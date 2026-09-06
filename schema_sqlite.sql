@@ -519,6 +519,16 @@ CREATE TABLE IF NOT EXISTS allocation (
     REFERENCES indent_line (indent_line_id)
 ) ;
 
+CREATE TABLE IF NOT EXISTS allocation_material (
+  alloc_id    INTEGER NOT NULL,
+  material_no INTEGER NOT NULL,
+  vendor      TEXT NULL,
+  efficiency  TEXT NULL,
+  batch       TEXT NULL,
+  PRIMARY KEY (alloc_id, material_no),
+  CONSTRAINT fk_am_alloc FOREIGN KEY (alloc_id)
+    REFERENCES allocation (alloc_id)
+) ;
 -- The serial master. format_version, date_produced, shift and sequence are
 -- REAL COLUMNS written once at generation. Nothing downstream ever parses
 -- the string again.

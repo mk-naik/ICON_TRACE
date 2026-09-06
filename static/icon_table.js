@@ -39,7 +39,7 @@
 
     var shown = 0;
     rowsOf(root).forEach(function (tr) {
-      if (tr.hasAttribute('data-empty')) return;
+      if (tr.hasAttribute('data-empty') || tr.hasAttribute('data-none')) return;
       var ok = true;
       if (q) {
         ok = (tr.textContent || '').toLowerCase().indexOf(q) !== -1;
@@ -61,7 +61,7 @@
     var c = root.querySelector('[data-role=count]');
     if (c) {
       var total = rowsOf(root).filter(function (r) {
-        return !r.hasAttribute('data-empty'); }).length;
+        return !r.hasAttribute('data-empty') && !r.hasAttribute('data-none'); }).length;
       c.textContent = shown === total ? total + ' rows'
                                       : shown + ' of ' + total + ' rows';
     }

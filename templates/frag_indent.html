@@ -1,7 +1,7 @@
 <div class="pg"><h2>Indent</h2>
   <p>Marketing's instruction to the factory &middot; form IS-HO-MRK-FM-03</p>
   <div class="pg-act">
-    <button class="btn btn-primary" onclick="indNew()">New indent</button>
+    <button id="indToggleBtn" class="btn btn-primary" onclick="indNew()">New indent</button>
     <button class="btn" data-role="export">Export table</button>
   </div>
 </div>
@@ -26,8 +26,8 @@
         <select data-role="filter" data-col="8" data-match="has" id="ixStat">
           <option value="">All</option><option>open</option><option>complete</option></select></div>
     </div>
-    <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
-      <button class="btn btn-sm btn-ghost" data-role="reset">Reset</button>
+    <div class="table-tools" style="margin-top:10px">
+      <button class="btn btn-ghost" data-role="reset">Reset</button>
       <span class="tag t-mute" data-role="count"></span>
     </div>
   </div>
@@ -121,8 +121,14 @@
 
   window.indNew = function () {
     var box = document.getElementById('indForm');
-    if (box.style.display === '') { box.style.display = 'none'; return; }
+    var button = document.getElementById('indToggleBtn');
+    if (box.style.display === '') {
+      box.style.display = 'none';
+      if (button) { button.textContent = 'New indent'; button.className = 'btn btn-primary'; }
+      return;
+    }
     box.style.display = '';
+    if (button) { button.textContent = 'Close indent'; button.className = 'btn btn-ghost'; }
     fetch('/view/indent-form', {cache:'no-store'})
       .then(function(r){return r.text();}).then(function (h) {
         box.innerHTML = h;

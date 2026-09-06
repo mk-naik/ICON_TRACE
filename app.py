@@ -942,6 +942,16 @@ def api_allocation_create():
             "shift": int(d.get("shift") or 1), "qty": qty,
             "seq_from": d.get("seq_from") or 0, "seq_to": d.get("seq_to") or 0,
             "created_by": actor()})
+        for material in d.get("materials") or []:
+            try:
+                material_no = int(material.get("material_no"))
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "why": "Allocation contains an invalid material row."}), 400
+            store.insert(cur, "allocation_material", {
+                "alloc_id": aid, "material_no": material_no,
+                "vendor": material.get("vendor"),
+                "efficiency": material.get("efficiency"),
+                "batch": material.get("batch")})
         import icon_challan_import as CI
         for s in serials:
             r = CI.decompose(s)
@@ -960,6 +970,99 @@ def api_allocation_create():
                   "left_after": after["left"]})
     return jsonify({"ok": True, "alloc_id": aid, "qty": qty,
                     "left": after["left"], "indent_no": L["indent_no"]})
+
+
+@app.route("/api/allocation/<int:alloc_id>/update", methods=["PUT"])
+def api_allocation_update(alloc_id):
+    d = request.get_json(force=True)
+    try:
+        line_id = int(d.get("indent_line_id"))
+        qty = int(d.get("qty"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "why": "Indent item and quantity are required."}), 400
+    serials = d.get("serials") or []
+    if len(serials) != qty or qty < 1:
+        return jsonify({"ok": False, "why": "The serial range quantity does not match its serials."}), 400
+    with store.conn() as (cx, cur):
+        old = store.one(cur, "SELECT * FROM allocation WHERE alloc_id=%s", (alloc_id,))
+        if not old:
+            return jsonify({"ok": False, "why": "No such allocation."}), 404
+        started = store.one(cur, "SELECT COUNT(*) AS n FROM serial WHERE "
+                                "alloc_id=%s AND state<>'planned'", (alloc_id,))["n"]
+        if started:
+            return jsonify({"ok": False, "why":
+                "%d module(s) in this allocation have already entered production. "
+                "It cannot be edited." % started}), 400
+        L = _line_state(cur, line_id)
+        if not L:
+            return jsonify({"ok": False, "why": "No such indent item."}), 400
+        old_qty = store.one(cur, "SELECT COUNT(*) AS n FROM serial WHERE alloc_id=%s",
+                            (alloc_id,))["n"]
+        if qty > L["left"] + old_qty:
+            return jsonify({"ok": False, "why":
+                "Only %d serial(s) remain on indent %s item %d after this "
+                "allocation is accounted for." % (L["left"] + old_qty,
+                                                   L["indent_no"], L["line"])}), 400
+        clash = [s for s in serials if store.one(cur,
+            "SELECT serial FROM serial WHERE serial=%s AND alloc_id<>%s", (s, alloc_id))]
+        if clash:
+            return jsonify({"ok": False, "why":
+                "%d serial(s) already belong to another allocation, e.g. %s."
+                % (len(clash), ", ".join(clash[:3]))}), 400
+        import icon_challan_import as CI
+        parsed = []
+        for s in serials:
+            r = CI.decompose(s)
+            if not r["ok"]:
+                return jsonify({"ok": False, "why": "%s — %s" % (s, r["why"])}), 400
+            parsed.append(r)
+        cur.execute("UPDATE allocation SET indent_line_id=%s, model=%s, wattage=%s, "
+                    "customer=%s, dcr=%s, arc=%s, date_produced=%s, shift=%s, "
+                    "qty=%s, seq_from=%s, seq_to=%s WHERE alloc_id=%s",
+                    (line_id, L["model"], L["wattage"], d.get("customer") or L["cust"],
+                     L["dcr"], L["arc"], d.get("date_produced") or old["date_produced"],
+                     int(d.get("shift") or old["shift"]), qty,
+                     d.get("seq_from") or 0, d.get("seq_to") or 0, alloc_id))
+        cur.execute("DELETE FROM serial WHERE alloc_id=%s", (alloc_id,))
+        for s, r in zip(serials, parsed):
+            store.insert(cur, "serial", {
+                "serial": s, "build_instance": 1, "alloc_id": alloc_id,
+                "indent_line_id": line_id, "model": L["model"],
+                "wattage": L["wattage"], "customer": L["cust"], "dcr": L["dcr"],
+                "format_version": r["format_version"], "date_produced": r["date_produced"],
+                "shift": r["shift"], "sequence": r["sequence"], "state": "planned"})
+        cur.execute("DELETE FROM allocation_material WHERE alloc_id=%s", (alloc_id,))
+        for material in d.get("materials") or []:
+            store.insert(cur, "allocation_material", {
+                "alloc_id": alloc_id, "material_no": int(material.get("material_no")),
+                "vendor": material.get("vendor"), "efficiency": material.get("efficiency"),
+                "batch": material.get("batch")})
+        db.audit(cur, actor(), "planning.update", "allocation", alloc_id,
+                 {"indent": L["indent_no"], "line": L["line"], "qty": qty})
+        after = _line_state(cur, line_id)
+    return jsonify({"ok": True, "alloc_id": alloc_id, "qty": qty,
+                    "left": after["left"], "indent_no": L["indent_no"]})
+
+
+@app.route("/api/allocation/<int:alloc_id>/detail")
+def api_allocation_get(alloc_id):
+    with store.conn() as (cx, cur):
+        a = store.one(cur, "SELECT a.*, il.line_no, i.indent_no "
+                         "FROM allocation a JOIN indent_line il "
+                         "ON il.indent_line_id=a.indent_line_id "
+                         "JOIN indent i ON i.indent_id=il.indent_id "
+                         "WHERE a.alloc_id=%s", (alloc_id,))
+        if not a:
+            return jsonify({"ok": False, "why": "No such allocation."}), 404
+        serials = store.rows(cur, "SELECT serial FROM serial WHERE alloc_id=%s "
+                             "ORDER BY sequence", (alloc_id,))
+        materials = store.rows(cur, "SELECT material_no, vendor, efficiency, batch "
+                                 "FROM allocation_material WHERE alloc_id=%s "
+                                 "ORDER BY material_no", (alloc_id,))
+    out = dict(a)
+    out["serials"] = [r["serial"] for r in serials]
+    out["materials"] = [dict(r) for r in materials]
+    return jsonify(out)
 
 
 @app.route("/api/allocation/<int:alloc_id>", methods=["DELETE"])
@@ -1674,6 +1777,98 @@ def planning():
 # --------------------------------------------------------------------------
 # FQC  -  verification, not data entry
 # --------------------------------------------------------------------------
+
+def _fqc_payload(cur, serial, sandbox=False):
+    rec = db.find_serial(cur, serial)
+    if not rec:
+        return None, None, {"ok": False, "why":
+                            "%s is not in the serial master." % serial}
+    cfg = db.get_config(cur)
+    evidence = ev.gather(cfg, serial, rec.get("wattage") or 0, sandbox=sandbox)
+    prior = next((dict(r) for r in db.fqc_recent(cur, 1000)
+                  if r.get("serial") == serial), None)
+    return rec, evidence, {"ok": True, "serial": serial,
+                           "model": rec.get("model"),
+                           "wattage": rec.get("wattage"),
+                           "state": rec.get("state"),
+                           "grade": rec.get("grade"),
+                           "evidence": evidence, "record": prior}
+
+
+@app.route("/api/fqc/lookup")
+def api_fqc_lookup():
+    serial = (request.args.get("serial") or "").strip().upper()
+    if not serial:
+        return jsonify({"ok": False, "why": "Scan or enter a serial."}), 400
+    with store.conn() as (cx, cur):
+        _rec, _evidence, out = _fqc_payload(
+            cur, serial, request.args.get("sandbox") == "1")
+    return jsonify(out), 200 if out.get("ok") else 404
+
+
+@app.route("/api/fqc", methods=["POST"])
+@_sync_guard
+def api_fqc_grade():
+    d = request.get_json(force=True)
+    serial = (d.get("serial") or "").strip().upper()
+    grade = (d.get("grade") or "").strip().upper()
+    reason = (d.get("reason") or "").strip() or None
+    evidence = d.get("evidence") or {}
+    if grade not in ("A", "GY", "BGY"):
+        return jsonify({"ok": False, "why": "Choose A, GY, or BGY."}), 400
+    if not serial:
+        return jsonify({"ok": False, "why": "Serial is required."}), 400
+    if evidence.get("ss_state") == ev.BAD:
+        return jsonify({"ok": False, "why":
+            "The Sun Simulator returned BAD for this serial. Grading is disabled "
+            "until the probe, polarity, or junction-box fault is reviewed."}), 400
+    proposed = evidence.get("proposed")
+    if proposed and grade != proposed and not reason:
+        return jsonify({"ok": False, "why":
+            "An override reason is required when the grade differs from the proposal."}), 400
+    with store.conn() as (cx, cur):
+        rec = db.find_serial(cur, serial)
+        if not rec:
+            return jsonify({"ok": False, "why":
+                "%s is not in the serial master." % serial}), 404
+        mode = d.get("mode") or evidence.get("mode") or "provisional"
+        if mode not in ("confirmed", "provisional"):
+            mode = "provisional"
+        saved = db.record_fqc(cur, serial, grade, evidence, actor(), mode, reason)
+        db.audit(cur, actor(), "fqc.grade", "serial", serial,
+                 {"grade": grade, "mode": mode, "reason": reason,
+                  "proposed": proposed})
+    return jsonify({"ok": True, "serial": serial, "grade": grade,
+                    "mode": mode, "record": saved})
+
+
+@app.route("/api/fqc/recent")
+def api_fqc_recent():
+    limit = min(100, max(1, int(request.args.get("limit") or 25)))
+    with store.conn() as (cx, cur):
+        rows = [dict(r) for r in db.fqc_recent(cur, limit)]
+    return jsonify(rows)
+
+
+@app.route("/api/fqc/dashboard")
+def api_fqc_dashboard():
+    with store.conn() as (cx, cur):
+        summary = store.rows(cur, """
+            SELECT substr(f.at, 1, 10) AS day, s.model AS model, s.shift AS shift,
+                   COUNT(*) AS inspected,
+                   SUM(CASE WHEN f.grade='A' THEN 1 ELSE 0 END) AS passed,
+                   SUM(CASE WHEN f.grade IN ('GY','BGY') THEN 1 ELSE 0 END) AS rejected
+            FROM fqc_record f JOIN serial s ON s.serial=f.serial
+            GROUP BY day, s.model, s.shift ORDER BY day DESC, s.shift, s.model
+        """)
+        totals = store.one(cur, """
+            SELECT COUNT(*) AS inspected,
+                   SUM(CASE WHEN grade='A' THEN 1 ELSE 0 END) AS passed,
+                   SUM(CASE WHEN grade IN ('GY','BGY') THEN 1 ELSE 0 END) AS rejected
+            FROM fqc_record
+        """)
+    return jsonify({"rows": [dict(r) for r in summary],
+                    "totals": dict(totals or {})})
 
 @app.route("/fqc", methods=["GET", "POST"])
 def fqc():

@@ -158,6 +158,16 @@ CREATE TABLE IF NOT EXISTS allocation (
     REFERENCES indent_line (indent_line_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS allocation_material (
+  alloc_id    BIGINT NOT NULL,
+  material_no INT NOT NULL,
+  vendor      VARCHAR(120) NULL,
+  efficiency  VARCHAR(40) NULL,
+  batch       VARCHAR(120) NULL,
+  PRIMARY KEY (alloc_id, material_no),
+  CONSTRAINT fk_am_alloc FOREIGN KEY (alloc_id)
+    REFERENCES allocation (alloc_id)
+) ENGINE=InnoDB;
 -- The serial master. format_version, date_produced, shift and sequence are
 -- REAL COLUMNS written once at generation. Nothing downstream ever parses
 -- the string again.
@@ -190,7 +200,7 @@ CREATE TABLE IF NOT EXISTS fqc_record (
   grade       ENUM('A','GY','BGY') NOT NULL,
   mode        ENUM('confirmed','provisional') NOT NULL,
   ss_pmax     DECIMAL(8,2) NULL,
-  ss_state    ENUM('OK','NC','NA') NULL,
+  ss_state    ENUM('OK','NC','NA','BAD') NULL,
   el_verdict  VARCHAR(60) NULL,
   el_state    ENUM('OK','NC','NA') NULL,
   proposed    ENUM('A','GY','BGY') NULL,

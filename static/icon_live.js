@@ -92,7 +92,8 @@
      functions. Calling them by name keeps the arithmetic in v4 where it
      belongs - this layer supplies data, never recomputes it. */
   function rerender() {
-    ['renderMgmt', 'renderProd', 'renderFqcDash', 'renderPackLog',
+    ['renderMgmt', 'renderProd', 'renderFqcDash', 'renderLiveFqcDash',
+     'renderLiveFqcRecent', 'renderPackLog',
      'renderStock', 'renderPlan'].forEach(function (fn) {
       try { if (typeof window[fn] === 'function') window[fn](); }
       catch (e) { /* a screen that is not on the page yet */ }
@@ -103,6 +104,169 @@
     if (typeof wirePlanChecks === 'function') wirePlanChecks();
   }
   window.iconRerender = rerender;
+
+  var liveFqcHold = null;
+
+  function fqcEsc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  function fqcState(evidence, key) {
+    return evidence && evidence[key] ? evidence[key] : 'NC';
+  }
+
+  function renderLiveFqcRecent() {
+    fetch('/api/fqc/recent?limit=25', {cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (rows) {
+        var host = document.getElementById('fqcRows');
+        if (!host) return;
+        var count = document.getElementById('fqcN');
+        var overrides = document.getElementById('fqcOv');
+        var blind = document.getElementById('fqcBlind');
+        if (count) count.textContent = rows.length.toLocaleString();
+        if (overrides) overrides.textContent = rows.filter(function (r) { return !!r.reason; }).length;
+        if (blind) blind.textContent = rows.filter(function (r) { return r.ss_state !== 'OK'; }).length;
+        host.innerHTML = rows.length ? rows.map(function (r) {
+          var pass = r.grade === 'A';
+          return '<tr><td class="mono">' + fqcEsc(r.at) + '</td>' +
+            '<td class="mono">' + fqcEsc(r.serial) + '</td><td class="mono">1</td>' +
+            '<td class="mono">—</td><td class="num">' + (r.ss_pmax == null ? '—' : r.ss_pmax) + '</td>' +
+            '<td>' + fqcEsc(r.el_verdict || '—') + '</td><td>' + fqcEsc(r.proposed || '—') + '</td>' +
+            '<td><span class="tag ' + (pass ? 't-pass' : 't-fail') + '">' + r.grade + '</span></td>' +
+            '<td>—</td><td>—</td><td>' + (r.mode === 'provisional' ? '<span class="tag t-rev">Provisional</span>' : '') +
+            (r.reason ? '<span class="tag t-rev">Override</span>' : '') + '</td></tr>';
+        }).join('') : '<tr data-empty><td colspan="11"><div class="empty-state">No grading decisions recorded yet.</div></td></tr>';
+      });
+  }
+  window.renderLiveFqcRecent = renderLiveFqcRecent;
+
+  function renderLiveFqcDash() {
+    fetch('/api/fqc/dashboard', {cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var totals = d.totals || {}, grid = document.querySelector('#v-dash .grid.g5');
+        if (grid) {
+          var vals = [totals.inspected || 0, totals.passed || 0,
+                      totals.rejected || 0, '—', '—'];
+          grid.querySelectorAll('.kpi .v').forEach(function (el, i) {
+            el.textContent = vals[i].toLocaleString ? vals[i].toLocaleString() : vals[i];
+          });
+        }
+        var body = document.getElementById('shiftRows');
+        if (body) body.innerHTML = (d.rows || []).map(function (r) {
+          return '<tr><td class="s' + fqcEsc(r.shift) + '">' + fqcEsc(r.shift) + '</td>' +
+            '<td class="mono">—</td><td class="mono">' + fqcEsc(r.model) + '</td>' +
+            '<td class="num">' + r.inspected + '</td><td class="num">' + r.passed + '</td>' +
+            '<td class="num">' + r.rejected + '</td><td>—</td><td>—</td></tr>';
+        }).join('') || '<tr data-empty><td colspan="8"><div class="empty-state">No FQC decisions recorded yet.</div></td></tr>';
+        var cat = document.getElementById('catRows');
+        var rej = document.getElementById('rejRows');
+        var days = document.getElementById('dayRows');
+        if (cat) cat.innerHTML = [
+          ['A', totals.passed || 0, 'Passed'],
+          ['GY', (totals.rejected || 0), 'Rejected'],
+          ['BGY', 0, 'Rejected']
+        ].map(function (x) {
+          return '<tr><td>' + x[0] + '</td><td>' + x[2] + '</td><td class="num">' + x[1] +
+            '</td><td>—</td><td>—</td></tr>';
+        }).join('');
+        if (rej) rej.innerHTML = (d.rows || []).length ?
+          '<tr><td>Recorded FQC decisions</td><td class="num">' + (totals.rejected || 0) +
+          '</td><td>—</td><td>—</td></tr>' :
+          '<tr data-empty><td colspan="4"><div class="empty-state">No rejection data recorded yet.</div></td></tr>';
+        if (days) {
+          var byDay = {};
+          (d.rows || []).forEach(function (r) {
+            byDay[r.day] = byDay[r.day] || {inspected: 0, passed: 0, rejected: 0};
+            byDay[r.day].inspected += r.inspected || 0;
+            byDay[r.day].passed += r.passed || 0;
+            byDay[r.day].rejected += r.rejected || 0;
+          });
+          days.innerHTML = Object.keys(byDay).sort().reverse().map(function (day) {
+            var x = byDay[day];
+            return '<tr><td class="mono">' + day + '</td><td>—</td><td class="num">' +
+              x.inspected + '</td><td class="num">' + x.passed + '</td><td class="num">' +
+              x.rejected + '</td><td>—</td><td>—</td><td>—</td></tr>';
+          }).join('') || '<tr data-empty><td colspan="8"><div class="empty-state">No FQC decisions recorded yet.</div></td></tr>';
+        }
+        if (typeof drawDonut === 'function') {
+          drawDonut('fqDonut', 'fqLegend', [
+            {n: 'A - passed', v: totals.passed || 0, c: C.green},
+            {n: 'GY / BGY - rejected', v: totals.rejected || 0, c: C.red}
+          ], String(totals.inspected || 0), 'inspected');
+        }
+      });
+  }
+  window.renderLiveFqcDash = renderLiveFqcDash;
+
+  function fqcShowLive(data) {
+    var e = data.evidence || {};
+    liveFqcHold = data;
+    var proposed = e.proposed || 'none';
+    var bad = e.fault || e.ss_state === 'BAD';
+    document.getElementById('fqcPending').innerHTML =
+      '<div class="pending' + (bad ? ' blocked' : '') + '">' +
+      '<div class="pending-h"><span class="ph-t">' + (bad ? 'Cannot grade' : 'Confirm or overrule') +
+      '</span><span class="ph-s">' + fqcEsc(data.serial) + '</span><div class="ph-r">' +
+      '<span class="tag t-mute">' + fqcEsc(data.model) + '</span>' +
+      (!bad ? '<button class="btn btn-solar btn-sm" onclick="fqcCommitLive(false)">Confirm ' + proposed + '</button>' +
+        '<button class="btn btn-ghost btn-sm" onclick="fqcShowLiveOverride()">Overrule</button>' : '') +
+      '<button class="btn btn-ghost btn-sm" onclick="fqcCancelLive()">Discard</button></div></div>' +
+      '<div class="lookup">' +
+      '<div><label>Pmax</label><div class="lv">' + (e.pmax == null ? '—' : e.pmax + ' W') + '</div></div>' +
+      '<div><label>Sun Simulator</label><div class="lv">' + fqcEsc(e.ss_state || 'NC') + '</div></div>' +
+      '<div><label>EL/VI</label><div class="lv">' + fqcEsc(e.el || e.el_state || 'NC') + '</div></div>' +
+      '<div><label>Proposed</label><div class="lv">' + fqcEsc(proposed) + '</div></div>' +
+      '<div><label>Mode</label><div class="lv">' + fqcEsc(e.mode || 'provisional') + '</div></div>' +
+      '<div><label>Existing grade</label><div class="lv">' + fqcEsc(data.grade || '—') + '</div></div>' +
+      '</div><div class="gates"><span class="gate ' + (e.ss_state === 'OK' ? 'ok' : 'warn') + '">' +
+      fqcEsc(e.ss_note || 'Sun Simulator evidence unavailable') + '</span><span class="gate ' +
+      (e.el_state === 'OK' ? 'ok' : 'warn') + '">' + fqcEsc(e.el_note || 'EL evidence unavailable') +
+      '</span></div><div id="fqcLiveOverride"></div></div>';
+  }
+
+  window.fqcLookup = function () {
+    var input = document.getElementById('fqcScan');
+    var serial = (input && input.value || '').trim().toUpperCase();
+    if (!serial) return;
+    fetch('/api/fqc/lookup?serial=' + encodeURIComponent(serial), {cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (!d.ok) toast(d.why); else fqcShowLive(d); })
+      .catch(function (e) { toast('FQC lookup failed: ' + e.message); });
+  };
+  window.fqcShowLiveOverride = function () {
+    var host = document.getElementById('fqcLiveOverride');
+    if (!host) return;
+    host.innerHTML = '<div class="card-f"><div class="fld"><label>Final grade</label>' +
+      '<select id="fqcLiveGrade"><option>A</option><option>GY</option><option>BGY</option></select></div>' +
+      '<div class="fld"><label>Override reason</label><input id="fqcLiveReason" placeholder="Required"></div>' +
+      '<button class="btn btn-danger" onclick="fqcCommitLive(true)">Save grade</button></div>';
+  };
+  window.fqcCommitLive = function (override) {
+    if (!liveFqcHold) return;
+    var grade = override ? document.getElementById('fqcLiveGrade').value : liveFqcHold.evidence.proposed;
+    var reason = override ? document.getElementById('fqcLiveReason').value.trim() : '';
+    if (!grade || (override && !reason)) { toast('Final grade and an override reason are required.'); return; }
+    api('fqc', {method: 'POST', body: JSON.stringify({
+      serial: liveFqcHold.serial, grade: grade, reason: reason,
+      mode: liveFqcHold.evidence.mode || 'provisional', evidence: liveFqcHold.evidence
+    })}).then(function (d) {
+      if (!d.ok) { toast(d.why); return; }
+      toast(d.serial + ' graded ' + d.grade + ' and saved to the serial master.');
+      renderLiveFqcRecent(); renderLiveFqcDash();
+      fqcCancelLive();
+    });
+  };
+  window.fqcCancelLive = function () {
+    liveFqcHold = null;
+    var p = document.getElementById('fqcPending'); if (p) p.innerHTML = '';
+    var s = document.getElementById('fqcScan'); if (s) { s.value = ''; s.disabled = false; s.focus(); }
+  };
+  window.fqcCancel = window.fqcCancelLive;
+  window.fqcLookup = window.fqcLookup;
 
   /* v4's dashboards each have a Reset button that was decorative. Wire every
      one of them: clear the fields in that filter bar, then call the screen's
@@ -371,24 +535,6 @@
             .test(lab.textContent.trim())) f.remove();
     });
 
-    /* independent scrolling */
-    var work = view.querySelector('.work');
-    if (work) {
-      var main = work.querySelector('.wmain') || work.firstElementChild;
-      var rail = work.querySelector('.rail');
-      /* Each column scrolls on its own, but the wheel must still chain to the
-         page. `overscroll-behavior: contain` blocked that, so hovering a card
-         in a column with nothing left to scroll froze the page entirely - the
-         only place that worked was the gap between the columns. */
-      [main, rail].forEach(function (col) {
-        if (!col) return;
-        col.style.maxHeight = 'calc(100vh - 118px)';
-        col.style.overflowY = 'auto';
-        col.style.overscrollBehavior = 'auto';
-        col.style.paddingRight = '4px';
-      });
-      if (rail) rail.style.position = 'static';
-    }
   }
 
   function planCrossCheck() {
@@ -622,11 +768,15 @@
           if (typeof toast === 'function') toast('That range is empty.');
           return;
         }
-        api('allocation', { method: 'POST', body: JSON.stringify({
+        var editingId = window.__editingAlloc;
+        api(editingId ? ('allocation/' + editingId + '/update') : 'allocation', {
+          method: editingId ? 'PUT' : 'POST', body: JSON.stringify({
+            alloc_id: editingId || null,
             indent_line_id: L.id, qty: serials.length, serials: serials,
             customer: L.cust, shift: serials.length ?
               (typeof parseSerial === 'function' ? parseSerial(a).shift : 1) : 1,
-            date_produced: (document.getElementById('pDate') || {}).value || null
+            date_produced: (document.getElementById('pDate') || {}).value || null,
+            materials: planMaterialRows()
           }) })
           .then(function (d) {
             if (d.ok === false) {
@@ -641,8 +791,17 @@
               toast(d.qty + ' serial(s) allocated against ' + d.indent_no +
                     ' \u2014 ' + d.left + ' left on that line.');
             iconRefresh().then(function () {
+              renderAllocations();
               planLineFigures();
               if (typeof rangeCalc === 'function') rangeCalc();
+              var work = document.querySelector('#v-plan .work');
+              if (work) work.style.display = 'none';
+              var newBtn = document.getElementById('newPlanBtn');
+              if (newBtn) {
+                newBtn.textContent = 'New plan';
+                newBtn.className = 'btn btn-primary';
+              }
+              window.__editingAlloc = null;
             });
           })
           .catch(function (e) {
@@ -654,6 +813,69 @@
       wrapped.__wired = true;
       window.loadMaster = wrapped;
     }
+  }
+
+  function planMaterialRows() {
+    return Object.keys(MAT_SEL || {}).map(function (key) {
+      var s = MAT_SEL[key] || {};
+      return { material_no: parseInt(key, 10), vendor: s.vendor || null,
+               efficiency: s.eff || null, batch: s.batch || null };
+    }).filter(function (m) { return m.material_no > 0; });
+  }
+
+  function planOpenAllocation(id, copy) {
+    fetch('/api/allocation/' + id + '/detail', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (a) {
+        if (!a.ok && a.why) { toast(a.why); return; }
+        var view = document.getElementById('v-plan');
+        var btn = document.getElementById('newPlanBtn');
+        var work = view && view.querySelector('.work');
+        if (btn && work && work.style.display === 'none') btn.click();
+        setTimeout(function () {
+          var ind = document.getElementById('pIndent');
+          var line = document.getElementById('pIndentLine');
+          if (!copy) {
+            window.__editingAlloc = id;
+            if (ind) {
+              ind.value = a.indent_no;
+              if (typeof indentChange === 'function') indentChange();
+            }
+            if (line) {
+              line.value = String(a.line_no);
+              if (typeof indentChange === 'function') indentChange();
+            }
+          } else {
+            window.__editingAlloc = null;
+            var target = planIndentLine();
+            if (!target) { toast('Choose the new indent item before copying materials.'); return; }
+            if (String(target.dcr) !== String(a.dcr) ||
+                String(target.arc || '') !== String(a.arc || '')) {
+              toast('Cannot copy materials: the new indent item requires ' +
+                    target.dcr + ' / ' + (target.arc || 'no ARC choice') +
+                    ', but the source batch is ' + a.dcr + ' / ' +
+                    (a.arc || 'no ARC choice') + '.');
+              return;
+            }
+          }
+          if (!copy) {
+            var serials = a.serials || [];
+            var from = document.getElementById('rgFrom');
+            var to = document.getElementById('rgTo');
+            if (from) from.value = serials[0] || '';
+            if (to) to.value = serials[serials.length - 1] || '';
+          }
+          MAT_SEL = {};
+          (a.materials || []).forEach(function (m) {
+            MAT_SEL[m.material_no] = {vendor: m.vendor || '', eff: m.efficiency || '',
+                                      batch: m.batch || ''};
+          });
+          if (typeof rangeCalc === 'function') rangeCalc();
+          toast(copy ? 'Material selections copied. Check the range before loading.'
+                     : 'Allocation opened for editing.');
+        }, 80);
+      })
+      .catch(function (e) { toast('Could not read allocation ' + id + ': ' + e.message); });
   }
 
   /* Planning opens on what has been allocated, with New plan on top - the
@@ -669,8 +891,13 @@
     work.style.display = 'none';
 
     var pg = view.querySelector('.pg');
+    if (pg && !pg.querySelector('.pg-act')) {
+      var act = document.createElement('div');
+      act.className = 'pg-act';
+      pg.appendChild(act);
+    }
     if (pg && !pg.querySelector('#newPlanBtn')) {
-      var act = pg.querySelector('.pg-act') || pg;
+      var act = pg.querySelector('.pg-act');
       var b = document.createElement('button');
       b.id = 'newPlanBtn';
       b.className = 'btn btn-primary';
@@ -681,6 +908,7 @@
         b.textContent = open ? 'New plan' : 'Close the plan form';
         b.className = open ? 'btn btn-primary' : 'btn btn-ghost';
         if (!open) {
+          window.__editingAlloc = null;
           try { planTidy(); planLineFigures(); rangeCalc(); } catch (e) {}
           if (work.scrollIntoView) {
             work.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -689,6 +917,21 @@
       };
       act.insertBefore(b, act.firstChild);
     }
+      var copyBtn = view.querySelector('.rail-acts button:last-child');
+      if (copyBtn && !copyBtn.__copyWired) {
+        copyBtn.__copyWired = true;
+        copyBtn.textContent = 'Copy from last batch';
+        copyBtn.onclick = function (e) {
+          e.preventDefault();
+          fetch('/api/allocations', {cache: 'no-store'}).then(function (r) {
+            if (!r.ok) throw new Error('server returned ' + r.status);
+            return r.json();
+          }).then(function (rows) {
+            if (!rows.length) { toast('No previous batch is available to copy.'); return; }
+            planOpenAllocation(rows[0].alloc_id, true);
+          }).catch(function () { toast('Could not read the last batch.'); });
+        };
+      }
 
     /* the allocations card is outside .work, so it stays visible */
     var card = null;
@@ -696,6 +939,10 @@
       if (/recent allocation/i.test(h.textContent)) card = h.closest('.card');
     });
     if (card && card.parentNode !== view) view.appendChild(card);
+    if (card) {
+      card.style.marginTop = '14px';
+      card.style.clear = 'both';
+    }
   }
 
   /* Recent allocations: real rows, its own filter bar, its own scroll. The
@@ -715,10 +962,16 @@
       anchor.setAttribute('data-itable', 'allocations');
       anchor.setAttribute('data-export', 'allocations');
       card = anchor;
+      var headRow = card.querySelector('thead tr');
+      if (headRow) {
+        headRow.innerHTML = '<th>Batch</th><th>Indent</th><th>Customer</th>' +
+          '<th>Model</th><th>Date</th><th>Shift</th><th style="text-align:right">Qty</th>' +
+          '<th>Status</th><th>Actions</th>';
+      }
       var head = card.querySelector('.card-h');
       if (head && !head.querySelector('[data-role=search]')) {
         var bar = document.createElement('div');
-        bar.className = 'ch-r';
+        bar.className = 'ch-r table-tools';
         bar.innerHTML =
           '<input data-role="search" placeholder="serial, indent, customer" ' +
             'style="width:180px;padding:5px 8px;border:1px solid var(--line);' +
@@ -732,7 +985,7 @@
             'border-radius:var(--r);font-size:12px">' +
             '<option value="">All</option><option>editable</option>' +
             '<option>in production</option></select>' +
-          '<button class="btn btn-ghost btn-sm" data-role="reset">Reset</button>' +
+          '<button class="btn btn-ghost" data-role="reset">Reset</button>' +
           '<span class="tag t-mute" data-role="count"></span>';
         head.appendChild(bar);
       }
@@ -778,6 +1031,9 @@
               '<a class="btn btn-ghost btn-sm" href="/allocation/' +
                 a.alloc_id + '/barcodes.xlsx">Excel</a>' +
               (a.editable ?
+                ' <button class="btn btn-ghost btn-sm" onclick="iconEditAlloc(' +
+                  a.alloc_id + ')">Edit</button>' : '') +
+              (a.editable ?
                 ' <button class="btn btn-ghost btn-sm" onclick="iconCancelAlloc(' +
                   a.alloc_id + ')">Withdraw</button>' : '') +
             '</td></tr>';
@@ -798,6 +1054,8 @@
       });
   }
   window.iconAllocations = renderAllocations;
+  window.iconEditAlloc = function (id) { planOpenAllocation(id, false); };
+  window.iconCopyAlloc = function (id) { planOpenAllocation(id, true); };
 
   window.iconCancelAlloc = function (id) {
     if (!confirm('Withdraw this allocation? Its serials are released and the ' +

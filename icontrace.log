@@ -4,3 +4,15 @@
 2026-09-06 11:16:51,066 INFO    icontrace  invoice parser build 2026.09.09  (run: python icon_invoice_parser.py --selftest)
 2026-09-06 11:16:51,066 INFO    icontrace  Serving on http://0.0.0.0:8080 with 12 threads
 2026-09-06 11:16:51,070 INFO    waitress  Serving on http://0.0.0.0:8080
+2026-09-06 22:35:52,891 WARNING icontrace  ICON_DB is not set to mysql - running in DEMO mode. Everything works; nothing is saved.
+2026-09-06 22:35:52,892 WARNING icontrace  ICON_SECRET is not set - a random key was generated, so sessions drop on every restart. Set a fixed value.
+2026-09-06 22:35:52,897 INFO    icontrace  QR decoding available - e-invoice QR will be cross-checked.
+2026-09-06 22:35:52,898 INFO    icontrace  invoice parser build 2026.09.09  (run: python icon_invoice_parser.py --selftest)
+2026-09-06 22:35:52,898 INFO    icontrace  Serving on http://0.0.0.0:8080 with 12 threads
+2026-09-06 22:35:52,906 INFO    waitress  Serving on http://0.0.0.0:8080
+2026-09-07 00:23:55,251 WARNING icontrace  ICON_DB is not set to mysql - running in DEMO mode. Everything works; nothing is saved.
+2026-09-07 00:23:55,251 WARNING icontrace  ICON_SECRET is not set - a random key was generated, so sessions drop on every restart. Set a fixed value.
+2026-09-07 00:23:55,258 INFO    icontrace  QR decoding available - e-invoice QR will be cross-checked.
+2026-09-07 00:23:55,258 INFO    icontrace  invoice parser build 2026.09.09  (run: python icon_invoice_parser.py --selftest)
+2026-09-07 00:23:55,258 INFO    icontrace  Serving on http://0.0.0.0:8080 with 12 threads
+2026-09-07 00:23:55,264 INFO    waitress  Serving on http://0.0.0.0:8080
