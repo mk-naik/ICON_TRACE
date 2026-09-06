@@ -1,0 +1,126 @@
+{% extends "base.html" %}{% set nav='indent' %}
+{% block body %}
+{% for e in errors %}<div class="note n-fail">{{ e }}</div>{% endfor %}
+<form method="post" enctype="multipart/form-data">
+<div class="card"><div class="card-h"><h3>New indent · IS-HO-MRK-FM-03</h3></div>
+<div class="card-b">
+  <div class="note n-info">Typed, not parsed. Ten fields and two different
+  layouts across two samples — a parser would cost more than it saves. The PDF
+  is attached as the record of what Marketing actually instructed.</div>
+  <div class="grid">
+    <div class="fld req"><label>Indent number</label>
+      <input name="indent_no" value="{{ form.indent_no or '' }}" placeholder="AUG-05/2026"></div>
+    <div class="fld req"><label>Indent date</label>
+      <input name="indent_date" type="date" value="{{ form.indent_date or '' }}"></div>
+    <div class="fld req"><label>Customer</label>
+      <input name="customer" list="customers" autocomplete="off"
+             value="{{ form.customer or '' }}" placeholder="start typing…">
+      <datalist id="customers">
+        {% for c in customers %}<option value="{{ c }}">{% endfor %}
+      </datalist>
+      <div class="why">Suggests every customer already on an indent, invoice or
+        challan, so one company is not spelled three ways.</div></div>
+    <div class="fld"><label>Lot name</label>
+      <input name="lot_name" value="{{ form.lot_name or '' }}" placeholder="optional"></div>
+    <div class="fld"><label>Area</label>
+      <input name="area" value="{{ form.area or '' }}" placeholder="MIZORAM"></div>
+    <div class="fld"><label>Build type</label>
+      <select name="build_type">
+        <option value="make_to_stock" {{ 'selected' if form.build_type=='make_to_stock' }}>Make to stock (common)</option>
+        <option value="make_to_order" {{ 'selected' if form.build_type=='make_to_order' }}>Make to order (un-common)</option>
+      </select>
+      <div class="why">Icon's own words from the Jan-2025 SRS. Borosil is make
+        to order; AGNI is make to stock.</div></div>
+    <div class="fld"><label>Delivery by (real date)</label>
+      <input name="delivery_by" type="date" value="{{ form.delivery_by or '' }}"></div>
+    <div class="fld"><label>Delivery as written</label>
+      <input name="delivery_text" value="{{ form.delivery_text or '' }}" placeholder="NEXT WEEK">
+      <div class="why">Kept for the record. A real date goes beside it —
+        "NEXT WEEK" cannot be sorted or chased.</div></div>
+    <div class="fld"><label>Prepared by</label>
+      <input name="prepared_by" value="{{ form.prepared_by or 'Akansha Reddy' }}"></div>
+    <div class="fld"><label>Approved by</label>
+      <input name="approved_by" value="{{ form.approved_by or '' }}"></div>
+    <div class="fld" style="grid-column:1/-1"><label>Special instructions</label>
+      <textarea name="special_instructions" rows="2">{{ form.special_instructions or '' }}</textarea></div>
+    <div class="fld req" style="grid-column:1/-1"><label>Indent PDF</label>
+      <input type="file" name="pdf" accept=".pdf,.png,.jpg"></div>
+  </div>
+</div></div>
+
+<div class="card"><div class="card-h"><h3>Items</h3>
+  <span class="sp hint">One item per model and DCR combination. A Borosil
+  indent carries the same model twice — once NDCR, once DCR.</span></div>
+<div class="card-b">
+  <div id="items"></div>
+  <button type="button" class="btn btn-sm" onclick="addItem()">+ Add item</button>
+</div>
+<div class="card-f"><button class="btn btn-primary">Save indent</button>
+  <a class="btn btn-ghost" href="{{ url_for('indent_list') }}">Cancel</a></div></div>
+</form>
+
+<template id="itemTpl">
+  <div class="grid item" style="margin-bottom:10px;padding-bottom:10px;
+       border-bottom:1px solid var(--line2)">
+    <div class="fld"><label>Item <span class="n"></span> · item code</label>
+      <select name="model_N" onchange="fill(this)">
+        <option value="">— choose —</option>
+        {% for it in catalog %}<option value="{{ it.item_code }}">{{ it.item_code }}{% if not it.produced %} · not yet produced{% endif %}</option>{% endfor %}
+      </select>
+      <div class="why">DCR and NDCR are separate items, as in the other system.</div></div>
+    <div class="fld"><label>Wattage</label>
+      <input name="wattage_N" type="number" readonly>
+      <div class="why">From the model master.</div></div>
+    <div class="fld"><label>Quantity</label><input name="qty_N" type="number" oninput="kw(this)"></div>
+    <div class="fld"><label>KW</label><input name="kw_N" readonly tabindex="-1">
+      <div class="why">Derived. Never typed.</div></div>
+    <div class="fld"><label>Cell type</label>
+      <input name="dcrshow_N" readonly tabindex="-1">
+      <div class="why">Comes with the item — not chosen separately.</div></div>
+    <div class="fld"><label>Glass</label>
+      <select name="arc_N"><option value="">—</option><option>ARC</option><option>NARC</option></select></div>
+    <div class="fld"><label>Per pallet</label>
+      <input name="pallet_N" type="number" placeholder="36">
+      <div class="why">From "PALLET PACKING (36nos x 1)". Blank uses the
+        ceiling; above it is refused.</div></div>
+    <div class="fld" style="grid-column:1/-1"><label>Item note</label>
+      <input name="note_N"></div>
+    <div style="grid-column:1/-1">
+      <button type="button" class="btn btn-sm btn-ghost" onclick="dropItem(this)">Remove this item</button></div>
+  </div>
+</template>
+
+<script>
+var MODELS = {{ model_json | safe }};
+var n = 0;
+function addItem(){
+  n++;
+  var f = document.getElementById('itemTpl').content.cloneNode(true);
+  f.querySelectorAll('[name]').forEach(function(el){
+    el.name = el.name.replace(/_N$/, '_' + n);
+  });
+  f.querySelector('.n').textContent = n;
+  document.getElementById('items').appendChild(f);
+}
+function fill(sel){
+  var row = sel.closest('.item'), m = MODELS[sel.value];
+  if (!m) return;
+  row.querySelector('[name^=wattage_]').value = m.wattage;
+  row.querySelector('[name^=dcrshow_]').value = m.cell_type;
+  var p = row.querySelector('[name^=pallet_]');
+  p.placeholder = m.pallet_ceiling;
+  kw(row.querySelector('[name^=qty_]'));
+}
+function kw(inp){
+  var row = inp.closest('.item');
+  var w = parseFloat(row.querySelector('[name^=wattage_]').value) || 0;
+  var q = parseFloat(row.querySelector('[name^=qty_]').value) || 0;
+  row.querySelector('[name^=kw_]').value = w && q ? (w*q/1000).toFixed(2) : '';
+}
+function dropItem(btn){
+  var rows = document.querySelectorAll('#items .item');
+  if (rows.length > 1) btn.closest('.item').remove();
+}
+addItem();
+</script>
+{% endblock %}

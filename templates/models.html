@@ -1,0 +1,40 @@
+{% extends "base.html" %}{% set nav='models' %}
+{% block body %}
+<div class="pg"><h2>Item Master</h2>
+  <p>{{ items|length }} items · {{ models|length }} models × DCR and NDCR</p></div>
+
+<div class="card"><div class="card-h"><h3>Item master</h3>
+  <span class="sp hint">two versions per model, as in the other system</span></div>
+<div class="card-b">
+  <div class="note n-info">The back label is the controlled document that says
+  what may legally be built and labelled, so the master is seeded from it —
+  not from what has been produced. The serial embeds the wattage, so a missing
+  model blocks serial generation on the morning production starts. That has
+  already happened once: ISEN630-G12R shipped on a real challan while it was
+  absent from the master.</div>
+</div>
+<div class="scroll" style="max-height:560px"><table>
+<thead><tr><th>Item code</th><th>Cell type</th><th>Model</th>
+<th style="text-align:right">Wattage</th><th>Family</th>
+<th style="text-align:right">Per pallet</th><th>HSN</th>
+<th>External ERP code</th><th>Status</th></tr></thead><tbody>
+{% for i in items %}<tr>
+  <td class="mono">{{ i.item_code }}</td>
+  <td><span class="tag {{ 't-pass' if i.cell_type=='DCR' else 't-mute' }}">{{ i.cell_type }}</span></td>
+  <td class="mono">{{ i.model }}</td>
+  <td style="text-align:right" class="mono">{{ i.wattage }}</td>
+  <td>{{ i.family }}</td>
+  <td style="text-align:right">{{ i.pallet_ceiling }}</td>
+  <td class="mono">{{ i.hsn }}</td>
+  <td class="mono hint">{{ i.erp_code or '— to be mapped' }}</td>
+  <td>{% if i.produced %}<span class="tag t-pass">produced</span>
+      {% else %}<span class="tag t-mute">authorised only</span>{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table></div>
+<div class="card-b hint">HO omits the suffix when it means NDCR — invoice 736
+reads <span class="mono">SOLAR PV MODULE-ISEN630-G12R</span> for an NDCR
+module, while 746 reads <span class="mono">…-ISEN625-G12R-DCR</span>. The bare
+model is therefore an alias for the NDCR item, so both forms resolve. The
+the other system column stays empty until those codes are mapped in — they belong to
+the other system and must never be invented here.</div></div>
+{% endblock %}

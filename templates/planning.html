@@ -1,0 +1,38 @@
+{% extends "base.html" %}{% set nav='planning' %}
+{% block body %}
+<div class="card"><div class="card-h"><h3>Allocate against an indent line</h3></div>
+<form method="post"><div class="card-b">
+  <div class="note n-info">Customer, model, DCR and ARC come from the indent
+  line. They are looked up, never re-typed — two sources of one fact is how
+  they end up disagreeing.</div>
+  {% if prog %}
+  <div class="grid">
+    <div class="fld req" style="grid-column:1/-1"><label>Indent line</label>
+      <select name="indent_line_id">
+      {% for p in prog %}<option value="{{ p.indent_line_id }}">
+        {{ p.indent_no }} · line {{ p.line_no }} · {{ p.model }} · {{ p.dcr }}
+        · {{ p.customer }} · {{ p.remaining_qty }} remaining</option>{% endfor %}
+      </select></div>
+    <div class="fld req"><label>Produced on</label>
+      <input type="date" name="produced_on" value="{{ today }}"></div>
+    <div class="fld req"><label>Shift</label>
+      <select name="shift"><option>1</option><option>2</option><option>3</option></select></div>
+    <div class="fld req"><label>Quantity</label><input type="number" name="qty" min="1"></div>
+  </div>
+  {% else %}<p class="hint">No indent lines yet. Create an indent first.</p>{% endif %}
+</div>
+{% if prog %}<div class="card-f"><button class="btn btn-primary">Generate serials</button>
+  <span class="hint">Sequence is per date and shift, taken from a counter.</span></div>{% endif %}
+</form></div>
+
+<div class="card"><div class="card-h"><h3>Allocations</h3></div>
+{% if allocs %}<div class="scroll"><table>
+<thead><tr><th>Indent</th><th>Model</th><th>DCR</th><th>Customer</th><th>Produced</th>
+<th>Shift</th><th style="text-align:right">Qty</th><th>Sequence</th></tr></thead><tbody>
+{% for a in allocs %}<tr>
+  <td class="mono">{{ a.indent_no or '—' }}</td><td class="mono">{{ a.model }}</td>
+  <td>{{ a.dcr }}</td><td>{{ a.customer }}</td><td>{{ a.date_produced }}</td>
+  <td>{{ a.shift }}</td><td style="text-align:right" class="mono">{{ a.qty }}</td>
+  <td class="mono">{{ a.seq_from }}–{{ a.seq_to }}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<div class="card-b hint">Nothing allocated yet.</div>{% endif %}</div>
+{% endblock %}

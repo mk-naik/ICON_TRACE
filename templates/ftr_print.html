@@ -1,0 +1,58 @@
+<!doctype html><html><head><meta charset="utf-8"><title>FTR {{ no }}</title>
+<style>
+ @page{size:A4 landscape;margin:8mm}
+ body{font-family:Arial,Helvetica,sans-serif;font-size:9pt;margin:0;color:#000}
+ .hd{border:1.5px solid #000;border-bottom:none;padding:3mm;text-align:center}
+ .hd h1{font-size:12pt;margin:0}
+ .hd .s{font-size:8pt;margin-top:1mm}
+ .meta{border:1.5px solid #000;border-bottom:none;display:flex;font-size:8.5pt}
+ .meta div{flex:1;padding:1.6mm 3mm;border-right:1px solid #000}
+ .meta div:last-child{border-right:none}
+ table{width:100%;border-collapse:collapse}
+ th,td{border:1px solid #000;padding:1.1mm 1.6mm;font-size:8pt;text-align:right}
+ th{background:#F2F2F2;font-size:7.5pt}
+ td.s{text-align:left;font-family:Consolas,monospace}
+ tr.miss td{background:#FBEBE9;text-align:left}
+ .note{font-size:7.5pt;color:#444;padding:2mm 1mm}
+ @media screen{body{background:#EDF1F6;padding:14px}
+   .bar{margin-bottom:10px;font-size:12px;color:#3D4E63}}
+ @media print{.bar{display:none}}
+</style></head><body>
+<div class="bar"><button onclick="print()">Open print dialog</button>
+  <span style="margin-left:10px">{{ rows|length }} modules measured
+  {%- if missing %}, {{ missing|length }} not measured{% endif %}.
+  Landscape A4.</span></div>
+
+<div class="hd"><h1>FLASH TEST REPORT</h1>
+  <div class="s">ICON SOLAR-EN POWER TECHNOLOGIES PRIVATE LIMITED (UNIT-2)
+    &middot; measured at the Sun Simulator, not re-entered</div></div>
+<div class="meta">
+  <div><b>Challan</b> {{ no }}</div>
+  <div><b>Date</b> {{ date }}</div>
+  <div><b>Model</b> {{ model or '—' }}</div>
+  <div><b>Modules</b> {{ rows|length }}</div>
+  {% if summary %}<div><b>Pmax min / avg / max</b>
+    {{ summary.pmax_min }} / {{ summary.pmax_avg }} / {{ summary.pmax_max }}</div>{% endif %}
+</div>
+
+<table>
+  <thead><tr><th style="text-align:left">Sl</th>
+    {% for _k, label, _i in cols %}<th>{{ label }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr><td class="s">{{ loop.index }}</td>
+      {% for k, _l, _i in cols %}
+        <td class="{{ 's' if k in ('serial','tested_at') }}">{{ r[k] if r[k] is not none else '' }}</td>
+      {% endfor %}</tr>
+  {% endfor %}
+  {% for m in missing %}
+    <tr class="miss"><td class="s">&mdash;</td>
+      <td class="s">{{ m.serial }}</td>
+      <td colspan="{{ cols|length - 1 }}">not measured &mdash; {{ m.why }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<div class="note">Where a module was tested more than once the latest valid
+  reading is shown &mdash; retesting after a failed probe is routine. A module
+  with no valid reading is listed with the reason rather than omitted.</div>
+</body></html>

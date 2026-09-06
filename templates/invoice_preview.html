@@ -1,0 +1,156 @@
+{% extends "base.html" %}{% set nav='invoice' %}
+{% macro field(key, meta, label, wide=false) %}
+  <div class="fld {{ ('absent' if meta.optional else 'blank') if not meta.found }}"
+       {% if wide %}style="grid-column:1/-1"{% endif %}>
+    <label for="f_{{ key }}">{{ label }}</label>
+    {% if wide %}
+      <textarea name="f_{{ key }}" id="f_{{ key }}" rows="2">{{ meta.value or '' }}</textarea>
+    {% else %}
+      <input name="f_{{ key }}" id="f_{{ key }}" value="{{ meta.value if meta.value is not none else '' }}">
+    {% endif %}
+    {% if not meta.found %}<div class="why">{% if meta.optional %}Not on this
+      invoice. Fill it only if you have it.{% else %}The parser did not find
+      this. Type it rather than trust a guess.{% endif %}</div>{% endif %}
+  </div>
+{% endmacro %}
+{% block body %}
+
+{% set blocked = r.checks | selectattr('level','equalto','block') | list %}
+
+<div class="note n-info">
+  Read from <b>{{ filename }}</b>. Every field below can be corrected before
+  you save. Fields the parser could not find are blank and highlighted — fill
+  those in rather than leaving them.
+</div>
+
+{% for c in r.checks %}
+  {% if c.level != 'info' %}
+  <div class="note n-{{ 'pass' if c.level=='ok' else 'fail' if c.level=='block' else 'warn' }}">
+    {{ c.msg }}</div>
+  {% endif %}
+{% endfor %}
+
+{% if supersede %}
+<div class="note n-fail">
+  Invoice <b>{{ supersede.invoice_no }}</b> is already loaded under a different
+  IRN. HO has reissued it.
+  {% if supersede.challans %}
+    <b>{{ supersede.challans|length }} challan(s) were already built against the
+    old one</b> and need checking.
+  {% endif %}
+  Saving this marks the earlier version superseded.
+</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('invoice_confirm') }}">
+<input type="hidden" name="expect_qty" value="{{ expect }}">
+<input type="hidden" name="supersede_ids"
+       value="{{ supersede.prior_ids | tojson if supersede else '[]' }}">
+
+<div class="card">
+  <div class="card-h"><h3>Invoice identity</h3>
+    <span class="sp tag {{ 't-pass' if r.qr.einvoice else 't-mute' }}">
+      {{ 'QR verified' if r.qr.einvoice else 'QR not readable' }}</span></div>
+  <div class="card-b"><div class="grid">
+    {{ field('invoice_no', r.fields.invoice_no, 'Invoice number') }}
+    {{ field('invoice_date', r.fields.invoice_date, 'Invoice date') }}
+    {{ field('ack_no', r.fields.ack_no, 'Ack number') }}
+    {{ field('ack_date', r.fields.ack_date, 'Ack date') }}
+    {{ field('irn', r.fields.irn, 'IRN — the reference we store', true) }}
+  </div></div>
+</div>
+
+<div class="card">
+  <div class="card-h"><h3>Buyer</h3></div>
+  <div class="card-b"><div class="grid">
+    {{ field('buyer_name', r.fields.buyer_name, 'Name') }}
+    {{ field('buyer_gstin', r.fields.buyer_gstin, 'GSTIN') }}
+    {{ field('buyer_state', r.fields.buyer_state, 'State (from GSTIN)') }}
+    {{ field('tax_mode', r.fields.tax_mode, 'Tax mode (from GSTIN)') }}
+    {{ field('buyer_contact_name', r.fields.buyer_contact_name, 'Contact person') }}
+    {{ field('buyer_contact_phone', r.fields.buyer_contact_phone, 'Contact phone') }}
+    {{ field('buyer_address', r.fields.buyer_address, 'Address', true) }}
+  </div></div>
+</div>
+
+<div class="card">
+  <div class="card-h"><h3>Consignee</h3>
+    <span class="sp">
+      <label class="hint" style="display:flex;gap:6px;align-items:center">
+        <input type="checkbox" name="f_consignee_same_as_buyer" value="1"
+               {{ 'checked' if r.fields.consignee_same_as_buyer.value }}>
+        same as buyer</label></span></div>
+  <div class="card-b"><div class="grid">
+    {{ field('consignee_name', r.fields.consignee_name, 'Name') }}
+    {{ field('consignee_gstin', r.fields.consignee_gstin, 'GSTIN') }}
+    {{ field('consignee_contact_name', r.fields.consignee_contact_name, 'Contact person') }}
+    {{ field('consignee_contact_phone', r.fields.consignee_contact_phone, 'Contact phone') }}
+    {{ field('consignee_address', r.fields.consignee_address, 'Ship-to address', true) }}
+  </div></div>
+</div>
+
+<div class="card">
+  <div class="card-h"><h3>Transport and e-Way Bill</h3></div>
+  <div class="card-b"><div class="grid">
+    {{ field('transporter', r.fields.transporter, 'Transporter') }}
+    {{ field('transporter_id', r.fields.transporter_id, 'Transporter ID') }}
+    {{ field('vehicle_no', r.fields.vehicle_no, 'Vehicle number') }}
+    {{ field('lr_no', r.fields.lr_no, 'LR / GR number') }}
+    {{ field('destination', r.fields.destination, 'Destination') }}
+    {{ field('ewb_no', r.fields.ewb_no, 'e-Way Bill number') }}
+    {{ field('ewb_valid_upto', r.fields.ewb_valid_upto, 'e-Way Bill valid until') }}
+    {{ field('ewb_distance_km', r.fields.ewb_distance_km, 'Distance (km)') }}
+  </div></div>
+</div>
+
+<div class="card">
+  <div class="card-h"><h3>References</h3></div>
+  <div class="card-b"><div class="grid">
+    {{ field('po_no', r.fields.po_no, 'Buyer order number') }}
+    {{ field('po_date', r.fields.po_date, 'Buyer order date') }}
+    {{ field('ho_reference', r.fields.ho_reference, 'HO reference') }}
+    {{ field('delivery_note', r.fields.delivery_note, 'Delivery note') }}
+    {{ field('dispatch_doc_no', r.fields.dispatch_doc_no, 'Dispatch doc number') }}
+    {{ field('payment_terms', r.fields.payment_terms, 'Payment terms', true) }}
+  </div>
+  <div class="note n-warn" style="margin:12px 0 0">
+    Delivery note and dispatch doc number are the two fields Tally keeps for
+    <i>our</i> challan number. They arrive blank because nobody at HO fills
+    them. That is the missing link between the two systems, not a parser fault.
+  </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-h"><h3>Declared by the invoice — checked, never copied</h3></div>
+  <div class="card-b">
+    <div class="grid">
+      {{ field('quantity', r.compare_only.quantity, 'Quantity') }}
+      {{ field('model', r.compare_only.model, 'Model') }}
+      {{ field('hsn', r.compare_only.hsn, 'HSN') }}
+    </div>
+    <div class="note {{ 'n-fail' if blocked else 'n-info' }}" style="margin:12px 0 0">
+      {% if expect %}
+        Boxes scanned total <b>{{ expect }}</b>, invoice declares
+        <b>{{ r.compare_only.quantity.value }}</b>.
+        {% if blocked %}These must match. Correct the packing or ask HO to
+        reissue — there is no override.{% else %}They match.{% endif %}
+      {% else %}
+        No scanned total entered, so nothing is being reconciled yet. The
+        challan cannot be issued until it is.
+      {% endif %}
+    </div>
+    <p class="hint" style="margin-top:9px">
+      Rate, amount and tax are never read from the invoice.</p>
+  </div>
+</div>
+
+<div class="card"><div class="card-f">
+  <button class="btn btn-primary" {{ 'disabled' if blocked }}>
+    {{ 'Cannot save — resolve the block above' if blocked else 'Save this invoice' }}</button>
+  <button class="btn btn-ghost" formaction="{{ url_for('invoice_cancel') }}"
+          formnovalidate>Discard</button>
+  <span class="sp hint">The PDF is stored with the record.</span>
+</div></div>
+</form>
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}{% set nav='settings' %}
+{% block body %}
+<form method="post">
+<div class="card"><div class="card-h"><h3>Evidence sources</h3></div>
+<div class="card-b">
+  <div class="note n-info">FQC reads these <b>directly</b>, not through the
+  server. SS, EL and FQC share one switch; the server is about four switches
+  away. Routing evidence via the server would make FQC depend on hops the data
+  never needs to cross.</div>
+  <div class="grid">
+    <div class="fld" style="grid-column:1/-1"><label>Sun Simulator CSV</label>
+      <input name="ss_csv_path" value="{{ cfg.ss_csv_path }}"
+             placeholder="\\\\SS-PC\\share\\results.csv">
+      <div class="why">{{ probe.ss.note }}</div></div>
+    <div class="fld"><label>Serial column index</label>
+      <input name="ss_serial_col" value="{{ cfg.ss_serial_col }}"></div>
+    <div class="fld"><label>Pmax column index</label>
+      <input name="ss_pmax_col" value="{{ cfg.ss_pmax_col }}"></div>
+    <div class="fld" style="grid-column:1/-1"><label>EL image root folder</label>
+      <input name="el_root" value="{{ cfg.el_root }}"
+             placeholder="\\\\EL-PC\\output">
+      <div class="why">{{ probe.el.note }} The folder name a file sits in is
+        the operator's verdict.</div></div>
+  </div>
+</div></div>
+
+<div class="card"><div class="card-h"><h3>Plant</h3></div>
+<div class="card-b"><div class="grid">
+  <div class="fld"><label>Unit</label><input name="unit" value="{{ cfg.unit }}">
+    <div class="why">Unit-2 issues v2 serials. Unit-1 never moved and still
+      issues v1, so format follows the unit, not only the date.</div></div>
+  <div class="fld"><label>Pallet ceiling</label>
+    <input name="pallet_ceiling" value="{{ cfg.pallet_ceiling }}">
+    <div class="why">From frame thickness: 30 mm gives 36, 36 mm gives 30. An
+      indent may instruct fewer, never more.</div></div>
+</div></div>
+<div class="card-f"><button class="btn btn-primary">Save settings</button></div></div>
+</form>
+{% endblock %}

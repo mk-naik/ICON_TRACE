@@ -1,0 +1,138 @@
+<div class="pg"><h2>Indent</h2>
+  <p>Marketing's instruction to the factory &middot; form IS-HO-MRK-FM-03</p>
+  <div class="pg-act">
+    <button class="btn btn-primary" onclick="indNew()">New indent</button>
+    <button class="btn" data-role="export">Export table</button>
+  </div>
+</div>
+
+<div id="indForm" style="display:none"></div>
+
+<div class="card" data-itable="indents" data-export="indents">
+  <div class="card-b" style="border-bottom:1px solid var(--line2);padding-bottom:12px">
+    <div class="grid g5" style="align-items:end">
+      <div class="fld"><label>Search</label>
+        <input data-role="search" placeholder="indent, customer, item"></div>
+      <div class="fld"><label>Customer</label>
+        <select data-role="filter" data-col="1" id="ixCust">
+          <option value="">All customers</option></select></div>
+      <div class="fld"><label>Item</label>
+        <select data-role="filter" data-col="2" data-match="has" id="ixItem">
+          <option value="">All items</option></select></div>
+      <div class="fld"><label>Cell type</label>
+        <select data-role="filter" data-col="3">
+          <option value="">All</option><option>DCR</option><option>NDCR</option></select></div>
+      <div class="fld"><label>Status</label>
+        <select data-role="filter" data-col="8" data-match="has" id="ixStat">
+          <option value="">All</option><option>open</option><option>complete</option></select></div>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+      <button class="btn btn-sm btn-ghost" data-role="reset">Reset</button>
+      <span class="tag t-mute" data-role="count"></span>
+    </div>
+  </div>
+  <div class="card-h"><h3>Indents</h3></div>
+  <div class="scroll">
+    <table><thead><tr>
+      <th>Indent</th><th>Customer</th><th>Item</th><th>Cell</th>
+      <th class="num">Ordered</th><th class="num">KW</th>
+      <th class="num">Dispatched</th><th class="num">Remaining</th>
+      <th>Status</th><th>Due</th><th></th>
+    </tr></thead><tbody id="indRows"></tbody></table>
+  </div>
+  <div class="card-b hint">Dispatched and Remaining are counted, never typed.
+    Both columns have sat blank on the paper form since 2016.</div>
+</div>
+
+<script>
+(function () {
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+
+  window.indRefresh = function () {
+    fetch('/api/indents', {cache:'no-store'}).then(function(r){return r.json();})
+      .then(function (rows) {
+        var tb = document.getElementById('indRows');
+        if (!rows.length) {
+          tb.innerHTML = '<tr data-empty><td colspan="11" style="padding:18px;' +
+            'color:var(--ink3)">No indents yet. Create one, then allocate ' +
+            'against it in Planning.</td></tr>';
+          if (window.iconTable) window.iconTable.wireAll();
+          return;
+        }
+        tb.innerHTML = rows.map(function (p) {
+          /* An indent can be edited while nothing has been allocated against
+             it. Once serials exist the instruction has been acted on, so the
+             quantity is history and only the header may change. */
+          var started = p.dispatched_qty > 0 || p.allocated_qty > 0;
+          var status = p.remaining_qty <= 0 ? 'complete'
+                     : started ? 'in progress' : 'open';
+          return '<tr><td class="mono">' + esc(p.indent_no) + '</td>' +
+            '<td>' + esc(p.customer) + '</td>' +
+            '<td class="mono">' + esc(p.item || p.model) + '</td>' +
+            '<td><span class="tag ' + (p.dcr === 'DCR' ? 't-pass' : 't-mute') +
+              '">' + esc(p.dcr) + '</span></td>' +
+            '<td class="num">' + p.ordered_qty + '</td>' +
+            '<td class="num">' + p.ordered_kw + '</td>' +
+            '<td class="num">' + p.dispatched_qty + '</td>' +
+            '<td class="num"><b>' + p.remaining_qty + '</b></td>' +
+            '<td><span class="tag ' + (status === 'complete' ? 't-pass'
+                : status === 'open' ? 't-mute' : 't-rev') + '">' + status +
+              '</span></td>' +
+            '<td>' + esc(p.delivery_by || '—') + '</td>' +
+            '<td><button class="btn btn-ghost btn-sm" onclick="indEdit(\'' +
+              esc(p.indent_no) + '\')">' + (started ? 'Header' : 'Edit') +
+              '</button></td></tr>';
+        }).join('');
+        fillIndentFilters(rows);
+        if (window.iconTable) window.iconTable.wireAll();
+      });
+  };
+
+  function fillIndentFilters(rows) {
+    var uniq = function (k) {
+      var seen = {}, out = [];
+      rows.forEach(function (r) { if (r[k] && !seen[r[k]]) { seen[r[k]] = 1; out.push(r[k]); } });
+      return out.sort();
+    };
+    [['ixCust', 'customer', 'All customers'],
+     ['ixItem', 'item', 'All items']].forEach(function (t) {
+      var sel = document.getElementById(t[0]);
+      if (!sel) return;
+      var keep = sel.value;
+      sel.innerHTML = '<option value="">' + t[2] + '</option>' +
+        uniq(t[1]).map(function (v) {
+          return '<option>' + esc(v) + '</option>'; }).join('');
+      sel.value = keep;
+    });
+  }
+
+  window.indEdit = function (no) {
+    fetch('/api/indent/' + encodeURIComponent(no), {cache:'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.error) { if (typeof toast === 'function') toast(d.error); return; }
+        indNew();
+        setTimeout(function () {
+          if (window.indLoadForEdit) window.indLoadForEdit(d);
+        }, 250);
+      });
+  };
+
+  window.indNew = function () {
+    var box = document.getElementById('indForm');
+    if (box.style.display === '') { box.style.display = 'none'; return; }
+    box.style.display = '';
+    fetch('/view/indent-form', {cache:'no-store'})
+      .then(function(r){return r.text();}).then(function (h) {
+        box.innerHTML = h;
+        box.querySelectorAll('script').forEach(function (o) {
+          var n = document.createElement('script');
+          n.textContent = o.textContent; o.parentNode.replaceChild(n, o);
+        });
+      });
+  };
+
+  indRefresh();
+})();
+</script>

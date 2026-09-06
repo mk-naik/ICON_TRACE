@@ -1,0 +1,81 @@
+<div class="pg"><h2>Evidence Sources</h2>
+  <p>Where FQC reads the Sun Simulator and EL from</p></div>
+
+<div class="note n-info">FQC reads these <b>directly</b>, not through the
+  server. SS, EL and FQC share one switch; the server is about four switches
+  away. Routing evidence via the server would make FQC depend on hops the data
+  never needs to cross.</div>
+
+<div class="card"><div class="card-h"><h3>Sun Simulator</h3>
+  <div class="ch-r"><span class="tag {{ 't-pass' if probe.ss.state=='OK' else 't-rev' }}">{{ probe.ss.state }}</span></div></div>
+<div class="card-b"><div class="grid g4">
+  <div class="fld" style="grid-column:1/-1"><label>CSV path</label>
+    <input id="s_ss" value="{{ cfg.ss_csv_path }}" placeholder="\\\\SS-PC\\share\\results.csv">
+    <div class="hint">{{ probe.ss.note }}</div></div>
+  <div class="fld"><label>Serial column</label><input id="s_scol" value="{{ cfg.ss_serial_col }}"></div>
+  <div class="fld"><label>Pmax column</label><input id="s_pcol" value="{{ cfg.ss_pmax_col }}">
+    <div class="hint">Column 2 in the real export. Column 10 is Rsh.</div></div>
+</div></div></div>
+
+<div class="card"><div class="card-h"><h3>EL images</h3>
+  <div class="ch-r"><span class="tag {{ 't-pass' if probe.el.state=='OK' else 't-rev' }}">{{ probe.el.state }}</span></div></div>
+<div class="card-b"><div class="grid g4">
+  <div class="fld" style="grid-column:1/-1"><label>Root folder</label>
+    <input id="s_el" value="{{ cfg.el_root }}" placeholder="\\\\EL-PC\\output">
+    <div class="hint">{{ probe.el.note }} The folder a file sits in is the
+      operator&rsquo;s verdict.</div></div>
+</div></div></div>
+
+<div class="card"><div class="card-h"><h3>Plant</h3></div>
+<div class="card-b"><div class="grid g4">
+  <div class="fld"><label>Unit</label><input id="s_unit" value="{{ cfg.unit }}">
+    <div class="hint">Unit-2 issues v2 serials. Unit-1 never moved.</div></div>
+  <div class="fld"><label>Pallet ceiling</label><input id="s_cap" value="{{ cfg.pallet_ceiling }}">
+    <div class="hint">30&nbsp;mm frame gives 36, 36&nbsp;mm gives 30. An indent
+      may instruct fewer, never more.</div></div>
+</div></div>
+<div class="card-f"><button class="btn btn-primary" onclick="setSave()">Save</button>
+  <span class="sp hint" id="s_msg"></span></div></div>
+
+<div class="card"><div class="card-h"><h3>Database</h3>
+  <div class="ch-r"><span class="tag t-mute mono" id="s_db"></span></div></div>
+<div class="card-b">
+  <p class="hint">One file beside the application. While the system is being
+    tested the data in it is test data, so it is thrown away rather than
+    migrated &mdash; a bad import leaves nothing behind and there is no schema
+    to drop before production.</p>
+  <div id="s_stats" class="hint mono" style="margin-top:8px"></div>
+</div>
+<div class="card-f"><button class="btn btn-ghost" onclick="dbReset()">Delete all data and start clean</button></div></div>
+
+<script>
+(function(){
+  function g(id){return document.getElementById(id).value.trim();}
+  window.setSave=function(){
+    fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ss_csv_path:g('s_ss'),ss_serial_col:g('s_scol'),
+        ss_pmax_col:g('s_pcol'),el_root:g('s_el'),unit:g('s_unit'),
+        pallet_ceiling:g('s_cap')})})
+     .then(function(r){return r.json();}).then(function(){
+       document.getElementById('s_msg').textContent='Saved.';
+       if(typeof toast==='function') toast('Evidence sources saved.');
+       if(window.iconLoadView) iconLoadView('settings','/view/settings');
+     });
+  };
+  window.dbReset=function(){
+    if(!confirm('Delete every record and start from an empty database?')) return;
+    fetch('/api/db/reset',{method:'POST'}).then(function(r){return r.json();})
+     .then(function(){ if(typeof toast==='function') toast('Database cleared.');
+       if(window.iconRefresh) iconRefresh();
+       if(window.iconLoadView) iconLoadView('settings','/view/settings'); });
+  };
+  fetch('/api/db/stats',{cache:'no-store'}).then(function(r){return r.json();})
+   .then(function(d){
+     document.getElementById('s_db').textContent=d._file.split(/[\\/]/).pop()+
+       ' · '+Math.round(d._bytes/1024)+' KB';
+     document.getElementById('s_stats').textContent=Object.keys(d)
+       .filter(function(k){return k[0]!=='_'&&d[k];})
+       .map(function(k){return k+' '+d[k];}).join('  ·  ') || 'empty';
+   });
+})();
+</script>

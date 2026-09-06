@@ -1,0 +1,47 @@
+{% extends "base.html" %}{% set nav='search' %}
+{% block body %}
+<div class="pg"><h2>Search &amp; Trace</h2>
+  <p>One serial, everything known about it</p></div>
+
+<div class="card"><form method="get"><div class="card-b">
+  <div class="fld"><label>Serial</label>
+    <input name="q" value="{{ q }}" autofocus placeholder="ICON630R1282710070"></div>
+</div><div class="card-f"><button class="btn btn-primary">Trace</button></div></form></div>
+
+{% if q and not hit %}
+<div class="note n-fail"><b>{{ q }}</b> is not in the serial master. That is a
+serial-existence issue, so the Incharge clears it — not Quality.</div>
+{% endif %}
+
+{% if hit %}
+<div class="card"><div class="card-h"><h3>{{ hit.serial }}</h3>
+  <span class="sp"><span class="tag t-mute">{{ hit.master.state }}</span>
+  {% if hit.master.grade %}<span class="tag {{ 't-pass' if hit.master.grade=='A' else 't-rev' }}">{{ hit.master.grade }}</span>{% endif %}</span></div>
+<div class="card-b"><div class="kpi">
+  <div><span>Model</span><b style="font-size:14px">{{ hit.master.model }}</b></div>
+  <div><span>Wattage</span><b>{{ hit.master.wattage }}W</b></div>
+  <div><span>Produced</span><b style="font-size:14px">{{ hit.master.date_produced }}</b></div>
+  <div><span>Shift</span><b>{{ hit.master.shift }}</b></div>
+  <div><span>Customer</span><b style="font-size:13px">{{ hit.master.customer or 'General Stock' }}</b></div>
+</div></div></div>
+
+<div class="card"><div class="card-h"><h3>FQC history</h3></div>
+{% if hit.fqc %}<table>
+<thead><tr><th>When</th><th>Grade</th><th>Mode</th><th>Pmax</th><th>EL</th>
+<th>By</th><th>Reason</th></tr></thead><tbody>
+{% for r in hit.fqc %}<tr><td>{{ r.at }}</td>
+<td><span class="tag {{ 't-pass' if r.grade=='A' else 't-rev' }}">{{ r.grade }}</span></td>
+<td>{{ r.mode }}</td><td class="mono">{{ r.ss_pmax or r.ss_state }}</td>
+<td>{{ r.el_verdict or r.el_state }}</td><td>{{ r.decided_by }}</td>
+<td class="hint">{{ r.reason or '' }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<div class="card-b hint">Not graded yet.</div>{% endif %}
+<div class="card-b hint">Evidence is snapshotted onto each record, so a later
+re-import cannot rewrite why this module was graded.</div></div>
+
+<div class="card"><div class="card-h"><h3>Box</h3></div>
+<div class="card-b">{% if hit.box %}
+  <b class="mono">{{ hit.box.legacy_box_no or hit.box.seq }}</b> ·
+  packed {{ hit.box.pack_date }} · {{ hit.box.qty }} modules
+{% else %}<span class="hint">Not packed.</span>{% endif %}</div></div>
+{% endif %}
+{% endblock %}

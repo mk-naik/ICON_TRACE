@@ -1,0 +1,35 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>{{ L.box_no }}</title>
+<style>
+ @page { size: 100mm 150mm; margin: 4mm }
+ body{font-family:-apple-system,'Segoe UI',Arial,sans-serif;margin:0;color:#0E1A2B}
+ .lab{width:92mm;border:1.5px solid #0E1A2B;padding:4mm}
+ h1{font-size:15pt;letter-spacing:-.3px;margin-bottom:1mm}
+ .no{font-family:Consolas,monospace;font-size:17pt;font-weight:700}
+ .grade{font-size:34pt;font-weight:800;line-height:1;text-align:center;
+        border:2px solid #0E1A2B;padding:2mm 0;margin:3mm 0}
+ table{width:100%;border-collapse:collapse;font-size:8pt;margin-top:2mm}
+ td{border-bottom:.4px solid #bbb;padding:.7mm 1mm;font-family:Consolas,monospace}
+ .meta{font-size:9pt;margin-top:2mm} .meta b{display:inline-block;width:22mm}
+ @media print{.noprint{display:none}}
+</style></head><body>
+<div class="lab">
+  <h1>ICON SOLAR · PACKING LIST</h1>
+  <div class="no">{{ L.box_no }}</div>
+  <div class="grade">{{ L.grade_display }}</div>
+  <div class="meta">
+    <div><b>Model</b> {{ L.model }}</div>
+    <div><b>Quantity</b> {{ L.qty }}{% if L.partial %} &nbsp;(PARTIAL of {{ L.capacity }}){% endif %}</div>
+    <div><b>Packed</b> {{ L.pack_date }}{% if L.shift %} · shift {{ L.shift }}{% endif %}</div>
+    {% if L.bin %}<div><b>Bin</b> {{ L.bin }}</div>{% endif %}
+  </div>
+  <table><tbody>
+  {% for s in L.serials %}<tr><td style="width:8mm">{{ loop.index }}</td><td>{{ s }}</td></tr>{% endfor %}
+  </tbody></table>
+</div>
+<p class="noprint" style="margin:6mm;font-size:11px;color:#666">
+  Every module in this box shares one model, one grade and one customer — the
+  system refuses to close a mixed box. No customer, challan or invoice appears
+  here: a box may wait months before it is dispatched.
+  <button onclick="print()">Print</button></p>
+</body></html>

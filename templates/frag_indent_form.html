@@ -1,0 +1,210 @@
+<div class="card"><div class="card-h"><h3>New indent &middot; IS-HO-MRK-FM-03</h3>
+  <span class="sp hint">typed, not parsed</span></div>
+<div class="card-b">
+  <div class="note n-info">Ten fields and two different layouts across two real
+    samples &mdash; a parser would cost more than it saves. The PDF is attached
+    as the record of what Marketing actually instructed.</div>
+  <div id="indErr"></div>
+
+  <div class="grid g4">
+    <div class="fld req"><label>Indent number</label>
+      <input id="i_no" placeholder="AUG-05/2026"
+             oninput="this.style.borderColor='';this.style.background=''"></div>
+    <div class="fld req"><label>Indent date</label><input id="i_date" type="date"></div>
+    <div class="fld req"><label>Customer</label>
+      <input id="i_cust" list="i_custlist" autocomplete="off" placeholder="start typing&hellip;">
+      <datalist id="i_custlist">
+        {% for c in customers %}<option value="{{ c }}">{% endfor %}
+      </datalist>
+      <div class="hint">Suggests every customer already on an indent, invoice
+        or challan, so one company is not spelled three ways.</div></div>
+    <div class="fld"><label>Area</label><input id="i_area" placeholder="MIZORAM"></div>
+
+    <div class="fld"><label>Build type</label>
+      <select id="i_build">
+        <option value="make_to_stock">Make to stock (common)</option>
+        <option value="make_to_order">Make to order (un-common)</option>
+      </select>
+      <div class="hint">Icon&rsquo;s own words from the Jan-2025 SRS.</div></div>
+    <div class="fld"><label>Lot name</label><input id="i_lot" placeholder="optional"></div>
+    <div class="fld"><label>Delivery by (real date)</label><input id="i_by" type="date"></div>
+    <div class="fld"><label>Delivery as written</label>
+      <input id="i_text" placeholder="NEXT WEEK">
+      <div class="hint">Kept for the record. A real date goes beside it &mdash;
+        &ldquo;NEXT WEEK&rdquo; cannot be sorted or chased.</div></div>
+
+    <div class="fld"><label>Prepared by</label><input id="i_prep" value="Akansha Reddy"></div>
+    <div class="fld"><label>Approved by</label><input id="i_appr" placeholder="Marketing HOD"></div>
+    <div class="fld" style="grid-column:1/-1"><label>Special instructions</label>
+      <textarea id="i_note" rows="2"></textarea></div>
+    <div class="fld" style="grid-column:1/-1"><label>Indent PDF</label>
+      <input id="i_pdf" type="file" accept=".pdf,.png,.jpg"></div>
+  </div>
+</div></div>
+
+<div class="card"><div class="card-h"><h3>Items</h3>
+  <span class="sp hint">one item per model and cell type &mdash; the same model
+  can appear twice, once DCR and once NDCR</span></div>
+<div class="card-b"><div id="i_items"></div>
+  <button class="btn btn-sm" onclick="indAddItem()">+ Add item</button></div>
+<div class="card-f">
+  <button class="btn btn-primary" onclick="indSave()">Save indent</button>
+  <button class="btn btn-ghost" onclick="indNew()">Cancel</button>
+  <span class="sp hint" id="i_tot"></span>
+</div></div>
+
+<template id="i_tpl">
+  <div class="grid g4 i_row" style="margin-bottom:14px;padding-bottom:14px;
+       border-bottom:1px solid var(--line2)">
+    <div class="fld" style="grid-column:1/-1"><label>Item <span class="i_n"></span></label>
+      <select class="i_item" onchange="indFill(this)">
+        <option value="">&mdash; choose &mdash;</option>
+        {% for it in catalog %}<option value="{{ it.item_code }}">{{ it.item }}{% if not it.produced %} &middot; not yet produced{% endif %}</option>{% endfor %}
+      </select></div>
+    <div class="fld"><label>Item code</label><input class="i_code" readonly tabindex="-1"></div>
+    <div class="fld"><label>Wattage</label><input class="i_watt" readonly tabindex="-1"></div>
+    <div class="fld"><label>Cell type</label><input class="i_dcr" readonly tabindex="-1">
+      <div class="hint">Comes with the item.</div></div>
+    <div class="fld"><label>Quantity</label>
+      <input class="i_qty" type="number" min="1" step="1" inputmode="numeric"
+             oninput="indQty(this)"></div>
+    <div class="fld"><label>KW</label><input class="i_kw" readonly tabindex="-1">
+      <div class="hint">Derived, never typed.</div></div>
+    <div class="fld"><label>Glass</label>
+      <select class="i_arc"><option value="">&mdash;</option><option>ARC</option><option>NARC</option></select></div>
+    <div class="fld"><label>Per pallet</label>
+      <input class="i_pal" type="number" min="1" step="1" placeholder="36">
+      <div class="hint">Blank uses the ceiling.</div></div>
+    <div style="grid-column:1/-1">
+      <button class="btn btn-sm btn-ghost" onclick="indDrop(this)">Remove this item</button></div>
+  </div>
+</template>
+
+<script>
+var IT = {{ model_json | safe }};
+
+function indAddItem(){
+  var f = document.getElementById('i_tpl').content.cloneNode(true);
+  document.getElementById('i_items').appendChild(f);
+  var rows = document.querySelectorAll('.i_row');
+  rows[rows.length-1].querySelector('.i_n').textContent = rows.length;
+}
+function indFill(sel){
+  var r = sel.closest('.i_row'), m = IT[sel.value];
+  if(!m){ return; }
+  r.querySelector('.i_code').value = sel.value;
+  r.querySelector('.i_watt').value = m.wattage;
+  r.querySelector('.i_dcr').value  = m.cell_type;
+  r.querySelector('.i_pal').placeholder = m.pallet_ceiling;
+  indQty(r.querySelector('.i_qty'));
+}
+/* Modules are whole things. A fractional quantity is always a typo, so it is
+   corrected in the field rather than accepted and rejected on save. */
+function indQty(inp){
+  if(inp.value !== ''){
+    var n = Math.floor(Math.abs(parseFloat(inp.value) || 0));
+    if(String(n) !== inp.value) inp.value = n ? n : '';
+  }
+  var r = inp.closest('.i_row');
+  var w = parseFloat(r.querySelector('.i_watt').value)||0;
+  var q = parseInt(r.querySelector('.i_qty').value,10)||0;
+  r.querySelector('.i_kw').value = (w&&q) ? (w*q/1000).toFixed(2) : '';
+  var tot=0, qt=0;
+  document.querySelectorAll('.i_row').forEach(function(x){
+    tot += parseFloat(x.querySelector('.i_kw').value)||0;
+    qt  += parseInt(x.querySelector('.i_qty').value,10)||0; });
+  document.getElementById('i_tot').textContent =
+    qt ? (qt + ' modules · ' + tot.toFixed(2) + ' KW') : '';
+}
+function indDrop(b){
+  if(document.querySelectorAll('.i_row').length>1){
+    b.closest('.i_row').remove();
+    document.querySelectorAll('.i_row').forEach(function(r,i){
+      r.querySelector('.i_n').textContent = i+1; });
+  }
+  var q=document.querySelector('.i_qty'); if(q) indQty(q);
+}
+function indSave(){
+  var g=function(id){return document.getElementById(id).value.trim();};
+  var items=[];
+  document.querySelectorAll('.i_row').forEach(function(r){
+    var code=r.querySelector('.i_item').value,
+        qty=parseInt(r.querySelector('.i_qty').value,10);
+    if(code&&qty>0) items.push({item_code:code, qty:qty,
+      arc:r.querySelector('.i_arc').value||null,
+      pallet_qty:parseInt(r.querySelector('.i_pal').value,10)||null});
+  });
+  var editing=window.__indEditing;
+  fetch(editing?('/api/indent/'+encodeURIComponent(editing)):'/api/indent',
+    {method:editing?'PUT':'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({indent_no:g('i_no'),indent_date:g('i_date'),
+      customer:g('i_cust'),lot_name:g('i_lot'),area:g('i_area'),
+      build_type:g('i_build'),delivery_by:g('i_by'),delivery_text:g('i_text'),
+      prepared_by:g('i_prep'),approved_by:g('i_appr'),
+      special_instructions:g('i_note'),items:items})})
+   .then(function(r){return r.json();}).then(function(d){
+     var e=document.getElementById('indErr');
+     if(d.errors&&d.errors.length){
+       /* Amber for something the operator can simply change; red for a
+          collision with a record that already exists. A plain grey box beside
+          an empty field reads like a hint, not a refusal. */
+       e.innerHTML=d.errors.map(function(x){
+         var dup=/already exists/i.test(x);
+         return '<div class="note '+(dup?'n-bad':'n-warn')+'"><span>'+
+           (dup?'\u2691':'\u26A0')+'</span><span>'+x+'</span></div>';}).join('');
+       var no=document.getElementById('i_no');
+       if(/already exists/i.test(d.errors.join(' '))&&no){
+         no.style.borderColor='var(--fail)';
+         no.style.background='var(--fail-lt)';
+         no.focus();
+       }
+       e.scrollIntoView({behavior:'smooth',block:'nearest'});
+       return;
+     }
+     e.innerHTML='';
+     window.__indEditing=null;
+     indNew();
+     if(window.indRefresh) indRefresh();
+     if(window.iconRefresh) iconRefresh();
+     if(typeof toast==='function') toast('Indent '+d.indent_no+' saved with '+
+       d.items+' item(s).');
+   });
+}
+/* Reopening an existing indent. The header can always be corrected; the items
+   can only change while nothing has been allocated against them, because after
+   that the instruction has already been acted on. */
+window.indLoadForEdit=function(d){
+  var set=function(id,v){var e=document.getElementById(id); if(e&&v!=null)e.value=v;};
+  set('i_no',d.indent_no); set('i_date',d.indent_date); set('i_cust',d.customer);
+  set('i_lot',d.lot_name); set('i_area',d.area); set('i_build',d.build_type);
+  set('i_by',d.delivery_by); set('i_text',d.delivery_text);
+  set('i_prep',d.prepared_by); set('i_appr',d.approved_by);
+  set('i_note',d.special_instructions);
+  document.getElementById('i_no').readOnly=true;
+  document.getElementById('i_items').innerHTML='';
+  (d.items||[]).forEach(function(it){
+    indAddItem();
+    var rows=document.querySelectorAll('.i_row'), r=rows[rows.length-1];
+    r.querySelector('.i_item').value=it.item_code;
+    indFill(r.querySelector('.i_item'));
+    r.querySelector('.i_qty').value=it.qty;
+    if(it.arc) r.querySelector('.i_arc').value=it.arc;
+    if(it.pallet_qty) r.querySelector('.i_pal').value=it.pallet_qty;
+    indQty(r.querySelector('.i_qty'));
+    if(d.locked){
+      r.querySelectorAll('select,input').forEach(function(f){
+        if(!f.readOnly) f.disabled=true; });
+    }
+  });
+  var err=document.getElementById('indErr');
+  err.innerHTML=d.locked?
+    '<div class="note n-warn"><span>\u26A0</span><span>Serials have already been '+
+    'allocated against this indent, so the items are fixed \u2014 the instruction '+
+    'has been acted on. The header can still be corrected.</span></div>':
+    '<div class="note n-info"><span>\u2139</span><span>Editing <b>'+d.indent_no+
+    '</b>. Nothing has been allocated against it yet, so items can still change.</span></div>';
+  window.__indEditing=d.indent_no;
+};
+
+indAddItem();
+</script>

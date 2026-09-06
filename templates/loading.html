@@ -1,0 +1,150 @@
+{% extends "base.html" %}{% set nav='loading' %}
+{% block body %}
+<div class="pg"><h2>Loading Verification</h2>
+  <p>Team 3 · confirm a pallet is intact before it goes on the truck</p></div>
+
+<div class="note n-info">
+  This screen <b>writes nothing</b>. It compares what is physically in front of
+  you against what the system recorded when the pallet was closed. That is what
+  makes it a check rather than another record — if it wrote, it could be made
+  to agree with itself.
+</div>
+
+<div class="card"><div class="card-h"><h3>1 · Scan the pallet</h3></div>
+<div class="card-b">
+  <div class="grid"><div class="fld" style="grid-column:1/-1">
+    <label>Pallet / packing list number</label>
+    <input id="boxIn" autofocus placeholder="ISPL260901/K001 — scan the pallet QR or type it">
+    <div class="why">The QR on the pallet sheet carries this number.</div>
+  </div></div>
+</div><div class="card-f">
+  <button class="btn btn-primary" onclick="loadBox()">Load its serials</button>
+  <button class="btn btn-ghost" onclick="resetAll()">Start again</button>
+  <span class="sp" id="boxInfo"></span>
+</div></div>
+
+<div class="card" id="verifyCard" style="display:none">
+  <div class="card-h"><h3>2 · Scan every module</h3>
+    <span class="sp">
+      <span class="tag t-pass" id="okCount">0 matched</span>
+      <span class="tag t-fail" id="badCount">0 unexpected</span>
+      <span class="tag t-mute" id="leftCount">0 not yet scanned</span>
+    </span></div>
+  <div class="card-b">
+    <div class="grid"><div class="fld" style="grid-column:1/-1">
+      <label>Scan module barcode</label>
+      <input id="scanIn" placeholder="scan — the cursor stays here">
+    </div></div>
+    <div id="lastMsg" style="margin-top:10px"></div>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th style="width:46px">#</th>
+      <th>Recorded in the system</th>
+      <th>Scanned on the floor</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <div class="card-b" id="verdict"></div>
+</div>
+
+<script>
+var EXPECTED = [], SCANNED = {}, EXTRA = [], BOX = null;
+
+function esc(s){return (s||'').replace(/[&<>]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+
+function loadBox(){
+  var no = document.getElementById('boxIn').value.trim();
+  if(!no) return;
+  fetch('/api/loading/box?no=' + encodeURIComponent(no))
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(d.error){ document.getElementById('boxInfo').innerHTML =
+        '<span class="tag t-fail">' + esc(d.error) + '</span>'; return; }
+      BOX = d; EXPECTED = d.serials; SCANNED = {}; EXTRA = [];
+      document.getElementById('boxInfo').innerHTML =
+        '<span class="hint">' + esc(d.model) + ' · grade ' + esc(d.grade) +
+        ' · packed ' + esc(d.pack_date) + ' · ' + d.serials.length + ' modules</span>';
+      document.getElementById('verifyCard').style.display = '';
+      render();
+      document.getElementById('scanIn').focus();
+    });
+}
+
+function render(){
+  var tb = document.getElementById('rows'), html = '';
+  EXPECTED.forEach(function(s, i){
+    var hit = SCANNED[s];
+    html += '<tr>' +
+      '<td class="mono">' + (i+1) + '</td>' +
+      '<td class="mono">' + esc(s) + '</td>' +
+      '<td class="mono" style="' + (hit ?
+          'background:var(--pass-lt);color:var(--pass);font-weight:700' : '') + '">' +
+      (hit ? esc(s) : '<span style="color:var(--ink3)">—</span>') + '</td></tr>';
+  });
+  EXTRA.forEach(function(s){
+    html += '<tr>' +
+      '<td class="mono">!</td>' +
+      '<td class="mono" style="color:var(--ink3)">not in this pallet</td>' +
+      '<td class="mono" style="background:var(--fail-lt);color:var(--fail);' +
+      'font-weight:700">' + esc(s) + '</td></tr>';
+  });
+  tb.innerHTML = html;
+
+  var ok = Object.keys(SCANNED).length;
+  document.getElementById('okCount').textContent = ok + ' matched';
+  document.getElementById('badCount').textContent = EXTRA.length + ' unexpected';
+  document.getElementById('leftCount').textContent =
+    (EXPECTED.length - ok) + ' not yet scanned';
+
+  var v = document.getElementById('verdict');
+  if(ok === EXPECTED.length && EXTRA.length === 0){
+    v.innerHTML = '<div class="note n-pass"><b>Pallet verified.</b> Every ' +
+      'module recorded at packing is physically present, and nothing else is. ' +
+      'Safe to load.</div>';
+  } else if(EXTRA.length){
+    v.innerHTML = '<div class="note n-fail"><b>' + EXTRA.length + ' module(s) ' +
+      'in this pallet were never packed into it.</b> The pallet has been opened ' +
+      'since it was closed. Do not load it — send it to Quality.</div>';
+  } else if(ok < EXPECTED.length){
+    v.innerHTML = '<div class="note n-warn">' + (EXPECTED.length - ok) +
+      ' still to scan.</div>';
+  }
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+  var inp = document.getElementById('scanIn');
+  inp.addEventListener('keydown', function(e){
+    if(e.key !== 'Enter') return;
+    e.preventDefault();
+    var s = inp.value.trim().toUpperCase();
+    inp.value = '';
+    if(!s) return;
+    var msg = document.getElementById('lastMsg');
+    if(SCANNED[s]){
+      msg.innerHTML = '<div class="note n-warn">' + esc(s) +
+        ' was already scanned.</div>';
+    } else if(EXPECTED.indexOf(s) !== -1){
+      SCANNED[s] = true;
+      msg.innerHTML = '<div class="note n-pass">' + esc(s) + ' matched.</div>';
+    } else if(EXTRA.indexOf(s) === -1){
+      EXTRA.push(s);
+      msg.innerHTML = '<div class="note n-fail">' + esc(s) +
+        ' is not in this pallet.</div>';
+    }
+    render();
+  });
+});
+
+function resetAll(){
+  EXPECTED = []; SCANNED = {}; EXTRA = []; BOX = null;
+  document.getElementById('verifyCard').style.display = 'none';
+  document.getElementById('boxInfo').innerHTML = '';
+  document.getElementById('boxIn').value = '';
+  document.getElementById('boxIn').focus();
+}
+</script>
+{% endblock %}

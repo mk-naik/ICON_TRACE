@@ -1,0 +1,131 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>{{ box_no }}</title>
+<style>
+ @page{size:A4;margin:8mm}
+ body{font-family:Arial,Helvetica,sans-serif;margin:0;color:#000;font-size:10pt}
+ .sheet{border:1.5px solid #000}
+ .hd{display:flex;align-items:center;border-bottom:1.5px solid #000}
+ .hd .lg{width:26mm;padding:3mm;border-right:1px solid #000;text-align:center}
+ .hd .lg b{font-size:13pt;letter-spacing:-.5px}
+ .hd .ti{flex:1;padding:3mm;text-align:center}
+ .hd .ti h1{font-size:12.5pt;margin:0}
+ .hd .ti div{font-size:8pt;margin-top:1mm}
+ .meta{display:flex;border-bottom:1.5px solid #000}
+ .meta table{flex:1;border-collapse:collapse;font-size:9.5pt}
+ .meta td{border:1px solid #000;padding:1.6mm 2.5mm}
+ .meta td.k{font-weight:700;width:34mm;background:#F2F2F2}
+ .meta .qr{width:42mm;padding:3mm;text-align:center;border-left:1px solid #000}
+ .meta .qr svg{width:34mm;height:34mm}
+ table.uid{width:100%;border-collapse:collapse}
+ table.uid th{border:1px solid #000;background:#F2F2F2;font-size:9pt;padding:1.4mm}
+ table.uid td{border:1px solid #000;padding:1mm 2mm;vertical-align:middle}
+ td.n{width:9mm;text-align:center;font-size:9pt}
+ td.bc{text-align:center}
+ td.bc svg{height:11mm}
+ td.txt{font-family:Consolas,monospace;font-size:9pt}
+ .foot{display:flex;font-size:8.5pt}
+ .foot div{flex:1;border:1px solid #000;padding:6mm 2mm 2mm;text-align:center}
+ .note{font-size:7.5pt;color:#444;padding:2mm 3mm;border-top:1px solid #000}
+ .opts{max-width:196mm;margin:0 auto 12px;background:#fff;border:1px solid #D5DEE8;
+   border-radius:3px;padding:12px 14px;font-size:12.5px}
+ .opts h4{font-size:11px;text-transform:uppercase;letter-spacing:.6px;
+   color:#3D4E63;margin-bottom:8px}
+ .opts label{display:inline-flex;align-items:center;gap:5px;margin:0 16px 6px 0}
+ .opts .why{color:#72859A;font-size:11.5px;margin-top:6px}
+ .opts button{padding:7px 14px;border:1px solid #1B4D7A;background:#1B4D7A;
+   color:#fff;border-radius:3px;font-weight:600;cursor:pointer}
+ @media screen{body{background:#EDF1F6;padding:14px}
+   .sheet{background:#fff;max-width:196mm;margin:0 auto}}
+ @media print{.noprint{display:none}}
+ .off{display:none !important}
+</style></head><body>
+
+<div class="opts noprint">
+  <h4>What goes on this label</h4>
+  <label><input type="checkbox" id="o_bin" checked onchange="upd()"> Bin number</label>
+  <label><input type="checkbox" id="o_shift" checked onchange="upd()"> Shift</label>
+  <label><input type="checkbox" id="o_cust" onchange="upd()"> Customer</label>
+  <label><input type="checkbox" id="o_qr" checked onchange="upd()"> QR</label>
+  <label><input type="checkbox" id="o_bars" checked onchange="upd()"> Barcodes</label>
+  <label><input type="checkbox" id="o_sign" checked onchange="upd()"> Signature row</label>
+  <div><button onclick="print()">Print</button>
+    <span class="why">Customer is off by default — it is often not settled when
+    a pallet is packed, and a label that names the wrong customer is worse than
+    one that names none. Turning barcodes off prints the serials as text, which
+    is faster on a slow printer.</span></div>
+</div>
+
+<div class="sheet">
+  <div class="hd">
+    <div class="lg"><b>EN-ICON</b><div style="font-size:6.5pt">Harvesting the Sun</div></div>
+    <div class="ti"><h1>ICON SOLAR-EN POWER TECHNOLOGIES PRIVATE LIMITED</h1>
+      <div>Khasra No 1553/1, 1564, 1566, 1568/1, 1568/2 · Mandir Hasaud, Arang,
+        Tekari, Raipur, Chhattisgarh 493225 · UNIT-2</div></div>
+  </div>
+
+  <div class="meta">
+    <table>
+      <tr><td class="k">Packing List No.</td><td><b>{{ box_no }}</b></td>
+          <td class="k">Date</td><td>{{ L.pack_date }}</td></tr>
+      <tr><td class="k">Model Type</td><td colspan="3"><b>{{ L.model }}</b></td></tr>
+      <tr><td class="k">Pallet No.</td><td style="background:#DCE9F5"><b>{{ box_no }}</b></td>
+          <td class="k">Pallet Grade</td><td><b style="font-size:12pt">{{ L.grade_display }}</b></td></tr>
+      <tr><td class="k">Quantity</td>
+          <td>{{ L.qty }}{% if L.partial %} &nbsp;<b>(PARTIAL of {{ L.capacity }})</b>{% endif %}</td>
+          <td class="k">Bin</td><td id="c_bin"><b>{{ L.bin if L.bin is not none else '—' }}</b></td></tr>
+      <tr id="r_shift"><td class="k">Shift</td><td>{{ L.shift or '—' }}</td>
+          <td class="k">Line</td><td>—</td></tr>
+      <tr id="r_cust" class="off"><td class="k">Customer</td>
+          <td colspan="3">{{ L.customer or 'Not yet allocated' }}</td></tr>
+    </table>
+    <div class="qr" id="c_qr">{{ qr | safe }}</div>
+  </div>
+
+  <table class="uid">
+    <thead><tr>
+      <th style="width:9mm">UID No.</th><th>UID Code / Barcode</th>
+      <th style="width:9mm">UID No.</th><th>UID Code / Barcode</th>
+    </tr></thead>
+    <tbody>
+    {% for left, right in rows %}
+      <tr>
+        <td class="n">{{ left.i }}</td>
+        <td class="bc"><span class="bcs">{{ left.svg | safe }}</span>
+          <span class="txt off">{{ left.serial }}</span></td>
+        {% if right %}
+          <td class="n">{{ right.i }}</td>
+          <td class="bc"><span class="bcs">{{ right.svg | safe }}</span>
+            <span class="txt off">{{ right.serial }}</span></td>
+        {% else %}<td class="n"></td><td></td>{% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="foot" id="c_sign">
+    <div>Packed By</div><div>Checked By</div><div>Store</div><div>Security</div>
+  </div>
+  <div class="note">
+    Every module in this pallet shares one model and one grade — the system
+    refuses to close a mixed pallet. Challan and invoice never appear here: a
+    pallet may wait months before it is dispatched, so they are not knowable
+    at packing time.
+  </div>
+</div>
+
+<script>
+function upd(){
+  var on = function(id){ return document.getElementById(id).checked; };
+  document.getElementById('r_shift').classList.toggle('off', !on('o_shift'));
+  document.getElementById('r_cust').classList.toggle('off', !on('o_cust'));
+  document.getElementById('c_qr').classList.toggle('off', !on('o_qr'));
+  document.getElementById('c_sign').classList.toggle('off', !on('o_sign'));
+  document.querySelectorAll('#c_bin').forEach(function(e){
+    e.parentNode.classList.toggle('off', !on('o_bin')); });
+  var bars = on('o_bars');
+  document.querySelectorAll('.bcs').forEach(function(e){ e.classList.toggle('off', !bars); });
+  document.querySelectorAll('.txt').forEach(function(e){ e.classList.toggle('off', bars); });
+}
+upd();
+</script>
+</body></html>

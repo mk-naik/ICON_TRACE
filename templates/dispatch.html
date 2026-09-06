@@ -1,0 +1,40 @@
+{% extends "base.html" %}{% set nav='dispatch' %}
+{% block body %}
+<form method="post">
+<div class="card"><div class="card-h"><h3>Issue a challan</h3></div>
+<div class="card-b">
+  <div class="note n-info">The challan quantity comes from the boxes ticked
+  below. The invoice states only what HO expects to ship, and the two must
+  agree — there is no override.</div>
+  <div class="grid"><div class="fld req" style="grid-column:1/-1">
+    <label>Against invoice</label>
+    <select name="invoice_no">
+      <option value="">— choose —</option>
+      {% for i in invoices %}<option value="{{ i.invoice_no }}">
+        {{ i.invoice_no }} · {{ i.buyer_name }} · {{ i.declared_model }} ·
+        declares {{ i.declared_qty }}</option>{% endfor %}
+    </select>
+    {% if not invoices %}<div class="why">No invoices loaded. Load one first.</div>{% endif %}
+  </div></div>
+</div></div>
+
+<div class="card"><div class="card-h"><h3>Closed boxes</h3>
+  <span class="sp hint">tick the ones going on this truck</span></div>
+{% if closed %}<div class="scroll"><table>
+<thead><tr><th></th><th>Box</th><th>Grade</th><th>Model</th><th>Customer</th>
+<th style="text-align:right">Qty</th><th>Challan</th></tr></thead><tbody>
+{% for b in closed %}<tr>
+  <td><input type="checkbox" name="box" value="{{ b.number }}"
+       {{ 'disabled' if b.challan_no is defined and b.challan_no }}></td>
+  <td class="mono">{{ b.number }}</td>
+  <td><span class="tag {{ 't-pass' if b.grade=='A' else 't-rev' }}">{{ b.grade }}</span></td>
+  <td class="mono">{{ b.model }}</td><td>{{ b.customer or 'General Stock' }}</td>
+  <td style="text-align:right" class="mono">{{ b.serials|length }}</td>
+  <td class="mono hint">{{ b.challan_no if b.challan_no is defined else '' }}</td></tr>{% endfor %}
+</tbody></table></div>
+<div class="card-f"><button class="btn btn-primary">Reconcile and issue</button>
+  <span class="hint">Challan number is drawn from the counter under a row lock,
+  so two operators cannot take the same one.</span></div>
+{% else %}<div class="card-b hint">No closed boxes. Pack some first.</div>{% endif %}</div>
+</form>
+{% endblock %}

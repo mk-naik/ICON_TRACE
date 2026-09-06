@@ -1,0 +1,96 @@
+{% extends "base.html" %}{% set nav='invoice' %}
+{% block body %}
+
+<div class="split">
+<div>
+  <div class="card">
+    <div class="card-h"><h3>Load an invoice from HO</h3></div>
+    <form method="post" action="{{ url_for('invoice_parse') }}"
+          enctype="multipart/form-data" id="up">
+      <div class="card-b">
+        <div class="drop" id="drop">
+          <input type="file" name="pdf" id="pdf" accept=".pdf" style="display:none">
+          <div style="font-weight:600;margin-bottom:4px" id="dropname">
+            Drop the Tax Invoice PDF here</div>
+          <div class="hint" id="drophint">
+            or <a href="#" onclick="pdf.click();return false">choose a file</a>
+            · the PDF is stored in ICON TRACE, because operators keep invoices
+            only on their own PCs</div>
+        </div>
+
+        <div class="grid" style="margin-top:14px">
+          <div class="fld">
+            <label for="expect_qty">Modules scanned into boxes</label>
+            <input type="number" name="expect_qty" id="expect_qty" min="1"
+                   placeholder="leave empty to load the invoice only">
+            <div class="why">Fill this once packing is done. The invoice
+              quantity is checked against it and there is no override.</div>
+          </div>
+        </div>
+      </div>
+      <div class="card-f">
+        <button class="btn btn-primary" type="submit">Read the invoice</button>
+        <span class="hint">Nothing is saved until you confirm the next screen.</span>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div>
+  <div class="card">
+    <div class="card-h"><h3>What gets copied</h3></div>
+    <div class="card-b" style="font-size:12.5px">
+      <p><b>Copied onto the challan</b><br>
+      <span class="hint">party names, GSTINs, addresses, vehicle, transporter,
+      LR, invoice number and date, e-Way Bill, IRN, PO number.</span></p>
+      <p style="margin-top:9px"><b>Compared, never copied</b><br>
+      <span class="hint">quantity, model, HSN. These come from the scanned
+      boxes. The invoice states only what HO expects to ship.</span></p>
+      <p style="margin-top:9px"><b>Never read at all</b><br>
+      <span class="hint">rate, amount, tax. ICON TRACE holds no financial
+      figures.</span></p>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="card">
+  <div class="card-h"><h3>Invoices loaded</h3>
+    <span class="sp hint">{{ recent|length }} shown</span></div>
+  {% if recent %}
+  <div class="scroll"><table>
+    <thead><tr><th>Invoice</th><th>Date</th><th>Buyer</th><th>Model</th>
+      <th style="text-align:right">Declared</th><th>IRN</th><th></th></tr></thead>
+    <tbody>
+    {% for i in recent %}
+      <tr>
+        <td class="mono">{{ i.invoice_no }}</td>
+        <td>{{ i.invoice_date or '—' }}</td>
+        <td>{{ i.buyer_name or '—' }}</td>
+        <td class="mono">{{ i.declared_model or '—' }}</td>
+        <td style="text-align:right" class="mono">{{ i.declared_qty or '—' }}</td>
+        <td class="mono hint">{{ (i.irn or '')[:12] }}{{ '…' if i.irn }}</td>
+        <td>{% if i.superseded_by %}<span class="tag t-fail">superseded</span>
+            {% else %}<span class="tag t-pass">current</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <div class="card-b hint">No invoices loaded yet. Upload one above.</div>
+  {% endif %}
+</div>
+
+<script>
+var drop=document.getElementById('drop'), pdf=document.getElementById('pdf');
+function named(n){document.getElementById('dropname').textContent=n;
+  document.getElementById('drophint').innerHTML=
+    'Ready to read · <a href="#" onclick="pdf.click();return false">change</a>';}
+pdf.onchange=function(){if(pdf.files[0]) named(pdf.files[0].name);};
+drop.ondragover=function(e){e.preventDefault();drop.classList.add('over');};
+drop.ondragleave=function(){drop.classList.remove('over');};
+drop.ondrop=function(e){e.preventDefault();drop.classList.remove('over');
+  if(e.dataTransfer.files[0]){pdf.files=e.dataTransfer.files;
+    named(e.dataTransfer.files[0].name);}};
+</script>
+{% endblock %}

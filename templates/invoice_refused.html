@@ -1,0 +1,22 @@
+{% extends "base.html" %}{% set nav='invoice' %}
+{% block body %}
+<div class="card">
+  <div class="card-h"><h3>Not a recognised invoice</h3>
+    <span class="sp tag t-fail">nothing was read</span></div>
+  <div class="card-b">
+    <div class="note n-fail">
+      <b>{{ filename }}</b> is missing labels this parser needs:
+      <span class="mono">{{ r.fingerprint.missing | join(', ') }}</span>
+    </div>
+    <p>The file was discarded. A parser that guesses at an unfamiliar layout
+    is worse than one that stops, so it stopped.</p>
+    <p style="margin-top:8px" class="hint">
+      If this is the wrong file, upload the Tax Invoice PDF from HO. If HO has
+      changed the invoice layout, keep this file — the parser needs updating
+      against it.</p>
+  </div>
+  <div class="card-f">
+    <a class="btn btn-primary" href="{{ url_for('invoice_upload') }}">Try another file</a>
+  </div>
+</div>
+{% endblock %}

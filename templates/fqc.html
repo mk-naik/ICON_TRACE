@@ -1,0 +1,113 @@
+{% extends "base.html" %}{% set nav='fqc' %}
+{% block body %}
+<div class="card"><div class="card-h"><h3>FQC · verification</h3>
+  <span class="sp hint">
+    <a href="{{ url_for('fqc', sandbox='' if sandbox else '1') }}">
+      {{ 'using real sources' if sandbox else 'simulate evidence' }}</a></span></div>
+<form method="get"><div class="card-b">
+  <div class="grid"><div class="fld" style="grid-column:1/-1">
+    <label>Scan serial</label>
+    <input name="serial" value="{{ serial }}" autofocus placeholder="ICON630R1282710070">
+    {% if sandbox %}<input type="hidden" name="sandbox" value="1">{% endif %}
+  </div></div>
+</div><div class="card-f"><button class="btn btn-primary">Look up</button>
+{% if sandbox %}<span class="tag t-rev">SANDBOX — evidence is simulated</span>{% endif %}
+</div></form></div>
+
+{% if serial and not rec %}
+<div class="note n-fail"><b>{{ serial }}</b> is not in the serial master.
+That is a serial-existence issue, so the Incharge clears it — not Quality.</div>
+{% endif %}
+
+{% if rec and evidence %}
+<form method="post">
+<input type="hidden" name="serial" value="{{ serial }}">
+<input type="hidden" name="action" value="confirm">
+{% if sandbox %}<input type="hidden" name="sandbox" value="1">{% endif %}
+<div class="card"><div class="card-h"><h3>{{ serial }}</h3>
+  <span class="sp tag {{ 't-rev' if evidence.degraded else 't-pass' }}">
+    {{ 'PROVISIONAL' if evidence.degraded else 'evidence present' }}</span></div>
+<div class="card-b">
+  <div class="kpi" style="margin-bottom:14px">
+    <div><span>Model</span><b style="font-size:15px">{{ rec.model }}</b></div>
+    <div><span>Nameplate</span><b>{{ rec.wattage }}W</b></div>
+    <div><span>Sun Simulator</span>
+      <b class="{{ '' }}">{{ evidence.pmax if evidence.pmax is not none else evidence.ss_state }}</b></div>
+    <div><span>EL verdict</span><b style="font-size:15px">{{ evidence.el or evidence.el_state }}</b></div>
+    <div><span>Proposed</span><b>{{ evidence.proposed or '—' }}</b></div>
+  </div>
+
+  {% if evidence.ss_state != 'OK' %}
+  <div class="note {{ 'n-fail' if evidence.ss_state in ('NA','BAD') else 'n-warn' }}">
+    <b>SS {{ evidence.ss_state }}</b> — {{ evidence.ss_note }}
+    {% if evidence.ss_state=='BAD' %}<br><b>The tester wrote a row and could
+    not read the module.</b> That is a fault, not missing data. Do not grade
+    it — send it to review.{% elif evidence.ss_state=='NA' %}<br>No row at all.
+    Either it has not reached the tester yet, or it was tested under an ID
+    that was typed in by hand.{% endif %}
+  </div>{% endif %}
+  {% if evidence.el_state != 'OK' %}
+  <div class="note {{ 'n-fail' if evidence.el_state=='NA' else 'n-warn' }}">
+    <b>EL {{ evidence.el_state }}</b> — {{ evidence.el_note }}</div>{% endif %}
+  {% if evidence.why %}<p class="hint">{{ evidence.why }}</p>{% endif %}
+
+  <div class="grid" style="margin-top:12px">
+    <div class="fld req"><label>Grade</label>
+      <select name="grade" {{ 'disabled' if evidence.fault }}>
+        {% for g,l in [('A','A'),('GY','GY  (B)'),('BGY','BGY  (C)')] %}
+        <option value="{{ g }}" {{ 'selected' if evidence.proposed==g }}>{{ l }}</option>
+        {% endfor %}</select></div>
+    <div class="fld" style="grid-column:2/-1"><label>Reason (needed to override)</label>
+      <input name="reason" placeholder="{{ 'grade recorded on verbal information' if evidence.degraded else 'only if you change the proposed grade' }}"></div>
+  </div>
+</div>
+<div class="card-f"><button class="btn btn-primary" {{ 'disabled' if evidence.fault }}>
+    {{ 'Cannot grade — the tester could not read this module' if evidence.fault else 'Confirm grade' }}</button>
+  <span class="hint">
+  {% if evidence.degraded %}Provisional — when evidence arrives, agreement
+  confirms it and disagreement puts the serial on hold.
+  {% else %}Changing the proposed grade is an override and needs a reason.{% endif %}
+  </span></div></div>
+</form>
+{% endif %}
+
+{% if anomalies and anomalies.available %}
+<div class="card"><div class="card-h"><h3>What the tester wrote that no lookup will find</h3>
+  <span class="sp hint">last 200 rows</span></div>
+<div class="card-b">
+  {% if anomalies.junk %}
+  <p><b>{{ anomalies.junk|length }} row(s) under a hand-typed ID.</b>
+     The barcode would not scan, so the operator entered something to let the
+     test run. The module exists; its result is filed under nothing.</p>
+  <div class="scroll" style="max-height:130px"><table>
+    <thead><tr><th>Time</th><th>ID as typed</th><th>Pmax</th></tr></thead><tbody>
+    {% for j in anomalies.junk %}<tr><td>{{ j.at }}</td>
+      <td class="mono"><span class="tag t-fail">{{ j.id }}</span></td>
+      <td class="mono">{{ j.pmax }}</td></tr>{% endfor %}
+    </tbody></table></div>{% endif %}
+  {% if anomalies.failed %}
+  <p style="margin-top:10px"><b>{{ anomalies.failed|length }} module(s) tested
+     and never read.</b> Probe or Zig at the JB connector, polarity, or
+     soldering.</p>
+  <div class="scroll" style="max-height:130px"><table>
+    <thead><tr><th>Serial</th><th>Attempts</th><th>Last try</th><th>Why</th></tr></thead><tbody>
+    {% for f in anomalies.failed %}<tr><td class="mono">{{ f.serial }}</td>
+      <td style="text-align:right">{{ f.attempts }}</td><td>{{ f.at }}</td>
+      <td class="hint">{{ f.why }}</td></tr>{% endfor %}
+    </tbody></table></div>{% endif %}
+  {% if not anomalies.junk and not anomalies.failed %}
+  <p class="hint">Nothing anomalous in the last 200 rows.</p>{% endif %}
+</div></div>
+{% endif %}
+
+<div class="card"><div class="card-h"><h3>Recent</h3><span class="sp"><a class="btn btn-sm" href="{{ url_for('export_csv', what='fqc') }}">Export CSV</a></span></div>
+{% if recent %}<div class="scroll" style="max-height:260px"><table>
+<thead><tr><th>Serial</th><th>Grade</th><th>Mode</th><th>Pmax</th><th>EL</th>
+<th>By</th><th>Reason</th></tr></thead><tbody>
+{% for r in recent %}<tr><td class="mono">{{ r.serial }}</td>
+  <td><span class="tag {{ 't-pass' if r.grade=='A' else 't-rev' }}">{{ r.grade }}</span></td>
+  <td>{{ r.mode }}</td><td class="mono">{{ r.ss_pmax or r.ss_state }}</td>
+  <td>{{ r.el_verdict or r.el_state }}</td><td>{{ r.decided_by }}</td>
+  <td class="hint">{{ r.reason or '' }}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<div class="card-b hint">Nothing graded yet.</div>{% endif %}</div>
+{% endblock %}

@@ -1,0 +1,79 @@
+<!doctype html><html><head><meta charset="utf-8"><title>{{ no }}</title>
+<style>
+ @page{size:A4;margin:10mm}
+ body{font-family:Arial,Helvetica,sans-serif;font-size:10pt;margin:0;color:#000}
+ .sheet{border:1.5px solid #000}
+ .hd{text-align:center;padding:3mm;border-bottom:1.5px solid #000}
+ .hd h1{font-size:12pt;margin:0}
+ .hd .sub{font-size:8pt;margin-top:1mm}
+ .hd .ti{font-weight:700;font-size:11pt;margin-top:2mm}
+ table{width:100%;border-collapse:collapse}
+ td,th{border:1px solid #000;padding:1.8mm 2.5mm;font-size:9.5pt;vertical-align:top}
+ td.k{font-weight:700;background:#F2F2F2;width:30mm}
+ .goods th{background:#F2F2F2;font-size:9pt}
+ .tot td{font-weight:700}
+ .foot{display:flex;font-size:8.5pt}
+ .foot div{flex:1;border:1px solid #000;padding:10mm 2mm 2mm;text-align:center}
+ .note{font-size:7.5pt;color:#444;padding:2mm 3mm}
+ @media screen{body{background:#EDF1F6;padding:14px}
+   .sheet{background:#fff;max-width:190mm;margin:0 auto}
+   .noprint{max-width:190mm;margin:0 auto 10px}}
+ @media print{.noprint{display:none}}
+</style></head><body>
+<div class="noprint"><button onclick="print()">Print</button>
+  <span style="font-size:11px;color:#555;margin-left:8px">Version 1 — one page,
+  no serial list. This is the copy the driver carries.</span></div>
+
+<div class="sheet">
+  <div class="hd">
+    <h1>ICON SOLAR-EN POWER TECHNOLOGIES PRIVATE LIMITED</h1>
+    <div class="sub">Khasra No 1553/1, 1564, 1566, 1568/1, 1568/2 · Mandir
+      Hasaud, Arang, Tekari, Raipur, Chhattisgarh 493225 ·
+      GSTIN 22AADCI5761L3ZE</div>
+    <div class="ti">DISPATCH CHALLAN CUM GATE PASS</div>
+    <div class="sub">{{ form }}</div>
+  </div>
+
+  <table>
+    <tr><td class="k">Challan No.</td><td><b>{{ no }}</b></td>
+        <td class="k">Date</td><td>{{ ch.challan_date }}</td></tr>
+    <tr><td class="k">Invoice No.</td><td>{{ ch.invoice_no or '—' }}</td>
+        <td class="k">Vehicle No.</td><td><b>{{ ch.vehicle_no or '—' }}</b></td></tr>
+    <tr><td class="k">Transporter</td><td>{{ ch.transporter or '—' }}</td>
+        <td class="k">LR / GR No.</td><td>{{ ch.lr_no or '—' }}</td></tr>
+    <tr><td class="k">Buyer</td><td colspan="3">{{ ch.buyer_name or '—' }}
+        {% if ch.buyer_gstin %}<br>GSTIN {{ ch.buyer_gstin }}{% endif %}</td></tr>
+    <tr><td class="k">Consignee</td><td colspan="3">{{ ch.consignee_name or '—' }}
+        {% if ch.consignee_address %}<br>{{ ch.consignee_address }}{% endif %}</td></tr>
+  </table>
+
+  <table class="goods" style="margin-top:-1px">
+    <thead><tr><th style="width:12mm">S.No</th><th>Description</th>
+      <th style="width:18mm">UOM</th><th style="width:20mm">Wattage</th>
+      <th style="width:20mm">Qty</th><th style="width:22mm">KW</th></tr></thead>
+    <tbody>
+      <tr><td style="text-align:center">1</td>
+        <td><b>SOLAR PV MODULE-{{ ch.model }}</b></td>
+        <td style="text-align:center">NOS</td>
+        <td style="text-align:center">{{ ch.wattage }}</td>
+        <td style="text-align:center"><b>{{ qty }}</b></td>
+        <td style="text-align:center">{{ kw }}</td></tr>
+      <tr class="tot"><td colspan="4" style="text-align:right">Total</td>
+        <td style="text-align:center">{{ qty }}</td>
+        <td style="text-align:center">{{ kw }}</td></tr>
+    </tbody>
+  </table>
+
+  <table style="margin-top:-1px">
+    <tr><td class="k">Boxes</td><td colspan="3">{{ boxes|length }} pallet(s)
+      · KW derived as wattage × quantity ÷ 1000, never typed</td></tr>
+  </table>
+
+  <div class="foot">
+    <div>Prepared By</div><div>Authorised Signatory</div>
+    <div>Security</div><div>Received By</div>
+  </div>
+  <div class="note">Serial numbers are not listed on this copy. The soft copy
+    carries the box-wise serial table and the Flash Test Report.</div>
+</div>
+</body></html>

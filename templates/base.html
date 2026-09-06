@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}ICON TRACE{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='icon.css') }}?b={{ build }}">
+</head><body>
+<div id="app">
+  <div class="topbar">
+    <div class="tb-mark"><div class="tb-sun"></div><b>ICON <span>TRACE</span></b>
+      <span class="tb-unit">UNIT-{{ cfg_unit }}</span>
+      <button id="sideBtn" class="side-toggle" title="Collapse the menu">&laquo;</button>
+    </div>
+    <div class="tb-right">
+      <span class="tb-clock">{{ now }}</span>
+      <span class="conn on" id="conn"><i></i><span>Online</span></span>
+      <span class="shift-pill"><i></i><span>FY {{ fy_label }}</span></span>
+      <span class="tb-unit" title="build">p{{ parser_version }}</span>
+      <div class="tb-user">
+        <div class="tb-av">{{ user[:2] | upper }}</div>
+        <div><div style="font-size:12px;font-weight:600">{{ user }}</div>
+        <div style="font-size:10px;color:#8FA5BC">Operator</div></div>
+      </div>
+    </div>
+  </div>
+
+  <nav class="side" id="sidenav">
+    <div class="nav-sec">Overview</div>
+    <a class="nav-i" href="/"><em>&#9905;</em>Back to the main app</a>
+    <div class="nav-sec">Records</div>
+    <a class="nav-i {{ 'on' if nav=='indent' }}" href="{{ url_for('indent_list') }}"><em>&#9636;</em>Indent</a>
+    <a class="nav-i {{ 'on' if nav=='invoice' }}" href="{{ url_for('invoice_upload') }}"><em>&#9637;</em>Tax Invoice</a>
+    <div class="nav-sec">Loading</div>
+    <a class="nav-i {{ 'on' if nav=='loading' }}" href="{{ url_for('loading') }}"><em>&#8862;</em>Loading Verification</a>
+    <div class="nav-sec">Admin</div>
+    <a class="nav-i {{ 'on' if nav=='import' }}" href="{{ url_for('challan_import') }}"><em>&#9707;</em>Historical Import</a>
+    <a class="nav-i {{ 'on' if nav=='models' }}" href="{{ url_for('model_master') }}"><em>&#9645;</em>Item Master</a>
+    <a class="nav-i {{ 'on' if nav=='settings' }}" href="{{ url_for('settings') }}"><em>&#9881;</em>Evidence Sources</a>
+  </nav>
+
+  <div class="main">
+  {% with msgs = get_flashed_messages(with_categories=true) %}
+    {% for cat, m in msgs %}
+      <div class="note n-{{ 'pass' if cat=='pass' else 'fail' if cat=='fail' else 'warn' }}">{{ m }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% block body %}{% endblock %}
+  </div>
+</div>
+<script src="{{ url_for('static', filename='icon_table.js') }}?b={{ build }}"></script>
+<script>
+/* Same collapse behaviour as the main app, and the same session key, so the
+   choice follows you between the two shells instead of resetting. */
+(function(){
+  var app=document.getElementById('app'), btn=document.getElementById('sideBtn');
+  function setC(on){
+    app.classList.toggle('side-collapsed',on);
+    btn.innerHTML = on ? '\u00BB' : '\u00AB';
+    btn.title = on ? 'Pin the menu open' : 'Collapse the menu';
+    try{ sessionStorage.setItem('icon.side', on?'1':'0'); }catch(e){}
+  }
+  btn.onclick=function(){ setC(!app.classList.contains('side-collapsed')); };
+  var saved=null; try{ saved=sessionStorage.getItem('icon.side'); }catch(e){}
+  if(saved==='1') setC(true);
+})();
+</script>
+</body></html>

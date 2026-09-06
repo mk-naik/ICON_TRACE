@@ -1,0 +1,124 @@
+{% extends "base.html" %}{% set nav='import' %}
+{% block body %}
+
+<div class="card">
+  <div class="card-h"><h3>Historical challan import</h3></div>
+  <form method="post" enctype="multipart/form-data">
+    <div class="card-b">
+      <p style="margin-bottom:11px">Load the old challan workbooks from
+      February onward. Dispatch cannot go live until this is done — the rule
+      that a dispatched serial's customer never changes is blind for every
+      serial shipped before then.</p>
+      <input type="file" name="xlsx" accept=".xlsx,.xls" multiple>
+      <p class="hint" style="margin-top:9px">
+      Select many files at once. Nothing is written until every file passes.</p>
+    </div>
+    <div class="card-f">
+      <button class="btn btn-primary" name="action" value="check">Check these files</button>
+      <span class="hint">Nothing is written until you press Load below.</span>
+    </div>
+  </form>
+</div>
+
+{% if stats %}
+<div class="card"><div class="card-h"><h3>Loaded</h3></div>
+  <div class="card-b"><div class="kpi">
+    <div><span>Challans</span><b>{{ stats.challans }}</b></div>
+    <div><span>Boxes</span><b>{{ stats.boxes }}</b></div>
+    <div><span>Serials</span><b>{{ stats.serials }}</b></div>
+  </div>
+  {% if seeded %}<p class="hint" style="margin-top:10px">
+    Counters seeded — next challan per year:
+    {% for fy, n in seeded.challan.items() %}<b>{{ fy }}: {{ n }}</b>{% if not loop.last %} · {% endif %}{% endfor %}
+    · box counters for {{ seeded.box }} date(s).</p>{% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% if results %}
+  {% set held = results | rejectattr('ok') | list %}
+  <div class="note {{ 'n-fail' if held else 'n-pass' }}">
+    {{ results|length }} file(s) read ·
+    {{ results|length - held|length }} ready ·
+    {{ held|length }} held.
+    {% if held %}Held files are not loaded. Fix them and run again.{% endif %}
+  </div>
+  {% if not held and not stats %}
+  <form method="post" enctype="multipart/form-data" id="loadform">
+    <div class="note n-warn">
+      Every file passed. Loading writes {{ results | sum(attribute='serials') | length }}
+      records and cannot be undone from this screen.
+      <span class="hint">Re-select the same files and press Load.</span>
+      <div style="margin-top:8px">
+        <input type="file" name="xlsx" accept=".xlsx,.xls" multiple>
+        <button class="btn btn-primary btn-sm" name="action" value="load">Load into the database</button>
+      </div>
+    </div>
+  </form>
+  {% endif %}
+
+  {% for r in results %}
+  <div class="card">
+    <div class="card-h">
+      <h3>{{ r.header.challan_no_raw or r.source_file }}</h3>
+      <span class="sp tag {{ 't-pass' if r.ok else 't-fail' }}">
+        {{ 'ready' if r.ok else 'held' }}</span>
+    </div>
+    <div class="card-b">
+      {% if r.header.seq is defined %}
+      <div class="kpi" style="margin-bottom:13px">
+        <div><span>Financial year</span><b>{{ r.header.fy_label }}</b></div>
+        <div><span>Sequence</span><b>{{ r.header.seq }}</b></div>
+        <div><span>Suffix</span><b>{{ r.header.suffix or '—' }}</b></div>
+        <div><span>Boxes</span><b>{{ r.boxes|length }}</b></div>
+        <div><span>Serials</span><b>{{ r.serials|length }}</b></div>
+        {% if r.header.wattage and r.header.qty %}
+        <div><span>KW (derived)</span>
+          <b>{{ '%.1f'|format(r.header.wattage * r.header.qty / 1000) }}</b></div>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {% if r.boxes %}
+      <div class="scroll" style="max-height:220px"><table>
+        <thead><tr><th>Box</th><th>Pack date</th><th>Bin</th>
+          <th>Pack shift</th><th style="text-align:right">Modules</th></tr></thead>
+        <tbody>
+        {% for b in r.boxes %}
+          <tr><td class="mono">{{ b.box_no or '?' }}</td>
+            <td>{{ b.pack_date or '—' }}</td>
+            <td>{{ b.bin or '—' }}</td>
+            <td>{{ b.shift or '—' }}</td>
+            <td style="text-align:right" class="mono">{{ b.serials|length }}</td></tr>
+        {% endfor %}
+        </tbody></table></div>
+      {% endif %}
+
+      <div style="margin-top:12px">
+      {% for it in r.issues %}
+        <div class="note n-{{ 'pass' if it.level=='ok' else 'fail' if it.level=='block' else 'warn' if it.level=='warn' else 'info' }}"
+             style="margin-bottom:6px">{{ it.msg }}</div>
+      {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+{% endif %}
+
+<div class="card">
+  <div class="card-h"><h3>What this checks</h3></div>
+  <div class="card-b hint" style="font-size:12.5px">
+    <p>Every serial is decomposed once here into format version, production
+    date, shift and sequence, and stored as real columns. Nothing downstream
+    parses the string again.</p>
+    <p style="margin-top:7px">The format is chosen per serial, not per file,
+    because June v1 stock ships alongside August v2. Where a serial reads
+    validly as both, the box pack date breaks the tie; if it cannot, the file
+    is held rather than guessed at.</p>
+    <p style="margin-top:7px">Challan numbers store as year and sequence
+    integers plus an optional suffix. <span class="mono">742</span> and
+    <span class="mono">742 (A)</span> are two real documents that both reached
+    a customer, so both load.</p>
+  </div>
+</div>
+{% endblock %}

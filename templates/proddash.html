@@ -1,0 +1,51 @@
+{% extends "base.html" %}{% set nav='proddash' %}
+{% block body %}
+<div class="pg"><h2>Production Dashboard</h2>
+  <p>Where every allocated serial currently sits · <span class="tag t-pass">scanned</span></p>
+  <div class="pg-act"><a class="btn btn-sm" href="{{ url_for('export_csv', what='serials') }}">Export CSV</a></div>
+</div>
+
+<div class="kpi" style="margin-bottom:16px">
+  <div><span>Allocated</span><b>{{ f.allocated }}</b>
+    <span class="hint">serials issued by Planning</span></div>
+  <div><span>Awaiting FQC</span><b style="color:var(--solar)">{{ f.planned }}</b>
+    <span class="hint">produced, not yet graded</span></div>
+  <div><span>Rejected</span><b style="color:var(--fail)">{{ f.rejected }}</b>
+    <span class="hint">GY + BGY at FQC</span></div>
+  <div><span>Packed</span><b style="color:var(--pass)">{{ f.packed }}</b></div>
+  <div><span>Dispatched</span><b style="color:var(--pass)">{{ f.dispatched }}</b></div>
+</div>
+
+<div class="card"><div class="card-h"><h3>Stage funnel</h3>
+  <span class="sp hint">counted from the serial master, never typed</span></div>
+<div class="card-b">
+{% for name, n, pc in f.stages %}
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:9px">
+    <div style="width:110px;font-size:12.5px">{{ name }}</div>
+    <div style="flex:1;background:var(--line2);border-radius:2px;height:20px">
+      <div style="width:{{ pc }}%;height:100%;border-radius:2px;
+           background:{{ 'var(--brand)' if loop.index0 < 3 else 'var(--pass)' }}"></div></div>
+    <div class="mono" style="width:70px;text-align:right"><b>{{ n }}</b></div>
+    <div class="hint mono" style="width:52px;text-align:right">{{ pc }}%</div>
+  </div>
+{% endfor %}
+{% if not f.allocated %}<p class="hint">Nothing allocated yet. Create an indent,
+then allocate against it in Planning.</p>{% endif %}
+</div></div>
+
+<div class="card"><div class="card-h"><h3>Date &amp; shift performance</h3></div>
+{% if shifts %}<table>
+<thead><tr><th>Date produced</th><th>Shift</th><th style="text-align:right">Produced</th>
+<th style="text-align:right">Passed A</th><th style="text-align:right">GY / BGY</th>
+<th style="text-align:right">Pass rate</th></tr></thead><tbody>
+{% for r in shifts %}<tr><td>{{ r.date }}</td><td>{{ r.shift }}</td>
+  <td style="text-align:right" class="mono">{{ r.produced }}</td>
+  <td style="text-align:right" class="mono">{{ r.passed }}</td>
+  <td style="text-align:right" class="mono" style="color:var(--fail)">{{ r.rejected }}</td>
+  <td style="text-align:right" class="mono">
+    {{ ((r.passed or 0) * 100 // (r.produced or 1)) }}%</td></tr>{% endfor %}
+</tbody></table>{% else %}<div class="card-b hint">No production yet.</div>{% endif %}
+<div class="card-b hint">Ideal cycle time per line per model is still unconfirmed.
+Until Humeshwar signs it off, no OEE figure is published here — a number nobody
+has agreed is worse than no number.</div></div>
+{% endblock %}

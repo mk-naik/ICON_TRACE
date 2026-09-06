@@ -1,0 +1,121 @@
+<div class="pg"><h2>Loading Verification</h2>
+  <p>Team 3 &middot; confirm a pallet is intact before it goes on the truck</p>
+</div>
+
+<div class="note n-info">This screen <b>writes nothing</b>. It compares what is
+  in front of you against what was recorded when the pallet was closed. That is
+  what makes it a check rather than another record &mdash; if it wrote, it could
+  be made to agree with itself.</div>
+
+<div class="card"><div class="card-h"><h3>1 &middot; Scan the pallet</h3>
+  <span class="sp" id="lvInfo"></span></div>
+<div class="card-b"><div class="grid g4">
+  <div class="fld" style="grid-column:1/-1"><label>Packing list number</label>
+    <input id="lvBox" placeholder="ISPL260901/K001 — scan the pallet QR or type it">
+    <div class="hint">The QR on the pallet sheet carries this number.</div></div>
+</div></div>
+<div class="card-f"><button class="btn btn-primary" onclick="lvLoad()">Load its serials</button>
+  <button class="btn btn-ghost" onclick="lvReset()">Start again</button></div></div>
+
+<div class="card" id="lvCard" style="display:none">
+  <div class="card-h"><h3>2 &middot; Scan every module</h3>
+    <span class="sp">
+      <span class="tag t-pass" id="lvOk">0 matched</span>
+      <span class="tag t-fail" id="lvBad">0 unexpected</span>
+      <span class="tag t-mute" id="lvLeft">0 left</span></span></div>
+  <div class="card-b"><div class="grid g4"><div class="fld" style="grid-column:1/-1">
+    <label>Scan module barcode</label>
+    <input id="lvScan" placeholder="scan — the cursor stays here"></div></div>
+    <div id="lvMsg" style="margin-top:10px"></div></div>
+  <div class="scroll" style="max-height:420px">
+    <table><thead><tr><th style="width:52px">#</th>
+      <th>Recorded in the system</th><th>Scanned on the floor</th>
+    </tr></thead><tbody id="lvRows"></tbody></table></div>
+  <div class="card-b" id="lvVerdict"></div>
+</div>
+
+<script>
+(function () {
+  var EXP = [], HIT = {}, EXTRA = [];
+  function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+
+  window.lvLoad = function () {
+    var no = document.getElementById('lvBox').value.trim();
+    if (!no) return;
+    fetch('/api/loading/box?no=' + encodeURIComponent(no), {cache:'no-store'})
+      .then(function(r){return r.json();}).then(function (d) {
+        var info = document.getElementById('lvInfo');
+        if (d.error) { info.innerHTML = '<span class="tag t-fail">' +
+          esc(d.error) + '</span>'; return; }
+        EXP = d.serials; HIT = {}; EXTRA = [];
+        info.innerHTML = '<span class="hint">' + esc(d.model) + ' · grade ' +
+          esc(d.grade) + ' · packed ' + esc(d.pack_date) + ' · ' +
+          d.serials.length + ' modules</span>';
+        document.getElementById('lvCard').style.display = '';
+        lvRender();
+        document.getElementById('lvScan').focus();
+      });
+  };
+
+  function lvRender() {
+    var html = EXP.map(function (s, i) {
+      var hit = HIT[s];
+      return '<tr><td class="mono">' + (i + 1) + '</td>' +
+        '<td class="mono">' + esc(s) + '</td>' +
+        '<td class="mono" style="' + (hit ? 'background:var(--pass-lt);' +
+          'color:var(--pass);font-weight:700' : '') + '">' +
+        (hit ? esc(s) : '<span style="color:var(--ink3)">—</span>') +
+        '</td></tr>';
+    }).join('') + EXTRA.map(function (s) {
+      return '<tr><td class="mono">!</td>' +
+        '<td class="mono" style="color:var(--ink3)">not in this pallet</td>' +
+        '<td class="mono" style="background:var(--fail-lt);color:var(--fail);' +
+        'font-weight:700">' + esc(s) + '</td></tr>';
+    }).join('');
+    document.getElementById('lvRows').innerHTML = html;
+
+    var ok = Object.keys(HIT).length;
+    document.getElementById('lvOk').textContent = ok + ' matched';
+    document.getElementById('lvBad').textContent = EXTRA.length + ' unexpected';
+    document.getElementById('lvLeft').textContent = (EXP.length - ok) + ' left';
+
+    var v = document.getElementById('lvVerdict');
+    if (ok === EXP.length && !EXTRA.length && EXP.length) {
+      v.innerHTML = '<div class="note n-pass"><b>Pallet verified.</b> Every ' +
+        'module recorded at packing is present, and nothing else is. Safe to load.</div>';
+    } else if (EXTRA.length) {
+      v.innerHTML = '<div class="note n-fail"><b>' + EXTRA.length + ' module(s) ' +
+        'were never packed into this pallet.</b> It has been opened since it ' +
+        'was closed. Do not load it — send it to Quality.</div>';
+    } else {
+      v.innerHTML = '<div class="note n-warn">' + (EXP.length - ok) +
+        ' still to scan.</div>';
+    }
+  }
+
+  document.getElementById('lvScan').addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    var s = this.value.trim().toUpperCase(); this.value = '';
+    if (!s) return;
+    var m = document.getElementById('lvMsg');
+    if (HIT[s]) m.innerHTML = '<div class="note n-warn">' + esc(s) +
+      ' was already scanned.</div>';
+    else if (EXP.indexOf(s) !== -1) { HIT[s] = true;
+      m.innerHTML = '<div class="note n-pass">' + esc(s) + ' matched.</div>'; }
+    else if (EXTRA.indexOf(s) === -1) { EXTRA.push(s);
+      m.innerHTML = '<div class="note n-fail">' + esc(s) +
+        ' is not in this pallet.</div>'; }
+    lvRender();
+  });
+
+  window.lvReset = function () {
+    EXP = []; HIT = {}; EXTRA = [];
+    document.getElementById('lvCard').style.display = 'none';
+    document.getElementById('lvInfo').innerHTML = '';
+    document.getElementById('lvBox').value = '';
+    document.getElementById('lvBox').focus();
+  };
+})();
+</script>

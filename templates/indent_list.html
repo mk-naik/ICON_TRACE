@@ -1,0 +1,41 @@
+{% extends "base.html" %}{% set nav='indent' %}
+{% block body %}
+<div class="card"><div class="card-h"><h3>Indents</h3>
+  <span class="sp"><a class="btn btn-primary btn-sm" href="{{ url_for('indent_new') }}">New indent</a></span></div>
+{% if rows %}<div class="scroll"><table>
+<thead><tr><th>Indent</th><th>Date</th><th>Customer</th><th>Build</th>
+<th style="text-align:right">Lines</th><th style="text-align:right">Qty</th>
+<th style="text-align:right">KW</th><th>Delivery</th></tr></thead><tbody>
+{% for r in rows %}<tr>
+  <td class="mono">{{ r.indent_no }}</td><td>{{ r.indent_date }}</td>
+  <td>{{ r.customer }}</td>
+  <td><span class="tag {{ 't-rev' if r.build_type=='make_to_order' else 't-mute' }}">
+      {{ 'make to order' if r.build_type=='make_to_order' else 'make to stock' }}</span></td>
+  <td style="text-align:right">{{ r.lines }}</td>
+  <td style="text-align:right" class="mono">{{ r.total_qty }}</td>
+  <td style="text-align:right" class="mono">{{ r.total_kw }}</td>
+  <td>{{ r.delivery_by or r.delivery_text or '—' }}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}
+<div class="card-b hint">No indents yet. The indent is Marketing's instruction to
+the factory and everything downstream hangs off it.</div>{% endif %}</div>
+
+{% if prog %}
+<div class="card"><div class="card-h"><h3>Lines · ordered, dispatched, remaining</h3><span class="sp"><a class="btn btn-sm" href="{{ url_for('export_csv', what='indents') }}">Export CSV</a></span></div>
+<div class="scroll"><table>
+<thead><tr><th>Indent</th><th>#</th><th>Model</th><th>DCR</th><th>ARC</th>
+<th style="text-align:right">Ordered</th><th style="text-align:right">KW</th>
+<th style="text-align:right">Dispatched</th><th style="text-align:right">Remaining</th></tr></thead><tbody>
+{% for p in prog %}<tr>
+  <td class="mono">{{ p.indent_no }}</td><td>{{ p.line_no }}</td>
+  <td class="mono">{{ p.model }}</td>
+  <td><span class="tag {{ 't-pass' if p.dcr=='DCR' else 't-mute' }}">{{ p.dcr }}</span></td>
+  <td>{{ p.arc or '—' }}</td>
+  <td style="text-align:right" class="mono">{{ p.ordered_qty }}</td>
+  <td style="text-align:right" class="mono">{{ p.ordered_kw }}</td>
+  <td style="text-align:right" class="mono">{{ p.dispatched_qty }}</td>
+  <td style="text-align:right" class="mono"><b>{{ p.remaining_qty }}</b></td></tr>{% endfor %}
+</tbody></table></div>
+<div class="card-b hint">Dispatched and Remaining are derived, never typed. Both
+columns have sat blank on the paper form since 2016.</div></div>
+{% endif %}
+{% endblock %}

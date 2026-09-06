@@ -1,0 +1,50 @@
+<div class="pg"><h2>Item Master</h2>
+  <p>Seeded from the back label &middot; {{ items|length }} items from
+     {{ models|length }} models &times; DCR and NDCR</p>
+  <div class="pg-act"><button class="btn" data-role="export">Export table</button></div>
+</div>
+
+<div class="note n-info">The back label is the controlled document saying what
+  may legally be built and labelled, so the master is seeded from it &mdash; not
+  from what has been produced. The serial embeds the wattage, so a missing item
+  blocks serial generation on the morning production starts. That has happened
+  once already: ISEN630-G12R shipped on a real challan while it was absent.</div>
+
+<div class="card" data-itable="items" data-export="items">
+  <div class="card-h"><h3>Items</h3>
+    <div class="ch-r">
+      <input data-role="search" placeholder="search" style="width:150px;padding:5px 8px;
+        border:1px solid var(--line);border-radius:var(--r);font-size:12px">
+      <select data-role="filter" data-col="1"
+        style="padding:5px 8px;border:1px solid var(--line);border-radius:var(--r);font-size:12px">
+        <option value="">All cell types</option><option>DCR</option><option>NDCR</option></select>
+      <select data-role="filter" data-col="7"
+        style="padding:5px 8px;border:1px solid var(--line);border-radius:var(--r);font-size:12px">
+        <option value="">All statuses</option><option>produced</option>
+        <option>authorised only</option></select>
+      <button class="btn btn-sm btn-ghost" data-role="reset">Reset</button>
+      <span class="tag t-mute" data-role="count"></span>
+    </div></div>
+  <div class="scroll" style="max-height:520px">
+    <table><thead><tr>
+      <th>Item</th><th>Cell type</th><th>Item code</th><th>Model</th>
+      <th class="num">Wattage</th><th class="num">Per pallet</th>
+      <th>HSN</th><th>Status</th>
+    </tr></thead><tbody>
+      {% for i in items %}<tr>
+        <td class="mono">{{ i.item }}</td>
+        <td><span class="tag {{ 't-pass' if i.cell_type=='DCR' else 't-mute' }}">{{ i.cell_type }}</span></td>
+        <td class="mono">{{ i.item_code }}</td>
+        <td class="mono">{{ i.model }}</td>
+        <td class="num">{{ i.wattage }}</td>
+        <td class="num">{{ i.pallet_ceiling }}</td>
+        <td class="mono">{{ i.hsn }}</td>
+        <td>{% if i.produced %}<span class="tag t-pass">produced</span>
+            {% else %}<span class="tag t-mute">authorised only</span>{% endif %}</td>
+      </tr>{% endfor %}
+    </tbody></table></div>
+  <div class="card-b hint">HO omits the suffix when it means NDCR &mdash; one
+    invoice reads <span class="mono">SOLAR PV MODULE-ISEN630-G12R</span> for an
+    NDCR module while another reads <span class="mono">&hellip;-ISEN625-G12R-DCR</span>.
+    The bare model is therefore an alias for the NDCR item, so both resolve.</div>
+</div>

@@ -1,0 +1,48 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>{{ a.wattage }}W · {{ serials|length }} NOS</title>
+<style>
+ @page{size:A4;margin:10mm}
+ body{font-family:Arial,Helvetica,sans-serif;font-size:9pt;margin:0;color:#000}
+ h1{font-size:11pt;text-align:center;border:1px solid #000;border-bottom:none;
+    margin:0;padding:2.5mm}
+ table{width:100%;border-collapse:collapse}
+ th,td{border:1px solid #000;padding:.9mm 2mm;text-align:center}
+ th{font-size:8.5pt;background:#F2F2F2}
+ td.b{font-family:Consolas,monospace;font-size:8.5pt}
+ td.n{width:9mm;font-size:8pt}
+ @media screen{body{background:#EDF1F6;padding:14px}
+   .sheet{background:#fff;max-width:190mm;margin:0 auto;padding:0 0 10px}
+   .bar{max-width:190mm;margin:0 auto 10px;font-size:12px;color:#3D4E63}}
+ @media print{.bar{display:none}}
+</style></head><body>
+<div class="bar">
+  <button onclick="print()">Open print dialog</button>
+  <a href="/allocation/{{ a.alloc_id }}/barcodes.xlsx"
+     style="margin-left:10px">Download as Excel</a>
+  <span style="margin-left:10px">{{ serials|length }} serials
+    {%- if cols|length > 1 %}, {{ cols|length }} column pairs of {{ per }}{% endif %}
+    &mdash; same layout as the old barcode sheet, but the serials come from
+    the database rather than being re-generated.</span>
+</div>
+
+<div class="sheet">
+  <h1>{{ a.wattage }}W &mdash; {{ serials|length }} NOS {{ cust }}</h1>
+  <table>
+    <thead><tr>
+      {% for _c in cols %}<th style="width:9mm">S.NO.</th><th>BARCODE</th>{% endfor %}
+    </tr></thead>
+    <tbody>
+      {% for r in range(depth) %}
+      <tr>
+        {% for c in cols %}
+          {% if r < c|length %}
+            <td class="n">{{ loop.index0 * per + r + 1 }}</td>
+            <td class="b">{{ c[r] }}</td>
+          {% else %}<td class="n"></td><td></td>{% endif %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+</body></html>

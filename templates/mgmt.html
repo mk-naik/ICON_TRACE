@@ -1,0 +1,49 @@
+{% extends "base.html" %}{% set nav='mgmt' %}
+{% block body %}
+<div class="pg"><h2>Management Overview</h2>
+  <p>Order book, stock position and what has left the gate</p></div>
+
+<div class="kpi" style="margin-bottom:16px">
+  <div><span>Indents open</span><b>{{ indents|length }}</b></div>
+  <div><span>Ordered</span><b>{{ prog | sum(attribute='ordered_qty') }}</b></div>
+  <div><span>Allocated</span><b>{{ f.allocated }}</b></div>
+  <div><span>Packed</span><b>{{ f.packed }}</b></div>
+  <div><span>Dispatched</span><b style="color:var(--pass)">{{ f.dispatched }}</b></div>
+  <div><span>Historical challans</span><b>{{ stats.challans }}</b></div>
+</div>
+
+<div class="card"><div class="card-h"><h3>Order book</h3>
+  <span class="sp hint">remaining is derived, never typed</span></div>
+{% if prog %}<table>
+<thead><tr><th>Indent</th><th>Customer</th><th>Model</th><th>DCR</th>
+<th style="text-align:right">Ordered</th><th style="text-align:right">KW</th>
+<th style="text-align:right">Dispatched</th><th style="text-align:right">Remaining</th>
+<th>Due</th></tr></thead><tbody>
+{% for p in prog %}<tr><td class="mono">{{ p.indent_no }}</td><td>{{ p.customer }}</td>
+<td class="mono">{{ p.model }}</td>
+<td><span class="tag {{ 't-pass' if p.dcr=='DCR' else 't-mute' }}">{{ p.dcr }}</span></td>
+<td style="text-align:right" class="mono">{{ p.ordered_qty }}</td>
+<td style="text-align:right" class="mono">{{ p.ordered_kw }}</td>
+<td style="text-align:right" class="mono">{{ p.dispatched_qty }}</td>
+<td style="text-align:right" class="mono"><b>{{ p.remaining_qty }}</b></td>
+<td>{{ p.delivery_by or '—' }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<div class="card-b hint">No indents yet.</div>{% endif %}</div>
+
+<div class="card"><div class="card-h"><h3>Invoices from HO</h3></div>
+{% if invoices %}<table>
+<thead><tr><th>Invoice</th><th>Date</th><th>Buyer</th><th>Model</th>
+<th style="text-align:right">Declared</th></tr></thead><tbody>
+{% for i in invoices %}<tr><td class="mono">{{ i.invoice_no }}</td>
+<td>{{ i.invoice_date or '—' }}</td><td>{{ i.buyer_name }}</td>
+<td class="mono">{{ i.declared_model }}</td>
+<td style="text-align:right" class="mono">{{ i.declared_qty }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<div class="card-b hint">None loaded.</div>{% endif %}</div>
+
+<div class="card"><div class="card-h"><h3>Gate passes</h3></div>
+{% if gatepasses %}<table>
+<thead><tr><th>Number</th><th>Date</th><th>Type</th><th>Party</th><th>Material</th></tr></thead>
+<tbody>{% for g in gatepasses %}<tr><td class="mono">{{ g.gp_no }}</td><td>{{ g.gp_date }}</td>
+<td><span class="tag {{ 't-rev' if g.kind=='RGP' else 't-mute' }}">{{ g.kind }}</span></td>
+<td>{{ g.party }}</td><td>{{ g.description }}</td></tr>{% endfor %}</tbody>
+</table>{% else %}<div class="card-b hint">None issued.</div>{% endif %}</div>
+{% endblock %}

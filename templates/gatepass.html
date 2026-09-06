@@ -1,0 +1,42 @@
+{% extends "base.html" %}{% set nav='gatepass' %}
+{% block body %}
+<form method="post">
+<div class="card"><div class="card-h"><h3>New gate pass · IS-MP-STR-FM-04</h3></div>
+<div class="card-b">
+  <div class="note n-info">This is premises control for material leaving the
+  factory — tools, equipment, samples, inter-unit transfers. Finished modules
+  leave on the challan, which is itself titled "Dispatch Challan Cum Gate Pass".
+  One number series covers every type.</div>
+  <div class="grid">
+    <div class="fld req"><label>Type</label>
+      <select name="kind"><option>NRGP</option><option>RGP</option></select>
+      <div class="why">NRGP prints 3 copies (1 creator, 2 gate). RGP prints 3
+        (1 creator, 1 gate, 1 recipient, returned on receipt).</div></div>
+    <div class="fld req"><label>Party / destination</label>
+      <input name="party" placeholder="ICON SOLAR UNIT-1 (DIGHARI)"></div>
+    <div class="fld"><label>Delivery address</label><input name="address"></div>
+    <div class="fld"><label>Vehicle / by hand</label>
+      <input name="vehicle" placeholder="BY HAND - RUPESH SAHU (STORE)"></div>
+    <div class="fld" style="grid-column:1/-1"><label>Material description</label>
+      <input name="description" placeholder="SOLAR CELL (25.6%)"></div>
+    <div class="fld"><label>Quantity</label><input name="qty" type="number"></div>
+    <div class="fld"><label>Expected return (RGP)</label>
+      <input name="expected_return" type="date"></div>
+    <div class="fld"><label>Against challan</label><input name="challan_no"></div>
+  </div>
+</div>
+<div class="card-f"><button class="btn btn-primary">Issue gate pass</button>
+  <span class="hint">ISGP + YYMMDD + / + sequence.</span></div></div>
+</form>
+
+<div class="card"><div class="card-h"><h3>Issued</h3><span class="sp"><a class="btn btn-sm" href="{{ url_for('export_csv', what='gatepass') }}">Export CSV</a></span></div>
+{% if rows %}<div class="scroll"><table>
+<thead><tr><th>Number</th><th>Date</th><th>Type</th><th>Party</th>
+<th>Material</th><th style="text-align:right">Qty</th><th>Return by</th></tr></thead><tbody>
+{% for r in rows %}<tr><td class="mono">{{ r.gp_no }}</td><td>{{ r.gp_date }}</td>
+<td><span class="tag {{ 't-rev' if r.kind=='RGP' else 't-mute' }}">{{ r.kind }}</span></td>
+<td>{{ r.party }}</td><td>{{ r.description }}</td>
+<td style="text-align:right" class="mono">{{ r.qty or '' }}</td>
+<td>{{ r.expected_return or '' }}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<div class="card-b hint">None issued yet.</div>{% endif %}</div>
+{% endblock %}

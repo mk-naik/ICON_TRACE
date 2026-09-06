@@ -1,0 +1,61 @@
+{% extends "base.html" %}{% set nav='packing' %}
+{% block body %}
+<div class="split"><div>
+<div class="card"><div class="card-h"><h3>Open a box</h3></div>
+<form method="post"><input type="hidden" name="action" value="open">
+<div class="card-b"><div class="grid">
+  <div class="fld req"><label>Model</label><input name="model" placeholder="ISEN630-G12R"></div>
+  <div class="fld req"><label>Grade</label>
+    <select name="grade"><option>A</option><option>GY</option><option>BGY</option></select>
+    <div class="why">Drives the indirect letter in the box number.</div></div>
+  <div class="fld"><label>Customer</label><input name="customer" placeholder="blank = General Stock"></div>
+</div></div>
+<div class="card-f"><button class="btn btn-primary">Open box</button>
+<span class="hint">The number is taken from the daily counter at open, and the
+label prints at close.</span></div></form></div>
+
+{% for b in boxes %}
+<div class="card"><div class="card-h">
+  <h3>{{ b.number }}</h3>
+  <span class="sp">
+    <span class="tag {{ 't-pass' if b.state=='closed' else 't-rev' if b.state=='retired' else 't-mute' }}">{{ b.state }}</span>
+    <span class="tag t-mute">{{ b.grade }}</span>
+    <span class="mono">{{ b.serials|length }}/{{ b.capacity }}</span></span></div>
+<div class="card-b">
+  <p class="hint">{{ b.model }} · {{ b.customer or 'General Stock' }} · packed {{ b.pack_date }}</p>
+  {% if b.state == 'open' %}
+  <form method="post" style="margin-top:10px">
+    <input type="hidden" name="action" value="scan">
+    <input type="hidden" name="box_no" value="{{ b.number }}">
+    <div class="grid"><div class="fld" style="grid-column:1/-1">
+      <label>Scan module into this box</label>
+      <input name="serial" autofocus placeholder="scan or type a serial"></div></div>
+    <button class="btn btn-sm btn-primary" style="margin-top:8px">Add</button>
+  </form>
+  <form method="post" style="display:inline">
+    <input type="hidden" name="action" value="close">
+    <input type="hidden" name="box_no" value="{{ b.number }}">
+    <button class="btn btn-sm" style="margin-top:8px">Close and print label</button>
+  </form>
+  {% else %}
+  <a class="btn btn-sm" href="{{ url_for('packing_label', box_no=b.number) }}" target="_blank">View label</a>
+  {% endif %}
+  {% if b.serials %}<div class="scroll" style="max-height:150px;margin-top:10px">
+    <table><tbody>{% for s in b.serials %}<tr><td class="mono">{{ loop.index }}</td>
+    <td class="mono">{{ s }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+</div></div>
+{% endfor %}
+</div>
+
+<div>
+<div class="card"><div class="card-h"><h3>Graded, not yet packed</h3>
+  <span class="sp hint">{{ graded|length }}</span></div>
+{% if graded %}<div class="scroll" style="max-height:420px"><table>
+<thead><tr><th>Serial</th><th>Grade</th></tr></thead><tbody>
+{% for s in graded %}<tr><td class="mono">{{ s.serial }}</td>
+<td><span class="tag {{ 't-pass' if s.grade=='A' else 't-rev' }}">{{ s.grade }}</span></td></tr>{% endfor %}
+</tbody></table></div>{% else %}
+<div class="card-b hint">Nothing graded yet. A module cannot be packed before
+FQC — packing an ungraded module is how a reject reaches a customer.</div>{% endif %}</div>
+</div></div>
+{% endblock %}
