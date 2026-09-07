@@ -85,25 +85,48 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       demo numbers.
 - [x] Customer dropdowns come from the customer master, so one company cannot
       appear under three spellings in a filter.
-- [ ] Export works.
+- [x] **Export works, and it works everywhere at once.** Every Export button
+      in v4 called `exportNote()`, which only toasted *"Export runs on the
+      server in the real build — Excel with your current filters."* That
+      sentence is now true. One delegated handler catches every one of them,
+      reads the rows **off the screen** and posts them to `/api/export/xlsx`,
+      which builds a real `.xlsx` with openpyxl.
+      **Off the screen, deliberately:** a report that runs its own query is
+      how a report and the screen it came from end up disagreeing about the
+      same day. What was filtered out of view is absent from the file.
+      Quantities land as numbers so they can be summed; `0001` and serials
+      stay text, because a challan sequence read back as `1` is a different
+      document. The Actions column of buttons is dropped.
 - [ ] Reset clears every filter field.
 
 **The pattern for every remaining screen:** find the array its render function
 reads, serve that array from the database, call the render function again.
 Never re-implement the screen — v4's arithmetic is the part that was agreed.
 
+**The pattern for Export:** nothing. A card with a table exports itself, and
+the page header's Export takes every table on the screen, one sheet each.
+A new screen gets both for free.
+
 ## 2. Search & Trace
 
-- [ ] Move **Build Instances** and **Customer Assignment History** below the
-      Full Event Log.
+- [x] **Build Instances** and **Customer Assignment History** now sit below
+      the Full Event Log. v4 put them between the crumb and the journey,
+      which pushed the event log — the thing somebody searching a serial came
+      for — below the fold. Both read as supporting detail, so both moved
+      under it. `doSearch()` is patched to reorder after it renders; v4's own
+      `serialView()` is untouched.
 - [ ] **Materials Used** panel styled as the reference image: material name,
       spec line, make on the right, UOM under it, `FROZEN AT ALLOCATION` chip.
 - [ ] Box / Serial Journey — every title clickable, linking into Search.
 
 ## 3. Production Dashboard
 
-- [ ] Export works; add Reset.
-- [ ] Export on Line & Shift Performance.
+- [x] **Export works, and Reset exists at all.** The filter bar had Apply and
+      nothing to undo it with, so a Reset is injected beside it and
+      `wireResets()` picks it up by its label like every other one.
+- [x] **Export on Line & Shift Performance.** That card had no Export button
+      to begin with — one is injected into its header and goes through the
+      same handler as the rest.
 
 ## 4. Indent  *(done, keep in step with later changes)*
 
@@ -185,7 +208,11 @@ Never re-implement the screen — v4's arithmetic is the part that was agreed.
 
 ## 8. FQC Dashboard
 
-- [ ] Export, reset, filters; scroll and export on every table.
+- [x] Export — the filter bar's Export takes the whole screen (KPI strip,
+      shift table, every card), and each card's own Export takes that table.
+- [ ] Scroll on every table — the cards are not wired to `data-itable` yet,
+      so a long list still grows the page instead of scrolling in its card.
+      Reset and the filters were already there; confirm on screen.
 
 ## 9. FQC Entry
 
@@ -195,12 +222,18 @@ Never re-implement the screen — v4's arithmetic is the part that was agreed.
 
 - [ ] Move **above** New Pallet in the sidebar, and make it the first Packing
       screen.
-- [ ] Reset, export, all filters working.
+- [x] Export — page header and per-card, same as the other dashboards.
+- [ ] Reset and all filters working — unverified on screen.
 - [ ] Print boxes.
 
 ## 11. New Pallet
 
-- [ ] Remove **Simulate a full box**.  *(v4 screen wiring)*
+- [x] **Simulate a full box is gone.** It filled the open pallet with
+      invented serials (`ICON590G1202121001` upwards) a slot at a time.
+      Beside a real scanner on a real pallet that is one wrong click from a
+      fabricated box in the record — the same reason the invoice screen's
+      simulate buttons went. The button is removed and `fillDemo()` is
+      neutralised, so nothing can reach it by another route.
 - [ ] Survive a refresh mid-pallet — see Foundations, box persistence.
 - [x] Label layout per the reference images (Lighthouse pallet sheet): header
       block, Voucher No / Voucher Date, Model Type, Pallet No, Pallet Grade,
@@ -215,7 +248,8 @@ Never re-implement the screen — v4's arithmetic is the part that was agreed.
 
 ## 13. Stock & Dispatch
 
-- [ ] Same as the other dashboards: filters, reset, scroll, export.
+- [x] Export — page header and per-card, same as the other dashboards.
+- [ ] Filters, reset and scroll — still to wire.
 
 ## 13a. Flash Test Report  *(new, built)*
 
@@ -354,3 +388,4 @@ not know any of the following, and each is a change to make on top of it.
 | Three dispatch outputs, two challan versions | Challan |
 | Contact person / phone from the invoice | Invoice |
 | SQLite file, deletable, not MySQL | store |
+| Export is Excel, built on the server from what is on screen | every dashboard |

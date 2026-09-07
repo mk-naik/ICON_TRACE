@@ -1186,6 +1186,140 @@ def allocation_barcodes_print(alloc_id):
                            cols=cols, depth=depth, per=per)
 
 
+# ==========================================================================
+# Export  -  every Export button on every screen, one endpoint
+# ==========================================================================
+
+EXPORT_MAX_SHEETS = 40
+EXPORT_MAX_ROWS = 100000
+EXPORT_MAX_COLS = 60
+
+
+def _xlsx_value(text):
+    """A cell as Excel should hold it: a quantity as a number so it can be
+    summed, everything else as the text the operator was looking at.
+
+    Deliberately NOT coerced:
+      * anything with a leading zero - '0001' is a challan sequence rendered
+        at its padding, and 1 is not the same document.
+      * more than 15 digits - Excel starts rounding, and a serial that comes
+        back one digit different is worse than no export at all.
+      * percentages, dates and anything else with a unit in it.
+    """
+    s = " ".join((text or "").split())
+    if not s or s in ("—", "-"):
+        return None
+    t = s.replace(",", "")
+    body = t[1:] if t[:1] == "-" else t
+    if body[:1] == "0" and body not in ("0",) and not body.startswith("0."):
+        return s
+    import re as _re
+    if _re.fullmatch(r"-?\d{1,15}", t):
+        return int(t)
+    if _re.fullmatch(r"-?\d{0,15}\.\d{1,6}", t) and len(body.replace(".", "")) <= 15:
+        return float(t)
+    return s
+
+
+def _sheet_title(raw, used):
+    """Excel refuses []:*?/\\ and anything past 31 characters, and refuses two
+    sheets with the same name. Fix it here rather than returning a file the
+    operator cannot open."""
+    t = "".join(ch for ch in (raw or "Sheet") if ch not in "[]:*?/\\").strip()
+    t = " ".join(t.split())[:31] or "Sheet"
+    base, n = t, 2
+    while t.lower() in used:
+        suffix = " (%d)" % n
+        t = base[:31 - len(suffix)] + suffix
+        n += 1
+    used.add(t.lower())
+    return t
+
+
+@app.route("/api/export/xlsx", methods=["POST"])
+def api_export_xlsx():
+    """Every Export button on every screen, in one endpoint.
+
+    The rows arrive from the SCREEN rather than from a second query here.
+    The operator has a filter bar in front of them, and a report that runs
+    its own query is exactly how a report and the screen it was exported
+    from end up disagreeing about the same day. What was on screen is what
+    lands in the file - which is what the button has always promised.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill
+    from openpyxl.utils import get_column_letter
+    from flask import Response
+
+    d = request.get_json(force=True, silent=True) or {}
+    sheets = d.get("sheets") or []
+    if not isinstance(sheets, list) or not sheets:
+        return jsonify({"ok": False, "why": "There is nothing on this screen "
+                                            "to export yet."}), 400
+    if len(sheets) > EXPORT_MAX_SHEETS:
+        return jsonify({"ok": False, "why":
+            "That screen has %d tables on it and the export takes at most %d."
+            % (len(sheets), EXPORT_MAX_SHEETS)}), 400
+    total_rows = sum(len(s.get("rows") or []) for s in sheets)
+    if total_rows > EXPORT_MAX_ROWS:
+        return jsonify({"ok": False, "why":
+            "%s rows is past the %s this export takes. Narrow the filters "
+            "and export again." % (format(total_rows, ","),
+                                   format(EXPORT_MAX_ROWS, ","))}), 400
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    head_font = Font(bold=True, color="FFFFFF")
+    head_fill = PatternFill("solid", fgColor="1B4D7A")     # the app's navy
+    used = set()
+    written = 0
+
+    for s in sheets:
+        cols = [str(c) for c in (s.get("columns") or [])][:EXPORT_MAX_COLS]
+        rows = s.get("rows") or []
+        ws = wb.create_sheet(_sheet_title(s.get("title"), used))
+        widths = {}
+
+        if cols:
+            ws.append(cols)
+            for i, c in enumerate(cols, 1):
+                cell = ws.cell(1, i)
+                cell.font = head_font
+                cell.fill = head_fill
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
+                widths[i] = len(c)
+            ws.freeze_panes = "A2"
+
+        for r in rows:
+            vals = [_xlsx_value(v if isinstance(v, str) else
+                                ("" if v is None else str(v)))
+                    for v in (r or [])[:EXPORT_MAX_COLS]]
+            ws.append(vals)
+            written += 1
+            for i, v in enumerate(vals, 1):
+                widths[i] = max(widths.get(i, 0), len(str(v)) if v is not None else 0)
+
+        for i, w in widths.items():
+            ws.column_dimensions[get_column_letter(i)].width = min(max(w + 3, 9), 46)
+        if cols and rows:
+            ws.auto_filter.ref = "A1:%s%d" % (get_column_letter(len(cols)),
+                                              len(rows) + 1)
+
+    if not wb.sheetnames:                       # every sheet came in empty
+        return jsonify({"ok": False, "why": "There is nothing on this screen "
+                                            "to export yet."}), 400
+
+    name = "".join(ch for ch in (d.get("name") or "export")
+                   if ch.isalnum() or ch in "-_")[:40] or "export"
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fn = "icontrace_%s_%s.xlsx" % (name, datetime.date.today().isoformat())
+    return Response(buf.read(),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="%s"' % fn})
+
+
 @app.route("/api/allocations")
 def api_allocations():
     with store.conn() as (cx, cur):

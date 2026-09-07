@@ -86,9 +86,21 @@ patched.__mine = true;          // so it is never patched twice
 window.someFn = patched;
 ```
 
-**Test in a real DOM before claiming a fix.** `node` and `jsdom` are
-installed. Render the page, click the thing, assert the result. Reading your
-own code is not testing it.
+**Test before claiming a fix.** Render the page, click the thing, assert the
+result. Reading your own code is not testing it.
+
+With `node` and `jsdom` on the machine, test in a real DOM. Without them —
+and a plant PC will not have them — Windows Script Host runs plain JavaScript
+with no install at all, which is what `test_export.js` uses:
+
+```
+cscript //Nologo //E:JScript test_export.js
+```
+
+It reads the functions out of `icon_live.js` rather than copying them, so it
+tests the code that ships. Write new JS tests the same way: stub only the
+selectors the code asks for, and check the test can still fail before
+trusting it to pass.
 
 **Say why in a comment when the reason is not obvious** — especially where a
 value looks wrong but is right (Pmax is column 2, not 10).
@@ -182,10 +194,12 @@ python serve.py                    → http://127.0.0.1:8080/
 ```
 
 ```
-del icontrace.db                   start clean
+del icontrace.db                        start clean
 python icon_invoice_parser.py --selftest
-python test_box_number.py          32 tests
-node --check static/icon_live.js
+python test_box_number.py               32 tests
+cscript //Nologo //E:JScript test_export.js   19 tests, no install needed
+node test_export.js                     the same tests, if node is installed
+node --check static/icon_live.js        needs node
 ```
 
 The top bar shows the build id. If the server reports a different one, the

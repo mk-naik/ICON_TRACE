@@ -99,8 +99,13 @@
       catch (e) { /* a screen that is not on the page yet */ }
     });
     if (typeof window.iconTable !== 'undefined') window.iconTable.wireAll();
+    /* before wireResets(), so the Reset it injects gets wired this pass */
+    if (typeof addMissingControls === 'function') addMissingControls();
     if (typeof wireResets === 'function') wireResets();
+    if (typeof wireExports === 'function') wireExports();
     if (typeof invoiceRealParse === 'function') invoiceRealParse();
+    if (typeof pruneDemoControls === 'function') pruneDemoControls();
+    if (typeof wireSearchOrder === 'function') wireSearchOrder();
     if (typeof wirePlanChecks === 'function') wirePlanChecks();
   }
   window.iconRerender = rerender;
@@ -325,6 +330,274 @@
   }
   window.iconWireResets = wireResets;
 
+  /* ---- Export ------------------------------------------------------
+   * v4 has an Export button on nearly every screen and every one of them
+   * calls exportNote(), which only toasts "Export runs on the server in the
+   * real build - Excel with your current filters". Make that sentence true.
+   *
+   * The rows are read off the SCREEN, so whatever the filter bar has hidden
+   * is absent from the file too. A report that runs its own query is how a
+   * report and the screen it came from end up disagreeing about the same
+   * day. The server turns what is sent into a real .xlsx.
+   *
+   * A button inside a card exports that card. A button in the page header
+   * exports every table on the screen, one sheet each.
+   */
+  function txt(el) {
+    return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
+  }
+
+  function slug(s) {
+    return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-')
+                    .replace(/^-|-$/g, '').slice(0, 40);
+  }
+
+  function exportTable(tbl, title) {
+    var head = tbl.querySelector('thead tr');
+    var cells = head ? Array.prototype.slice.call(head.cells) : [];
+    /* The Actions column holds buttons, not data. A column of the word
+       "Withdraw" repeated down a spreadsheet helps nobody. */
+    var skip = [];
+    cells.forEach(function (th, i) {
+      if (/^actions?$/i.test(txt(th))) skip.push(i);
+    });
+    var keep = function (v, i) { return skip.indexOf(i) === -1; };
+    var columns = cells.filter(keep).map(txt);
+
+    var rows = [];
+    tbl.querySelectorAll('tbody tr, tfoot tr').forEach(function (tr) {
+      if (tr.style.display === 'none') return;       // filtered out of view
+      if (tr.hasAttribute('data-none') || tr.hasAttribute('data-empty')) return;
+      var vals = Array.prototype.slice.call(tr.cells).filter(keep).map(txt);
+      if (vals.join('')) rows.push(vals);
+    });
+    return rows.length ? { title: title, columns: columns, rows: rows } : null;
+  }
+
+  /* The charts carry real figures too, and three shapes cover every one v4
+     draws: the KPI strip, the stage funnel and a donut's legend. Without
+     these, Export on a chart card would have nothing to answer with. */
+  function exportSheetsFrom(scope, fallbackTitle) {
+    var sheets = [], seen = [];
+
+    var kpis = Array.prototype.slice.call(scope.querySelectorAll('.kpi'));
+    if (kpis.length) {
+      sheets.push({ title: 'Summary', columns: ['Measure', 'Value', 'Detail'],
+        rows: kpis.map(function (k) {
+          return [txt(k.querySelector('label')), txt(k.querySelector('.v')),
+                  txt(k.querySelector('.d'))]; }) });
+    }
+
+    var cards = (scope.classList && scope.classList.contains('card'))
+      ? [scope] : Array.prototype.slice.call(scope.querySelectorAll('.card'));
+
+    cards.forEach(function (card) {
+      var title = txt(card.querySelector('.card-h h3')) || fallbackTitle || 'Sheet';
+      card.querySelectorAll('table').forEach(function (tbl) {
+        seen.push(tbl);
+        var s = exportTable(tbl, title);
+        if (s) sheets.push(s);
+      });
+      var steps = card.querySelectorAll('.funnel .fstep');
+      if (steps.length) {
+        sheets.push({ title: title, columns: ['Stage', 'Count', 'Share'],
+          rows: Array.prototype.slice.call(steps).map(function (s) {
+            return [txt(s.querySelector('.fl')), txt(s.querySelector('.fv')),
+                    txt(s.querySelector('.fp'))]; }) });
+      }
+      var legend = card.querySelectorAll('.legend .lg');
+      if (legend.length) {
+        sheets.push({ title: title, columns: ['Item', 'Count', 'Share'],
+          rows: Array.prototype.slice.call(legend).map(function (l) {
+            return [txt(l.querySelector('span')), txt(l.querySelector('b')),
+                    txt(l.querySelector('.pc'))]; }) });
+      }
+    });
+
+    /* a table that sits outside any card still belongs in the file */
+    scope.querySelectorAll('table').forEach(function (tbl) {
+      if (seen.indexOf(tbl) !== -1) return;
+      var s = exportTable(tbl, fallbackTitle || 'Table');
+      if (s) sheets.push(s);
+    });
+    return sheets;
+  }
+
+  function exportSend(name, sheets) {
+    if (navigator.onLine === false) {
+      if (typeof toast === 'function')
+        toast('Export builds the Excel file on the server, so it needs the ' +
+              'network. Everything else on this screen keeps working.');
+      return;
+    }
+    if (!sheets.length) {
+      if (typeof toast === 'function')
+        toast('There is nothing on this screen to export yet.');
+      return;
+    }
+    if (typeof toast === 'function') toast('Building the Excel file…');
+    fetch('/api/export/xlsx', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, sheets: sheets })
+    }).then(function (r) {
+      /* a refusal carries its reason, same as every other route - and if the
+         body is not JSON at all, say the status rather than a parser error */
+      if (!r.ok) {
+        return r.json().then(function (b) {
+          throw new Error(b && b.why ? b.why : 'the server refused the export');
+        }, function () {
+          throw new Error('the server answered ' + r.status + '.');
+        });
+      }
+      var m = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
+      return r.blob().then(function (blob) {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = m ? m[1] : 'icontrace_export.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        /* released late on purpose: revoking the moment the click returns
+           has been known to cancel the download on a slow machine */
+        setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
+        var n = sheets.reduce(function (t, s) { return t + s.rows.length; }, 0);
+        if (typeof toast === 'function')
+          toast(n.toLocaleString() + ' row(s) exported — exactly what is ' +
+                'on screen, filters and all.');
+      });
+    }).catch(function (e) {
+      if (typeof toast === 'function') toast('Export failed — ' + e.message);
+    });
+  }
+
+  function exportFrom(btn) {
+    var view = btn.closest('.view') || btn.closest('#mdl') || document.body;
+    var viewName = slug((view.id || '').replace(/^v-/, ''));
+    var card = btn.closest('[data-itable]') || btn.closest('.card');
+
+    /* the page header's Export means the screen, not one card */
+    if (!card || btn.closest('.pg')) {
+      exportSend(viewName || 'export',
+                 exportSheetsFrom(view, txt(view.querySelector('.pg h2'))));
+      return;
+    }
+    var title = txt(card.querySelector('.card-h h3'));
+    var sheets = exportSheetsFrom(card, title);
+    if (!sheets.length) {
+      if (typeof toast === 'function')
+        toast('There is nothing to export in ' + (title || 'this card') +
+              ' yet — it has no rows on screen.');
+      return;
+    }
+    exportSend(card.getAttribute('data-export') || slug(title) ||
+               viewName || 'export', sheets);
+  }
+
+  function wireExports() {
+    if (document.__iconExports) return;
+    document.__iconExports = true;
+    document.addEventListener('click', function (e) {
+      var btn = e.target && e.target.closest ? e.target.closest('button,a') : null;
+      if (!btn || !btn.getAttribute) return;
+      if ((btn.getAttribute('onclick') || '').indexOf('exportNote') === -1) return;
+      /* capture phase, so v4's inline handler never runs and the placeholder
+         toast never appears beside the real file */
+      e.preventDefault();
+      e.stopPropagation();
+      exportFrom(btn);
+    }, true);
+  }
+
+  /* anything calling exportNote() directly exports the screen on show */
+  window.exportNote = function () {
+    var view = document.querySelector('.view.on') || document.body;
+    exportSend(slug((view.id || '').replace(/^v-/, '')) || 'export',
+               exportSheetsFrom(view, txt(view.querySelector('.pg h2'))));
+  };
+  window.iconExport = exportFrom;
+
+  /* Two controls the backlog asks for that v4 never drew: a Reset on the
+     Production Dashboard filter bar, and an Export on Line & shift
+     performance. Injected rather than typed into v4, and both then behave
+     like every other one of their kind - wireResets() picks the Reset up by
+     its label, and the Export goes through the same delegated handler. */
+  function addMissingControls() {
+    var pd = document.getElementById('v-proddash');
+    if (!pd) return;
+
+    var sp = pd.querySelector('.filters .sp');
+    if (sp && !sp.querySelector('[data-added=reset]')) {
+      var r = document.createElement('button');
+      r.className = 'btn btn-ghost';
+      r.textContent = 'Reset';
+      r.setAttribute('data-added', 'reset');
+      sp.insertBefore(r, sp.firstChild);
+    }
+
+    pd.querySelectorAll('.card').forEach(function (card) {
+      var h = txt(card.querySelector('.card-h h3')).toLowerCase();
+      if (h.indexOf('line') !== 0 || h.indexOf('performance') === -1) return;
+      var bar = card.querySelector('.card-h .ch-r');
+      if (!bar || bar.querySelector('[data-added=export]')) return;
+      var b = document.createElement('button');
+      b.className = 'btn btn-ghost btn-sm';
+      b.textContent = 'Export';
+      b.setAttribute('data-added', 'export');
+      b.setAttribute('onclick', 'exportNote()');
+      bar.appendChild(b);
+    });
+  }
+
+  /* "Simulate a full box" fills the open pallet with invented serials
+     (ICON590G1202121001 upwards) one slot at a time. Beside a real scanner
+     on a real pallet that is one wrong click from a fabricated box in the
+     record, which is why the invoice screen's simulate buttons went the same
+     way. The function is neutralised too, so nothing can reach it. */
+  function pruneDemoControls() {
+    document.querySelectorAll('[onclick*="fillDemo"]').forEach(function (b) {
+      b.remove();
+    });
+    if (typeof window.fillDemo === 'function' && !window.fillDemo.__pruned) {
+      var stub = function () {
+        if (typeof toast === 'function')
+          toast('Simulated boxes are not available — scan the modules.');
+      };
+      stub.__pruned = true;
+      window.fillDemo = stub;
+    }
+  }
+
+  /* Search & Trace: v4 puts Build instances and Customer assignment history
+     between the crumb and the journey, which pushes the event log - the
+     thing somebody searching a serial actually came for - below the fold.
+     Both move under the full event log, where they read as the supporting
+     detail they are. */
+  function searchPanelOrder() {
+    var out = document.getElementById('searchOut');
+    if (!out) return;
+    var hasWork = Array.prototype.slice.call(out.children).some(function (el) {
+      return el.classList && el.classList.contains('work');
+    });
+    if (!hasWork) return;                  // not the serial view
+    ['build instances', 'customer assignment history'].forEach(function (want) {
+      Array.prototype.slice.call(out.children).forEach(function (el) {
+        if (!el.classList || !el.classList.contains('card')) return;
+        if (txt(el.querySelector('.card-h h3')).toLowerCase() !== want) return;
+        out.appendChild(el);               // .work is last, so this lands after it
+      });
+    });
+  }
+
+  function wireSearchOrder() {
+    var orig = window.doSearch;
+    if (typeof orig !== 'function' || orig.__ordered) return;
+    var patched = function () {
+      orig.apply(this, arguments);
+      try { searchPanelOrder(); } catch (e) {}
+    };
+    patched.__ordered = true;
+    window.doSearch = patched;
+  }
+
   /* v4 ships sample rows in several tables. Where the database has nothing
      yet, say so plainly rather than leaving last month's demo numbers on
      screen - a stale figure that looks real is worse than an empty state. */
@@ -345,9 +618,13 @@
     addScreens();
     sidebarToggle();
     wireDateResets();
+    addMissingControls();
     wireResets();
+    wireExports();
     invoiceRealParse();
     pruneGatePass();
+    pruneDemoControls();
+    wireSearchOrder();
     wirePlanChecks();
     var badge = document.createElement('span');
     badge.className = 'tb-unit';
@@ -1549,6 +1826,11 @@
 
   /* v4's simulate-outage button must not fight the real status */
   window.toggleConn = function () { ping(); };
+
+  /* delegated, so a screen rendered later gets it too */
+  wireExports();
+  pruneDemoControls();
+  wireSearchOrder();
 
   registerSW();
   window.addEventListener('online', function () { fails = 2; ping(); });

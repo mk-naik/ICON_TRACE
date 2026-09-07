@@ -94,3 +94,111 @@ Traceback (most recent call last):
     self._c.execute(sql.replace("%s", "?"), tuple(args))
     ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlite3.IntegrityError: FOREIGN KEY constraint failed
+2026-09-08 00:29:15,052 ERROR   app  Exception on /api/allocation/4 [DELETE]
+Traceback (most recent call last):
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "D:\GITHub\ICON_TRACE\app.py", line 1088, in api_allocation_cancel
+    cur.execute("DELETE FROM allocation_material WHERE alloc_id=%s", (alloc_id,))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\GITHub\ICON_TRACE\store.py", line 39, in execute
+    self._c.execute(sql.replace("%s", "?"), tuple(args))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+2026-09-08 00:29:21,559 ERROR   app  Exception on /api/allocation/4 [DELETE]
+Traceback (most recent call last):
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "D:\GITHub\ICON_TRACE\app.py", line 1088, in api_allocation_cancel
+    cur.execute("DELETE FROM allocation_material WHERE alloc_id=%s", (alloc_id,))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\GITHub\ICON_TRACE\store.py", line 39, in execute
+    self._c.execute(sql.replace("%s", "?"), tuple(args))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+2026-09-08 00:32:46,231 ERROR   app  Exception on /api/allocation/6 [DELETE]
+Traceback (most recent call last):
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "D:\GITHub\ICON_TRACE\app.py", line 1088, in api_allocation_cancel
+    cur.execute("DELETE FROM allocation_material WHERE alloc_id=%s", (alloc_id,))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\GITHub\ICON_TRACE\store.py", line 39, in execute
+    self._c.execute(sql.replace("%s", "?"), tuple(args))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+2026-09-08 00:32:51,211 ERROR   app  Exception on /api/allocation/5 [DELETE]
+Traceback (most recent call last):
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "D:\GITHub\ICON_TRACE\app.py", line 1088, in api_allocation_cancel
+    cur.execute("DELETE FROM allocation_material WHERE alloc_id=%s", (alloc_id,))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\GITHub\ICON_TRACE\store.py", line 39, in execute
+    self._c.execute(sql.replace("%s", "?"), tuple(args))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+2026-09-08 00:35:12,729 ERROR   app  Exception on /api/allocation/7 [DELETE]
+Traceback (most recent call last):
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "D:\GITHub\ICON_TRACE\app.py", line 1088, in api_allocation_cancel
+    cur.execute("DELETE FROM allocation_material WHERE alloc_id=%s", (alloc_id,))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\GITHub\ICON_TRACE\store.py", line 39, in execute
+    self._c.execute(sql.replace("%s", "?"), tuple(args))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+2026-09-08 00:35:20,772 ERROR   app  Exception on /api/allocation/7 [DELETE]
+Traceback (most recent call last):
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "C:\Program Files\Python314\Lib\site-packages\flask\app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "D:\GITHub\ICON_TRACE\app.py", line 1088, in api_allocation_cancel
+    cur.execute("DELETE FROM allocation_material WHERE alloc_id=%s", (alloc_id,))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\GITHub\ICON_TRACE\store.py", line 39, in execute
+    self._c.execute(sql.replace("%s", "?"), tuple(args))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
