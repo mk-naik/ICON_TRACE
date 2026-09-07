@@ -22,23 +22,25 @@ Two rules that make it trustworthy:
 import os, csv, datetime
 import icon_evidence as ev
 
-# Column layout of the real export, confirmed against FTR.csv:
-#   0 TestTime  1 ID  2 Pmax  3 Isc  4 Voc  5 Ipm  6 Vpm  7 FF
-#   8 Rs  9 Rs_M  10 Rsh  11 Eff  12 T_Object  13 T_Target  14 Irr_Target
+# The columns and their headings. The POSITION of each one is not here: it
+# comes from the same Settings map FQC reads, through ev.param_cols(), so the
+# report and the grading screen can never disagree about which column Pmax is
+# in. A second column map maintained beside the first is how the FTR ends up
+# quoting Rsh as a module's power.
 COLUMNS = [
-    ("serial", "Module Serial", None),
-    ("pmax", "Pmax (W)", 2),
-    ("isc", "Isc (A)", 3),
-    ("voc", "Voc (V)", 4),
-    ("ipm", "Ipm (A)", 5),
-    ("vpm", "Vpm (V)", 6),
-    ("ff", "FF (%)", 7),
-    ("rs", "Rs (ohm)", 8),
-    ("rsh", "Rsh (ohm)", 10),
-    ("eff", "Efficiency (%)", 11),
-    ("temp", "Cell Temp (C)", 12),
-    ("irr", "Irradiance (W/m2)", 14),
-    ("tested_at", "Tested", 0),
+    ("serial", "Module Serial"),
+    ("pmax", "Pmax (W)"),
+    ("isc", "Isc (A)"),
+    ("voc", "Voc (V)"),
+    ("ipm", "Ipm (A)"),
+    ("vpm", "Vpm (V)"),
+    ("ff", "FF (%)"),
+    ("rs", "Rs (ohm)"),
+    ("rsh", "Rsh (ohm)"),
+    ("eff", "Efficiency (%)"),
+    ("temp", "Cell Temp (C)"),
+    ("irr", "Irradiance (W/m2)"),
+    ("tested_at", "Tested"),
 ]
 
 
@@ -64,31 +66,43 @@ def build(cfg, serials):
         out["missing"] = [{"serial": s, "why": "no source"} for s in serials]
         return out
 
+    # one map, shared with FQC - see COLUMNS above
+    col = dict((k, c) for (k, _lab, c, _u) in ev.param_cols(cfg))
+    col["tested_at"] = ev.COL_TIME
+    try:
+        scol = int(cfg.get("ss_serial_col", ev.COL_ID))
+    except (TypeError, ValueError):
+        scol = ev.COL_ID
+    need = max([scol] + list(col.values()))
+
     want = {s.strip().upper() for s in serials}
     hits = {}
     with open(path, "r", encoding="utf-8-sig", errors="replace",
               newline="") as fh:
         for r in csv.reader(fh):
-            if len(r) <= 14:
+            if len(r) <= need:
                 continue
-            sid = r[1].strip().upper()
+            sid = r[scol].strip().upper()
             if sid in want:
                 hits.setdefault(sid, []).append(r)
 
     for s in serials:
         key = s.strip().upper()
         rs = hits.get(key, [])
-        good = [r for r in rs if ev.reading_is_valid(r)[0]]
+        good = [r for r in rs
+                if ev.reading_is_valid(r, col["pmax"], col["isc"],
+                                       col["voc"])[0]]
         if not good:
             why = ("tested %d time(s), never read - probe, polarity or "
                    "soldering" % len(rs)) if rs else "no row in the export"
             out["missing"].append({"serial": s, "why": why,
                                    "attempts": len(rs)})
             continue
-        last = max(good, key=lambda r: r[0])
+        last = max(good, key=lambda r: r[ev.COL_TIME])
         row = {"serial": s}
-        for key_name, _label, idx in COLUMNS:
-            if idx is None:
+        for key_name, _label in COLUMNS:
+            idx = col.get(key_name)
+            if idx is None:                       # 'serial', already set
                 continue
             row[key_name] = last[idx] if key_name == "tested_at" \
                 else _num(last[idx], 3 if key_name in ("rs",) else 2)

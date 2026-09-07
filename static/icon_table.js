@@ -142,8 +142,16 @@
     apply(root);
   }
 
+  /* Re-apply to a table that is already wired, rather than returning early.
+     Every screen renders its rows AFTER the table is wired - the count was
+     therefore computed against an empty tbody and never recomputed, so
+     Indents showed nothing and Recent Allocations kept reading "3 rows"
+     beside two. Wiring is once; the count and the filters are every time. */
   function wireAll() {
-    document.querySelectorAll('[data-itable]').forEach(wire);
+    document.querySelectorAll('[data-itable]').forEach(function (root) {
+      if (root.__itable) apply(root);
+      else wire(root);
+    });
   }
 
   window.iconTable = { wireAll: wireAll, apply: apply, reset: reset,

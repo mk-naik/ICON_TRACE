@@ -71,6 +71,11 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       Recent Grading, Select Boxes, Open Boxes. Build once, apply everywhere.
 - [x] **Reset means reset.** Every filter bar's reset returns all fields to
       default and re-runs the query. Currently decorative.
+- [x] **The row count counts.** `wireAll()` returned early for a table it had
+      already wired, and every screen renders its rows *after* wiring — so
+      the count was computed against an empty tbody and never recomputed.
+      Indents showed no count at all and Recent Allocations sat on "3 rows"
+      beside two. Wiring is once; the count and the filters are every time.
 
 ---
 
@@ -115,9 +120,37 @@ A new screen gets both for free.
       for — below the fold. Both read as supporting detail, so both moved
       under it. `doSearch()` is patched to reorder after it renders; v4's own
       `serialView()` is untouched.
-- [ ] **Materials Used** panel styled as the reference image: material name,
-      spec line, make on the right, UOM under it, `FROZEN AT ALLOCATION` chip.
+- [x] **The screen answers from the database.** v4's `serialView()` returned
+      one fixed example — the same batch, the same FQC operator, the same
+      repack, the same challan and vehicle, whatever serial was typed. Every
+      value on it was an illustration, so the screen could not answer the
+      question it exists for. `/api/trace/serial/<serial>` now returns the
+      real record and the layout is drawn around it.
+      **A stage that has not happened says so** — *not graded yet*, *not
+      packed yet*, *not dispatched* — rather than borrowing the example's
+      version, and a lookup that fails shows nothing rather than falling
+      back to it. A plausible journey under a real serial is the one thing
+      this screen must never produce.
+      DCR eligibility is derived from grade, allocation and dispatch state,
+      and reads `—` until the module has been graded.
+- [x] **One page, two columns.** The event log, build instances and
+      assignment history sit in `.work`'s left column with Materials Used as
+      the rail beside them — `.work` is a `1fr 320px` grid whose rail spans
+      50 rows, so cards left outside it dropped full width and left the
+      space next to a long bill of materials empty.
+- [x] **View full details** is back on the Materials Used card, opening v4's
+      own modal. It reads the recorded makes rather than v4's
+      `demoVendor()` and its invented `INV/26-27/…` batch references, and a
+      material with no category is listed under *Other* rather than dropped.
+- [x] **Materials Used** carries the makes actually chosen at allocation.
+      The panel was already styled as the reference image, but its vendors
+      came from v4's `demoVendor()` — a plausible make beside a real serial.
+      It now reads `allocation_material`, and a make nobody recorded says
+      **not recorded** instead of borrowing one.
 - [ ] Box / Serial Journey — every title clickable, linking into Search.
+- [ ] Reassignment history — only the original allocation is shown, because
+      nothing else is recorded yet. Needs a customer-assignment table before
+      the panel can say more.
 
 ## 3. Production Dashboard
 
@@ -155,6 +188,13 @@ A new screen gets both for free.
       available and can be allocated later as a separate batch.
 - [x] **Withdraw an allocation** while every serial is still `planned`. Once
       one has been graded, production has acted on it — raise a hold instead.
+      `allocation_material` is deleted with it; leaving those rows behind
+      made every withdraw of a batch with materials fail on a foreign key.
+- [x] **Batch numbers read `BAT-2609-00007`** — the year and month of the
+      allocation, then its sequence, which is the shape v4 and the floor
+      already use. Rendered from the allocation's date and id, never stored:
+      a batch number in a column of its own is a second copy of both, free
+      to drift away from the row it names.
 - [x] "Indent line" is called **Indent item** throughout.
 - [x] Ordered / Already allocated / Left to allocate shown on the item block.
 - [x] End serial derived from the start and greyed out.
@@ -360,6 +400,26 @@ Mukesh's answers, 4 Sep:
       Already settled: grade issues to Quality; serial existence to the
       Incharge; evidence mismatch is a grade issue, so Quality.
 
+## 20. Evidence Sources
+
+- [x] **Every Sun Simulator column is mapped, not just Serial and Pmax.**
+      Isc, Voc, Ipm, Vpm, FF, Rs, Rsh, Efficiency, Cell temp and Irradiance
+      each have their own field in Settings, defaulting to the real export's
+      layout.
+- [x] **The Flash Test Report reads the same map.** It had a second column
+      list of its own with the positions hardcoded, and took the serial from
+      column 1 whatever Settings said — so remapping a column moved FQC's
+      reading and left the customer's report quoting the old position. One
+      map now, shared: `ev.param_cols()`.
+- [x] **Merged into Admin > Stations & sources.** That tab's `data_source`
+      card already described where evidence comes from while the Evidence
+      Sources page set it somewhere else entirely — a description in one
+      place and the switches in another is how the two drift apart. The
+      sidebar entry is gone; the fields sit above the card that describes
+      them.
+- [ ] `data_source` still lists its rows from v4's fixed array. It should
+      read the paths that were just saved above it.
+
 ---
 
 ## Decisions from this chat that v4 predates
@@ -389,3 +449,6 @@ not know any of the following, and each is a change to make on top of it.
 | Contact person / phone from the invoice | Invoice |
 | SQLite file, deletable, not MySQL | store |
 | Export is Excel, built on the server from what is on screen | every dashboard |
+| Batch number `BAT-YYMM-NNNNN`, rendered from the allocation | Planning, Search |
+| Search & Trace answers from the database, never from an example | Search & Trace |
+| Evidence Sources lives in Admin, not as a screen of its own | Admin |

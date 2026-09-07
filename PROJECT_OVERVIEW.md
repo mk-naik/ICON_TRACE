@@ -198,6 +198,7 @@ del icontrace.db                        start clean
 python icon_invoice_parser.py --selftest
 python test_box_number.py               32 tests
 cscript //Nologo //E:JScript test_export.js   19 tests, no install needed
+cscript //Nologo //E:JScript test_trace.js    33 tests
 node test_export.js                     the same tests, if node is installed
 node --check static/icon_live.js        needs node
 ```

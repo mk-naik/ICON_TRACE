@@ -617,7 +617,7 @@ def challan_excel(fy, seq):
     ws2["A2"] = ("Measured at the Sun Simulator. Values are read from the "
                  "tester's own export, not re-entered.")
     ws2["A2"].font = Font(italic=True, color="777777")
-    labels = [lab for _k, lab, _i in ftr.COLUMNS]
+    labels = [lab for _k, lab in ftr.COLUMNS]
     for c, lab in enumerate(labels, start=1):
         cell = ws2.cell(4, c, lab); cell.font = head; cell.fill = fill
     ws2.column_dimensions["A"].width = 24
@@ -625,7 +625,7 @@ def challan_excel(fy, seq):
         ws2.column_dimensions[chr(64 + c)].width = 14
     rr = 5
     for row in f["rows"]:
-        for c, (k, _lab, _i) in enumerate(ftr.COLUMNS, start=1):
+        for c, (k, _lab) in enumerate(ftr.COLUMNS, start=1):
             ws2.cell(rr, c, row.get(k)).border = thin
         rr += 1
     if f["missing"]:
@@ -1060,6 +1060,7 @@ def api_allocation_get(alloc_id):
                                  "FROM allocation_material WHERE alloc_id=%s "
                                  "ORDER BY material_no", (alloc_id,))
     out = dict(a)
+    out["batch_no"] = batch_no(out)
     out["serials"] = [r["serial"] for r in serials]
     out["materials"] = [dict(r) for r in materials]
     return jsonify(out)
@@ -1320,6 +1321,185 @@ def api_export_xlsx():
         headers={"Content-Disposition": 'attachment; filename="%s"' % fn})
 
 
+@app.route("/api/trace/serial/<path:serial>")
+def api_trace_serial(serial):
+    """Everything the system actually knows about one module.
+
+    Search & Trace was v4's fixed example - the same journey, the same event
+    log and the same materials whatever serial was typed. This answers from
+    the database instead, and where a stage has not happened it says so
+    rather than showing the example's version of it. A plausible journey is
+    worse than a short one: the whole point of the screen is to be believed.
+    """
+    s = (serial or "").strip().upper()
+    with store.conn() as (cx, cur):
+        rows = store.rows(cur, "SELECT * FROM serial WHERE serial=%s "
+                               "ORDER BY build_instance", (s,))
+        if not rows:
+            return jsonify({"ok": False, "why":
+                "%s is not in the serial master. Nothing has been allocated "
+                "under that number." % s}), 404
+
+        first = dict(rows[0])
+        alloc = store.one(cur, "SELECT * FROM allocation WHERE alloc_id=%s",
+                          (first["alloc_id"],)) if first["alloc_id"] else None
+        line = store.one(cur, "SELECT il.*, i.indent_no FROM indent_line il "
+                              "JOIN indent i ON i.indent_id=il.indent_id "
+                              "WHERE il.indent_line_id=%s",
+                         (first["indent_line_id"],)) if first["indent_line_id"] else None
+        materials = store.rows(cur, "SELECT * FROM allocation_material "
+                                    "WHERE alloc_id=%s ORDER BY material_no",
+                               (first["alloc_id"],)) if first["alloc_id"] else []
+        fqc = store.rows(cur, "SELECT * FROM fqc_record WHERE serial=%s "
+                              "ORDER BY at", (s,))
+        boxes = store.rows(cur, "SELECT b.*, bs.added_at, bs.added_by "
+                                "FROM box_serial bs JOIN box b ON b.box_id=bs.box_id "
+                                "WHERE bs.serial=%s ORDER BY bs.added_at", (s,))
+        chal = store.rows(cur, "SELECT c.challan_id, c.fy, c.seq, c.suffix, "
+                               "c.challan_date, c.vehicle_no, c.status, "
+                               "c.created_by FROM challan_serial cs "
+                               "JOIN challan c ON c.challan_id=cs.challan_id "
+                               "WHERE cs.serial=%s", (s,))
+        events = store.rows(cur, "SELECT * FROM dispatch_audit WHERE "
+                                 "(entity='serial' AND entity_id=%s) OR "
+                                 "(entity='allocation' AND entity_id=%s) "
+                                 "ORDER BY at", (s, str(first["alloc_id"])))
+
+    bno = batch_no(alloc) if alloc else "—"
+    cust = customers.get(first["customer"])
+    cust_name = cust["name"] if cust else (first["customer"] or "ICON STOCK")
+
+    def box_label(b):
+        try:
+            return boxno.render(b["pack_date"], b["seq"], b["grade"],
+                                b["code_map_version"])
+        except Exception:
+            return "box %s" % b["seq"]
+
+    # ---- build instances ------------------------------------------------
+    # DCR eligibility is derived here, never stored - a flag beside the grade
+    # is free to drift away from it.
+    instances = []
+    for r in rows:
+        g = r["grade"]
+        instances.append({
+            "instance": r["build_instance"],
+            "built": r["date_produced"] or "—",
+            "grade": g or "—",
+            "allocation": bno,
+            "status": r["state"],
+            "dcr_eligible": ("—" if not g else
+                             ("Yes" if (r["dcr"] == "DCR" and g == "A"
+                                        and r["state"] != "rejected") else "No")),
+        })
+
+    # ---- customer assignment -------------------------------------------
+    # One row, because reassignment is not built yet. An empty table would
+    # read as "never assigned", which is not what the record says.
+    assignment = [{
+        "from": (alloc or {}).get("date_produced") or first["date_produced"] or "—",
+        "customer": cust_name,
+        "reason": "Original allocation",
+        "by": (alloc or {}).get("created_by") or "—",
+        "approved": "—",
+    }]
+
+    # ---- the journey ----------------------------------------------------
+    journey = [{
+        "stage": "Allocated", "value": bno, "done": True,
+        "detail": [cust_name, "%sW · %s" % (first["wattage"] or "—",
+                                            first["dcr"] or "—")],
+        "tag": (first["date_produced"] or "") + " · shift " + str(first["shift"] or "—"),
+        "tone": "t-mute",
+    }]
+    if fqc:
+        f = fqc[-1]
+        journey.append({"stage": "FQC", "value": f["grade"], "done": True,
+                        "detail": [f["decided_by"] or "—", f["mode"] or ""],
+                        "tag": f["at"] or "", "tone": "t-pass"})
+    else:
+        journey.append({"stage": "FQC", "value": "—", "done": False,
+                        "detail": ["not graded yet"], "tag": "pending",
+                        "tone": "t-mute"})
+    if boxes:
+        b = boxes[-1]
+        journey.append({"stage": "Packed", "value": box_label(b), "done": True,
+                        "detail": [b["bin_no"] or "—", b["added_by"] or "—"],
+                        "tag": b["added_at"] or "", "tone": "t-mute"})
+    else:
+        journey.append({"stage": "Packed", "value": "—", "done": False,
+                        "detail": ["not packed yet"], "tag": "pending",
+                        "tone": "t-mute"})
+    if chal:
+        c = chal[-1]
+        no = db.render_challan_no(datetime.date.fromisoformat(c["challan_date"]),
+                                  c["seq"], c["suffix"])
+        journey.append({"stage": "Challan", "value": no, "done": True,
+                        "detail": [c["vehicle_no"] or "—", c["status"] or ""],
+                        "tag": c["challan_date"] or "", "tone": "t-solar"})
+    else:
+        journey.append({"stage": "Challan", "value": "—", "done": False,
+                        "detail": ["not dispatched"], "tag": "pending",
+                        "tone": "t-mute"})
+
+    # ---- the event log --------------------------------------------------
+    log = []
+    for e in events:
+        detail = e["detail"]
+        if detail:
+            try:
+                d = json.loads(detail)
+                detail = " · ".join("%s %s" % (k, v) for k, v in d.items())
+            except (ValueError, TypeError):
+                pass
+        stage = (e["action"] or "").split(".")[0].title()
+        log.append({"at": e["at"], "stage": stage,
+                    "reference": bno if e["entity"] == "allocation" else s,
+                    "detail": detail or (e["action"] or ""),
+                    "user": e["actor"] or "—"})
+    for f in fqc:
+        log.append({"at": f["at"], "stage": "FQC", "reference": s,
+                    "detail": "Grade %s · %s%s" % (
+                        f["grade"], f["mode"] or "",
+                        " · " + f["reason"] if f["reason"] else ""),
+                    "user": f["decided_by"] or "—"})
+    for b in boxes:
+        log.append({"at": b["added_at"], "stage": "Packing",
+                    "reference": box_label(b),
+                    "detail": "Added to %s" % (b["bin_no"] or "box"),
+                    "user": b["added_by"] or "—"})
+    log.sort(key=lambda r: str(r["at"] or ""))
+
+    return jsonify({
+        "ok": True, "serial": s,
+        "model": first["model"], "wattage": first["wattage"],
+        "customer": cust_name, "dcr": first["dcr"],
+        "state": first["state"], "grade": first["grade"],
+        "batch_no": bno,
+        "indent_no": (line or {}).get("indent_no"),
+        "item_code": (line or {}).get("item_code"),
+        "line_no": (line or {}).get("line_no"),
+        "instances": instances, "assignment": assignment,
+        "journey": journey, "events": log,
+        "materials": [dict(m) for m in materials],
+    })
+
+
+def batch_no(alloc):
+    """BAT-YYMM-NNNNN, the shape the floor already reads: the year and month
+    of the allocation, then its sequence.
+
+    Rendered here, never stored. A batch number in a column of its own is a
+    second copy of the date and the id, free to drift away from the row it
+    names - the same reason the box letter is derived from the grade rather
+    than kept beside it.
+    """
+    d = str(alloc.get("date_produced") or "")
+    parts = d[:10].split("-")
+    yy, mm = (parts[0][2:], parts[1]) if len(parts) >= 2 else ("00", "00")
+    return "BAT-%s%s-%05d" % (yy.zfill(2), mm.zfill(2), alloc["alloc_id"])
+
+
 @app.route("/api/allocations")
 def api_allocations():
     with store.conn() as (cx, cur):
@@ -1338,6 +1518,7 @@ def api_allocations():
         cr = customers.get(r["customer"])
         d["customer"] = cr["name"] if cr else r["customer"]
         d["editable"] = (r["started"] or 0) == 0
+        d["batch_no"] = batch_no(d)
         out.append(d)
     return jsonify(out)
 

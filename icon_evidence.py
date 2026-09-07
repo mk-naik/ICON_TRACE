@@ -67,7 +67,7 @@ PARAMS = [("pmax", "Pmax", "ss_pmax_col", 2, "W"),
           ("irr", "Irradiance", "ss_irr_col", 14, "W/m2")]
 
 
-def _param_cols(cfg):
+def param_cols(cfg):
     """(key, label, column, unit) for every SS parameter, each read from its
     own Settings field rather than assumed at the default position."""
     out = []
@@ -161,7 +161,7 @@ def read_sun_simulator(cfg, serial):
                 "note": "Sun Simulator share unreachable: %s" % path}
     try:
         scol = int(cfg.get("ss_serial_col", COL_ID))
-        cols = _param_cols(cfg)
+        cols = param_cols(cfg)
         pcol = dict((k, c) for (k, _lab, c, _u) in cols)["pmax"]
         max_col = max([scol] + [c for (_k, _lab, c, _u) in cols])
         want = serial.strip().upper()
@@ -227,7 +227,7 @@ def scan_anomalies(cfg, limit=200):
     if not path or not os.path.exists(path):
             return {"available": False, "junk": [], "failed": [], "calibration": 0}
     scol = int(cfg.get("ss_serial_col", COL_ID))
-    cols = dict((k, c) for (k, _lab, c, _u) in _param_cols(cfg))
+    cols = dict((k, c) for (k, _lab, c, _u) in param_cols(cfg))
     pcol, isc_col, voc_col = cols["pmax"], cols["isc"], cols["voc"]
     rows = _read_rows(path)[-limit:]
     junk, by, calib = [], {}, 0

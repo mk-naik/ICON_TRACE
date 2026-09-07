@@ -37,11 +37,11 @@
 
 <table>
   <thead><tr><th style="text-align:left">Sl</th>
-    {% for _k, label, _i in cols %}<th>{{ label }}</th>{% endfor %}</tr></thead>
+    {% for _k, label in cols %}<th>{{ label }}</th>{% endfor %}</tr></thead>
   <tbody>
   {% for r in rows %}
     <tr><td class="s">{{ loop.index }}</td>
-      {% for k, _l, _i in cols %}
+      {% for k, _l in cols %}
         <td class="{{ 's' if k in ('serial','tested_at') }}">{{ r[k] if r[k] is not none else '' }}</td>
       {% endfor %}</tr>
   {% endfor %}

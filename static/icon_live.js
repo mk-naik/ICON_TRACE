@@ -587,10 +587,300 @@
     });
   }
 
+  /* Search & Trace, answered from the database.
+   *
+   * v4's serialView() returns one fixed example: the same batch, the same
+   * FQC operator, the same repack, the same challan and vehicle, whatever
+   * serial is typed. Every value on it was an illustration, so the screen
+   * could not answer the question it exists for.
+   *
+   * The layout is kept exactly - it is the agreed one - and the values come
+   * from /api/trace/serial. Where a stage has not happened the card says so
+   * instead of showing the example's version of it, and a lookup that fails
+   * says that too. Falling back to the illustration would put a fabricated
+   * journey on screen under a real serial number, which is the one outcome
+   * this screen must never produce.
+   */
+  var DASH = '—';
+  var lastTrace = null;          // what the materials modal reads
+
+  function traceRows(rows, cols, empty, span) {
+    if (!rows.length) {
+      return '<tr><td colspan="' + span + '" style="padding:16px;' +
+             'color:var(--ink3)">' + empty + '</td></tr>';
+    }
+    return rows.map(function (r) {
+      return '<tr>' + cols.map(function (c) {
+        return '<td' + (c.cls ? ' class="' + c.cls + '"' : '') + '>' +
+               c.get(r) + '</td>';
+      }).join('') + '</tr>';
+    }).join('');
+  }
+
+  function traceTag(text, tone) {
+    return '<span class="tag ' + (tone || 't-mute') + '">' +
+           fqcEsc(text) + '</span>';
+  }
+
+  /* The makes actually chosen at allocation, against v4's own material
+     master for the names and sizes. v4's matSummary() calls demoVendor() -
+     a plausible make beside a real serial is exactly what this screen must
+     not show, so an unrecorded make is said to be unrecorded. */
+  function traceMaterials(d) {
+    var byNo = {};
+    if (typeof MATERIALS !== 'undefined') {
+      MATERIALS.forEach(function (m) { byNo[m.n] = m; });
+    }
+    if (!d.materials.length) {
+      return '<tr><td style="padding:14px;color:var(--ink3);font-size:11.5px">' +
+             'No materials were recorded against this batch.</td></tr>';
+    }
+    return d.materials.map(function (am) {
+      var m = byNo[am.material_no] || {};
+      var made = am.vendor
+        ? '<div style="font-weight:600;font-size:11.5px">' + fqcEsc(am.vendor) + '</div>'
+        : '<div style="font-weight:600;font-size:11.5px;color:var(--review)">' +
+          'not recorded</div>';
+      return '<tr><td style="font-size:11px;color:var(--ink3);line-height:1.35">' +
+        fqcEsc(m.name || ('Material ' + am.material_no)) +
+        (m.size ? '<br><span class="mono" style="font-size:10px">' +
+                  fqcEsc(m.size) + '</span>' : '') +
+        '</td><td style="text-align:right">' + made +
+        '<div class="mono" style="font-size:10px;color:var(--ink3)">' +
+        fqcEsc(m.uom || '') +
+        (am.efficiency ? ' · ' + fqcEsc(am.efficiency) + ' eff' : '') +
+        (am.batch ? ' · batch ' + fqcEsc(am.batch) : '') +
+        '</div></td></tr>';
+    }).join('');
+  }
+
+  /* "View full details" - v4's own modal, kept.
+   *
+   * v4's showMaterials() fills its Make column from demoVendor() and invents
+   * a batch reference per material ('INV/26-27/1005'). Opened from a real
+   * serial that is a fabricated bill of materials, so the same modal is
+   * rendered here from the makes recorded at allocation. A material whose
+   * make nobody chose says so; it does not borrow one.
+   */
+  window.iconMaterialDetail = function () {
+    var d = lastTrace;
+    var host = document.getElementById('mdlGeneric');
+    var mdl = document.getElementById('mdl');
+    if (!d || !host || !mdl) {
+      if (typeof toast === 'function') toast('Search a serial first.');
+      return;
+    }
+    var recorded = {};
+    d.materials.forEach(function (m) { recorded[m.material_no] = m; });
+
+    /* the model's whole bill where the master knows it, so a material that
+       was never recorded is visible as a gap rather than simply absent */
+    var list = (typeof materialsFor === 'function' && d.model)
+      ? materialsFor(d.model) : [];
+    if (!list.length && typeof MATERIALS !== 'undefined') {
+      list = d.materials.map(function (m) {
+        return MATERIALS.filter(function (x) { return x.n === m.material_no; })[0] ||
+               { n: m.material_no, name: 'Material ' + m.material_no,
+                 size: DASH, uom: '', cat: 'Recorded' };
+      });
+    }
+
+    var seen = {}, out = '', shown = 0;
+    function rowFor(m) {
+      if (m.group) {
+        if (seen[m.group]) return '';
+        seen[m.group] = 1;
+      }
+      var mm = (m.group && typeof chosenInGroup === 'function')
+             ? chosenInGroup(list, m.group) : m;
+      var am = recorded[mm.n];
+      var miss = '<span style="color:var(--review)">not recorded</span>';
+      var per = (typeof qpmLabel === 'function' ? qpmLabel(mm, d.model) : mm.qpm);
+      shown++;
+      return '<tr><td style="font-weight:600">' + fqcEsc(mm.name) +
+        (mm.note ? '<div class="hint">' + fqcEsc(mm.note) + '</div>' : '') +
+        '</td><td class="mono" style="font-size:11px">' +
+          fqcEsc(mm.size || DASH) + '</td>' +
+        '<td class="mono">' + fqcEsc(mm.uom || '') + '</td>' +
+        '<td class="num">' + fqcEsc(per || DASH) + '</td>' +
+        '<td>' + (am && am.vendor ? fqcEsc(am.vendor) : miss) + '</td>' +
+        '<td class="mono">' + (am && am.efficiency ? fqcEsc(am.efficiency)
+          : (mm.cell ? miss : '<span style="color:var(--line)">' + DASH +
+             '</span>')) + '</td>' +
+        '<td class="mono" style="font-size:10.5px;color:var(--ink3)">' +
+          (am && am.batch ? fqcEsc(am.batch) : DASH) + '</td></tr>';
+    }
+
+    /* Grouped by category, but a material whose category is not in MAT_CATS -
+       or has none at all - is still listed under "Other". A bill of materials
+       that quietly drops a row is worse than an ugly one. */
+    var cats = (typeof MAT_CATS !== 'undefined') ? MAT_CATS.slice() : [];
+    var extra = [];
+    list.forEach(function (m) {
+      if (cats.indexOf(m.cat) === -1 && extra.indexOf(m.cat) === -1) {
+        extra.push(m.cat);
+      }
+    });
+    cats.concat(extra).forEach(function (cat) {
+      var body = list.filter(function (m) { return m.cat === cat; })
+                     .map(rowFor).join('');
+      if (body) {
+        out += '<tr><td colspan="7" style="background:#F2F6FA;font-size:10px;' +
+          'font-weight:700;color:var(--brand);text-transform:uppercase;' +
+          'letter-spacing:.8px">' + fqcEsc(cat || 'Other') + '</td></tr>' + body;
+      }
+    });
+    if (!out) {
+      out = '<tr><td colspan="7" style="padding:16px;color:var(--ink3)">' +
+            'No materials were recorded against this batch.</td></tr>';
+    }
+
+    var title = document.getElementById('mdlTitle');
+    var sub = document.getElementById('mdlSub');
+    if (title) title.textContent = 'Materials used · ' + (d.model || d.serial);
+    if (sub) {
+      sub.textContent = 'Sizes are fixed by the model. Make, efficiency and ' +
+        'batch are the ones recorded against ' + (d.batch_no || 'this batch') +
+        ' at allocation.';
+    }
+    if (typeof modalMode === 'function') modalMode(true);
+    host.innerHTML =
+      '<div class="card" style="margin:0"><div class="card-h">' +
+      '<h3>Bill of materials</h3><div class="ch-r">' +
+      traceTag(shown + ' materials') + '</div></div>' +
+      '<div class="card-b flush"><table><thead><tr><th>Material</th>' +
+      '<th>Size / spec</th><th>UOM</th><th style="text-align:right">Per module' +
+      '</th><th>Make</th><th>Cell efficiency</th><th>Batch</th></tr></thead>' +
+      '<tbody>' + out + '</tbody></table></div></div>';
+    mdl.classList.add('on');
+  };
+
+  function traceSerialHtml(d) {
+    var journey = d.journey.map(function (j) {
+      return '<div class="node' + (j.done ? ' done' : '') + '">' +
+        '<label>' + fqcEsc(j.stage) + '</label>' +
+        '<div class="nv">' + fqcEsc(j.value || DASH) + '</div>' +
+        '<div class="nd">' + (j.detail || []).map(fqcEsc).join('<br>') + '</div>' +
+        '<div class="ns">' + traceTag(j.tag || '', j.tone) + '</div></div>';
+    }).join('');
+
+    return '' +
+    '<div class="crumb">Module <b>' + fqcEsc(d.serial) + '</b></div>' +
+
+    '<div class="card"><div class="card-h"><h3>Module journey</h3>' +
+      '<div class="ch-r"><span class="mono" style="font-size:12px;' +
+      'font-weight:700">' + fqcEsc(d.model || 'model not derived') +
+      '</span></div></div>' +
+      '<div class="card-b"><div class="chain">' + journey + '</div></div>' +
+      '<div class="card-f"><span style="font-size:11.5px;color:var(--ink3)">' +
+      'Indent <b>' + fqcEsc(d.indent_no || DASH) + '</b>' +
+      (d.line_no ? ' · item ' + fqcEsc(d.line_no) : '') +
+      (d.item_code ? ' · ' + fqcEsc(d.item_code) : '') +
+      ' · currently <b>' + fqcEsc(d.state) + '</b></span></div></div>' +
+
+    '<div class="work"><div class="card"><div class="card-h">' +
+      '<h3>Full event log</h3><div class="ch-r">' +
+      traceTag(d.events.length + (d.events.length === 1 ? ' event' : ' events')) +
+      '<button class="btn btn-ghost btn-sm" onclick="exportNote()">Export</button>' +
+      '</div></div>' +
+      '<div class="card-b flush"><table><thead><tr><th>Timestamp</th>' +
+      '<th>Stage</th><th>Reference</th><th>Detail</th><th>User</th></tr></thead>' +
+      '<tbody>' + traceRows(d.events, [
+        { cls: 'mono', get: function (e) { return fqcEsc(e.at || DASH); } },
+        { get: function (e) { return fqcEsc(e.stage || DASH); } },
+        { cls: 'mono', get: function (e) { return fqcEsc(e.reference || DASH); } },
+        { get: function (e) { return fqcEsc(e.detail || DASH); } },
+        { get: function (e) { return fqcEsc(e.user || DASH); } }
+      ], 'Nothing has been recorded against this module yet.', 5) +
+      '</tbody></table></div></div>' +
+
+    '<div class="card"><div class="card-h"><h3>Build instances</h3>' +
+      '<div class="ch-r">' + traceTag('key: serial + build_instance') +
+      '</div></div>' +
+      '<div class="card-b flush"><table><thead><tr><th>Instance</th>' +
+      '<th>Built</th><th>Grade</th><th>Allocation</th><th>Status</th>' +
+      '<th>DCR eligible</th></tr></thead><tbody>' +
+      traceRows(d.instances, [
+        { cls: 'mono', get: function (r) { return fqcEsc(r.instance); } },
+        { cls: 'mono', get: function (r) { return fqcEsc(r.built); } },
+        { get: function (r) { return r.grade === DASH ? DASH
+                 : traceTag(r.grade, 't-pass'); } },
+        { cls: 'mono', get: function (r) { return fqcEsc(r.allocation); } },
+        { get: function (r) { return traceTag(r.status,
+                 r.status === 'dispatched' ? 't-solar'
+                 : r.status === 'rejected' ? 't-fail' : 't-mute'); } },
+        { get: function (r) { return r.dcr_eligible === DASH ? DASH
+                 : traceTag(r.dcr_eligible,
+                     r.dcr_eligible === 'Yes' ? 't-pass' : 't-mute'); } }
+      ], 'No build instance recorded.', 6) +
+      '</tbody></table></div>' +
+      '<div class="card-f"><span style="font-size:11.5px;color:var(--ink3)">' +
+      'DCR eligibility is <b>derived</b> from grade, allocation and dispatch ' +
+      'status — not stored as a flag, so it cannot drift out of step. It ' +
+      'reads ' + DASH + ' until the module has been graded.</span></div></div>' +
+
+    '<div class="card"><div class="card-h"><h3>Customer assignment history</h3>' +
+      '<div class="ch-r">' + traceTag('assignment, not a fixed attribute') +
+      '</div></div>' +
+      '<div class="card-b flush"><table><thead><tr><th>Effective from</th>' +
+      '<th>Customer</th><th>Reason</th><th>By</th><th>Approved</th></tr></thead>' +
+      '<tbody>' + traceRows(d.assignment, [
+        { cls: 'mono', get: function (r) { return fqcEsc(r.from); } },
+        { get: function (r) { return fqcEsc(r.customer); } },
+        { get: function (r) { return fqcEsc(r.reason); } },
+        { get: function (r) { return fqcEsc(r.by); } },
+        { get: function (r) { return fqcEsc(r.approved); } }
+      ], 'No assignment recorded.', 5) + '</tbody></table></div>' +
+      '<div class="card-f"><span style="font-size:11.5px;color:var(--ink3)">' +
+      'Reassignment before dispatch is not built yet, so this shows the ' +
+      'original allocation only. Once a serial is dispatched its customer ' +
+      'can never change.</span></div></div>' +
+
+    /* The rail is a grid child of .work spanning 50 rows, so it stands
+       beside the three cards above rather than leaving the width empty
+       under a long bill of materials. */
+    '<div class="rail o2"><div class="card"><div class="card-h">' +
+      '<h3>Materials used</h3><div class="ch-r">' +
+      traceTag('frozen at allocation') + '</div></div>' +
+      '<div class="card-b flush"><table><tbody>' + traceMaterials(d) +
+      '</tbody></table></div>' +
+      '<div class="card-f"><button class="btn btn-ghost btn-sm" ' +
+      'onclick="iconMaterialDetail()">View full details</button>' +
+      '<span style="font-size:10.5px;color:var(--ink3);margin-left:auto">' +
+      'sizes &amp; batches inside</span></div></div></div>' +
+
+    '</div>';                                  /* closes .work */
+  }
+
   function wireSearchOrder() {
     var orig = window.doSearch;
     if (typeof orig !== 'function' || orig.__ordered) return;
     var patched = function () {
+      var box = document.getElementById('qBox');
+      var out = document.getElementById('searchOut');
+      var q = box ? (box.value || '').trim().toUpperCase() : '';
+      if (out && q.indexOf('ICON') === 0) {
+        out.innerHTML = '<div class="note n-info"><span>ⓘ</span><span>' +
+          'Looking up ' + fqcEsc(q) + '…</span></div>';
+        fetch('/api/trace/serial/' + encodeURIComponent(q), { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            lastTrace = d.ok ? d : null;
+            out.innerHTML = d.ok ? traceSerialHtml(d)
+              : '<div class="note n-bad"><span>⚑</span><span>' +
+                fqcEsc(d.why) + '</span></div>';
+            if (window.iconTable) window.iconTable.wireAll();
+          })
+          .catch(function (e) {
+            /* never fall back to v4's example - a fabricated journey under a
+               real serial is worse than no answer at all */
+            out.innerHTML = '<div class="note n-bad"><span>⚑</span><span>' +
+              'Could not reach the server to trace ' + fqcEsc(q) + ' (' +
+              fqcEsc(e.message) + '). Nothing is shown rather than an ' +
+              'example journey.</span></div>';
+          });
+        return;
+      }
       orig.apply(this, arguments);
       try { searchPanelOrder(); } catch (e) {}
     };
@@ -619,6 +909,7 @@
     sidebarToggle();
     wireDateResets();
     addMissingControls();
+    mergeEvidenceSources();
     wireResets();
     wireExports();
     invoiceRealParse();
@@ -1306,7 +1597,9 @@
         }
         tb.innerHTML = rows.map(function (a) {
           return '<tr>' +
-            '<td class="mono">BAT-' + String(a.alloc_id).padStart(5, '0') + '</td>' +
+            /* the server renders the batch number - one place knows the rule */
+            '<td class="mono">' + (a.batch_no ||
+              ('BAT-' + String(a.alloc_id).padStart(5, '0'))) + '</td>' +
             '<td class="mono">' + (a.indent_no || '\u2014') +
               (a.line_no ? ' \u00b7 item ' + a.line_no : '') + '</td>' +
             '<td>' + (a.customer || '\u2014') + '</td>' +
@@ -1574,9 +1867,11 @@
     { id: 'items', label: 'Item Master', icon: '\u25A5', after: 'admin',
       roles: ['Admin'], url: '/view/items',
       title: 'Maintained by Admin, not by operators' },
-    { id: 'settings', label: 'Evidence Sources', icon: '\u2699', after: 'items',
-      roles: ['Admin'], url: '/view/settings',
-      title: 'Where FQC reads the Sun Simulator and EL from' },
+    /* Evidence Sources is NOT a screen of its own. Admin already has a
+       "Stations & sources" tab whose data_source card describes where
+       evidence comes from; a second page configuring the same thing is two
+       places to look and two answers to reconcile. The fragment is hosted
+       inside that tab instead - see mergeEvidenceSources(). */
     { id: 'loadver', label: 'Loading Verification', icon: '\u229E',
       before: 'gp', roles: ['Admin', 'Dispatch Operator', 'Packing Operator'],
       url: '/view/loading',
@@ -1653,6 +1948,31 @@
       });
   }
   window.iconLoadView = loadView;
+
+  /* Evidence Sources, merged into Admin > Stations & sources.
+   *
+   * That tab's data_source card already says where evidence comes from; the
+   * Evidence Sources page set the same paths and column positions somewhere
+   * else entirely. Read-only description in one place and the switches in
+   * another is how the two drift apart.
+   *
+   * The host keeps the id v-settings, so the fragment's own Save handler -
+   * which calls iconLoadView('settings', ...) to redraw itself - still finds
+   * it here. Its page heading comes off: the tab is already the heading.
+   */
+  function mergeEvidenceSources() {
+    var pane = document.getElementById('ad-stations');
+    if (!pane || document.getElementById('v-settings')) return;
+    var host = document.createElement('div');
+    host.id = 'v-settings';                 // NOT class="view" - go() must not reach it
+    pane.insertBefore(host, pane.firstChild);
+    loadView('settings', '/view/settings');
+    var strip = new MutationObserver(function () {
+      var pg = host.querySelector('.pg');
+      if (pg) pg.remove();
+    });
+    strip.observe(host, { childList: true, subtree: true });
+  }
 
   /* ---- 3c. collapsible sidebar -------------------------------------
    * Collapsed it is a 46px rail of icons; hovering slides the labels back
