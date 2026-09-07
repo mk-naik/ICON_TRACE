@@ -14,7 +14,18 @@
     <div class="hint">{{ probe.ss.note }}</div></div>
   <div class="fld"><label>Serial column</label><input id="s_scol" value="{{ cfg.ss_serial_col }}"></div>
   <div class="fld"><label>Pmax column</label><input id="s_pcol" value="{{ cfg.ss_pmax_col }}">
-    <div class="hint">Column 2 in the real export. Column 10 is Rsh.</div></div>
+    <div class="hint">Column 2 in the real export.</div></div>
+  <div class="fld"><label>Isc column</label><input id="s_isccol" value="{{ cfg.ss_isc_col }}"></div>
+  <div class="fld"><label>Voc column</label><input id="s_voccol" value="{{ cfg.ss_voc_col }}"></div>
+  <div class="fld"><label>Ipm column</label><input id="s_ipmcol" value="{{ cfg.ss_ipm_col }}"></div>
+  <div class="fld"><label>Vpm column</label><input id="s_vpmcol" value="{{ cfg.ss_vpm_col }}"></div>
+  <div class="fld"><label>FF column</label><input id="s_ffcol" value="{{ cfg.ss_ff_col }}"></div>
+  <div class="fld"><label>Rs column</label><input id="s_rscol" value="{{ cfg.ss_rs_col }}"></div>
+  <div class="fld"><label>Rsh column</label><input id="s_rshcol" value="{{ cfg.ss_rsh_col }}">
+    <div class="hint">Column 10 in the real export.</div></div>
+  <div class="fld"><label>Efficiency column</label><input id="s_effcol" value="{{ cfg.ss_eff_col }}"></div>
+  <div class="fld"><label>Cell temp column</label><input id="s_tempcol" value="{{ cfg.ss_temp_col }}"></div>
+  <div class="fld"><label>Irradiance column</label><input id="s_irrcol" value="{{ cfg.ss_irr_col }}"></div>
 </div></div></div>
 
 <div class="card"><div class="card-h"><h3>EL images</h3>
@@ -54,7 +65,11 @@
   window.setSave=function(){
     fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({ss_csv_path:g('s_ss'),ss_serial_col:g('s_scol'),
-        ss_pmax_col:g('s_pcol'),el_root:g('s_el'),unit:g('s_unit'),
+        ss_pmax_col:g('s_pcol'),ss_isc_col:g('s_isccol'),ss_voc_col:g('s_voccol'),
+        ss_ipm_col:g('s_ipmcol'),ss_vpm_col:g('s_vpmcol'),ss_ff_col:g('s_ffcol'),
+        ss_rs_col:g('s_rscol'),ss_rsh_col:g('s_rshcol'),ss_eff_col:g('s_effcol'),
+        ss_temp_col:g('s_tempcol'),ss_irr_col:g('s_irrcol'),
+        el_root:g('s_el'),unit:g('s_unit'),
         pallet_ceiling:g('s_cap')})})
      .then(function(r){return r.json();}).then(function(){
        document.getElementById('s_msg').textContent='Saved.';

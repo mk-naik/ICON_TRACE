@@ -1085,6 +1085,7 @@ def api_allocation_cancel(alloc_id):
         n = store.one(cur, "SELECT COUNT(*) AS n FROM serial WHERE alloc_id=%s",
                       (alloc_id,))["n"]
         cur.execute("DELETE FROM serial WHERE alloc_id=%s", (alloc_id,))
+        cur.execute("DELETE FROM allocation_material WHERE alloc_id=%s", (alloc_id,))
         cur.execute("DELETE FROM allocation WHERE alloc_id=%s", (alloc_id,))
         db.audit(cur, actor(), "planning.cancel", "allocation", alloc_id,
                  {"serials_released": n})

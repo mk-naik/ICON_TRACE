@@ -679,6 +679,12 @@
           ' more' : '') + '</span></div>';
     } else {
       note.innerHTML = '';
+      /* Materials just became complete. v4's own setRail() already computed
+         whether the serial range itself is valid (window.planOK) - this
+         handler runs from the material panel's own change listener, never
+         through rangeCalc(), so it must restore that verdict itself rather
+         than leaving the button latched off from the last missing material. */
+      btn.disabled = !window.planOK;
     }
   }
 
@@ -909,6 +915,14 @@
         b.className = open ? 'btn btn-primary' : 'btn btn-ghost';
         if (!open) {
           window.__editingAlloc = null;
+          /* v4 ships this form with a sample range already typed in
+             (ICON590G1280110000 / ...110074). A genuinely new plan must
+             start blank, not with the last batch's or the demo's numbers. */
+          var from = document.getElementById('rgFrom');
+          var to = document.getElementById('rgTo');
+          if (from) from.value = '';
+          if (to) to.value = '';
+          MAT_SEL = {};
           try { planTidy(); planLineFigures(); rangeCalc(); } catch (e) {}
           if (work.scrollIntoView) {
             work.scrollIntoView({ behavior: 'smooth', block: 'start' });

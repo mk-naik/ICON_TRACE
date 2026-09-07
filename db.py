@@ -714,6 +714,9 @@ def gatepasses(cur, n=25):
 
 DEFAULT_CONFIG = {
     "ss_csv_path": "", "ss_serial_col": "1", "ss_pmax_col": "2",
+    "ss_isc_col": "3", "ss_voc_col": "4", "ss_ipm_col": "5", "ss_vpm_col": "6",
+    "ss_ff_col": "7", "ss_rs_col": "8", "ss_rsh_col": "10", "ss_eff_col": "11",
+    "ss_temp_col": "12", "ss_irr_col": "14",
     "el_root": "", "unit": "2", "pallet_ceiling": "36",
     "grade_a_min": "0", "grade_b_min": "0",
 }

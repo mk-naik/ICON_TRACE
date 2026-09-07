@@ -51,13 +51,33 @@ COL_TIME, COL_ID, COL_PMAX, COL_ISC, COL_VOC = 0, 1, 2, 3, 4
 
 # The tester measures far more than Pmax, and the Flash Test Report the
 # customer receives carries all of it. Reading only Pmax meant FQC could show
-# a module's power but not why it graded the way it did.
-PARAMS = [("pmax", "Pmax", 2, "W"), ("isc", "Isc", 3, "A"),
-          ("voc", "Voc", 4, "V"), ("ipm", "Ipm", 5, "A"),
-          ("vpm", "Vpm", 6, "V"), ("ff", "FF", 7, "%"),
-          ("rs", "Rs", 8, "ohm"), ("rsh", "Rsh", 10, "ohm"),
-          ("eff", "Efficiency", 11, "%"), ("temp", "Cell temp", 12, "C"),
-          ("irr", "Irradiance", 14, "W/m2")]
+# a module's power but not why it graded the way it did. Every column here is
+# independently configurable in Settings, same as Serial and Pmax — the real
+# export's layout has shifted once already and will again.
+PARAMS = [("pmax", "Pmax", "ss_pmax_col", 2, "W"),
+          ("isc", "Isc", "ss_isc_col", 3, "A"),
+          ("voc", "Voc", "ss_voc_col", 4, "V"),
+          ("ipm", "Ipm", "ss_ipm_col", 5, "A"),
+          ("vpm", "Vpm", "ss_vpm_col", 6, "V"),
+          ("ff", "FF", "ss_ff_col", 7, "%"),
+          ("rs", "Rs", "ss_rs_col", 8, "ohm"),
+          ("rsh", "Rsh", "ss_rsh_col", 10, "ohm"),
+          ("eff", "Efficiency", "ss_eff_col", 11, "%"),
+          ("temp", "Cell temp", "ss_temp_col", 12, "C"),
+          ("irr", "Irradiance", "ss_irr_col", 14, "W/m2")]
+
+
+def _param_cols(cfg):
+    """(key, label, column, unit) for every SS parameter, each read from its
+    own Settings field rather than assumed at the default position."""
+    out = []
+    for key, label, cfg_key, default, unit in PARAMS:
+        try:
+            col = int(cfg.get(cfg_key, default))
+        except (TypeError, ValueError):
+            col = default
+        out.append((key, label, col, unit))
+    return out
 
 SERIAL_SHAPE = None      # set lazily to avoid an import cycle
 
@@ -78,21 +98,25 @@ def _num(v):
         return None
 
 
-def reading_is_valid(row):
+def reading_is_valid(row, pmax_col=COL_PMAX, isc_col=COL_ISC, voc_col=COL_VOC):
     """A disconnected probe leaves a row behind, so presence is not enough.
 
     Real signature, straight out of the plant's own export:
         Pmax 0.005500   Isc nan   Voc -0.898088   Ipm -0.004184
+
+    The three columns default to the standard export layout so callers
+    without a mapped Settings config (the FTR generator, the anomaly scan
+    with no cfg) still work; a caller holding cfg passes its mapped columns.
     """
-    pmax = _num(row[COL_PMAX]) if len(row) > COL_PMAX else None
-    isc  = _num(row[COL_ISC])  if len(row) > COL_ISC else None
-    voc  = _num(row[COL_VOC])  if len(row) > COL_VOC else None
+    pmax = _num(row[pmax_col]) if len(row) > pmax_col else None
+    isc  = _num(row[isc_col])  if len(row) > isc_col else None
+    voc  = _num(row[voc_col])  if len(row) > voc_col else None
     if pmax is None or pmax < 1.0:
-        return False, "Pmax is %s - the probe was not reading." % row[COL_PMAX]
+        return False, "Pmax is %s - the probe was not reading." % row[pmax_col]
     if isc is None:
-        return False, "Isc is %r - probe not connected." % row[COL_ISC]
+        return False, "Isc is %r - probe not connected." % row[isc_col]
     if voc is None or voc <= 0:
-        return False, "Voc is %s - polarity or connection fault." % row[COL_VOC]
+        return False, "Voc is %s - polarity or connection fault." % row[voc_col]
     return True, None
 
 
@@ -137,10 +161,12 @@ def read_sun_simulator(cfg, serial):
                 "note": "Sun Simulator share unreachable: %s" % path}
     try:
         scol = int(cfg.get("ss_serial_col", COL_ID))
-        pcol = int(cfg.get("ss_pmax_col", COL_PMAX))
+        cols = _param_cols(cfg)
+        pcol = dict((k, c) for (k, _lab, c, _u) in cols)["pmax"]
+        max_col = max([scol] + [c for (_k, _lab, c, _u) in cols])
         want = serial.strip().upper()
         hits = [r for r in _read_rows(path)
-                if len(r) > max(scol, pcol) and r[scol].strip().upper() == want]
+                if len(r) > max_col and r[scol].strip().upper() == want]
     except Exception as e:
         return {"state": NC, "pmax": None, "attempts": 0,
                 "note": "SS read failed: %s" % e}
@@ -151,7 +177,9 @@ def read_sun_simulator(cfg, serial):
                         "not have reached the tester yet, or it was tested "
                         "under a scanned-in-error ID."}
 
-    good = [r for r in hits if reading_is_valid(r)[0]]
+    isc_col = dict((k, c) for (k, _lab, c, _u) in cols)["isc"]
+    voc_col = dict((k, c) for (k, _lab, c, _u) in cols)["voc"]
+    good = [r for r in hits if reading_is_valid(r, pcol, isc_col, voc_col)[0]]
     if good:
         last = max(good, key=lambda r: r[COL_TIME])
         out = {"state": OK, "pmax": _num(last[pcol]),
@@ -159,15 +187,16 @@ def read_sun_simulator(cfg, serial):
                "note": "Read live from the Sun Simulator%s."
                        % (" (retested %d times)" % len(hits) if len(hits) > 1
                           else "")}
-        # the full measurement, not just power
+        # the full measurement, not just power - each column independently
+        # mapped in Settings, same as Serial and Pmax
         out["params"] = [{"key": k, "label": lab, "unit": u,
                           "value": _num(last[i]) if len(last) > i else None}
-                         for (k, lab, i, u) in PARAMS]
-        for (k, _lab, i, _u) in PARAMS:
+                         for (k, lab, i, u) in cols]
+        for (k, _lab, i, _u) in cols:
             out[k] = _num(last[i]) if len(last) > i else None
         return out
 
-    _, why = reading_is_valid(hits[-1])
+    _, why = reading_is_valid(hits[-1], pcol, isc_col, voc_col)
     return {"state": BAD, "pmax": None, "attempts": len(hits),
             "tested_at": hits[-1][COL_TIME],
             "note": "Tested %d time(s) and never read. %s Check the probe/Zig "
@@ -198,24 +227,26 @@ def scan_anomalies(cfg, limit=200):
     if not path or not os.path.exists(path):
             return {"available": False, "junk": [], "failed": [], "calibration": 0}
     scol = int(cfg.get("ss_serial_col", COL_ID))
+    cols = dict((k, c) for (k, _lab, c, _u) in _param_cols(cfg))
+    pcol, isc_col, voc_col = cols["pmax"], cols["isc"], cols["voc"]
     rows = _read_rows(path)[-limit:]
     junk, by, calib = [], {}, 0
     for r in rows:
-        if len(r) <= max(scol, COL_VOC):
+        if len(r) <= max(scol, pcol, isc_col, voc_col):
             continue
         sid = r[scol].strip()
         if is_calibration(sid):
             calib += 1
         elif not _looks_like_serial(sid):
-            junk.append({"at": r[COL_TIME], "id": sid, "pmax": r[COL_PMAX]})
+            junk.append({"at": r[COL_TIME], "id": sid, "pmax": r[pcol]})
         else:
             by.setdefault(sid.upper(), []).append(r)
     failed = []
     for sid, rs in by.items():
-        if not any(reading_is_valid(r)[0] for r in rs):
+        if not any(reading_is_valid(r, pcol, isc_col, voc_col)[0] for r in rs):
             failed.append({"serial": sid, "attempts": len(rs),
                            "at": rs[-1][COL_TIME],
-                           "why": reading_is_valid(rs[-1])[1]})
+                           "why": reading_is_valid(rs[-1], pcol, isc_col, voc_col)[1]})
     return {"available": True, "junk": junk, "failed": failed,
             "calibration": calib}
 
@@ -266,7 +297,7 @@ def simulate(serial, wattage):
         _d = {"state": OK, "pmax": round(wattage * _r, 1), "note": "SIMULATED"}
         _d.update(_sim_params(wattage, _r, rnd))
         _d["params"] = [{"key": k, "label": lab, "unit": u, "value": _d.get(k)}
-                        for (k, lab, _i, u) in PARAMS]
+                        for (k, lab, _cfg_key, _i, u) in PARAMS]
         return (_d,
                 {"state": OK, "verdict": rnd.choice(["Cell Crack", "Ribbon Short"]),
                  "note": "SIMULATED"})
@@ -275,14 +306,14 @@ def simulate(serial, wattage):
         _d = {"state": OK, "pmax": round(wattage * _r, 1), "note": "SIMULATED"}
         _d.update(_sim_params(wattage, _r, rnd))
         _d["params"] = [{"key": k, "label": lab, "unit": u, "value": _d.get(k)}
-                        for (k, lab, _i, u) in PARAMS]
+                        for (k, lab, _cfg_key, _i, u) in PARAMS]
         return (_d,
                 {"state": OK, "verdict": "PATCHES", "note": "SIMULATED"})
     _r = rnd.uniform(0.99, 1.02)
     _d = {"state": OK, "pmax": round(wattage * _r, 1), "note": "SIMULATED"}
     _d.update(_sim_params(wattage, _r, rnd))
     _d["params"] = [{"key": k, "label": lab, "unit": u, "value": _d.get(k)}
-                    for (k, lab, _i, u) in PARAMS]
+                    for (k, lab, _cfg_key, _i, u) in PARAMS]
     return (_d,
             {"state": OK, "verdict": "OK", "note": "SIMULATED"})
 
