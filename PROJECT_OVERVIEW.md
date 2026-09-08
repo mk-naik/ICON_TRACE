@@ -54,8 +54,7 @@ in this project and reverted both times.
 | `static/icon_table.js` | shared filter / search / reset / scroll / export |
 | `static/icon_offline.js` | IndexedDB outbox for offline work |
 | `static/sw.js` | service worker, caches the shell by build id |
-| `static/icon.css` | v4's stylesheet, verbatim |
-| `static/icon_add.css` | what the live layer adds — v4's page links no stylesheet at all, so the live layer injects this one |
+| `static/icon.css` | v4's stylesheet verbatim + a short additions block |
 | `app.py` | routes, API, document rendering |
 | `store.py` | SQLite connection, box helpers, counters |
 | `db.py` | domain helpers — counters, indents, FQC, config |
@@ -87,21 +86,29 @@ patched.__mine = true;          // so it is never patched twice
 window.someFn = patched;
 ```
 
-**Test before claiming a fix.** Render the page, click the thing, assert the
-result. Reading your own code is not testing it.
+**Test in a real DOM before claiming a fix, not by reading the code.** This is
+a project fact, not a tooling fact — how you get a real DOM depends on what is
+on the machine:
 
-With `node` and `jsdom` on the machine, test in a real DOM. Without them —
-and a plant PC will not have them — Windows Script Host runs plain JavaScript
-with no install at all, which is what `test_export.js` uses:
+- If Node is available, `npm install jsdom` (not a project dependency, just a
+  throwaway dev tool) and render the page, click the thing, assert the
+  result. That is how JS changes in this project were verified originally —
+  it is not preinstalled anywhere and no setup step provides it, so do not
+  assume it exists on a fresh machine.
+- If Node is not available, the Flask test client covers everything
+  server-side — every route, every refusal reason, every write actually
+  landing in `icontrace.db` — without needing a browser at all. Most of what
+  matters (the quantity gate, the evidence contract, the counters) is
+  provable that way alone; see the examples throughout `DATA_LAYER.md`.
+- JS-only behaviour that cannot be checked via Flask (the collapse button,
+  scroll chaining, a dropdown v4 rebuilds) needs an actual DOM. If neither
+  Node nor a browser is available, say so plainly rather than asserting the
+  fix works — "I patched X the same way Y is patched elsewhere; I could not
+  run it" is an honest state to leave a change in.
 
-```
-cscript //Nologo //E:JScript test_export.js
-```
-
-It reads the functions out of `icon_live.js` rather than copying them, so it
-tests the code that ships. Write new JS tests the same way: stub only the
-selectors the code asks for, and check the test can still fail before
-trusting it to pass.
+Either way: reading your own code is not testing it, and claiming a fix
+without having run it is the single most expensive mistake to make in this
+project — see the changelog of them in section 7.
 
 **Say why in a comment when the reason is not obvious** — especially where a
 value looks wrong but is right (Pmax is column 2, not 10).
@@ -112,13 +119,6 @@ value looks wrong but is right (Pmax is column 2, not 10).
 
 **Do not edit `icon_trace.html`.** The only permitted change is the injected
 script block already at the bottom.
-
-**Do not assume a class you set has a rule.** That page carries its CSS
-inline and links no stylesheet, so anything the live layer needs must be in
-`icon_add.css`, which the layer injects. A class with no rule fails in the
-worst way available: silently. The sidebar collapse, `.scroll` and the
-independent column scrolling all sat dead this way, set on elements and
-matching nothing. `python test_styles.py` checks the wiring.
 
 **Do not use `class="grid"` alone.** v4's `.grid` sets `display:grid` and a
 gap but **no columns** — it renders one field per row. Columns come from
@@ -202,16 +202,14 @@ python serve.py                    → http://127.0.0.1:8080/
 ```
 
 ```
-del icontrace.db                        start clean
+del icontrace.db                   start clean
 python icon_invoice_parser.py --selftest
-python test_box_number.py               32 tests
-python test_evidence.py                 25 tests, two lines of evidence
-python test_styles.py                   9 tests, the stylesheet reaches v4
-cscript //Nologo //E:JScript test_export.js   19 tests, no install needed
-cscript //Nologo //E:JScript test_trace.js    33 tests
-cscript //Nologo //E:JScript test_screens.js  17 tests
-node test_export.js                     the same tests, if node is installed
-node --check static/icon_live.js        needs node
+python test_box_number.py          32 tests
+```
+
+```
+node --check static/icon_live.js   only if Node is on the machine — a syntax
+                                    check, not part of the required setup
 ```
 
 The top bar shows the build id. If the server reports a different one, the
