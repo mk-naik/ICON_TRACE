@@ -282,6 +282,13 @@ def boot_payload():
         r = store.one(cur, "SELECT next_seq FROM challan_counter WHERE fy=%s", (fy,))
         counts = {t: store.one(cur, "SELECT COUNT(*) AS n FROM %s" % t)["n"]
                   for t in ("serial", "invoice", "challan", "box", "indent")}
+        # an empty material table is filled from icon_materials once; after
+        # that the table is the master and the file is never read again
+        db.seed_materials(cur)
+        mats = db.materials(cur)
+        cell_eff = db.cell_efficiencies(cur)
+    import icon_materials as MM
+    mat_cats = MM.MAT_CATS
     return {
         "live": True,
         "build": build_id(),
@@ -312,6 +319,8 @@ def boot_payload():
         "items": [{"item_code": i["item_code"], "model": i["model"],
                    "cell_type": i["cell_type"], "wattage": i["wattage"]}
                   for i in M.all_items()],
+        # the bill of materials, which used to live only in the browser
+        "materials": mats, "mat_cats": mat_cats, "cell_eff": cell_eff,
         "counts": {"serials": counts["serial"], "invoices": counts["invoice"],
                    "challans": counts["challan"], "boxes": counts["box"],
                    "indents": counts["indent"]},
@@ -794,9 +803,7 @@ def view_fragment(name):
     if name == "settings":
         with store.conn() as (cx, cur):
             cfg = db.get_config(cur)
-        return render_template(allowed[name], cfg=cfg,
-                               probe={"ss": ev.read_sun_simulator(cfg, "__probe__"),
-                                      "el": ev.read_el(cfg, "__probe__")})
+        return render_template(allowed[name], cfg=cfg, probe=_evidence_probe(cfg))
     if name == "indent-form":
         with store.conn() as (cx, cur):
             known = db.known_customers(cur)
@@ -805,6 +812,136 @@ def view_fragment(name):
                                customers=known + [c["name"] for c in
                                                   customers.all_customers()])
     return render_template(allowed[name])
+
+
+def _evidence_probe(cfg):
+    """Is each line's tester actually reachable? Reported per line, because
+    one share being down says nothing about the other - and an operator
+    needs to know WHICH one to chase."""
+    byline = {s["line"]: s for s in ev.sources(cfg)}
+    out = {}
+    for ln in ev.LINES:
+        s = byline.get(ln)
+        ss_path = (s or {}).get("ss_path") or ""
+        el_root = (s or {}).get("el_root") or ""
+        ss = ("—" if not ss_path
+              else ("OK" if os.path.exists(ss_path) else "NC"))
+        el = ("—" if not el_root
+              else ("OK" if os.path.isdir(el_root) else "NC"))
+        out[ln] = {
+            "ss": ss, "el": el,
+            "ss_note": ("No Sun Simulator configured for this line."
+                        if ss == "—" else
+                        ("Reachable." if ss == "OK"
+                         else "Unreachable: %s" % ss_path)),
+            "el_note": ("No EL folder configured for this line."
+                        if el == "—" else
+                        ("Reachable." if el == "OK"
+                         else "Unreachable: %s" % el_root)),
+        }
+    return out
+
+
+@app.route("/api/evidence/sources")
+def api_evidence_sources():
+    """The evidence sources as configured, for the Admin data_source card.
+
+    v4 filled that table from a fixed array of four plausible paths, sitting
+    directly under the fields that set the real ones - a screen describing
+    where evidence comes from, describing somewhere it does not come from.
+    """
+    with store.conn() as (cx, cur):
+        cfg = db.get_config(cur)
+    byline = {s["line"]: s for s in ev.sources(cfg)}
+    out = []
+    for ln in ev.LINES:
+        s = byline.get(ln)
+        for kind, path, typ, rule in (
+            ("SS", (s or {}).get("ss_path"), "SUNSIM_CSV",
+             "CSV, read by column position"),
+            ("EL", (s or {}).get("el_root"), "ELVI_ROOT",
+             "Folder name is the verdict"),
+        ):
+            ok = bool(path) and (os.path.isdir(path) if kind == "EL"
+                                 else os.path.exists(path))
+            out.append({
+                "id": "%s-%s" % (kind, ln), "type": typ, "line": ln,
+                "path": path or "— not configured —",
+                "state": "OK" if ok else ("NC" if path else "—"),
+                "rule": rule if path else "nothing is read from this line",
+                # the column map is per source, so it belongs on the row
+                "cols": ("serial %d · Pmax %d · Isc %d · Voc %d"
+                         % (s["serial_col"], s["pmax_col"], s["isc_col"],
+                            s["voc_col"])) if (s and kind == "SS") else "",
+            })
+    return jsonify(out)
+
+
+@app.route("/api/materials")
+def api_materials():
+    with store.conn() as (cx, cur):
+        db.seed_materials(cur)
+        return jsonify({"materials": db.materials(cur),
+                        "cell_eff": db.cell_efficiencies(cur)})
+
+
+@app.route("/api/material", methods=["POST"])
+@app.route("/api/material/<int:n>", methods=["PUT"])
+def api_material_save(n=None):
+    """Save one material. The number is the key allocation_material already
+    references, so it is assigned once and never reassigned - renumbering a
+    material silently rewrites what every past batch was built from."""
+    m = dict(request.get_json(force=True) or {})
+    if not (m.get("name") or "").strip():
+        return jsonify({"ok": False, "why": "A material needs a name."}), 400
+
+    # wattage is a string on purpose: a back label is matched to a model with
+    # mat.watt === m.watt, and MODELS carries '635', not 635. Stored as a
+    # number it would apply to no model at all, silently.
+    if m.get("watt") not in (None, ""):
+        m["watt"] = str(m["watt"]).strip()
+    if (m.get("series") or "") == "LABEL" and not m.get("watt"):
+        return jsonify({"ok": False, "why":
+            "A back label applies by wattage, so it needs one — without it "
+            "the label matches no model and the row reads 'Label undefinedW'."
+            }), 400
+
+    with store.conn() as (cx, cur):
+        db.seed_materials(cur)
+        if n is None:
+            n = db.next_material_no(cur)
+        m["n"] = n
+        db.save_material(cur, m, actor())
+        db.audit(cur, actor(), "material.save", "material", n,
+                 {"name": m.get("name"), "uom": m.get("uom")})
+        out = [x for x in db.materials(cur) if x["n"] == n]
+    return jsonify({"ok": True, "n": n, "material": out[0] if out else None})
+
+
+@app.route("/api/cell-efficiencies", methods=["PUT"])
+def api_cell_efficiencies():
+    """Replace the list of cell efficiencies.
+
+    Values already recorded against a batch are untouched: allocation_material
+    keeps the string it was given, so removing one here never restates what a
+    module was built from.
+    """
+    d = request.get_json(force=True) or {}
+    vals, seen = [], set()
+    for v in (d.get("values") or []):
+        v = str(v).strip()
+        if v and v not in seen:
+            seen.add(v)
+            vals.append(v)
+    if not vals:
+        return jsonify({"ok": False, "why": "The list cannot be empty — FQC "
+                                            "picks the cell efficiency from "
+                                            "it."}), 400
+    with store.conn() as (cx, cur):
+        db.set_cell_efficiencies(cur, vals)
+        db.audit(cur, actor(), "config.cell_eff", "config", None,
+                 {"count": len(vals)})
+    return jsonify({"ok": True, "values": vals})
 
 
 @app.route("/api/settings", methods=["POST"])
@@ -2094,13 +2231,17 @@ def planning():
 # FQC  -  verification, not data entry
 # --------------------------------------------------------------------------
 
-def _fqc_payload(cur, serial, sandbox=False):
+def _fqc_payload(cur, serial, sandbox=False, line=None):
     rec = db.find_serial(cur, serial)
     if not rec:
         return None, None, {"ok": False, "why":
                             "%s is not in the serial master." % serial}
     cfg = db.get_config(cur)
-    evidence = ev.gather(cfg, serial, rec.get("wattage") or 0, sandbox=sandbox)
+    # The station knows its own line, and reading only that tester is both
+    # quicker and unambiguous. Without one, both are searched: the serial
+    # itself carries no line indicator.
+    evidence = ev.gather(cfg, serial, rec.get("wattage") or 0,
+                         sandbox=sandbox, line=line)
     prior = next((dict(r) for r in db.fqc_recent(cur, 1000)
                   if r.get("serial") == serial), None)
     return rec, evidence, {"ok": True, "serial": serial,
@@ -2118,7 +2259,8 @@ def api_fqc_lookup():
         return jsonify({"ok": False, "why": "Scan or enter a serial."}), 400
     with store.conn() as (cx, cur):
         _rec, _evidence, out = _fqc_payload(
-            cur, serial, request.args.get("sandbox") == "1")
+            cur, serial, request.args.get("sandbox") == "1",
+            (request.args.get("line") or "").strip() or None)
     return jsonify(out), 200 if out.get("ok") else 404
 
 
@@ -2393,14 +2535,19 @@ def gatepass():
 def settings():
     with db.conn() as (cx, cur):
         if request.method == "POST":
-            db.set_config(cur, {k: (request.form.get(k) or "").strip()
-                                for k in db.DEFAULT_CONFIG})
-            db.audit(cur, actor(), "config.update", "config")
-            flash("Settings saved.", "pass")
+            # ONLY what the form actually submitted. Writing every key in
+            # DEFAULT_CONFIG blanked whatever this form does not carry - which
+            # after two lines were added meant a save here wiped Line B's
+            # paths and column map without saying so.
+            sent = {k: (request.form.get(k) or "").strip()
+                    for k in db.DEFAULT_CONFIG if k in request.form}
+            if sent:
+                db.set_config(cur, sent)
+                db.audit(cur, actor(), "config.update", "config", None,
+                         {"keys": sorted(sent)})
+                flash("Settings saved.", "pass")
         cfg = db.get_config(cur)
-    probe = {"ss": ev.read_sun_simulator(cfg, "__probe__"),
-             "el": ev.read_el(cfg, "__probe__")}
-    return render_template("settings.html", cfg=cfg, probe=probe)
+    return render_template("settings.html", cfg=cfg, probe=_evidence_probe(cfg))
 
 
 @app.route("/dashboard")

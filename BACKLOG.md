@@ -35,6 +35,19 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] Sidebar collapses to a 46px icon rail; hovering slides the labels back
       out **over** the page rather than pushing it, so a scanning screen gets
       the width without the layout jumping every time the pointer passes.
+- [x] **…and the button actually does it now.** v4's page carries its
+      stylesheet INLINE and links nothing, so every rule the live layer adds
+      sat in `static/icon.css` where that page never loaded it. The toggle
+      set `side-collapsed` and no rule matched: nothing moved. The same was
+      true of `.scroll`, the invoice drop zone and independent column
+      scrolling — set, and silently inert.
+      The additions are split into `static/icon_add.css`, injected into v4's
+      page by the live layer and loaded after `icon.css` by the base shell.
+      One copy, wherever it is needed; `icon.css` goes back to being v4's
+      stylesheet verbatim.
+      **Turning it on wakes several dormant features** — check Planning,
+      FQC, Packing and Challan, whose two columns now scroll independently
+      for the first time.
 - [x] The choice is remembered for the session and shared by both shells.
 - [x] The plain screens now use the same sidebar, so moving between them is
       not a jump into a different-looking application.
@@ -250,9 +263,12 @@ A new screen gets both for free.
 
 - [x] Export — the filter bar's Export takes the whole screen (KPI strip,
       shift table, every card), and each card's own Export takes that table.
-- [ ] Scroll on every table — the cards are not wired to `data-itable` yet,
-      so a long list still grows the page instead of scrolling in its card.
-      Reset and the filters were already there; confirm on screen.
+- [x] **Search, reset, scroll and count on every table.** icon_table.js did
+      all of it already; the dashboards were simply never marked up for it,
+      so "build once, apply everywhere" had stopped at Recent Allocations.
+      Every card holding a table is now claimed by the shared layer — its
+      own scroll box, its own search, Reset and row count — across all
+      fifteen screens, so one added later gets it by existing.
 
 ## 9. FQC Entry
 
@@ -260,10 +276,14 @@ A new screen gets both for free.
 
 ## 10. Packing Log
 
-- [ ] Move **above** New Pallet in the sidebar, and make it the first Packing
-      screen.
+- [x] **Above New Pallet in the sidebar, and the screen Packing opens on.**
+      Both are set before v4's `signIn()`, which ends in
+      `go(ROLES[role].home)` — changing the home afterwards would be a
+      screen too late. Arriving straight into an empty pallet form gave no
+      sense of what was already packed, the same reason Planning opens on
+      Recent Allocations.
 - [x] Export — page header and per-card, same as the other dashboards.
-- [ ] Reset and all filters working — unverified on screen.
+- [x] Reset, search, scroll and count on every table — from the shared layer.
 - [ ] Print boxes.
 
 ## 11. New Pallet
@@ -289,7 +309,7 @@ A new screen gets both for free.
 ## 13. Stock & Dispatch
 
 - [x] Export — page header and per-card, same as the other dashboards.
-- [ ] Filters, reset and scroll — still to wire.
+- [x] Filters, reset, scroll and count — from the shared layer.
 
 ## 13a. Flash Test Report  *(new, built)*
 
@@ -400,8 +420,52 @@ Mukesh's answers, 4 Sep:
       Already settled: grade issues to Quality; serial existence to the
       Incharge; evidence mismatch is a grade issue, so Quality.
 
+## 19a. Material master  *(new)*
+
+- [x] **The bill of materials is saved.** It lived only in v4's `MATERIALS`
+      array: the screen could edit it and posted nothing, so a UOM corrected
+      on Monday was back to the old one on Tuesday and the consumption BOM
+      never heard about it. Lifted into `icon_materials.py`, seeded once into
+      a `material` table, and served from there at boot. Edits go through
+      `PUT /api/material/<n>`.
+      `n` is never reassigned — `allocation_material` references it, so
+      renumbering a material silently rewrites what every past batch was
+      built from.
+- [x] **Label wattage can be set at last.** A back label applies *by
+      wattage* and the edit form had no field for it, so an added label read
+      `LABEL UNDEFINEDW` and matched no model at all. It is a **string**:
+      `materialsFor()` compares `mat.watt === m.watt` and MODELS carries
+      `'635'`, so a number would silently apply to nothing. A LABEL row
+      saved without one is refused with the reason.
+- [x] **Cell efficiency is editable** — both the list (add 25.8% when a new
+      cell arrives, in Admin) and a per-material default that pre-selects in
+      Planning. Removing a value never restates what a batch was already
+      built with: `allocation_material` keeps the string it was given.
+- [ ] Materials cannot be deleted, only edited — deliberate for now, since a
+      deleted material is one a past allocation still points at. Retiring
+      one properly (deprecate, never delete) is still to design.
+
 ## 20. Evidence Sources
 
+- [x] **Two lines, two Sun Simulators, two ELs.** Each line has its own SS
+      path, its own EL root and its own **full column map** — they are
+      separate machines and can be reconfigured or replaced one at a time,
+      so a shared map would move both at once.
+      A serial carries no line indicator, so a lookup searches both unless
+      the station's own line is given (`/api/fqc/lookup?line=A`).
+      **The rule that matters:** if one share is down and the serial is not
+      on the other, the module is **NC**, never NA. NA means the tester was
+      reachable and the serial genuinely is not there — a quality signal
+      that sends the module to review. Calling a good module NA because a
+      share was offline is the failure this rule exists to stop, and the
+      note names the line that could not be read.
+- [x] The old single-source settings still work, read as Line A, so an
+      existing setup keeps running untouched.
+- [x] **One settings editor, not two.** `/settings` and the Evidence Sources
+      fragment configured the same paths from different markup, and after
+      the second line was added a save on the old page would have blanked
+      Line B without saying so. The page includes the fragment now, and a
+      partial POST only writes the keys it actually carries.
 - [x] **Every Sun Simulator column is mapped, not just Serial and Pmax.**
       Isc, Voc, Ipm, Vpm, FF, Rs, Rsh, Efficiency, Cell temp and Irradiance
       each have their own field in Settings, defaulting to the real export's
@@ -417,8 +481,13 @@ Mukesh's answers, 4 Sep:
       place and the switches in another is how the two drift apart. The
       sidebar entry is gone; the fields sit above the card that describes
       them.
-- [ ] `data_source` still lists its rows from v4's fixed array. It should
-      read the paths that were just saved above it.
+- [x] **`data_source` lists what is actually configured.** It filled itself
+      from a fixed array of four plausible paths (`\\SIM-A\out\`,
+      `\\DESKTOP-T8ACD7V\D\EL`) sitting directly under the fields that set
+      the real ones — a card describing where evidence comes from,
+      describing somewhere it does not come from. It now shows each line's
+      SS and EL with its reachability and its column map, says *not
+      configured* where nothing is set, and is redrawn after a save.
 
 ---
 
@@ -452,3 +521,6 @@ not know any of the following, and each is a change to make on top of it.
 | Batch number `BAT-YYMM-NNNNN`, rendered from the allocation | Planning, Search |
 | Search & Trace answers from the database, never from an example | Search & Trace |
 | Evidence Sources lives in Admin, not as a screen of its own | Admin |
+| The material master is in the database, not in the page | Materials, Planning |
+| Two lines, each with its own SS and EL and its own column map | Evidence, FQC, FTR |
+| A source that is down is NC, never NA — even with the other readable | FQC |

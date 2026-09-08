@@ -79,6 +79,54 @@ def param_cols(cfg):
         out.append((key, label, col, unit))
     return out
 
+# Unit-2 runs two lines and each has its OWN Sun Simulator and EL. Two
+# testers means two exports, and they can be reconfigured or replaced one at
+# a time - so each source carries its own column map rather than sharing one.
+LINES = ("A", "B")
+
+
+def sources(cfg, line=None):
+    """The configured evidence sources, one per line, each fully resolved.
+
+    Reads the per-line settings (ss_a_csv_path, ss_a_pmax_col, el_a_root …)
+    and falls back to the single-source keys for Line A, so a system
+    configured before there were two lines keeps working untouched.
+    """
+    out = []
+    for ln in LINES:
+        p = "ss_%s_" % ln.lower()
+        ss = (cfg.get(p + "csv_path") or "").strip()
+        el = (cfg.get("el_%s_root" % ln.lower()) or "").strip()
+        if ln == "A":
+            ss = ss or (cfg.get("ss_csv_path") or "").strip()
+            el = el or (cfg.get("el_root") or "").strip()
+        if not ss and not el:
+            continue
+
+        def col(key, default, prefix=p):
+            for k in (prefix + key, "ss_" + key):        # per line, then shared
+                if cfg.get(k) not in (None, ""):
+                    try:
+                        return int(cfg[k])
+                    except (TypeError, ValueError):
+                        pass
+            return default
+
+        cols = [(k, lab, col(cfg_key[3:], default), unit)
+                for (k, lab, cfg_key, default, unit) in PARAMS]
+        by = dict((k, c) for (k, _lab, c, _u) in cols)
+        out.append({
+            "line": ln, "label": "Line %s" % ln,
+            "ss_path": ss, "el_root": el,
+            "serial_col": col("serial_col", COL_ID),
+            "cols": cols, "pmax_col": by["pmax"], "isc_col": by["isc"],
+            "voc_col": by["voc"],
+        })
+    if line:
+        out = [s for s in out if s["line"] == str(line).upper()]
+    return out
+
+
 SERIAL_SHAPE = None      # set lazily to avoid an import cycle
 
 
@@ -144,51 +192,82 @@ def _read_rows(path, retries=3, pause=0.15):
     return last or []
 
 
-def read_sun_simulator(cfg, serial):
-    """Look up one serial in the live SS CSV.
+def read_sun_simulator(cfg, serial, line=None):
+    """Look up one serial across the Sun Simulators.
+
+    Unit-2 has TWO lines and each has its own tester, so there are two CSVs
+    and either may hold the serial. A serial carries no line indicator, so
+    with no line given both are searched and the latest valid row across
+    them wins.
 
     A module can appear more than once - retesting after a failed probe is
     routine, and 12 of 53 serials in a real 45-minute sample had two rows.
     So collect EVERY row for the serial and take the latest VALID one. Only
     if none is valid does the module carry a fault.
+
+    WHY THE UNREACHABLE CASE IS NC AND NOT NA: NA means the tester was
+    reachable and the serial genuinely is not there, which is a quality
+    signal that sends the module to review. If one line's share is down, the
+    serial may be sitting on it - so a miss with any source unreachable is
+    NC, and the note names the line that could not be read.
     """
-    path = (cfg.get("ss_csv_path") or "").strip()
-    if not path:
+    srcs = sources(cfg, line)
+    if not srcs:
         return {"state": NC, "pmax": None, "attempts": 0,
                 "note": "No Sun Simulator path configured (Settings)."}
-    if not os.path.exists(path):
+
+    want = serial.strip().upper()
+    hits, down, read = [], [], []
+    for s in srcs:
+        if not s["ss_path"]:
+            continue
+        if not os.path.exists(s["ss_path"]):
+            down.append(s)
+            continue
+        try:
+            cols = s["cols"]
+            scol = s["serial_col"]
+            top = max([scol] + [c for (_k, _lab, c, _u) in cols])
+            for r in _read_rows(s["ss_path"]):
+                if len(r) > top and r[scol].strip().upper() == want:
+                    hits.append((s, r))
+            read.append(s)
+        except Exception as e:
+            down.append(dict(s, error=str(e)))
+
+    if not read and not hits:
+        why = "; ".join("%s: %s" % (s["label"], s.get("error") or "unreachable")
+                        for s in down) or "no path configured"
         return {"state": NC, "pmax": None, "attempts": 0,
-                "note": "Sun Simulator share unreachable: %s" % path}
-    try:
-        scol = int(cfg.get("ss_serial_col", COL_ID))
-        cols = param_cols(cfg)
-        pcol = dict((k, c) for (k, _lab, c, _u) in cols)["pmax"]
-        max_col = max([scol] + [c for (_k, _lab, c, _u) in cols])
-        want = serial.strip().upper()
-        hits = [r for r in _read_rows(path)
-                if len(r) > max_col and r[scol].strip().upper() == want]
-    except Exception as e:
-        return {"state": NC, "pmax": None, "attempts": 0,
-                "note": "SS read failed: %s" % e}
+                "note": "No Sun Simulator could be read (%s)." % why}
 
     if not hits:
+        if down:
+            return {"state": NC, "pmax": None, "attempts": 0,
+                    "note": "Not on %s, and %s could not be read — the serial "
+                            "may be on it. Confirm when the link returns."
+                            % (", ".join(s["label"] for s in read),
+                               ", ".join(s["label"] for s in down))}
         return {"state": NA, "pmax": None, "attempts": 0,
-                "note": "Reachable, but this serial is not in the file. It may "
-                        "not have reached the tester yet, or it was tested "
-                        "under a scanned-in-error ID."}
+                "note": "Reachable on %s, but this serial is not in the file. "
+                        "It may not have reached the tester yet, or it was "
+                        "tested under a scanned-in-error ID."
+                        % ", ".join(s["label"] for s in read)}
 
-    isc_col = dict((k, c) for (k, _lab, c, _u) in cols)["isc"]
-    voc_col = dict((k, c) for (k, _lab, c, _u) in cols)["voc"]
-    good = [r for r in hits if reading_is_valid(r, pcol, isc_col, voc_col)[0]]
+    good = [(s, r) for (s, r) in hits
+            if reading_is_valid(r, s["pmax_col"], s["isc_col"],
+                                s["voc_col"])[0]]
     if good:
-        last = max(good, key=lambda r: r[COL_TIME])
-        out = {"state": OK, "pmax": _num(last[pcol]),
+        src, last = max(good, key=lambda pair: pair[1][COL_TIME])
+        cols = src["cols"]
+        out = {"state": OK, "pmax": _num(last[src["pmax_col"]]),
                "tested_at": last[COL_TIME], "attempts": len(hits),
-               "note": "Read live from the Sun Simulator%s."
-                       % (" (retested %d times)" % len(hits) if len(hits) > 1
-                          else "")}
+               "line": src["line"], "source": src["label"],
+               "note": "Read live from %s%s." % (
+                   src["label"],
+                   " (retested %d times)" % len(hits) if len(hits) > 1 else "")}
         # the full measurement, not just power - each column independently
-        # mapped in Settings, same as Serial and Pmax
+        # mapped in Settings, per source, same as Serial and Pmax
         out["params"] = [{"key": k, "label": lab, "unit": u,
                           "value": _num(last[i]) if len(last) > i else None}
                          for (k, lab, i, u) in cols]
@@ -196,12 +275,15 @@ def read_sun_simulator(cfg, serial):
             out[k] = _num(last[i]) if len(last) > i else None
         return out
 
-    _, why = reading_is_valid(hits[-1], pcol, isc_col, voc_col)
+    src, last = hits[-1]
+    _, why = reading_is_valid(last, src["pmax_col"], src["isc_col"],
+                              src["voc_col"])
     return {"state": BAD, "pmax": None, "attempts": len(hits),
-            "tested_at": hits[-1][COL_TIME],
-            "note": "Tested %d time(s) and never read. %s Check the probe/Zig "
-                    "at the JB connector, plus-minus polarity and the "
-                    "soldering." % (len(hits), why)}
+            "tested_at": last[COL_TIME], "line": src["line"],
+            "source": src["label"],
+            "note": "Tested %d time(s) on %s and never read. %s Check the "
+                    "probe/Zig at the JB connector, plus-minus polarity and "
+                    "the soldering." % (len(hits), src["label"], why)}
 
 
 # Rows the tester writes that are not modules at all: calibration, reference
@@ -216,62 +298,89 @@ def is_calibration(sid):
             or (s.isdigit() and len(s) <= 4))
 
 
-def scan_anomalies(cfg, limit=200):
-    """Rows the tester wrote that no serial lookup will ever find.
+def scan_anomalies(cfg, limit=200, line=None):
+    """Rows the testers wrote that no serial lookup will ever find.
 
     Calibration and reference rows are counted, never flagged. What is left
     is either a barcode that would not scan, or a module that was tested and
-    never read.
+    never read. Both lines are scanned, and each row says which it came from.
     """
-    path = (cfg.get("ss_csv_path") or "").strip()
-    if not path or not os.path.exists(path):
-            return {"available": False, "junk": [], "failed": [], "calibration": 0}
-    scol = int(cfg.get("ss_serial_col", COL_ID))
-    cols = dict((k, c) for (k, _lab, c, _u) in param_cols(cfg))
-    pcol, isc_col, voc_col = cols["pmax"], cols["isc"], cols["voc"]
-    rows = _read_rows(path)[-limit:]
-    junk, by, calib = [], {}, 0
-    for r in rows:
-        if len(r) <= max(scol, pcol, isc_col, voc_col):
+    junk, failed, calib, seen_any = [], [], 0, False
+    for s in sources(cfg, line):
+        path = s["ss_path"]
+        if not path or not os.path.exists(path):
             continue
-        sid = r[scol].strip()
-        if is_calibration(sid):
-            calib += 1
-        elif not _looks_like_serial(sid):
-            junk.append({"at": r[COL_TIME], "id": sid, "pmax": r[pcol]})
-        else:
-            by.setdefault(sid.upper(), []).append(r)
-    failed = []
-    for sid, rs in by.items():
-        if not any(reading_is_valid(r, pcol, isc_col, voc_col)[0] for r in rs):
-            failed.append({"serial": sid, "attempts": len(rs),
-                           "at": rs[-1][COL_TIME],
-                           "why": reading_is_valid(rs[-1], pcol, isc_col, voc_col)[1]})
+        seen_any = True
+        scol, pcol = s["serial_col"], s["pmax_col"]
+        isc_col, voc_col = s["isc_col"], s["voc_col"]
+        by = {}
+        for r in _read_rows(path)[-limit:]:
+            if len(r) <= max(scol, pcol, isc_col, voc_col):
+                continue
+            sid = r[scol].strip()
+            if is_calibration(sid):
+                calib += 1
+            elif not _looks_like_serial(sid):
+                junk.append({"at": r[COL_TIME], "id": sid, "pmax": r[pcol],
+                             "line": s["line"]})
+            else:
+                by.setdefault(sid.upper(), []).append(r)
+        for sid, rs in by.items():
+            if not any(reading_is_valid(r, pcol, isc_col, voc_col)[0] for r in rs):
+                failed.append({"serial": sid, "attempts": len(rs),
+                               "at": rs[-1][COL_TIME], "line": s["line"],
+                               "why": reading_is_valid(rs[-1], pcol, isc_col,
+                                                       voc_col)[1]})
+    if not seen_any:
+        return {"available": False, "junk": [], "failed": [], "calibration": 0}
     return {"available": True, "junk": junk, "failed": failed,
             "calibration": calib}
 
 
-def read_el(cfg, serial):
-    """EL verdict comes from the folder the image was filed under."""
-    root = (cfg.get("el_root") or "").strip()
-    if not root:
+def read_el(cfg, serial, line=None):
+    """EL verdict comes from the folder the image was filed under.
+
+    Two lines, two EL stations, two output folders - so with no line given
+    both are searched. Unreachable is NC and not NA for the same reason as
+    the Sun Simulator: the image may be sitting on the share that is down.
+    """
+    srcs = [s for s in sources(cfg, line) if s["el_root"]]
+    if not srcs:
         return {"state": NC, "verdict": None,
                 "note": "No EL folder configured (Settings)."}
-    if not os.path.isdir(root):
+    down, read = [], []
+    for s in srcs:
+        root = s["el_root"]
+        if not os.path.isdir(root):
+            down.append(s)
+            continue
+        try:
+            for dirpath, _dirs, files in os.walk(root):
+                for fn in files:
+                    if os.path.splitext(fn)[0].strip().upper() == serial.upper():
+                        return {"state": OK,
+                                "verdict": os.path.basename(dirpath).strip() or "OK",
+                                "path": os.path.join(dirpath, fn),
+                                "line": s["line"], "source": s["label"],
+                                "note": "Folder name is the operator's verdict "
+                                        "(%s)." % s["label"]}
+            read.append(s)
+        except Exception as e:
+            down.append(dict(s, error=str(e)))
+    if not read:
         return {"state": NC, "verdict": None,
-                "note": "EL share unreachable: %s" % root}
-    try:
-        for dirpath, _dirs, files in os.walk(root):
-            for fn in files:
-                if os.path.splitext(fn)[0].strip().upper() == serial.upper():
-                    verdict = os.path.basename(dirpath).strip()
-                    return {"state": OK, "verdict": verdict or "OK",
-                            "path": os.path.join(dirpath, fn),
-                            "note": "Folder name is the operator's verdict."}
-    except Exception as e:
-        return {"state": NC, "verdict": None, "note": "EL read failed: %s" % e}
+                "note": "No EL folder could be read (%s)."
+                        % "; ".join("%s: %s" % (s["label"],
+                                                s.get("error") or "unreachable")
+                                    for s in down)}
+    if down:
+        return {"state": NC, "verdict": None,
+                "note": "No image on %s, and %s could not be read — it may be "
+                        "there." % (", ".join(s["label"] for s in read),
+                                    ", ".join(s["label"] for s in down))}
     return {"state": NA, "verdict": None,
-            "note": "Reachable, but no image for this serial."}
+            "note": "Reachable on %s, but no image for this serial."
+                    % ", ".join(s["label"] for s in read)}
 
 
 def _sim_params(w, ratio, rnd):
@@ -340,18 +449,25 @@ def propose_grade(wattage, ss, el):
         el.get("verdict"), ratio * 100)
 
 
-def gather(cfg, serial, wattage, sandbox=False):
-    """One call for the FQC screen. Returns evidence plus a proposed grade."""
+def gather(cfg, serial, wattage, sandbox=False, line=None):
+    """One call for the FQC screen. Returns evidence plus a proposed grade.
+
+    `line` narrows the lookup to that line's tester - the FQC station knows
+    its own line from station_config. Left out, both are searched, because
+    the serial itself carries no line indicator.
+    """
     if sandbox:
         ss, el = simulate(serial, wattage)
     else:
-        ss, el = read_sun_simulator(cfg, serial), read_el(cfg, serial)
+        ss = read_sun_simulator(cfg, serial, line)
+        el = read_el(cfg, serial, line)
     grade, why = propose_grade(wattage, ss, el)
     degraded = ss["state"] != OK or el["state"] != OK
     return {
         "pmax": ss.get("pmax"), "params": ss.get("params") or [],
         "ss_state": ss["state"], "ss_note": ss["note"],
         "ss_attempts": ss.get("attempts"), "tested_at": ss.get("tested_at"),
+        "ss_line": ss.get("line"), "el_line": el.get("line"),
         "fault": ss["state"] == BAD,
         "el": el.get("verdict"), "el_state": el["state"], "el_note": el["note"],
         "el_path": el.get("path"),

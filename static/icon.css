@@ -195,11 +195,6 @@ tfoot td{background:#F2F6FA;font-weight:700;border-top:2px solid var(--line);bor
 .filters .fld{margin:0}
 .filters .fld input,.filters .fld select{padding:6px 9px;font-size:12px;min-width:128px}
 .filters .sp{margin-left:auto;display:flex;gap:8px}
-.table-tools{gap:8px;align-items:center}
-.table-tools input,.table-tools select,.table-tools button,.table-tools [data-role=count]{
-  height:32px;min-height:32px}
-.table-tools input,.table-tools select{padding:6px 9px}
-.table-tools [data-role=count]{display:inline-flex;align-items:center;padding:0 9px}
 
 .note{display:flex;gap:9px;padding:10px 13px;border-radius:var(--r);font-size:12px;
   margin-bottom:13px;border:1px solid}
@@ -520,66 +515,3 @@ button.mchip:focus-visible{outline:2px solid var(--solar);outline-offset:1px;
 .cnt-in:focus{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand-lt)}
 .code{font-family:var(--f-mono);font-size:10px;background:#F2F6FA;border:1px solid var(--line);
   padding:1px 5px;border-radius:2px;color:var(--ink3)}
-
-/* --- additions for the live app --- */
-.fld.absent input,.fld.absent textarea{border-color:var(--line);background:#F7F9FB}
-.fld.absent label{color:var(--ink3)}
-.fld.absent label::after{content:' — not on this invoice';color:var(--ink3);
-  font-weight:400;letter-spacing:0;text-transform:none}
-.fld.blank input,.fld.blank textarea{border-color:var(--review);background:var(--review-lt)}
-.fld.blank label::after{content:' — not found';color:var(--review);font-weight:700;
-  letter-spacing:0;text-transform:none}
-.scroll{max-height:400px;overflow:auto}
-.scroll thead th{position:sticky;top:0;z-index:1}
-.drop{border:2px dashed var(--line);border-radius:var(--r);padding:26px;
-  text-align:center;background:#FAFCFD}
-.drop.over{border-color:var(--brand);background:var(--brand-lt)}
-.split{display:grid;grid-template-columns:1fr 300px;gap:14px;align-items:start}
-@media(max-width:900px){.split{grid-template-columns:1fr}}
-
-/* ---- collapsible sidebar -------------------------------------------
-   Collapsed the rail keeps the icons, and hovering slides the labels back
-   out OVER the page rather than pushing it - so a scanning screen gets the
-   full width without the layout jumping every time the pointer passes. */
-.side-toggle{margin-left:auto;background:none;border:1px solid rgba(255,255,255,.22);
-  color:#B3C4D6;border-radius:3px;width:22px;height:22px;line-height:1;
-  font-size:13px;cursor:pointer;padding:0}
-.side-toggle:hover{background:rgba(255,255,255,.1);color:#fff}
-#app.side-collapsed{grid-template-columns:46px 1fr}
-#app.side-collapsed .side{width:46px;overflow:visible;transition:width .12s ease}
-#app.side-collapsed .side .nav-sec{opacity:0;height:6px;padding:0;overflow:hidden}
-#app.side-collapsed .side .nav-i{gap:0;padding:9px 0;justify-content:center;
-  font-size:0;white-space:nowrap}
-#app.side-collapsed .side .nav-i em{font-size:14px;width:auto}
-#app.side-collapsed .side .nav-i b{display:none}
-#app.side-collapsed .side:hover{width:198px;box-shadow:5px 0 18px rgba(0,0,0,.35);
-  z-index:40;position:relative}
-#app.side-collapsed .side:hover .nav-sec{opacity:1;height:auto;padding:11px 16px 5px}
-#app.side-collapsed .side:hover .nav-i{gap:9px;padding:8px 16px;
-  justify-content:flex-start;font-size:12.5px}
-#app.side-collapsed .side:hover .nav-i em{font-size:12px;width:15px}
-#app.side-collapsed .side:hover .nav-i b{display:inline}
-a.nav-i{text-decoration:none}
-
-
-/* ---- two-column screens scroll independently ------------------------
-   Planning, FQC, Packing and Challan all put a long working column beside a
-   short summary rail. Scrolling the bill of materials used to drag the rail
-   past its own buttons, so each column keeps its own scroll.
-
-   overscroll-behavior stays `auto` on purpose. `contain` looked right but
-   froze the page whenever the pointer sat over a column with nothing left to
-   scroll - which is most of the rail, most of the time - leaving the gap
-   between the columns as the only place a wheel worked. */
-.work > .wmain, .work > .rail{
-  max-height:calc(100vh - 118px); overflow-y:auto; overscroll-behavior:auto;
-  padding-right:4px}
-.work > .rail{position:static}
-.work > .wmain::-webkit-scrollbar, .work > .rail::-webkit-scrollbar{width:8px}
-.work > .wmain::-webkit-scrollbar-thumb, .work > .rail::-webkit-scrollbar-thumb{
-  background:var(--line); border-radius:4px}
-#v-plan .work > .rail{position:sticky;top:0;max-height:none;overflow:visible;
-  padding-right:0}
-@media(max-width:1100px){
-  .work > .wmain, .work > .rail{max-height:none; overflow:visible}
-}

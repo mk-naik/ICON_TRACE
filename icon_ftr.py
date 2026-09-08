@@ -56,50 +56,57 @@ def _num(v, places=2):
 
 def build(cfg, serials):
     """Return one row per serial, in the order given."""
-    path = (cfg.get("ss_csv_path") or "").strip()
-    out = {"rows": [], "missing": [], "source": path,
+    # Both lines: each has its own tester, its own export and its own column
+    # map, and a challan's boxes can carry modules built on either.
+    srcs = ev.sources(cfg)
+    out = {"rows": [], "missing": [],
+           "source": ", ".join("%s %s" % (s["label"], s["ss_path"])
+                               for s in srcs if s["ss_path"]),
            "generated": datetime.datetime.now().isoformat(timespec="seconds")}
-    if not path or not os.path.exists(path):
-        out["error"] = ("Sun Simulator export not reachable at %r. Set it in "
-                        "Settings - the FTR is built from it, not typed."
-                        % (path or "(not configured)"))
+    live = [s for s in srcs if s["ss_path"] and os.path.exists(s["ss_path"])]
+    if not live:
+        out["error"] = ("No Sun Simulator export is reachable%s. Set the "
+                        "paths in Settings - the FTR is built from them, not "
+                        "typed." % (" (%s)" % out["source"] if out["source"]
+                                    else ""))
         out["missing"] = [{"serial": s, "why": "no source"} for s in serials]
         return out
-
-    # one map, shared with FQC - see COLUMNS above
-    col = dict((k, c) for (k, _lab, c, _u) in ev.param_cols(cfg))
-    col["tested_at"] = ev.COL_TIME
-    try:
-        scol = int(cfg.get("ss_serial_col", ev.COL_ID))
-    except (TypeError, ValueError):
-        scol = ev.COL_ID
-    need = max([scol] + list(col.values()))
+    out["unreachable"] = [s["label"] for s in srcs
+                          if s["ss_path"] and s not in live]
 
     want = {s.strip().upper() for s in serials}
     hits = {}
-    with open(path, "r", encoding="utf-8-sig", errors="replace",
-              newline="") as fh:
-        for r in csv.reader(fh):
-            if len(r) <= need:
-                continue
-            sid = r[scol].strip().upper()
-            if sid in want:
-                hits.setdefault(sid, []).append(r)
+    for src in live:
+        # one map per source, shared with FQC - see COLUMNS above
+        col = dict((k, c) for (k, _lab, c, _u) in src["cols"])
+        col["tested_at"] = ev.COL_TIME
+        scol = src["serial_col"]
+        need = max([scol] + list(col.values()))
+        with open(src["ss_path"], "r", encoding="utf-8-sig",
+                  errors="replace", newline="") as fh:
+            for r in csv.reader(fh):
+                if len(r) <= need:
+                    continue
+                sid = r[scol].strip().upper()
+                if sid in want:
+                    hits.setdefault(sid, []).append((src, col, r))
 
     for s in serials:
         key = s.strip().upper()
         rs = hits.get(key, [])
-        good = [r for r in rs
+        good = [(src, col, r) for (src, col, r) in rs
                 if ev.reading_is_valid(r, col["pmax"], col["isc"],
                                        col["voc"])[0]]
         if not good:
             why = ("tested %d time(s), never read - probe, polarity or "
                    "soldering" % len(rs)) if rs else "no row in the export"
+            if not rs and out["unreachable"]:
+                why += " (%s could not be read)" % ", ".join(out["unreachable"])
             out["missing"].append({"serial": s, "why": why,
                                    "attempts": len(rs)})
             continue
-        last = max(good, key=lambda r: r[ev.COL_TIME])
-        row = {"serial": s}
+        src, col, last = max(good, key=lambda t: t[2][ev.COL_TIME])
+        row = {"serial": s, "line": src["line"]}
         for key_name, _label in COLUMNS:
             idx = col.get(key_name)
             if idx is None:                       # 'serial', already set

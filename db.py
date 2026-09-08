@@ -712,14 +712,29 @@ def gatepasses(cur, n=25):
 # Config  -  where the Sun Simulator and EL actually live
 # ==========================================================================
 
+# The column positions of a standard export. Each line's tester overrides
+# them individually - the two are separate machines and can be reconfigured
+# or replaced one at a time.
+_SS_COLS = {"serial_col": "1", "pmax_col": "2", "isc_col": "3",
+            "voc_col": "4", "ipm_col": "5", "vpm_col": "6", "ff_col": "7",
+            "rs_col": "8", "rsh_col": "10", "eff_col": "11",
+            "temp_col": "12", "irr_col": "14"}
+
 DEFAULT_CONFIG = {
-    "ss_csv_path": "", "ss_serial_col": "1", "ss_pmax_col": "2",
-    "ss_isc_col": "3", "ss_voc_col": "4", "ss_ipm_col": "5", "ss_vpm_col": "6",
-    "ss_ff_col": "7", "ss_rs_col": "8", "ss_rsh_col": "10", "ss_eff_col": "11",
-    "ss_temp_col": "12", "ss_irr_col": "14",
-    "el_root": "", "unit": "2", "pallet_ceiling": "36",
+    # kept: one Sun Simulator and one EL was the whole configuration before
+    # there were two lines, and an existing setup still reads from these
+    "ss_csv_path": "", "el_root": "",
+    "unit": "2", "pallet_ceiling": "36",
     "grade_a_min": "0", "grade_b_min": "0",
 }
+DEFAULT_CONFIG.update({"ss_" + k: v for k, v in _SS_COLS.items()})
+
+# Unit-2 runs two lines, each with its own Sun Simulator and its own EL.
+for _ln in ("a", "b"):
+    DEFAULT_CONFIG["ss_%s_csv_path" % _ln] = ""
+    DEFAULT_CONFIG["el_%s_root" % _ln] = ""
+    for _k, _v in _SS_COLS.items():
+        DEFAULT_CONFIG["ss_%s_%s" % (_ln, _k)] = _v
 
 
 def get_config(cur):
@@ -739,6 +754,124 @@ def set_config(cur, data):
     for k, v in data.items():
         cur.execute("INSERT INTO app_config (k, v) VALUES (%s,%s) "
                     "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, v))
+
+
+# ==========================================================================
+# Material master
+# ==========================================================================
+
+# column -> the key the screen uses. v4's `group` is a reserved word in SQL,
+# and `cell` reads better as is_cell in a table.
+_MAT_COLS = ("n", "name", "size", "uom", "cat", "series", "watt", "qpm",
+             "eff", "makes", "is_cell", "grp", "note", "legacy", "offbom",
+             "added", "pot")
+
+
+def _mat_out(r):
+    """A row as the screen's MATERIALS array expects it."""
+    m = {"n": r["n"], "name": r["name"], "size": r["size"], "uom": r["uom"],
+         "cat": r["cat"], "series": r["series"] or "",
+         "makes": json.loads(r["makes"] or "[]")}
+    if r["watt"]:
+        m["watt"] = r["watt"]                 # string, never coerced
+    if r["eff"]:
+        m["eff"] = r["eff"]
+    # qpm null is "stores has not confirmed it", which is not zero
+    m["qpm"] = json.loads(r["qpm"]) if r["qpm"] not in (None, "") else None
+    for col, key in (("is_cell", "cell"), ("legacy", "legacy"),
+                     ("offbom", "offbom"), ("added", "added")):
+        if r[col]:
+            m[key] = True
+    if r["grp"]:
+        m["group"] = r["grp"]
+    for key in ("note", "pot"):
+        if r[key]:
+            m[key] = r[key]
+    return m
+
+
+def _mat_in(m):
+    """The screen's shape, ready for the table."""
+    qpm = m.get("qpm")
+    return {
+        "n": int(m["n"]),
+        "name": m.get("name") or "",
+        "size": m.get("size"),
+        "uom": m.get("uom"),
+        "cat": m.get("cat"),
+        "series": m.get("series") or "",
+        # kept as text: a back label is matched with mat.watt === m.watt
+        "watt": None if m.get("watt") in (None, "") else str(m["watt"]),
+        "qpm": None if qpm is None else json.dumps(qpm),
+        "eff": m.get("eff") or None,
+        "makes": json.dumps(m.get("makes") or []),
+        "is_cell": 1 if m.get("cell") else 0,
+        "grp": m.get("group") or None,
+        "note": m.get("note") or None,
+        "legacy": 1 if m.get("legacy") else 0,
+        "offbom": 1 if m.get("offbom") else 0,
+        "added": 1 if m.get("added") else 0,
+        "pot": m.get("pot") or None,
+    }
+
+
+def seed_materials(cur):
+    """Fill an empty material table from the file the master was lifted into.
+    Never touches a table that already has rows - the database is the master
+    once it exists, and re-seeding would undo every correction made since."""
+    import icon_materials as MM
+    if cur.execute("SELECT COUNT(*) AS n FROM material").fetchone()["n"]:
+        return 0
+    for m in MM.MATERIALS:
+        rec = _mat_in(m)
+        cur.execute("INSERT INTO material (%s) VALUES (%s)"
+                    % (", ".join(_MAT_COLS),
+                       ", ".join(["%s"] * len(_MAT_COLS))),
+                    [rec[c] for c in _MAT_COLS])
+    for i, v in enumerate(MM.CELL_EFF):
+        cur.execute("INSERT INTO cell_efficiency (value, seq) VALUES (%s,%s) "
+                    "ON CONFLICT(value) DO NOTHING", (v, i))
+    return len(MM.MATERIALS)
+
+
+def materials(cur):
+    cur.execute("SELECT * FROM material ORDER BY n")
+    return [_mat_out(r) for r in cur.fetchall()]
+
+
+def save_material(cur, m, actor=None):
+    """Insert or update one material, by its number."""
+    rec = _mat_in(m)
+    rec["updated_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+    rec["updated_by"] = actor
+    cols = list(_MAT_COLS) + ["updated_at", "updated_by"]
+    sets = ", ".join("%s=excluded.%s" % (c, c) for c in cols if c != "n")
+    cur.execute("INSERT INTO material (%s) VALUES (%s) "
+                "ON CONFLICT(n) DO UPDATE SET %s"
+                % (", ".join(cols), ", ".join(["%s"] * len(cols)), sets),
+                [rec[c] for c in cols])
+    return rec["n"]
+
+
+def next_material_no(cur):
+    r = cur.execute("SELECT MAX(n) AS m FROM material").fetchone()
+    return (r["m"] or 0) + 1
+
+
+def cell_efficiencies(cur):
+    cur.execute("SELECT value FROM cell_efficiency ORDER BY seq, value")
+    return [r["value"] for r in cur.fetchall()]
+
+
+def set_cell_efficiencies(cur, values):
+    """Replace the list. Values already recorded against an allocation are
+    untouched - fqc and allocation_material keep the string they were given,
+    so removing one here never rewrites what a batch was built with."""
+    cur.execute("DELETE FROM cell_efficiency")
+    for i, v in enumerate(values):
+        cur.execute("INSERT INTO cell_efficiency (value, seq) VALUES (%s,%s) "
+                    "ON CONFLICT(value) DO NOTHING", (v, i))
+    return len(values)
 
 
 def known_customers(cur):

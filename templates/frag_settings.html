@@ -6,36 +6,49 @@
   away. Routing evidence via the server would make FQC depend on hops the data
   never needs to cross.</div>
 
-<div class="card"><div class="card-h"><h3>Sun Simulator</h3>
-  <div class="ch-r"><span class="tag {{ 't-pass' if probe.ss.state=='OK' else 't-rev' }}">{{ probe.ss.state }}</span></div></div>
-<div class="card-b"><div class="grid g4">
-  <div class="fld" style="grid-column:1/-1"><label>CSV path</label>
-    <input id="s_ss" value="{{ cfg.ss_csv_path }}" placeholder="\\\\SS-PC\\share\\results.csv">
-    <div class="hint">{{ probe.ss.note }}</div></div>
-  <div class="fld"><label>Serial column</label><input id="s_scol" value="{{ cfg.ss_serial_col }}"></div>
-  <div class="fld"><label>Pmax column</label><input id="s_pcol" value="{{ cfg.ss_pmax_col }}">
-    <div class="hint">Column 2 in the real export.</div></div>
-  <div class="fld"><label>Isc column</label><input id="s_isccol" value="{{ cfg.ss_isc_col }}"></div>
-  <div class="fld"><label>Voc column</label><input id="s_voccol" value="{{ cfg.ss_voc_col }}"></div>
-  <div class="fld"><label>Ipm column</label><input id="s_ipmcol" value="{{ cfg.ss_ipm_col }}"></div>
-  <div class="fld"><label>Vpm column</label><input id="s_vpmcol" value="{{ cfg.ss_vpm_col }}"></div>
-  <div class="fld"><label>FF column</label><input id="s_ffcol" value="{{ cfg.ss_ff_col }}"></div>
-  <div class="fld"><label>Rs column</label><input id="s_rscol" value="{{ cfg.ss_rs_col }}"></div>
-  <div class="fld"><label>Rsh column</label><input id="s_rshcol" value="{{ cfg.ss_rsh_col }}">
-    <div class="hint">Column 10 in the real export.</div></div>
-  <div class="fld"><label>Efficiency column</label><input id="s_effcol" value="{{ cfg.ss_eff_col }}"></div>
-  <div class="fld"><label>Cell temp column</label><input id="s_tempcol" value="{{ cfg.ss_temp_col }}"></div>
-  <div class="fld"><label>Irradiance column</label><input id="s_irrcol" value="{{ cfg.ss_irr_col }}"></div>
-</div></div></div>
+<div class="note n-info"><span>&#9432;</span><span>Unit-2 runs <b>two lines</b>
+  and each has its own Sun Simulator and its own EL, so each is configured
+  separately &mdash; two testers can be reconfigured or replaced one at a time,
+  and a column map shared between them would move both at once.<br>
+  A serial carries no line indicator, so a lookup searches <b>both</b> unless
+  the station&rsquo;s own line is known. If one share is down and the serial is
+  not on the other, the module is <b>NC</b>, never NA: it may be sitting on the
+  line that could not be read, and NA would send a good module to review.
+  </span></div>
 
-<div class="card"><div class="card-h"><h3>EL images</h3>
-  <div class="ch-r"><span class="tag {{ 't-pass' if probe.el.state=='OK' else 't-rev' }}">{{ probe.el.state }}</span></div></div>
+{% for ln, LN in [('a','A'), ('b','B')] %}
+<div class="card"><div class="card-h"><h3>Line {{ LN }}</h3>
+  <div class="ch-r">
+    <span class="tag {{ 't-pass' if probe[LN].ss=='OK' else ('t-mute' if probe[LN].ss=='—' else 't-rev') }}">SS {{ probe[LN].ss }}</span>
+    <span class="tag {{ 't-pass' if probe[LN].el=='OK' else ('t-mute' if probe[LN].el=='—' else 't-rev') }}">EL {{ probe[LN].el }}</span>
+  </div></div>
 <div class="card-b"><div class="grid g4">
-  <div class="fld" style="grid-column:1/-1"><label>Root folder</label>
-    <input id="s_el" value="{{ cfg.el_root }}" placeholder="\\\\EL-PC\\output">
-    <div class="hint">{{ probe.el.note }} The folder a file sits in is the
+  <div class="fld" style="grid-column:1/-1"><label>Sun Simulator CSV</label>
+    <input id="s_{{ ln }}_ss" value="{{ cfg['ss_' + ln + '_csv_path'] }}"
+           placeholder="\\\\SS-{{ LN }}\\share\\results.csv">
+    <div class="hint">{{ probe[LN].ss_note }}</div></div>
+  <div class="fld" style="grid-column:1/-1"><label>EL image root folder</label>
+    <input id="s_{{ ln }}_el" value="{{ cfg['el_' + ln + '_root'] }}"
+           placeholder="\\\\EL-{{ LN }}\\output">
+    <div class="hint">{{ probe[LN].el_note }} The folder a file sits in is the
       operator&rsquo;s verdict.</div></div>
+
+  <div class="fld" style="grid-column:1/-1"><label>Column positions in this
+      tester&rsquo;s export</label>
+    <div class="hint">Counted from 0. A real export has no header row and
+      about 87 columns; the defaults are the confirmed layout &mdash; Pmax is
+      column 2, and column 10 is Rsh.</div></div>
+  {% for key, label in [('serial_col','Serial'), ('pmax_col','Pmax'),
+                        ('isc_col','Isc'), ('voc_col','Voc'),
+                        ('ipm_col','Ipm'), ('vpm_col','Vpm'),
+                        ('ff_col','FF'), ('rs_col','Rs'),
+                        ('rsh_col','Rsh'), ('eff_col','Efficiency'),
+                        ('temp_col','Cell temp'), ('irr_col','Irradiance')] %}
+  <div class="fld"><label>{{ label }}</label>
+    <input id="s_{{ ln }}_{{ key }}" value="{{ cfg['ss_' + ln + '_' + key] }}"></div>
+  {% endfor %}
 </div></div></div>
+{% endfor %}
 
 <div class="card"><div class="card-h"><h3>Plant</h3></div>
 <div class="card-b"><div class="grid g4">
@@ -61,20 +74,31 @@
 
 <script>
 (function(){
-  function g(id){return document.getElementById(id).value.trim();}
+  var LINES = ['a','b'];
+  var COLS = ['serial_col','pmax_col','isc_col','voc_col','ipm_col','vpm_col',
+              'ff_col','rs_col','rsh_col','eff_col','temp_col','irr_col'];
+  function g(id){var el=document.getElementById(id);return el?el.value.trim():'';}
+
   window.setSave=function(){
+    var body={unit:g('s_unit'),pallet_ceiling:g('s_cap')};
+    LINES.forEach(function(ln){
+      body['ss_'+ln+'_csv_path']=g('s_'+ln+'_ss');
+      body['el_'+ln+'_root']=g('s_'+ln+'_el');
+      COLS.forEach(function(c){ body['ss_'+ln+'_'+c]=g('s_'+ln+'_'+c); });
+    });
+    /* Line A also writes the single-source keys, so anything still reading
+       the pre-two-line settings sees the same paths rather than an empty
+       one. */
+    body.ss_csv_path=body.ss_a_csv_path;
+    body.el_root=body.el_a_root;
     fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ss_csv_path:g('s_ss'),ss_serial_col:g('s_scol'),
-        ss_pmax_col:g('s_pcol'),ss_isc_col:g('s_isccol'),ss_voc_col:g('s_voccol'),
-        ss_ipm_col:g('s_ipmcol'),ss_vpm_col:g('s_vpmcol'),ss_ff_col:g('s_ffcol'),
-        ss_rs_col:g('s_rscol'),ss_rsh_col:g('s_rshcol'),ss_eff_col:g('s_effcol'),
-        ss_temp_col:g('s_tempcol'),ss_irr_col:g('s_irrcol'),
-        el_root:g('s_el'),unit:g('s_unit'),
-        pallet_ceiling:g('s_cap')})})
+      body:JSON.stringify(body)})
      .then(function(r){return r.json();}).then(function(){
        document.getElementById('s_msg').textContent='Saved.';
        if(typeof toast==='function') toast('Evidence sources saved.');
        if(window.iconLoadView) iconLoadView('settings','/view/settings');
+       /* the data_source card below describes these paths - keep it in step */
+       if(window.iconLoadSources) iconLoadSources();
      });
   };
   window.dbReset=function(){

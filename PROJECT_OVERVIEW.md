@@ -54,7 +54,8 @@ in this project and reverted both times.
 | `static/icon_table.js` | shared filter / search / reset / scroll / export |
 | `static/icon_offline.js` | IndexedDB outbox for offline work |
 | `static/sw.js` | service worker, caches the shell by build id |
-| `static/icon.css` | v4's stylesheet verbatim + a short additions block |
+| `static/icon.css` | v4's stylesheet, verbatim |
+| `static/icon_add.css` | what the live layer adds — v4's page links no stylesheet at all, so the live layer injects this one |
 | `app.py` | routes, API, document rendering |
 | `store.py` | SQLite connection, box helpers, counters |
 | `db.py` | domain helpers — counters, indents, FQC, config |
@@ -111,6 +112,13 @@ value looks wrong but is right (Pmax is column 2, not 10).
 
 **Do not edit `icon_trace.html`.** The only permitted change is the injected
 script block already at the bottom.
+
+**Do not assume a class you set has a rule.** That page carries its CSS
+inline and links no stylesheet, so anything the live layer needs must be in
+`icon_add.css`, which the layer injects. A class with no rule fails in the
+worst way available: silently. The sidebar collapse, `.scroll` and the
+independent column scrolling all sat dead this way, set on elements and
+matching nothing. `python test_styles.py` checks the wiring.
 
 **Do not use `class="grid"` alone.** v4's `.grid` sets `display:grid` and a
 gap but **no columns** — it renders one field per row. Columns come from
@@ -197,8 +205,11 @@ python serve.py                    → http://127.0.0.1:8080/
 del icontrace.db                        start clean
 python icon_invoice_parser.py --selftest
 python test_box_number.py               32 tests
+python test_evidence.py                 25 tests, two lines of evidence
+python test_styles.py                   9 tests, the stylesheet reaches v4
 cscript //Nologo //E:JScript test_export.js   19 tests, no install needed
 cscript //Nologo //E:JScript test_trace.js    33 tests
+cscript //Nologo //E:JScript test_screens.js  17 tests
 node test_export.js                     the same tests, if node is installed
 node --check static/icon_live.js        needs node
 ```

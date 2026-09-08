@@ -599,3 +599,52 @@ CREATE TABLE IF NOT EXISTS app_config (
   v TEXT NULL
 ) ;
 
+-- ==========================================================================
+-- Material master
+--
+-- The bill of materials lived only in the browser: the screen could edit it
+-- and nothing was saved, so a UOM corrected on Monday was back to the old
+-- one on Tuesday. Seeded from icon_materials.py into an empty table, after
+-- which this is the master.
+--
+-- `n` is the number allocation_material already references, so it is the key
+-- here too and is never reassigned. Renumbering a material silently rewrites
+-- which material every past batch was built from.
+--
+-- `watt` is TEXT on purpose: a back label is matched to a model with
+-- mat.watt === m.watt, and MODELS carries '635', not 635.
+--
+-- `qpm` is JSON: a bare number when both series consume the same, a
+-- {"G2X":..,"G12R":..} pair when they do not, and null while stores has not
+-- confirmed it. Null is a real state and must not be read as zero.
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS material (
+  n           INTEGER NOT NULL PRIMARY KEY,
+  name        TEXT    NOT NULL,
+  size        TEXT NULL,
+  uom         TEXT NULL,
+  cat         TEXT NULL,
+  series      TEXT NULL,              -- '' both · G2X · G12R · LABEL
+  watt        TEXT NULL,              -- string, for LABEL rows
+  qpm         TEXT NULL,              -- JSON: number | {G2X,G12R} | null
+  eff         TEXT NULL,              -- default cell efficiency
+  makes       TEXT NOT NULL DEFAULT '[]',   -- JSON array of manufacturers
+  is_cell     INTEGER NOT NULL DEFAULT 0,
+  grp         TEXT NULL,              -- alternatives; one of the group is used
+  note        TEXT NULL,
+  legacy      INTEGER NOT NULL DEFAULT 0,
+  offbom      INTEGER NOT NULL DEFAULT 0,
+  added       INTEGER NOT NULL DEFAULT 0,
+  pot         TEXT NULL,              -- 'A' | 'B' of the potting mix
+  updated_at  TEXT NULL,
+  updated_by  TEXT NULL
+) ;
+
+-- Cell efficiency is a property of the CELL, not of the module, and the list
+-- is master data: a new cell arrives at 25.8% and somebody has to be able to
+-- add it without a code change.
+CREATE TABLE IF NOT EXISTS cell_efficiency (
+  value  TEXT    NOT NULL PRIMARY KEY,
+  seq    INTEGER NOT NULL DEFAULT 0
+) ;
+

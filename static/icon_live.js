@@ -12,6 +12,21 @@
 (function () {
   var B = window.ICON_BOOT || {};
 
+  /* v4's page carries its stylesheet INLINE and links nothing, so every rule
+     this layer relies on was missing: the sidebar collapse toggled a class
+     no rule matched, and each table wrapped in .scroll simply grew down the
+     page. icon_add.css holds the additions only - linking icon.css instead
+     would load a second copy of v4's whole stylesheet, and any drift
+     between the two copies would quietly win. */
+  (function styles() {
+    if (document.getElementById('iconAddCss')) return;
+    var link = document.createElement('link');
+    link.id = 'iconAddCss';
+    link.rel = 'stylesheet';
+    link.href = '/static/icon_add.css' + (B.build ? '?b=' + B.build : '');
+    (document.head || document.documentElement).appendChild(link);
+  })();
+
   function api(path, opts) {
     return fetch('/api/' + path, Object.assign({
       headers: { 'Content-Type': 'application/json' }
@@ -53,6 +68,25 @@
     if (B.models && typeof MODELS !== 'undefined' && B.models.length) {
       MODELS.length = 0;
       B.models.forEach(function (m) { MODELS.push(m); });
+    }
+
+    /* The bill of materials used to live only here: the screen could edit it
+       and nothing was saved, so a UOM corrected on Monday was back to the
+       old one on Tuesday. It comes from the material table now.
+
+       Filled in place rather than reassigned - v4 closes over these arrays
+       in renderMaterials(), materialsFor() and the planning panel. */
+    if (B.materials && typeof MATERIALS !== 'undefined' && B.materials.length) {
+      MATERIALS.length = 0;
+      B.materials.forEach(function (m) { MATERIALS.push(m); });
+    }
+    if (B.mat_cats && typeof MAT_CATS !== 'undefined' && B.mat_cats.length) {
+      MAT_CATS.length = 0;
+      B.mat_cats.forEach(function (c) { MAT_CATS.push(c); });
+    }
+    if (B.cell_eff && typeof CELL_EFF !== 'undefined' && B.cell_eff.length) {
+      CELL_EFF.length = 0;
+      B.cell_eff.forEach(function (e) { CELL_EFF.push(e); });
     }
 
     /* PROD is what v4's Management Overview and Production Dashboard read,
@@ -101,6 +135,9 @@
     if (typeof window.iconTable !== 'undefined') window.iconTable.wireAll();
     /* before wireResets(), so the Reset it injects gets wired this pass */
     if (typeof addMissingControls === 'function') addMissingControls();
+    if (typeof wireScreenTables === 'function') wireScreenTables();
+    if (typeof wireMaterialMaster === 'function') wireMaterialMaster();
+    if (typeof wireMatDefaults === 'function') wireMatDefaults();
     if (typeof wireResets === 'function') wireResets();
     if (typeof wireExports === 'function') wireExports();
     if (typeof invoiceRealParse === 'function') invoiceRealParse();
@@ -515,6 +552,250 @@
   };
   window.iconExport = exportFrom;
 
+  /* ---- Material master --------------------------------------------
+   * v4 could edit MATERIALS and saved nothing: the array lives in the page,
+   * so a UOM corrected on Monday was back to the old one on Tuesday and the
+   * consumption BOM never heard about it. Edits go to the material table
+   * now, and two fields the form never had are added:
+   *
+   *   watt  - a back label applies BY WATTAGE. Without it the row renders
+   *           "Label undefinedW" and matches no model at all. Text, not a
+   *           number: materialsFor() compares mat.watt === m.watt and
+   *           MODELS carries '635'.
+   *   eff   - the cell efficiency this material is normally supplied at,
+   *           pre-selected in Planning.
+   */
+  function wireMaterialMaster() {
+    if (typeof EDIT_SPECS === 'undefined' || !EDIT_SPECS.material) return;
+    var sp = EDIT_SPECS.material;
+    if (sp.__live) return;
+    sp.__live = true;
+
+    function has(k) {
+      for (var i = 0; i < sp.fields.length; i++) {
+        if (sp.fields[i].k === k) return true;
+      }
+      return false;
+    }
+    if (!has('watt')) {
+      var at = sp.fields.length;
+      sp.fields.forEach(function (f, i) { if (f.k === 'series') at = i + 1; });
+      sp.fields.splice(at, 0, { k: 'watt', l: 'Label wattage', t: 'text',
+        hint: 'Only for “Label — by wattage”. Exactly as the model carries ' +
+              'it — 635, not 635.0 — the label is matched on the string.' });
+    }
+    if (!has('eff')) {
+      sp.fields.push({ k: 'eff', l: 'Cell efficiency', t: 'select',
+        opts: function () {
+          return [['', '— not a cell material —']].concat(
+            typeof CELL_EFF !== 'undefined' ? CELL_EFF : []);
+        },
+        hint: 'Cell materials only. Pre-selected in Planning; the operator ' +
+              'can still choose another.' });
+    }
+
+    /* v4's saveRecord() updates the array and stops there. Send it. */
+    var origSave = window.saveRecord;
+    if (typeof origSave === 'function' && !origSave.__persists) {
+      var patched = function () {
+        var ctx = window.EDIT_CTX;
+        var before = (ctx && ctx.kind === 'material')
+          ? JSON.stringify(ctx.rec) : null;
+        origSave.apply(this, arguments);
+        if (!ctx || ctx.kind !== 'material') return;
+        var rec = ctx.rec;
+        if (!ctx.isNew && JSON.stringify(rec) === before) return;
+
+        api(ctx.isNew ? 'material' : ('material/' + rec.n), {
+          method: ctx.isNew ? 'POST' : 'PUT', body: JSON.stringify(rec)
+        }).then(function (d) {
+          if (d && d.ok === false) {
+            /* refused - say why, and do not leave a row on screen that the
+               database does not have */
+            if (typeof toast === 'function') toast(d.why);
+            if (ctx.isNew && typeof MATERIALS !== 'undefined') {
+              for (var i = MATERIALS.length - 1; i >= 0; i--) {
+                if (MATERIALS[i] === rec) MATERIALS.splice(i, 1);
+              }
+            }
+          } else if (d && d.material) {
+            /* adopt the server's version, including the number it assigned */
+            Object.keys(d.material).forEach(function (k) { rec[k] = d.material[k]; });
+            rec.n = d.n;
+            if (typeof toast === 'function') toast('Saved.');
+          }
+          ctx.isNew = false;
+          try { renderMaterials(); renderMatPanel(); } catch (e) {}
+        }).catch(function (e) {
+          if (typeof toast === 'function')
+            toast('Not saved — ' + e.message + '. The screen is ahead of the ' +
+                  'database until this succeeds.');
+        });
+      };
+      patched.__persists = true;
+      window.saveRecord = patched;
+    }
+
+    /* The efficiency list is master data too: a new cell arrives at 25.8%
+       and somebody has to add it without a code change. */
+    var chips = document.getElementById('effChips');
+    if (chips && !chips.__wired) {
+      chips.__wired = true;
+      var bar = document.createElement('div');
+      bar.style.cssText = 'display:flex;gap:6px;margin-top:10px;align-items:center';
+      bar.innerHTML =
+        '<input id="effNew" placeholder="25.8%" style="width:110px;padding:5px 8px;' +
+        'border:1px solid var(--line);border-radius:var(--r);font-size:12px">' +
+        '<button class="btn btn-ghost btn-sm" id="effAdd">+ Add</button>' +
+        '<span class="hint" style="margin-left:6px">Removing one never ' +
+        'changes what a batch was already built with.</span>';
+      chips.parentNode.insertBefore(bar, chips.nextSibling);
+      document.getElementById('effAdd').onclick = function () {
+        var el = document.getElementById('effNew');
+        var v = (el.value || '').trim();
+        if (!v) { el.focus(); return; }
+        saveEfficiencies(CELL_EFF.concat([v]), function () { el.value = ''; });
+      };
+      renderEffChips();
+    }
+  }
+
+  /* Each chip gets a × once the list is editable. */
+  function renderEffChips() {
+    var chips = document.getElementById('effChips');
+    if (!chips || typeof CELL_EFF === 'undefined') return;
+    chips.innerHTML = CELL_EFF.map(function (e, i) {
+      return '<span class="pchip" style="font-size:12px;padding:4px 10px">' +
+        fqcEsc(e) + ' <a href="#" data-eff="' + i + '" title="Remove" ' +
+        'style="text-decoration:none;color:var(--ink3)">×</a></span>';
+    }).join('');
+    chips.querySelectorAll('[data-eff]').forEach(function (a) {
+      a.onclick = function (ev) {
+        ev.preventDefault();
+        var i = parseInt(a.getAttribute('data-eff'), 10);
+        var next = CELL_EFF.filter(function (_v, j) { return j !== i; });
+        if (!next.length) {
+          if (typeof toast === 'function')
+            toast('The list cannot be empty — FQC picks the cell efficiency ' +
+                  'from it.');
+          return;
+        }
+        saveEfficiencies(next);
+      };
+    });
+  }
+
+  function saveEfficiencies(values, done) {
+    api('cell-efficiencies', { method: 'PUT',
+      body: JSON.stringify({ values: values }) })
+      .then(function (d) {
+        if (d && d.ok === false) {
+          if (typeof toast === 'function') toast(d.why);
+          return;
+        }
+        CELL_EFF.length = 0;
+        d.values.forEach(function (v) { CELL_EFF.push(v); });
+        renderEffChips();
+        try { renderMatPanel(); } catch (e) {}
+        if (done) done();
+        if (typeof toast === 'function')
+          toast(d.values.length + ' cell efficiencies.');
+      })
+      .catch(function (e) {
+        if (typeof toast === 'function') toast('Not saved — ' + e.message);
+      });
+  }
+
+  /* A cell material's usual efficiency is pre-selected in Planning, so the
+     common case is one less dropdown. The operator can still change it, and
+     the make is still theirs to choose - the gate on Load into master is
+     unchanged. */
+  function wireMatDefaults() {
+    if (typeof renderMatPanel !== 'function' || renderMatPanel.__defaults) return;
+    var orig = renderMatPanel;
+    var patched = function () {
+      if (typeof MATERIALS !== 'undefined' && typeof MAT_SEL !== 'undefined') {
+        MATERIALS.forEach(function (m) {
+          if (!m.eff) return;
+          MAT_SEL[m.n] = MAT_SEL[m.n] || {};
+          if (!MAT_SEL[m.n].eff) MAT_SEL[m.n].eff = m.eff;
+        });
+      }
+      return orig.apply(this, arguments);
+    };
+    patched.__defaults = true;
+    window.renderMatPanel = patched;
+  }
+
+  /* ---- Filter, search, reset, scroll and export on every table ------
+   *
+   * icon_table.js does all of it and the dashboards were simply never
+   * marked up for it, so "build once, apply everywhere" stopped at Recent
+   * Allocations: forty rows pushed the page down instead of scrolling in
+   * their card, and Reset had nothing to reset.
+   *
+   * Every card that holds a table gets the same treatment, so a screen
+   * added later gets it by existing rather than by being wired.
+   */
+  var TABLE_SCREENS = ['mgmt', 'proddash', 'dash', 'packdash', 'disp',
+                       'fqc', 'pack', 'repack', 'prodentry', 'loss', 'gp',
+                       'challan', 'drafts', 'hold', 'review'];
+
+  function wireScreenTables() {
+    TABLE_SCREENS.forEach(function (id) {
+      var view = document.getElementById('v-' + id);
+      if (!view) return;
+      view.querySelectorAll('.card').forEach(function (card) {
+        if (card.hasAttribute('data-itable')) return;
+        var tbl = card.querySelector('table');
+        if (!tbl || !tbl.querySelector('tbody')) return;
+
+        var title = txt(card.querySelector('.card-h h3'));
+        var name = slug(title) || id;
+        card.setAttribute('data-itable', name);
+        card.setAttribute('data-export', name);
+
+        /* its own scroll, so a long list does not push the page down */
+        var holder = tbl.parentNode;
+        if (holder && !holder.classList.contains('scroll')) {
+          var box = document.createElement('div');
+          box.className = 'scroll';
+          holder.insertBefore(box, tbl);
+          box.appendChild(tbl);
+        }
+
+        var head = card.querySelector('.card-h');
+        if (!head || head.querySelector('[data-role=search]')) return;
+        var bar = head.querySelector('.ch-r');
+        if (!bar) {
+          bar = document.createElement('div');
+          bar.className = 'ch-r';
+          head.appendChild(bar);
+        }
+        var tools = document.createElement('span');
+        tools.className = 'table-tools';          // laid out in icon_add.css
+        tools.innerHTML =
+          '<input data-role="search" placeholder="search" ' +
+            'style="width:130px;padding:4px 8px;border:1px solid var(--line);' +
+            'border-radius:var(--r);font-size:11.5px">' +
+          '<button class="btn btn-ghost btn-sm" data-role="reset">Reset</button>' +
+          (bar.querySelector('[onclick*="exportNote"]') ? '' :
+            '<button class="btn btn-ghost btn-sm" onclick="exportNote()">' +
+            'Export</button>') +
+          '<span class="tag t-mute" data-role="count"></span>';
+        bar.appendChild(tools);
+
+        /* This Reset belongs to the shared table layer, which clears the
+           bar and re-applies. wireResets() claims any button labelled
+           Reset, so tell it this one is spoken for - otherwise both run and
+           the whole screen re-renders to clear one card's search box. */
+        var reset = tools.querySelector('[data-role=reset]');
+        if (reset) reset.__reset = true;
+      });
+    });
+    if (window.iconTable) window.iconTable.wireAll();
+  }
+
   /* Two controls the backlog asks for that v4 never drew: a Reset on the
      Production Dashboard filter bar, and an Export on Line & shift
      performance. Injected rather than typed into v4, and both then behave
@@ -901,14 +1182,38 @@
   }
 
   /* ---- 3. saves go to the API -------------------------------------- */
+  /* Packing Log above New Pallet, and the screen Packing opens on. Arriving
+     straight into an empty pallet form gives no sense of what is already
+     packed - the same shape as Planning and Indent.
+
+     Both happen BEFORE v4's signIn(), which ends in go(ROLES[role].home):
+     changing the home afterwards would be a screen too late. */
+  function packingOrder() {
+    if (typeof ROLES !== 'undefined' && ROLES['Packing Operator']) {
+      ROLES['Packing Operator'].home = 'packdash';
+    }
+    var nav = document.getElementById('sidenav');
+    if (!nav || nav.__packOrder) return;
+    var log = nav.querySelector('[data-v="packdash"]');
+    var pallet = nav.querySelector('[data-v="pack"]');
+    if (!log || !pallet) return;
+    nav.__packOrder = true;
+    nav.insertBefore(log, pallet);
+  }
+
   var _origSignIn = window.signIn;
   window.signIn = function () {
+    packingOrder();
     if (_origSignIn) _origSignIn.apply(this, arguments);
     applyBoot();
     addScreens();
     sidebarToggle();
     wireDateResets();
     addMissingControls();
+    wireScreenTables();
+    wireMaterialMaster();
+    wireMatDefaults();
+    wireSourcesRedraw();
     mergeEvidenceSources();
     wireResets();
     wireExports();
@@ -1943,7 +2248,9 @@
       })
       .catch(function (e) {
         var el = document.getElementById('v-' + id);
-        if (el) el.innerHTML = '<div class="note n-fail">Could not load this ' +
+        /* n-bad, not n-fail: v4 has no n-fail rule, so the one message that
+           says a screen failed to load was the one rendering unstyled. */
+        if (el) el.innerHTML = '<div class="note n-bad">Could not load this ' +
           'screen: ' + e + '</div>';
       });
   }
@@ -1972,6 +2279,59 @@
       if (pg) pg.remove();
     });
     strip.observe(host, { childList: true, subtree: true });
+    loadSources();
+  }
+
+  /* The data_source table sat under those fields listing four plausible
+     paths from a fixed array - a card describing where evidence comes from,
+     describing somewhere it does not come from. It lists what is actually
+     configured, and says plainly when a line has nothing. */
+  function loadSources() {
+    var body = document.getElementById('sourceRows');
+    if (!body) return;
+    fetch('/api/evidence/sources', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (rows) {
+        if (typeof SOURCES !== 'undefined') {
+          SOURCES.length = 0;
+          rows.forEach(function (s) { SOURCES.push(s); });
+        }
+        var head = document.querySelector('#ad-stations table thead tr');
+        if (head && head.cells.length === 5 &&
+            !/state/i.test(head.cells[4].textContent)) {
+          head.innerHTML = '<th>Source</th><th>Type</th><th>Path</th>' +
+            '<th>Line</th><th>State</th><th>Columns / rule</th>';
+        }
+        body.innerHTML = rows.map(function (s) {
+          var tone = s.state === 'OK' ? 't-pass'
+                   : s.state === 'NC' ? 't-rev' : 't-mute';
+          return '<tr><td class="mono" style="font-weight:700">' +
+            fqcEsc(s.id) + '</td>' +
+            '<td><span class="code">' + fqcEsc(s.type) + '</span></td>' +
+            '<td class="mono" style="font-size:11px">' + fqcEsc(s.path) + '</td>' +
+            '<td><span class="s' + fqcEsc(s.line) + '">' + fqcEsc(s.line) +
+              '-Line</span></td>' +
+            '<td><span class="tag ' + tone + '">' + fqcEsc(s.state) + '</span></td>' +
+            '<td style="font-size:11.5px">' + fqcEsc(s.cols || s.rule) +
+            '</td></tr>';
+        }).join('');
+      })
+      .catch(function () { /* the card keeps whatever it had */ });
+  }
+  window.iconLoadSources = loadSources;
+
+  /* v4 redraws that table from SOURCES whenever the Admin screen renders, so
+     the real rows have to be put back afterwards rather than once. */
+  function wireSourcesRedraw() {
+    if (typeof renderStations !== 'function' || renderStations.__sourced) return;
+    var orig = renderStations;
+    var patched = function () {
+      var r = orig.apply(this, arguments);
+      try { loadSources(); } catch (e) {}
+      return r;
+    };
+    patched.__sourced = true;
+    window.renderStations = patched;
   }
 
   /* ---- 3c. collapsible sidebar -------------------------------------
