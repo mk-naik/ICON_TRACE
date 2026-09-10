@@ -74,6 +74,60 @@ class conn:
         return False
 
 
+def _table_ddl(text, table):
+    """The CREATE statement for one table, out of the schema file itself, so
+    a rebuild cannot drift from the definition everything else is built to."""
+    m = re.search(r"CREATE TABLE IF NOT EXISTS %s\s*\(.*?\n\)\s*;" % table,
+                  text, re.S)
+    return m.group(0) if m else None
+
+
+def _migrate(cx, text):
+    """What CREATE TABLE IF NOT EXISTS cannot do.
+
+    It skips a table that already exists, columns and all - so a column added
+    to the schema after a database was created is simply absent there, and
+    the feature that needs it fails on a file that looks up to date. Adding
+    them is idempotent; rebuilding is only for a column whose NULLability
+    changed, which SQLite cannot alter in place.
+    """
+    def cols(t):
+        return {r[1]: r for r in cx.execute("PRAGMA table_info(%s)" % t)}
+
+    # pre-shared or post-shared, recorded at allocation
+    if cols("allocation") and "alloc_type" not in cols("allocation"):
+        cx.execute("ALTER TABLE allocation ADD COLUMN alloc_type TEXT")
+
+    if not cols("fqc_record"):
+        return
+
+    # FQC records pass or reject, and what Quality later made of a reject
+    for name, decl in (("outcome", "TEXT"), ("defect", "TEXT"),
+                       ("note", "TEXT"), ("quality_grade", "TEXT"),
+                       ("quality_note", "TEXT"), ("quality_by", "TEXT"),
+                       ("quality_at", "TEXT"),
+                       ("superseded_by", "INTEGER"), ("superseded_at", "TEXT")):
+        if name not in cols("fqc_record"):
+            cx.execute("ALTER TABLE fqc_record ADD COLUMN %s %s" % (name, decl))
+
+    # grade was NOT NULL when FQC still graded. A rejected module has no
+    # grade until Quality gives it one, so the column has to accept NULL.
+    info = cols("fqc_record").get("grade")
+    if info and info[3] == 1:                      # notnull
+        ddl = _table_ddl(text, "fqc_record")
+        if ddl:
+            keep = [c for c in cols("fqc_record")]
+            cx.execute("ALTER TABLE fqc_record RENAME TO fqc_record_old")
+            cx.executescript(ddl)
+            shared = [c for c in keep if c in cols("fqc_record")]
+            cx.execute("INSERT INTO fqc_record (%s) SELECT %s FROM fqc_record_old"
+                       % (", ".join(shared), ", ".join(shared)))
+            cx.execute("DROP TABLE fqc_record_old")
+            print("[store] fqc_record rebuilt: grade is nullable until Quality "
+                  "decides")
+    cx.commit()
+
+
 def ensure():
     """Create the file and the schema on first use."""
     global _ready
@@ -84,8 +138,16 @@ def ensure():
         cx = sqlite3.connect(DB_PATH, timeout=20)
         try:
             if os.path.exists(SCHEMA):
-                cx.executescript(open(SCHEMA, encoding="utf-8").read())
+                text = open(SCHEMA, encoding="utf-8").read()
+                # Views hold no data, and CREATE VIEW IF NOT EXISTS leaves an
+                # old definition in place for ever. Dropping them first keeps
+                # every view in step with this file - v_indent_progress had
+                # an INNER JOIN long after the file said LEFT.
+                for name in re.findall(r"CREATE VIEW IF NOT EXISTS (\w+)", text):
+                    cx.execute("DROP VIEW IF EXISTS %s" % name)
+                cx.executescript(text)
                 cx.commit()
+                _migrate(cx, text)
         finally:
             cx.close()
         _ready = True
@@ -223,7 +285,14 @@ def close_box(cur, box_id):
 
 
 def serial_in_live_box(cur, serial):
-    """A module must sit in one live box only. Checked before the insert."""
-    return one(cur, "SELECT b.box_id, b.seq, b.pack_date FROM box_serial bs "
+    """A module must sit in one live box only. Checked before the insert.
+
+    Selects enough to NAME the box it is already in - grade and map version
+    included, because the number on the label is derived from them. "Already
+    in box ISPL260909/K001" sends the operator to it; "already in box 1"
+    does not.
+    """
+    return one(cur, "SELECT b.box_id, b.seq, b.pack_date, b.grade, "
+                    "b.code_map_version, b.state FROM box_serial bs "
                     "JOIN box b ON b.box_id=bs.box_id "
                     "WHERE bs.serial=%s AND b.state<>'retired'", (serial,))

@@ -51,22 +51,34 @@ That is a serial-existence issue, so the Incharge clears it — not Quality.</di
     <b>EL {{ evidence.el_state }}</b> — {{ evidence.el_note }}</div>{% endif %}
   {% if evidence.why %}<p class="hint">{{ evidence.why }}</p>{% endif %}
 
+  {# FQC records PASS or REJECT. It does not grade: a pass is A, and what is
+     rejected is called GY or BGY by Quality, on its own screen. Pass is
+     offered only when the evidence proposes one — a module below its
+     nameplate goes back to the Sun Simulator, not through this form. #}
   <div class="grid" style="margin-top:12px">
-    <div class="fld req"><label>Grade</label>
-      <select name="grade" {{ 'disabled' if evidence.fault }}>
-        {% for g,l in [('A','A'),('GY','GY  (B)'),('BGY','BGY  (C)')] %}
-        <option value="{{ g }}" {{ 'selected' if evidence.proposed==g }}>{{ l }}</option>
-        {% endfor %}</select></div>
-    <div class="fld" style="grid-column:2/-1"><label>Reason (needed to override)</label>
-      <input name="reason" placeholder="{{ 'grade recorded on verbal information' if evidence.degraded else 'only if you change the proposed grade' }}"></div>
+    <div class="fld req"><label>Decision</label>
+      <select name="outcome" {{ 'disabled' if evidence.fault }}>
+        {% if evidence.proposed == 'pass' %}
+        <option value="pass" selected>Pass — grade A</option>{% endif %}
+        <option value="reject" {{ 'selected' if evidence.proposed != 'pass' }}>
+          Rejected — Quality decides GY or BGY</option>
+      </select></div>
+    <div class="fld"><label>Defect</label>
+      <input name="defect" placeholder="{{ evidence.el or 'what is wrong' }}"></div>
+    <div class="fld"><label>Reason (needed to overrule a proposed pass)</label>
+      <input name="reason" placeholder="coded reason"></div>
+    <div class="fld" style="grid-column:1/-1"><label>Note / remark</label>
+      <input name="note" placeholder="required when the reason is Other"></div>
   </div>
 </div>
 <div class="card-f"><button class="btn btn-primary" {{ 'disabled' if evidence.fault }}>
-    {{ 'Cannot grade — the tester could not read this module' if evidence.fault else 'Confirm grade' }}</button>
+    {{ 'Cannot judge — the tester could not read this module' if evidence.fault else 'Record decision' }}</button>
   <span class="hint">
-  {% if evidence.degraded %}Provisional — when evidence arrives, agreement
+  {% if evidence.proposed != 'pass' %}A pass cannot be overruled here — if this
+  module should make its nameplate, retest it in the Sun Simulator.
+  {% elif evidence.degraded %}Provisional — when evidence arrives, agreement
   confirms it and disagreement puts the serial on hold.
-  {% else %}Changing the proposed grade is an override and needs a reason.{% endif %}
+  {% else %}Rejecting a module the evidence would pass needs a reason.{% endif %}
   </span></div></div>
 </form>
 {% endif %}

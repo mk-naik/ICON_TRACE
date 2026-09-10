@@ -110,6 +110,13 @@ def build_id():
     return h.hexdigest()[:10]
 
 
+# What the files hashed to when THIS process imported them. Compared against
+# a live build_id(), it is the difference between "your page is old" and
+# "the running server is old" - which are fixed by different people.
+BOOT_BUILD = build_id()
+STARTED_AT = datetime.datetime.now().isoformat(timespec="seconds")
+
+
 @app.after_request
 def no_store(resp):
     """Never let a browser cache a page or an API reply.
@@ -396,29 +403,128 @@ def api_box_scan(box_id):
         if (b["qty"] or 0) >= (b["capacity"] or 36):
             return jsonify({"ok": False,
                             "why": "Box is at its capacity of %d." % b["capacity"]}), 400
-        s = db.find_serial(cur, serial)
-        if not s:
-            return jsonify({"ok": False,
-                            "why": "%s is not in the serial master." % serial}), 400
-        if s.get("state") != "graded":
-            return jsonify({"ok": False,
-                            "why": "%s has no FQC grade. Packing an ungraded "
-                                   "module is how a reject reaches a customer."
-                                   % serial}), 400
-        if s.get("grade") != b["grade"]:
-            return jsonify({"ok": False,
-                            "why": "Box is grade %s, %s is %s. The label claims "
-                                   "every module matches."
-                                   % (b["grade"], serial, s.get("grade"))}), 400
-        if s.get("model") != b["model"]:
-            return jsonify({"ok": False,
-                            "why": "Box is %s, %s is %s."
-                                   % (b["model"], serial, s.get("model"))}), 400
-        dup = store.serial_in_live_box(cur, serial)
-        if dup:
-            return jsonify({"ok": False,
-                            "why": "%s is already in box %s." % (serial, dup["seq"])}), 400
+        # one gate, shared with the preview the screen shows
+        why = _pack_refusal(cur, b, serial)
+        if why:
+            return jsonify({"ok": False, "why": why}), 400
         store.add_to_box(cur, box_id, serial, actor())
+        # and the module's own state, in the same transaction. Without this a
+        # packed module still read 'graded' - the contract in DATA_LAYER says
+        # both writes happen together, and the box was the only thing that
+        # knew. Removing it puts the state back.
+        db.set_serial(cur, serial, state="packed")
+        db.audit(cur, actor(), "box.scan", "serial", serial, {"box": box_id})
+        b = store.box_row(cur, box_id)
+    return jsonify({"ok": True, "qty": b["qty"], "capacity": b["capacity"]})
+
+
+def _pack_refusal(cur, b, serial):
+    """Why this serial may not go in this box, or None if it may.
+
+    The screen previews with this and the scan enforces with it, so what the
+    operator is shown before pressing Add is the same rule that decides -
+    v4 guessed the FQC category from the last digit of the serial.
+    """
+    s = db.find_serial(cur, serial)
+    if not s:
+        return "%s is not in the serial master." % serial
+
+    # Asked first, because "already in box ISPL260909/K001" tells the
+    # operator where it is; "already packed" only tells them it is not here.
+    dup = store.serial_in_live_box(cur, serial)
+    if dup:
+        return "%s is already in box %s." % (serial, _box_label(dup))
+
+    state = s.get("state")
+    if state == "rejected":
+        return ("%s was rejected at FQC and is waiting on a quality decision. "
+                "It has no grade yet, so it cannot be packed." % serial)
+    if state == "planned":
+        return ("%s has not been through FQC. Packing an unjudged module is "
+                "how a reject reaches a customer." % serial)
+    if state in ("packed", "dispatched"):
+        return "%s is already %s." % (serial, state)
+    if state != "graded":
+        return "%s is %s, not ready to pack." % (serial, state)
+    if b is not None:
+        if s.get("grade") != b["grade"]:
+            return ("Box is grade %s, %s is %s. The label claims every module "
+                    "matches." % (b["grade"], serial, s.get("grade")))
+        if s.get("model") != b["model"]:
+            return "Box is %s, %s is %s." % (b["model"], serial, s.get("model"))
+    return None
+
+
+def _box_label(b):
+    """ISPL260909/K001 - the number on the label, derived from the pack date,
+    the sequence and the grade.
+
+    pack_date comes back from SQLite as TEXT and icon_box_number.render()
+    wants a date, so this parses it. Without that every box quietly reported
+    its bare sequence instead of its number, which is not what is printed on
+    the box or written on any packing list.
+    """
+    try:
+        d = b["pack_date"]
+        if isinstance(d, str):
+            d = datetime.date.fromisoformat(d[:10])
+        return boxno.render(d, b["seq"], b["grade"],
+                            b.get("code_map_version") or boxno.CURRENT_MAP_VERSION)
+    except Exception:
+        return str(b.get("seq") or "")
+
+
+@app.route("/api/boxes")
+def api_boxes():
+    """Boxes, newest first. Packing asks for the open one on load: a box is
+    a row from its first scan, so a refresh mid-pallet finds it again
+    instead of losing eighteen modules."""
+    state = (request.args.get("state") or "").strip() or None
+    with store.conn() as (cx, cur):
+        rows = [dict(r) for r in store.boxes_by_state(cur, state)]
+    for b in rows:
+        b["label"] = _box_label(b)
+    return jsonify(rows)
+
+
+@app.route("/api/box/check")
+def api_box_check():
+    """Preview, through the same gate the scan uses."""
+    serial = (request.args.get("serial") or "").strip().upper()
+    box_id = request.args.get("box_id")
+    if not serial:
+        return jsonify({"ok": False, "why": "Scan or enter a serial."}), 400
+    with store.conn() as (cx, cur):
+        b = store.box_row(cur, int(box_id)) if box_id else None
+        why = _pack_refusal(cur, b, serial)
+        s = db.find_serial(cur, serial) or {}
+        rec = next((dict(r) for r in db.fqc_recent(cur, 1000)
+                    if r.get("serial") == serial), None)
+        cr = customers.get(s.get("customer"))
+    return jsonify({
+        "ok": why is None, "why": why, "serial": serial,
+        "model": s.get("model"), "wattage": s.get("wattage"),
+        "grade": s.get("grade"), "state": s.get("state"),
+        "customer": cr["name"] if cr else s.get("customer"),
+        "graded_at": (rec or {}).get("at"),
+        "outcome": (rec or {}).get("outcome"),
+    })
+
+
+@app.route("/api/box/<int:box_id>/remove", methods=["POST"])
+@_sync_guard
+def api_box_remove(box_id):
+    """Take a module back out of an open box. The slot is pulled on screen,
+    so the row has to go with it - otherwise the box says 18 and the record
+    says 19."""
+    serial = (request.get_json(force=True).get("serial") or "").strip().upper()
+    with store.conn() as (cx, cur):
+        b = store.box_row(cur, box_id)
+        if not b or b["state"] != "open":
+            return jsonify({"ok": False, "why": "That box is not open."}), 400
+        store.remove_from_box(cur, box_id, serial)
+        db.set_serial(cur, serial, state="graded")
+        db.audit(cur, actor(), "box.remove", "box", box_id, {"serial": serial})
         b = store.box_row(cur, box_id)
     return jsonify({"ok": True, "qty": b["qty"], "capacity": b["capacity"]})
 
@@ -794,6 +900,7 @@ def view_fragment(name):
                "loading": "frag_loading.html",
                "indent-form": "frag_indent_form.html",
                "items": "frag_items.html",
+               "quality": "frag_quality.html",
                "settings": "frag_settings.html"}
     if name not in allowed:
         abort(404)
@@ -1078,6 +1185,7 @@ def api_allocation_create():
                              or datetime.date.today().isoformat(),
             "shift": int(d.get("shift") or 1), "qty": qty,
             "seq_from": d.get("seq_from") or 0, "seq_to": d.get("seq_to") or 0,
+            "alloc_type": _alloc_type(d.get("alloc_type")),
             "created_by": actor()})
         for material in d.get("materials") or []:
             try:
@@ -1155,11 +1263,14 @@ def api_allocation_update(alloc_id):
             parsed.append(r)
         cur.execute("UPDATE allocation SET indent_line_id=%s, model=%s, wattage=%s, "
                     "customer=%s, dcr=%s, arc=%s, date_produced=%s, shift=%s, "
-                    "qty=%s, seq_from=%s, seq_to=%s WHERE alloc_id=%s",
+                    "qty=%s, seq_from=%s, seq_to=%s, alloc_type=%s "
+                    "WHERE alloc_id=%s",
                     (line_id, L["model"], L["wattage"], d.get("customer") or L["cust"],
                      L["dcr"], L["arc"], d.get("date_produced") or old["date_produced"],
                      int(d.get("shift") or old["shift"]), qty,
-                     d.get("seq_from") or 0, d.get("seq_to") or 0, alloc_id))
+                     d.get("seq_from") or 0, d.get("seq_to") or 0,
+                     _alloc_type(d.get("alloc_type")) or old.get("alloc_type"),
+                     alloc_id))
         cur.execute("DELETE FROM serial WHERE alloc_id=%s", (alloc_id,))
         for s, r in zip(serials, parsed):
             store.insert(cur, "serial", {
@@ -1542,21 +1653,37 @@ def api_trace_serial(serial):
     }]
 
     # ---- the journey ----------------------------------------------------
+    alloc_label = ALLOC_TYPES.get((alloc or {}).get("alloc_type") or "")
     journey = [{
         "stage": "Allocated", "value": bno, "done": True,
-        "detail": [cust_name, "%sW · %s" % (first["wattage"] or "—",
-                                            first["dcr"] or "—")],
+        "detail": [cust_name, "%sW · %s%s" % (first["wattage"] or "—",
+                                              first["dcr"] or "—",
+                                              " · " + alloc_label
+                                              if alloc_label else "")],
         "tag": (first["date_produced"] or "") + " · shift " + str(first["shift"] or "—"),
         "tone": "t-mute",
     }]
     if fqc:
         f = fqc[-1]
-        journey.append({"stage": "FQC", "value": f["grade"], "done": True,
-                        "detail": [f["decided_by"] or "—", f["mode"] or ""],
-                        "tag": f["at"] or "", "tone": "t-pass"})
+        # FQC records pass or reject, and a reject has no grade until
+        # Quality calls it - reading the grade column alone put the word
+        # "None" on the journey of every rejected module.
+        if f["outcome"] == "pass":
+            value, tone = f["grade"] or "A", "t-pass"
+            detail = [f["decided_by"] or "—", f["mode"] or ""]
+        elif f["quality_grade"]:
+            value, tone = "Rejected · " + f["quality_grade"], "t-fail"
+            detail = [f["decided_by"] or "—",
+                      "Quality: " + (f["quality_by"] or "—")]
+        else:
+            value, tone = "Rejected", "t-fail"
+            detail = [f["decided_by"] or "—",
+                      f["defect"] or "awaiting a quality decision"]
+        journey.append({"stage": "FQC", "value": value, "done": True,
+                        "detail": detail, "tag": f["at"] or "", "tone": tone})
     else:
         journey.append({"stage": "FQC", "value": "—", "done": False,
-                        "detail": ["not graded yet"], "tag": "pending",
+                        "detail": ["not judged yet"], "tag": "pending",
                         "tone": "t-mute"})
     if boxes:
         b = boxes[-1]
@@ -1622,6 +1749,17 @@ def api_trace_serial(serial):
     })
 
 
+ALLOC_TYPES = {"pre": "Pre-shared", "post": "Post-shared"}
+
+
+def _alloc_type(v):
+    """'pre' or 'post', or nothing. Pre-shared means the serials went to a
+    customer's allocation before the modules were built; post-shared means
+    they were allocated out of what had already been produced."""
+    v = (v or "").strip().lower()
+    return v if v in ALLOC_TYPES else None
+
+
 def batch_no(alloc):
     """BAT-YYMM-NNNNN, the shape the floor already reads: the year and month
     of the allocation, then its sequence.
@@ -1656,6 +1794,7 @@ def api_allocations():
         d["customer"] = cr["name"] if cr else r["customer"]
         d["editable"] = (r["started"] or 0) == 0
         d["batch_no"] = batch_no(d)
+        d["alloc_type_label"] = ALLOC_TYPES.get(r["alloc_type"] or "")
         out.append(d)
     return jsonify(out)
 
@@ -1718,6 +1857,15 @@ def api_indent_update(indent_no):
                       "model": mm["model"], "wattage": mm["wattage"], "qty": q,
                       "dcr": mm["cell_type"], "arc": it.get("arc"),
                       "pallet_qty": int(pal) if pal else None, "line_note": None})
+    # An edit that carries no items would DELETE every one of them below and
+    # leave an indent the list can never show - the view joins its lines -
+    # while its number still refuses to be used again. That is exactly how
+    # an indent goes missing and cannot be recreated. It is only ever a
+    # form that has not finished loading, so say so and change nothing.
+    if not lines and not used:
+        errors.append("This edit carries no items, which would empty the "
+                      "indent. If the form is still loading, wait for the "
+                      "items to appear before saving.")
     if errors:
         return jsonify({"errors": errors})
 
@@ -2231,6 +2379,27 @@ def planning():
 # FQC  -  verification, not data entry
 # --------------------------------------------------------------------------
 
+def _evidence_token(evidence):
+    """A fingerprint of the reading the screen was shown.
+
+    Not data, and never read back as data: it only answers "does what you
+    were looking at still hold". Covers what a decision turns on - the
+    state, the power, the EL verdict and the proposal.
+    """
+    parts = [str(evidence.get(k)) for k in
+             ("ss_state", "pmax", "el_state", "el", "proposed")]
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def _evidence_summary(evidence):
+    """How the reading now stands, in words an operator can act on."""
+    state = evidence.get("ss_state")
+    if state != ev.OK:
+        return str(state)
+    pmax = evidence.get("pmax")
+    return "OK, Pmax %s W" % (pmax if pmax is not None else "—")
+
+
 def _fqc_payload(cur, serial, sandbox=False, line=None):
     rec = db.find_serial(cur, serial)
     if not rec:
@@ -2244,12 +2413,36 @@ def _fqc_payload(cur, serial, sandbox=False, line=None):
                          sandbox=sandbox, line=line)
     prior = next((dict(r) for r in db.fqc_recent(cur, 1000)
                   if r.get("serial") == serial), None)
+
+    # what the lookup panel shows beside the reading
+    line = store.one(cur, "SELECT il.*, i.indent_no, i.lot_name "
+                          "FROM indent_line il JOIN indent i "
+                          "ON i.indent_id=il.indent_id "
+                          "WHERE il.indent_line_id=%s",
+                     (rec.get("indent_line_id"),)) if rec.get("indent_line_id") else None
+    alloc = store.one(cur, "SELECT * FROM allocation WHERE alloc_id=%s",
+                      (rec.get("alloc_id"),)) if rec.get("alloc_id") else None
+    cr = customers.get(rec.get("customer"))
+    instances = store.one(cur, "SELECT COUNT(*) AS n FROM serial WHERE serial=%s",
+                          (serial,))["n"]
     return rec, evidence, {"ok": True, "serial": serial,
                            "model": rec.get("model"),
                            "wattage": rec.get("wattage"),
                            "state": rec.get("state"),
                            "grade": rec.get("grade"),
-                           "evidence": evidence, "record": prior}
+                           "customer": cr["name"] if cr else rec.get("customer"),
+                           "lot_name": (line or {}).get("lot_name"),
+                           "indent_no": (line or {}).get("indent_no"),
+                           "batch_no": batch_no(alloc) if alloc else None,
+                           "alloc_type": ALLOC_TYPES.get(
+                               (alloc or {}).get("alloc_type") or ""),
+                           "instance": "%d of %d" % (rec.get("build_instance") or 1,
+                                                     instances or 1),
+                           "dcr": rec.get("dcr"),
+                           "evidence": evidence, "record": prior,
+                           # echoed back when grading, so a screen that has
+                           # gone stale is told rather than overwriting
+                           "evidence_token": _evidence_token(evidence)}
 
 
 @app.route("/api/fqc/lookup")
@@ -2267,37 +2460,190 @@ def api_fqc_lookup():
 @app.route("/api/fqc", methods=["POST"])
 @_sync_guard
 def api_fqc_grade():
+    """The operator supplies the JUDGEMENT. The server reads the MEASUREMENT.
+
+    Evidence is not accepted from the request, at all. It used to be, and a
+    body saying `{"ss_state":"OK","pmax":631}` was enough to walk a module
+    the tester had failed to read twice straight past the BAD block and into
+    fqc_record as a 631 W reading. Every value the record keeps - the state,
+    the Pmax, the EL verdict, the proposal it was judged against and whether
+    it was confirmed - is read here, from the same source the screen read.
+
+    What the client sends is: serial, grade, an override reason, sandbox if
+    that flag is in use, and the token it was handed at lookup so a screen
+    that has gone stale can be told rather than silently overwritten.
+    """
+    d = request.get_json(force=True)
+    serial = (d.get("serial") or "").strip().upper()
+    outcome = (d.get("outcome") or "").strip().lower()
+    reason = (d.get("reason") or "").strip() or None
+    defect = (d.get("defect") or "").strip() or None
+    note = (d.get("note") or "").strip() or None
+    if outcome not in ("pass", "reject"):
+        return jsonify({"ok": False, "why": "Record a Pass or a Rejection."}), 400
+    if not serial:
+        return jsonify({"ok": False, "why": "Serial is required."}), 400
+    # A coded reason of OTHER says nothing on its own; the note is the reason.
+    if reason and reason.upper().startswith("OV-OTHER") and not note:
+        return jsonify({"ok": False, "why":
+            "“Other” is not a reason on its own — write what it was in "
+            "Note / Remark."}), 400
+
+    with store.conn() as (cx, cur):
+        rec, evidence, out = _fqc_payload(
+            cur, serial, bool(d.get("sandbox")),
+            (d.get("line") or "").strip() or None)
+        if not rec:
+            return jsonify(out), 404
+
+        # A module already in a box cannot be re-judged where it stands:
+        # recording a decision moves its state, and it would leave the box
+        # holding a module the record says is not packed. Take it out first.
+        if rec.get("state") in ("packed", "dispatched"):
+            return jsonify({"ok": False, "why":
+                "%s is %s. Take it out of its box before judging it again — "
+                "otherwise the box holds a module the record says is not in "
+                "it." % (serial, rec.get("state"))}), 400
+
+        if evidence.get("ss_state") == ev.BAD:
+            return jsonify({"ok": False, "why":
+                "The Sun Simulator returned BAD for this serial. It cannot be "
+                "judged until the probe, polarity, or junction-box fault is "
+                "reviewed."}), 400
+
+        # A stale tab is the common case, not a malicious one: the module was
+        # retested while the operator was deciding. Say so rather than
+        # recording a judgement made against a reading that has moved on.
+        token = (d.get("evidence_token") or "").strip()
+        if token and token != _evidence_token(evidence):
+            return jsonify({"ok": False, "why":
+                "The reading changed since this screen loaded — it now reads "
+                "%s. Look again before deciding."
+                % _evidence_summary(evidence)}), 409
+
+        proposed = evidence.get("proposed")
+
+        # THE READING CANNOT BE ARGUED WITH; THE EL VERDICT CAN.
+        #
+        # Pmax is a measurement: no reason text turns a module that measures
+        # short into one that makes its wattage, so the only way up is the
+        # Sun Simulator, and it is tested again.
+        #
+        # The EL verdict is a person's reading of an image - it is the name
+        # of the folder somebody filed it in. When the power is there and the
+        # EL is the only objection, an operator who has looked at the image
+        # may overrule it, and says why. That is a recorded judgement, not a
+        # way round the measurement.
+        if outcome == "pass" and not proposed:
+            return jsonify({"ok": False, "why":
+                "There is not enough evidence to pass this module: %s"
+                % (evidence.get("why") or "the reading is unavailable.")}), 400
+        if outcome == "pass" and proposed != "pass":
+            pmax = evidence.get("pmax")
+            want = evidence.get("wattage") or 0
+            if pmax is None or pmax < want:
+                return jsonify({"ok": False, "why":
+                    "This module cannot be passed: %s Retest it in the Sun "
+                    "Simulator — a reading below the wattage is not something "
+                    "that can be overruled."
+                    % (evidence.get("why") or "")}), 400
+            if not reason:
+                return jsonify({"ok": False, "why":
+                    "It makes its wattage and the EL is the only objection, so "
+                    "it can be passed — but say why with a coded reason, "
+                    "having looked at the image."}), 400
+        if outcome == "reject" and proposed == "pass" and not reason:
+            return jsonify({"ok": False, "why":
+                "The evidence proposes a pass, so rejecting it needs a coded "
+                "reason."}), 400
+
+        # confirmed or provisional is a property of the evidence, not a field
+        # anyone gets to set: a decision made with the tester unreachable is
+        # provisional however the request describes it.
+        mode = evidence.get("mode") or "provisional"
+        if mode not in ("confirmed", "provisional"):
+            mode = "provisional"
+        # the EL verdict is the defect unless the operator named another
+        if outcome == "reject" and not defect:
+            verdict = (evidence.get("el") or "").strip()
+            if verdict and verdict.lower() not in ev.EL_CLEAN:
+                defect = verdict
+        saved = db.record_fqc(cur, serial, outcome, evidence, actor(), mode,
+                              reason, defect, note)
+        db.audit(cur, actor(), "fqc." + outcome, "serial", serial,
+                 {"outcome": outcome, "mode": mode, "reason": reason,
+                  "defect": defect, "proposed": proposed,
+                  "ss_state": evidence.get("ss_state")})
+    return jsonify({"ok": True, "serial": serial, "outcome": outcome,
+                    "grade": saved.get("grade"), "mode": mode,
+                    "record": saved})
+
+
+@app.route("/api/quality/pending")
+def api_quality_pending():
+    """What FQC rejected and Quality has not yet called."""
+    with store.conn() as (cx, cur):
+        rows = [dict(r) for r in db.quality_pending(cur)]
+    return jsonify(rows)
+
+
+@app.route("/api/quality", methods=["POST"])
+@_sync_guard
+def api_quality_grade():
+    """Quality calls a rejected module GY or BGY.
+
+    Only here does a rejected module get a grade, and only then can it be
+    packed. Pass is not on this screen: FQC decided that, and a module that
+    failed to make its wattage does not become an A module by review.
+    """
     d = request.get_json(force=True)
     serial = (d.get("serial") or "").strip().upper()
     grade = (d.get("grade") or "").strip().upper()
-    reason = (d.get("reason") or "").strip() or None
-    evidence = d.get("evidence") or {}
-    if grade not in ("A", "GY", "BGY"):
-        return jsonify({"ok": False, "why": "Choose A, GY, or BGY."}), 400
-    if not serial:
-        return jsonify({"ok": False, "why": "Serial is required."}), 400
-    if evidence.get("ss_state") == ev.BAD:
+    note = (d.get("note") or "").strip() or None
+    if grade not in ("GY", "BGY"):
+        return jsonify({"ok": False, "why": "Quality decides GY or BGY."}), 400
+    # GY and BGY are not interchangeable and the difference is a judgement,
+    # so the judgement is written down. A grade with no reasoning behind it
+    # is one nobody can defend to a customer later.
+    if not note:
         return jsonify({"ok": False, "why":
-            "The Sun Simulator returned BAD for this serial. Grading is disabled "
-            "until the probe, polarity, or junction-box fault is reviewed."}), 400
-    proposed = evidence.get("proposed")
-    if proposed and grade != proposed and not reason:
-        return jsonify({"ok": False, "why":
-            "An override reason is required when the grade differs from the proposal."}), 400
+            "Say why this is %s — the reasoning is what makes the grade "
+            "defensible afterwards." % grade}), 400
     with store.conn() as (cx, cur):
         rec = db.find_serial(cur, serial)
         if not rec:
             return jsonify({"ok": False, "why":
                 "%s is not in the serial master." % serial}), 404
-        mode = d.get("mode") or evidence.get("mode") or "provisional"
-        if mode not in ("confirmed", "provisional"):
-            mode = "provisional"
-        saved = db.record_fqc(cur, serial, grade, evidence, actor(), mode, reason)
-        db.audit(cur, actor(), "fqc.grade", "serial", serial,
-                 {"grade": grade, "mode": mode, "reason": reason,
-                  "proposed": proposed})
+        if rec.get("state") != "rejected":
+            return jsonify({"ok": False, "why":
+                "%s is %s, not awaiting a quality decision."
+                % (serial, rec.get("state"))}), 400
+        saved = db.record_quality(cur, serial, grade, actor(), note)
+        db.audit(cur, actor(), "quality.grade", "serial", serial,
+                 {"grade": grade, "note": note})
     return jsonify({"ok": True, "serial": serial, "grade": grade,
-                    "mode": mode, "record": saved})
+                    "record": saved})
+
+
+@app.route("/api/el/image")
+def api_el_image():
+    """The EL image itself, for the viewer.
+
+    Read from the folder the operator filed it in - the same lookup FQC
+    uses - and streamed rather than copied anywhere. Only a file that the
+    EL lookup actually resolved for this serial is served, so this cannot
+    be pointed at an arbitrary path.
+    """
+    serial = (request.args.get("serial") or "").strip().upper()
+    if not serial:
+        abort(400)
+    with store.conn() as (cx, cur):
+        cfg = db.get_config(cur)
+    el = ev.read_el(cfg, serial, (request.args.get("line") or "").strip() or None)
+    path = el.get("path")
+    if not path or not os.path.isfile(path):
+        abort(404)
+    return send_file(path, conditional=True)
 
 
 @app.route("/api/fqc/recent")
@@ -2311,19 +2657,27 @@ def api_fqc_recent():
 @app.route("/api/fqc/dashboard")
 def api_fqc_dashboard():
     with store.conn() as (cx, cur):
+        # counted on the OUTCOME, not the grade: a reject has no grade until
+        # Quality calls it, and counting grades would drop it from both
+        # columns while it waits.
         summary = store.rows(cur, """
             SELECT substr(f.at, 1, 10) AS day, s.model AS model, s.shift AS shift,
                    COUNT(*) AS inspected,
-                   SUM(CASE WHEN f.grade='A' THEN 1 ELSE 0 END) AS passed,
-                   SUM(CASE WHEN f.grade IN ('GY','BGY') THEN 1 ELSE 0 END) AS rejected
+                   SUM(CASE WHEN f.outcome='pass' THEN 1 ELSE 0 END) AS passed,
+                   SUM(CASE WHEN f.outcome='reject' THEN 1 ELSE 0 END) AS rejected
             FROM fqc_record f JOIN serial s ON s.serial=f.serial
+            WHERE f.superseded_by IS NULL
             GROUP BY day, s.model, s.shift ORDER BY day DESC, s.shift, s.model
         """)
         totals = store.one(cur, """
             SELECT COUNT(*) AS inspected,
-                   SUM(CASE WHEN grade='A' THEN 1 ELSE 0 END) AS passed,
-                   SUM(CASE WHEN grade IN ('GY','BGY') THEN 1 ELSE 0 END) AS rejected
-            FROM fqc_record
+                   SUM(CASE WHEN outcome='pass' THEN 1 ELSE 0 END) AS passed,
+                   SUM(CASE WHEN outcome='reject' THEN 1 ELSE 0 END) AS rejected,
+                   SUM(CASE WHEN outcome='reject' AND quality_grade IS NULL
+                            THEN 1 ELSE 0 END) AS awaiting_quality,
+                   SUM(CASE WHEN quality_grade='GY' THEN 1 ELSE 0 END) AS gy,
+                   SUM(CASE WHEN quality_grade='BGY' THEN 1 ELSE 0 END) AS bgy
+            FROM fqc_record WHERE superseded_by IS NULL
         """)
     return jsonify({"rows": [dict(r) for r in summary],
                     "totals": dict(totals or {})})
@@ -2344,25 +2698,37 @@ def fqc():
         anomalies = ev.scan_anomalies(cfg)
 
     if request.method == "POST" and request.form.get("action") == "confirm":
-        grade = request.form.get("grade")
+        outcome = (request.form.get("outcome") or "").strip().lower()
         reason = (request.form.get("reason") or "").strip()
+        defect = (request.form.get("defect") or "").strip()
+        note = (request.form.get("note") or "").strip()
+        proposed = (evidence or {}).get("proposed")
         if not rec:
             flash("%s is not in the serial master. Incharge must clear this "
-                  "before it can be graded." % serial, "fail")
-        elif not grade:
-            flash("Choose a grade.", "warn")
-        elif evidence and evidence["proposed"] and grade != evidence["proposed"] \
-                and not reason:
-            flash("Overriding the proposed grade needs a reason.", "fail")
+                  "before it can be judged." % serial, "fail")
+        elif outcome not in ("pass", "reject"):
+            flash("Record a Pass or a Rejection.", "warn")
+        elif outcome == "pass" and proposed != "pass":
+            # the same rule the API enforces: the way up is the tester
+            flash("This module cannot be passed. %s Retest it in the Sun "
+                  "Simulator." % ((evidence or {}).get("why") or ""), "fail")
+        elif reason.upper().startswith("OV-OTHER") and not note:
+            flash("“Other” is not a reason on its own — write what it was in "
+                  "Note / remark.", "fail")
+        elif outcome == "reject" and proposed == "pass" and not reason:
+            flash("The evidence proposes a pass, so rejecting it needs a "
+                  "reason.", "fail")
         else:
             with db.conn() as (cx, cur):
-                db.record_fqc(cur, serial, grade, evidence or {}, actor(),
+                db.record_fqc(cur, serial, outcome, evidence or {}, actor(),
                               (evidence or {}).get("mode", "provisional"),
-                              reason or None)
-                db.audit(cur, actor(), "fqc.grade", "serial", serial,
-                         {"grade": grade, "mode": (evidence or {}).get("mode"),
-                          "reason": reason or None})
-            flash("%s graded %s%s." % (serial, grade,
+                              reason or None, defect or None, note or None)
+                db.audit(cur, actor(), "fqc." + outcome, "serial", serial,
+                         {"outcome": outcome, "mode": (evidence or {}).get("mode"),
+                          "reason": reason or None, "defect": defect or None})
+            flash("%s recorded as %s%s." % (
+                  serial, "passed — grade A" if outcome == "pass"
+                  else "rejected — Quality decides GY or BGY",
                   " (provisional - evidence incomplete)"
                   if (evidence or {}).get("degraded") else ""), "pass")
             return redirect(url_for("fqc", sandbox="1" if sandbox else ""))
@@ -2635,7 +3001,26 @@ def export_csv(what):
 
 @app.route("/healthz")
 def healthz():
-    return jsonify({"ok": True, "db": db.MODE, "build": build_id(),
+    """Two different kinds of out-of-date, told apart.
+
+    build_id() hashes the files ON DISK when it is called, so it changes the
+    moment anything is saved. It says nothing about the code this process is
+    running: Waitress imports the app once at startup and never again.
+
+    So the page comparing its build to build_id() could only ever say "the
+    files changed" — and it said "the server is running newer code", which
+    was the opposite of true. The page reloads and picks up new JS and CSS,
+    while the Python it is talking to is whatever was imported at start.
+
+    BOOT_BUILD is what the files hashed to when this process imported them.
+    live != boot means the PROCESS is behind and must be restarted; that is
+    an admin's job, so only an admin is told.
+    """
+    live = build_id()
+    return jsonify({"ok": True, "db": db.MODE, "build": live,
+                    "boot_build": BOOT_BUILD,
+                    "server_stale": live != BOOT_BUILD,
+                    "started": STARTED_AT,
                     "store": os.path.basename(store.DB_PATH),
                     "time": datetime.datetime.now().isoformat(timespec="seconds")})
 

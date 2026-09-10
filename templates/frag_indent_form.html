@@ -48,7 +48,7 @@
 <div class="card-b"><div id="i_items"></div>
   <button class="btn btn-sm" onclick="indAddItem()">+ Add item</button></div>
 <div class="card-f">
-  <button class="btn btn-primary" onclick="indSave()">Save indent</button>
+  <button class="btn btn-primary" id="indSaveBtn" onclick="indSave()">Save indent</button>
   <button class="btn btn-ghost" onclick="indNew()">Cancel</button>
   <span class="sp hint" id="i_tot"></span>
 </div></div>
@@ -125,6 +125,16 @@ function indDrop(b){
   var q=document.querySelector('.i_qty'); if(q) indQty(q);
 }
 function indSave(){
+  /* One save per press. Two quick clicks sent two creates, and the second
+     came back "already exists" against the indent the first had just made -
+     an error about your own work, a second earlier. */
+  var btn=document.getElementById('indSaveBtn');
+  if(btn){
+    if(btn.disabled) return;
+    btn.disabled=true;
+    btn.textContent='Saving…';
+  }
+  var done=function(){ if(btn){btn.disabled=false;btn.textContent='Save indent';} };
   var g=function(id){return document.getElementById(id).value.trim();};
   var items=[];
   document.querySelectorAll('.i_row').forEach(function(r){
@@ -143,6 +153,7 @@ function indSave(){
       prepared_by:g('i_prep'),approved_by:g('i_appr'),
       special_instructions:g('i_note'),items:items})})
    .then(function(r){return r.json();}).then(function(d){
+     done();
      var e=document.getElementById('indErr');
      if(d.errors&&d.errors.length){
        /* Amber for something the operator can simply change; red for a
@@ -168,6 +179,9 @@ function indSave(){
      if(window.iconRefresh) iconRefresh();
      if(typeof toast==='function') toast('Indent '+d.indent_no+' saved with '+
        d.items+' item(s).');
+   }).catch(function(err){
+     done();
+     if(typeof toast==='function') toast('Indent not saved — '+err.message);
    });
 }
 /* Reopening an existing indent. The header can always be corrected; the items

@@ -40,6 +40,40 @@
 .split{display:grid;grid-template-columns:1fr 300px;gap:14px;align-items:start}
 @media(max-width:900px){.split{grid-template-columns:1fr}}
 
+/* ---- the modal close button ----------------------------------------
+   .modal-h lays its children out in a row and the × is the last of them,
+   after .mh-r - which carries the margin-left:auto that pushes everything
+   to the right. modalMode(true) hides .mh-r for a generic modal, and the ×
+   then had nothing pushing it: it sat against the subtitle, in the middle
+   of the header, on every popup that is not the serial list.
+
+   Taking it out of the flow puts it in the corner whatever else is shown,
+   and the padding keeps the header text from running underneath it. */
+.modal-h{position:relative;padding-right:46px}
+.modal-x{position:absolute;top:10px;right:12px;margin:0}
+
+/* The reject form: fields carry a label above the input, so a bare button
+   in the same row aligned to the top of the labels instead of to the
+   inputs beside it. */
+.card-f .btn.self-end{align-self:flex-end}
+
+/* ---- the sidebar scrolls itself ------------------------------------
+   #app is a grid of height 100vh and .side is one of its items. A grid
+   item's min-height is `auto`, which means it refuses to be shorter than
+   its content — so with the screens added since, the nav simply overflowed
+   the row and its own overflow-y:auto never engaged. The wheel over the
+   menu scrolled the page behind it instead.
+
+   min-height:0 lets the item be the height of its row, and the scroll it
+   already asked for starts working. */
+.side{min-height:0; overflow-y:auto}
+
+/* A gate with no verdict class is a note about where the evidence came
+   from — "Read live from Line A" is not a pass. Neutral, so that the green
+   ones keep meaning something. */
+.gates .gate:not(.ok):not(.no):not(.warn){
+  background:var(--panel);color:var(--ink3);font-weight:500}
+
 /* ---- collapsible sidebar -------------------------------------------
    Collapsed the rail keeps the icons, and hovering slides the labels back
    out OVER the page rather than pushing it - so a scanning screen gets the

@@ -60,22 +60,38 @@
           if (window.iconTable) window.iconTable.wireAll();
           return;
         }
-        tb.innerHTML = rows.map(function (p) {
+        tb.innerHTML = rows.map(function (p, i) {
           /* An indent can be edited while nothing has been allocated against
              it. Once serials exist the instruction has been acted on, so the
              quantity is history and only the header may change. */
           var started = p.dispatched_qty > 0 || p.allocated_qty > 0;
-          var status = p.remaining_qty <= 0 ? 'complete'
+          /* An indent with no item at all. It used to join to nothing and
+             disappear from this list while its number still refused to be
+             reused - invisible and un-recreatable. It shows now, saying
+             what is wrong with it. */
+          var empty = !p.indent_line_id;
+          var status = empty ? 'no items'
+                     : p.remaining_qty <= 0 ? 'complete'
                      : started ? 'in progress' : 'open';
-          return '<tr><td class="mono">' + esc(p.indent_no) + '</td>' +
-            '<td>' + esc(p.customer) + '</td>' +
-            '<td class="mono">' + esc(p.item || p.model) + '</td>' +
+          /* One row per ITEM, so an indent carrying two items is two rows -
+             the same number twice is the second item, not a duplicate. */
+          var repeat = i > 0 && rows[i - 1].indent_no === p.indent_no;
+          return '<tr><td class="mono">' +
+            (repeat ? '<span style="color:var(--line)">' + esc(p.indent_no) +
+                      '</span>' : esc(p.indent_no)) +
+            (p.line_no ? '<div class="hint">item ' + p.line_no + '</div>' : '') +
+            '</td>' +
+            '<td>' + (repeat ? '' : esc(p.customer)) + '</td>' +
+            '<td class="mono">' + (empty ?
+              '<span style="color:var(--review)">no item on this indent</span>'
+              : esc(p.item || p.model)) + '</td>' +
             '<td><span class="tag ' + (p.dcr === 'DCR' ? 't-pass' : 't-mute') +
               '">' + esc(p.dcr) + '</span></td>' +
-            '<td class="num">' + p.ordered_qty + '</td>' +
-            '<td class="num">' + p.ordered_kw + '</td>' +
-            '<td class="num">' + p.dispatched_qty + '</td>' +
-            '<td class="num"><b>' + p.remaining_qty + '</b></td>' +
+            '<td class="num">' + (empty ? '—' : p.ordered_qty) + '</td>' +
+            '<td class="num">' + (empty ? '—' : p.ordered_kw) + '</td>' +
+            '<td class="num">' + (empty ? '—' : p.dispatched_qty) + '</td>' +
+            '<td class="num">' + (empty ? '—' : '<b>' + p.remaining_qty +
+              '</b>') + '</td>' +
             '<td><span class="tag ' + (status === 'complete' ? 't-pass'
                 : status === 'open' ? 't-mute' : 't-rev') + '">' + status +
               '</span></td>' +

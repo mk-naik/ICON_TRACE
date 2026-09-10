@@ -20,6 +20,13 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## 0b. Navigation  *(built)*
 
+- [x] **The sidebar scrolls itself.** `#app` is a grid of viewport height and
+      a grid item's `min-height` is `auto` — it refuses to be shorter than
+      its content, so with the screens added since, the nav overflowed the
+      row and its own `overflow-y:auto` never engaged. The wheel over the
+      menu scrolled the page behind it. `min-height:0` lets the scroll it
+      already asked for work.
+
 - [x] Indent and Loading Verification are now **real v4 views** — a
       `<section class="view">` in `.main`, a nav button, and the id added to
       the roles that should see it, so `go()` reaches them like any other
@@ -176,6 +183,25 @@ A new screen gets both for free.
 
 ## 4. Indent  *(done, keep in step with later changes)*
 
+- [x] **An edit can no longer empty an indent.** A PUT carrying no items
+      deleted every line, and because the progress view joined to those
+      lines the indent then vanished from every screen while its number went
+      on refusing to be used again — invisible and un-recreatable. The usual
+      cause was saving before the form had finished loading. Refused now,
+      and the view LEFT JOINs so an already-empty one is visible and can be
+      given items back. `SEP-09/2026` in the current database is one of these.
+- [x] **The list says which item it is showing.** One row per item is by
+      design; two rows under one number is an indent with two items, which
+      read as a duplicate. The repeated number is greyed and the item number
+      shown.
+- [x] **Save once per press.** Two quick clicks sent two creates, the second
+      answered "already exists" about the first — an error about your own
+      work a second earlier.
+- [x] **The Indent screen hears about allocations.** Edit vs Header is
+      decided by whether anything has been allocated, and nothing refreshed
+      that after Planning ran: the button went on offering an edit it would
+      then refuse, until the page was reloaded.
+
 - [x] Items not lines; one item with **+ Add item**.
 - [x] Customer type-to-suggest.
 - [x] Lot name, optional.
@@ -288,6 +314,23 @@ A new screen gets both for free.
 
 ## 11. New Pallet
 
+- [x] **Packing is real.** The screen decided whether a module had passed
+      FQC from the LAST DIGIT of its serial, held the pallet in a JavaScript
+      array and saved nothing. Every scan goes through the server gate now —
+      graded, matching grade and model, not already in a box, within
+      capacity — and the box is a row from its first scan, so a refresh at
+      18 of 36 finds it again.
+      The screen previews with the **same function** the scan enforces with,
+      so what the operator is shown before pressing Add is what decides.
+      A refusal names the box a module is already in, by its printed number.
+- [x] **A packed module is recorded as packed.** The scan added the row and
+      left the serial reading `graded`, so only the box knew. Both writes
+      happen together, as DATA_LAYER always said they did; pulling a slot
+      puts the state back.
+- [x] **The box reports its real number.** `render()` wants a date and the
+      column holds text, so every box was quietly reporting its bare
+      sequence instead of `ISPL260909/K001`.
+
 - [x] **Simulate a full box is gone.** It filled the open pallet with
       invented serials (`ICON590G1202121001` upwards) a slot at a time.
       Beside a real scanner on a real pallet that is one wrong click from a
@@ -385,8 +428,100 @@ Mukesh's answers, 4 Sep:
 - **Admin sees the queue.**
 - Quality freeze on a material lot: deferred, to be specified later.
 
+- [x] **FQC passes or rejects; it does not grade.** A pass is grade A and
+      means Pmax at or above the nameplate with a clean EL — the label's
+      number, not a band below it. **A pass cannot be overruled**: a module
+      that measures short goes back to the Sun Simulator, because a pass is
+      the only thing that reaches a customer as a full-power module.
+      What is rejected has no grade until Quality calls it GY or BGY on its
+      own screen, from the SS reading, the EL image and what FQC recorded —
+      coded defect, override reason, note. No grade is what keeps it out of
+      a box.
+      `OV-OTHER` says nothing on its own, so the note is compulsory with it.
+- [x] **Existing Decision** on the lookup shows what FQC said last time, so
+      a module coming round again is judged knowing that.
+- [x] **The EL/VI image opens for real** — wheel to zoom at the pointer,
+      drag to move, double-click to fit, arrows and +/−/0 without a mouse.
+      v4 drew a placeholder saying the image would render there. It opens
+      from the Quality screen too, looking the verdict up rather than
+      borrowing whatever FQC last scanned.
+- [x] **Every reading reaches the panel.** `gather()` returned the values
+      only inside `params`, so Voc, Isc and Fill factor showed as `—` beside
+      a Pmax that was read fine.
+- [x] **Space and Esc work.** v4's handler tests `fqcHold`, its own variable,
+      which the live flow never sets — so the shortcuts the scan hint
+      promises did nothing. Space confirms a proposed pass and is ignored
+      while typing; Esc discards.
+- [x] **The modal × is in the corner again.** It sits after `.mh-r`, which
+      carries the `margin-left:auto`, and `modalMode(true)` hides that group
+      for a generic modal — so the × collapsed against the subtitle on every
+      popup that is not the serial list.
+- [x] **Pmax is compared to the wattage**, in those words. "Nameplate" is not
+      how the floor says it.
+- [x] **Allocation type** — pre-shared or post-shared, chosen in Planning and
+      recorded on the batch, shown on the allocations list, the FQC lookup
+      and the module's journey. Pre-shared is serials issued before the
+      modules exist; post-shared is allocated out of what was built.
+- [x] **Quality sees the evidence** — the EL image and the full Flash Test
+      values, not just Pmax.
+
+- [x] **Space confirms the proposal either way.** Agreeing with a proposed
+      rejection is the common case and now costs one key: the defect comes
+      off the EL and the note is there for anything worth adding. It is
+      ignored while typing, so a space in the note stays a space.
+- [x] **An EL-only rejection can be overruled; a short reading cannot.**
+      Pmax is a measurement — no reason turns a module that measures short
+      into one that makes its wattage, and the way up is the tester. The EL
+      verdict is the name of a folder somebody filed an image in, so an
+      operator who has looked at the image may overrule it, with a coded
+      reason. Both halves are enforced server-side.
+- [x] **Quality says why.** GY and BGY are not interchangeable, so the
+      decision popup shows the reading, the EL verdict, the FQC defect,
+      reason and note, offers the image and the flash values, and requires
+      the reasoning before it will record a grade.
+- [x] **The stale-server banner is for whoever can act on it.** It told
+      every operator the server was running newer code — which was both
+      untrue and unactionable. The server now reports the build it loaded
+      at startup beside the live one, so "restart me" goes to Admin and
+      everyone else just gets "reload".
+
+- [x] **One live decision per module.** A module judged again — retested
+      after a rework, or looked at twice — supersedes its earlier decision
+      rather than adding a second. The old row is kept and points at what
+      replaced it, so the trail is intact, and every count reads the live
+      row only: a retested module is one module, not two.
+- [x] **A module in a box cannot be re-judged where it stands.** Recording
+      a decision moves the serial's state, which would leave the box holding
+      a module the record says is not in it. Take it out first.
+- [x] **Going against the evidence is asked about once.** Agreeing with it
+      stays a single key.
+- [x] **The reason field is only for overruling.** Agreeing with a proposed
+      rejection overrules nothing, so it no longer asks for a coded reason
+      to do exactly what the evidence said.
+- [x] **The scan box lets go after Enter**, so the next Space confirms
+      instead of typing a space into the barcode field.
+- [x] **Pmax and the EL verdict are coloured** by whether they satisfy the
+      rule — the two values the decision turns on, and nothing else. The
+      source chips went neutral: "Read live from Line A" was green, which
+      read as a pass beside a rejection.
+- [x] **The journey says what happened at FQC.** It read the grade column,
+      which is empty until Quality calls a reject — so every rejected
+      module's journey said `None`.
+
 ### Routes in — enforced today
 
+- [x] **The measurement is the server's, never the browser's.** `/api/fqc`
+      accepted an `evidence` object and trusted it, so a body claiming
+      `{"ss_state":"OK","pmax":631}` walked a module the tester had failed
+      to read twice past the BAD block and into `fqc_record` as a 631 W
+      reading. Evidence is gathered inside the route now; the client sends
+      the judgement only. Same for `proposed` (the override rule fires
+      against the server's proposal) and `mode` (a grade decided with the
+      tester unreachable is provisional however the request describes it).
+- [x] **A stale screen is told, not overwritten.** The lookup hands out an
+      `evidence_token`; if the module was retested while the operator was
+      deciding, the grade is refused with what it reads now. A failed
+      retest is not a change — the latest valid row still wins.
 - [x] `BAD` probe fault blocks grading
 - [x] Serial not in master refused at FQC and Packing
 - [x] Duplicate: already in a live box

@@ -1,0 +1,165 @@
+<div class="pg"><h2>Quality Decision</h2>
+  <p>What FQC rejected, and what it is &mdash; GY or BGY</p>
+  <div class="pg-act"><button class="btn" data-role="export">Export table</button></div>
+</div>
+
+<div class="note n-info"><span>&#9432;</span><span>FQC records <b>pass</b> or
+  <b>rejected</b>. A pass is grade A. What is rejected has <b>no grade at
+  all</b> until it is called here, and no grade is what keeps it out of a box
+  &mdash; packing wants a graded module whose grade matches the label.<br>
+  The call is made from the same three things every time: the Sun Simulator
+  reading, the EL verdict and its image, and what FQC recorded &mdash; the
+  defect, the coded reason if the operator overruled the proposal, and the
+  note.</span></div>
+
+<div class="card" data-itable="quality" data-export="quality">
+  <div class="card-h"><h3>Awaiting a decision</h3>
+    <div class="ch-r"><span class="tag t-mute" id="qCount">&mdash;</span></div>
+  </div>
+  <div class="scroll">
+    <table><thead><tr>
+      <th>Serial</th><th>Model</th><th class="num">Pmax</th>
+      <th>EL/VI</th><th>Defect</th><th>Reason</th><th>Note</th>
+      <th>Rejected by</th><th>When</th><th></th>
+    </tr></thead><tbody id="qRows"></tbody></table>
+  </div>
+  <div class="card-b hint">A module is only listed once FQC has rejected it.
+    Nothing here can be made an A &mdash; that decision was FQC&rsquo;s, and a
+    module that failed to make its nameplate does not make it by review.</div>
+</div>
+
+<script>
+(function () {
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+
+  window.iconQualityRefresh = function () {
+    var body = document.getElementById('qRows');
+    if (!body) return;
+    fetch('/api/quality/pending', {cache:'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (rows) {
+        window.__qRows = rows;      // the decision popup reads the evidence
+        var count = document.getElementById('qCount');
+        if (count) count.textContent = rows.length + ' awaiting';
+        if (!rows.length) {
+          body.innerHTML = '<tr data-empty><td colspan="10" ' +
+            'style="padding:18px;color:var(--ink3)">Nothing is waiting on ' +
+            'Quality. Every rejected module has been called.</td></tr>';
+          if (window.iconTable) window.iconTable.wireAll();
+          return;
+        }
+        body.innerHTML = rows.map(function (r) {
+          var short = r.ss_pmax != null && r.wattage &&
+                      r.ss_pmax < r.wattage;
+          return '<tr>' +
+            '<td class="mono"><button class="lnk" onclick="qTry(\'' +
+              esc(r.serial) + '\')">' + esc(r.serial) + '</button></td>' +
+            '<td class="mono">' + esc(r.model || '—') + '</td>' +
+            '<td class="num' + (short ? ' bad' : '') + '">' +
+              (r.ss_pmax == null ? '—' : r.ss_pmax + ' W') +
+              (r.wattage ? '<div class="hint">of ' + r.wattage + ' W</div>' : '') +
+              '</td>' +
+            '<td>' + esc(r.el_verdict || r.el_state || '—') +
+              '<div><button class="lnk" onclick="iconShowEl(\'' +
+              esc(r.serial) + '\')">View image</button> · ' +
+              '<button class="lnk" onclick="iconShowFtr(\'' +
+              esc(r.serial) + '\')">Readings</button></div></td>' +
+            '<td>' + esc(r.defect || '—') + '</td>' +
+            '<td style="font-size:11.5px">' + esc(r.reason || '—') + '</td>' +
+            '<td style="font-size:11.5px">' + esc(r.note || '—') + '</td>' +
+            '<td>' + esc(r.decided_by || '—') + '</td>' +
+            '<td class="mono" style="font-size:11px">' +
+              esc((r.at || '').replace('T', ' ').slice(0, 16)) + '</td>' +
+            '<td style="white-space:nowrap">' +
+              '<button class="btn btn-ghost btn-sm" onclick="qDecide(\'' +
+                esc(r.serial) + '\',\'GY\')">GY</button> ' +
+              '<button class="btn btn-ghost btn-sm" onclick="qDecide(\'' +
+                esc(r.serial) + '\',\'BGY\')">BGY</button></td>' +
+            '</tr>';
+        }).join('');
+        if (window.iconTable) window.iconTable.wireAll();
+      });
+  };
+
+  /* GY and BGY are not interchangeable, and the difference is a judgement
+     made from the image and the reading. It is written down at the moment
+     it is made - a grade nobody can explain later is one nobody can defend
+     to a customer. The evidence is put back on screen so the reason is
+     written against it rather than from memory. */
+  window.qDecide = function (serial, grade) {
+    var row = (window.__qRows || []).filter(function (r) {
+      return r.serial === serial; })[0] || {};
+    var host = document.getElementById('mdlGeneric');
+    var mdl = document.getElementById('mdl');
+    if (!host || !mdl) return;
+    var title = document.getElementById('mdlTitle');
+    var sub = document.getElementById('mdlSub');
+    if (title) title.textContent = 'Quality decision · ' + serial;
+    if (sub) sub.textContent = 'Grading it ' + grade +
+      ' — say what the evidence shows';
+    if (typeof modalMode === 'function') modalMode(true);
+    host.innerHTML =
+      '<div class="card" style="margin:0"><div class="card-b">' +
+      '<div class="lookup" style="padding:0 0 12px">' +
+        '<div><label>Pmax</label><div class="lv">' +
+          (row.ss_pmax == null ? '—' : row.ss_pmax + ' W') +
+          (row.wattage ? ' <span style="color:var(--ink3)">of ' +
+            row.wattage + ' W</span>' : '') + '</div></div>' +
+        '<div><label>EL/VI verdict</label><div class="lv">' +
+          esc(row.el_verdict || '—') + '</div></div>' +
+        '<div><label>Defect at FQC</label><div class="lv">' +
+          esc(row.defect || '—') + '</div></div>' +
+        '<div><label>FQC reason</label><div class="lv" ' +
+          'style="font-size:11.5px">' + esc(row.reason || '—') + '</div></div>' +
+        '<div><label>FQC note</label><div class="lv" ' +
+          'style="font-size:11.5px">' + esc(row.note || '—') + '</div></div>' +
+        '<div><label>Rejected by</label><div class="lv">' +
+          esc(row.decided_by || '—') + '</div></div>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;margin:0 0 10px">' +
+        '<button class="btn btn-ghost btn-sm" onclick="iconShowEl(\'' +
+          esc(serial) + '\')">View EL image</button>' +
+        '<button class="btn btn-ghost btn-sm" onclick="iconShowFtr(\'' +
+          esc(serial) + '\')">Flash test values</button></div>' +
+      '<div class="fld"><label>Why ' + grade + '? (required)</label>' +
+        '<textarea id="qWhy" rows="3" placeholder="what the image and the ' +
+        'reading show, and why that makes it ' + grade + '"></textarea></div>' +
+      '</div><div class="card-f">' +
+      '<button class="btn btn-primary" onclick="qConfirm(\'' + esc(serial) +
+        '\',\'' + grade + '\')">Record ' + grade + '</button>' +
+      '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+      '<span class="hint" style="margin-left:auto">A grade with no reasoning ' +
+        'behind it is one nobody can defend later.</span></div></div>';
+    mdl.classList.add('on');
+    var box = document.getElementById('qWhy');
+    if (box) box.focus();
+  };
+
+  window.qConfirm = function (serial, grade) {
+    var box = document.getElementById('qWhy');
+    var why = box ? box.value.trim() : '';
+    if (!why) {
+      if (typeof toast === 'function')
+        toast('Say why this is ' + grade + ' before recording it.');
+      if (box) box.focus();
+      return;
+    }
+    fetch('/api/quality', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({serial: serial, grade: grade, note: why})})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { if (typeof toast === 'function') toast(d.why); return; }
+        if (typeof closeModal === 'function') closeModal();
+        if (typeof toast === 'function')
+          toast(serial + ' is ' + grade + ' — it can be packed into a ' +
+                grade + ' box.');
+        iconQualityRefresh();
+        if (window.iconRefresh) iconRefresh();
+      });
+  };
+
+  iconQualityRefresh();
+})();
+</script>

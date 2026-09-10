@@ -173,10 +173,16 @@ var window = { iconTable: { wireAll: function () { wiredAll++; } } };
 var loc = here();
 var LIVE = loc.dir + loc.sep + 'static' + loc.sep + 'icon_live.js';
 var src = readFile(LIVE);
+/* An explicit end marker, not "whatever comment comes next": the first
+   version sliced up to the next comment block, and the day something was
+   inserted there the test pulled in code it knew nothing about and died
+   with a parse error instead of a failure. */
 var from = src.indexOf('  var TABLE_SCREENS =');
-var to = src.indexOf('  /* Two controls the backlog asks for');
+var to = src.indexOf('  /* END wireScreenTables');
 if (from === -1 || to === -1 || to < from) {
   echo('Could not find wireScreenTables() in ' + LIVE + '.');
+  echo('Expected it between "var TABLE_SCREENS =" and the ' +
+       '"END wireScreenTables" marker.');
   if (WSH) WScript.Quit(1); else process.exit(1);
 }
 function txt(el) {

@@ -1,0 +1,17 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# The database is disposable by design: while the system is being tested the
+# data in it is test data, and DATA_LAYER.md says to delete the file to reset.
+# Committed, it grew to 2.2 MB, dirtied the tree on every local run and
+# blocked a pull. The schema rebuilds empty on the next request.
+icontrace.db
+icontrace.db-wal
+icontrace.db-shm
+
+# Runtime logs
+*.log
+
+# Uploaded invoices and generated documents, kept beside the app
+storage/

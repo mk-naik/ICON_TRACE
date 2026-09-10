@@ -54,7 +54,8 @@ in this project and reverted both times.
 | `static/icon_table.js` | shared filter / search / reset / scroll / export |
 | `static/icon_offline.js` | IndexedDB outbox for offline work |
 | `static/sw.js` | service worker, caches the shell by build id |
-| `static/icon.css` | v4's stylesheet verbatim + a short additions block |
+| `static/icon.css` | v4's stylesheet, verbatim |
+| `static/icon_add.css` | what the live layer adds — v4's page links no stylesheet, so the layer injects this one |
 | `app.py` | routes, API, document rendering |
 | `store.py` | SQLite connection, box helpers, counters |
 | `db.py` | domain helpers — counters, indents, FQC, config |
@@ -204,7 +205,24 @@ python serve.py                    → http://127.0.0.1:8080/
 ```
 del icontrace.db                   start clean
 python icon_invoice_parser.py --selftest
-python test_box_number.py          32 tests
+python test_box_number.py          32 tests · box numbering, grade letters
+python test_evidence.py            26 tests · two lines of SS and EL, NC vs NA
+python test_fqc.py                 38 tests · pass/reject, and what a record may hold
+python test_indent.py               7 tests · one number, and an edit that cannot empty it
+python test_packing.py             16 tests · the gate that keeps a reject off a truck
+python test_styles.py               9 tests · the stylesheet reaches v4's page
+```
+
+The JS tests read their functions out of `icon_live.js`, so they test what
+ships. They run on Node where it exists and on Windows Script Host where it
+does not — no install either way:
+
+```
+node test_trace.js                 33 tests · Search & Trace renders the record
+node test_export.js                19 tests · what lands in the Excel export
+node test_screens.js               17 tests · the shared table wiring
+
+cscript //Nologo //E:JScript test_trace.js      the same, without Node
 ```
 
 ```

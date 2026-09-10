@@ -189,6 +189,17 @@ def t_all_params():
     assert r["rsh"] == 210.0 and r["irr"] == 1000.0
 
 
+@test("gather() passes every reading on, not just the list of them")
+def t_gather_carries_readings():
+    g = ev.gather(cfg(), "ICON625R2609112345", 625)
+    # the FQC panel reads these by name; it showed Voc, Isc and Fill factor
+    # as "—" because gather returned them only inside `params`
+    for k, expect in (("voc", 48.9), ("isc", 12.1), ("ff", 96.1),
+                      ("rsh", 210.0)):
+        assert g.get(k) == expect, "%s came through as %r" % (k, g.get(k))
+    assert g["wattage"] == 625, "the panel shows the reading against this"
+
+
 # --------------------------------------------------------------------------
 # EL, which has two of everything too
 # --------------------------------------------------------------------------

@@ -135,6 +135,7 @@
     if (typeof window.iconTable !== 'undefined') window.iconTable.wireAll();
     /* before wireResets(), so the Reset it injects gets wired this pass */
     if (typeof addMissingControls === 'function') addMissingControls();
+    if (typeof wirePacking === 'function') wirePacking();
     if (typeof wireScreenTables === 'function') wireScreenTables();
     if (typeof wireMaterialMaster === 'function') wireMaterialMaster();
     if (typeof wireMatDefaults === 'function') wireMatDefaults();
@@ -244,30 +245,144 @@
   }
   window.renderLiveFqcDash = renderLiveFqcDash;
 
+  /* One cell of the lookup grid, in v4's own markup. */
+  function fqcCell(label, value, absent) {
+    return '<div><label>' + fqcEsc(label) + '</label><div class="lv' +
+      (absent ? ' absent' : '') + '">' + value + '</div></div>';
+  }
+
+  /* What FQC decided last time, for a module coming round again. Re-FQC is
+     normal - a module retested after a rework - and the operator needs to
+     see what was said about it before, not discover it afterwards. */
+  function fqcPrior(data) {
+    var p = data.record;
+    if (!p) return '<span style="color:var(--ink3)">first inspection</span>';
+    var when = (p.at || '').replace('T', ' ').slice(0, 16);
+    var what = p.outcome === 'pass' ? 'Passed · A'
+             : p.quality_grade ? ('Rejected · ' + p.quality_grade)
+             : 'Rejected · awaiting Quality';
+    return '<span class="tag ' + (p.outcome === 'pass' ? 't-pass' : 't-fail') +
+      '">' + fqcEsc(what) + '</span> <span style="color:var(--ink3)">' +
+      fqcEsc(when) + (p.decided_by ? ' · ' + fqcEsc(p.decided_by) : '') +
+      '</span>' + (p.defect ? '<div class="hint">' + fqcEsc(p.defect) +
+      (p.note ? ' — ' + fqcEsc(p.note) : '') + '</div>' : '');
+  }
+
   function fqcShowLive(data) {
     var e = data.evidence || {};
     liveFqcHold = data;
-    var proposed = e.proposed || 'none';
     var bad = e.fault || e.ss_state === 'BAD';
+    var canPass = e.proposed === 'pass';
+    /* Rejected on the EL alone: the power is there, so an operator who has
+       looked at the image may overrule the folder name. A reading below the
+       wattage is a measurement and is not open to argument. */
+    var powerOk = e.pmax != null && data.wattage != null &&
+                  e.pmax >= data.wattage;
+    var elClean = !!e.el && /^(ok|pass)$/i.test(String(e.el).trim());
+    var elOnly = e.proposed === 'reject' && powerOk;
+    var p = function (k, unit) {
+      var v = e[k];
+      return v == null ? '—' : (v + (unit || ''));
+    };
     document.getElementById('fqcPending').innerHTML =
       '<div class="pending' + (bad ? ' blocked' : '') + '">' +
-      '<div class="pending-h"><span class="ph-t">' + (bad ? 'Cannot grade' : 'Confirm or overrule') +
-      '</span><span class="ph-s">' + fqcEsc(data.serial) + '</span><div class="ph-r">' +
-      '<span class="tag t-mute">' + fqcEsc(data.model) + '</span>' +
-      (!bad ? '<button class="btn btn-solar btn-sm" onclick="fqcCommitLive(false)">Confirm ' + proposed + '</button>' +
-        '<button class="btn btn-ghost btn-sm" onclick="fqcShowLiveOverride()">Overrule</button>' : '') +
-      '<button class="btn btn-ghost btn-sm" onclick="fqcCancelLive()">Discard</button></div></div>' +
+      '<div class="pending-h"><span class="ph-t">' +
+        (bad ? 'Cannot judge' : 'Confirm or overrule') + '</span>' +
+      '<span class="ph-s">' + fqcEsc(data.serial) + '</span><div class="ph-r">' +
+      '<span class="tag t-mute">' + fqcEsc(e.ss_line ? 'Line ' + e.ss_line
+                                            : (data.model || '')) + '</span>' +
+      (bad ? '' :
+        /* Space confirms whatever is proposed - a rejection just as much as
+           a pass. The defect comes off the EL and the note is there for
+           anything worth adding, so agreeing with a rejection is one key. */
+        '<span class="tag t-mute">Space to confirm</span>' +
+        (canPass
+          ? '<button class="btn btn-solar btn-sm" ' +
+              'onclick="fqcCommitLive(\'pass\')">Pass — grade A</button>' +
+            '<button class="btn btn-ghost btn-sm" ' +
+              'onclick="fqcShowLiveOverride()">Reject…</button>'
+          : '<button class="btn btn-danger btn-sm" ' +
+              'onclick="fqcCommitLive(\'reject\')">Confirm rejection</button>' +
+            '<button class="btn btn-ghost btn-sm" ' +
+              'onclick="fqcShowLiveOverride()">Add defect / note…</button>' +
+            (elOnly ? '<button class="btn btn-ghost btn-sm" ' +
+              'onclick="fqcShowPassOverride()">Overrule to pass…</button>' : '')
+        )) +
+      '<button class="btn btn-ghost btn-sm" onclick="fqcCancelLive()">Discard</button>' +
+      '</div></div>' +
+
       '<div class="lookup">' +
-      '<div><label>Pmax</label><div class="lv">' + (e.pmax == null ? '—' : e.pmax + ' W') + '</div></div>' +
-      '<div><label>Sun Simulator</label><div class="lv">' + fqcEsc(e.ss_state || 'NC') + '</div></div>' +
-      '<div><label>EL/VI</label><div class="lv">' + fqcEsc(e.el || e.el_state || 'NC') + '</div></div>' +
-      '<div><label>Proposed</label><div class="lv">' + fqcEsc(proposed) + '</div></div>' +
-      '<div><label>Mode</label><div class="lv">' + fqcEsc(e.mode || 'provisional') + '</div></div>' +
-      '<div><label>Existing grade</label><div class="lv">' + fqcEsc(data.grade || '—') + '</div></div>' +
-      '</div><div class="gates"><span class="gate ' + (e.ss_state === 'OK' ? 'ok' : 'warn') + '">' +
-      fqcEsc(e.ss_note || 'Sun Simulator evidence unavailable') + '</span><span class="gate ' +
-      (e.el_state === 'OK' ? 'ok' : 'warn') + '">' + fqcEsc(e.el_note || 'EL evidence unavailable') +
-      '</span></div><div id="fqcLiveOverride"></div></div>';
+        fqcCell('Customer', fqcEsc(data.customer || '—')) +
+        fqcCell('Model', fqcEsc(data.model || '—')) +
+        /* renamed from Build instance: the lot the indent named */
+        fqcCell('Lot No.', fqcEsc(data.lot_name || '—'), !data.lot_name) +
+        /* renamed from Serial printed: confirmed or provisional */
+        fqcCell('Mode', '<span class="tag ' +
+          (e.mode === 'confirmed' ? 't-pass' : 't-rev') + '">' +
+          fqcEsc(e.mode || 'provisional') + '</span>') +
+        fqcCell('Allocation', fqcEsc(data.batch_no || '—') +
+          (data.alloc_type ? '<div class="hint">' + fqcEsc(data.alloc_type) +
+            '</div>' : '')) +
+        /* renamed from Line (station config): what FQC said last time */
+        fqcCell('Existing Decision', fqcPrior(data)) +
+      '</div>' +
+
+      /* The two values the decision turns on are coloured: green when they
+         satisfy the rule, red when they do not, so the reason for the
+         proposal is visible before anyone reads the wording. Everything
+         else stays plain - colouring what does not decide anything is how
+         a screen stops meaning anything. */
+      '<div class="lookup" style="border-top:1px solid var(--line2)">' +
+        fqcCell('Pmax', '<span style="color:' +
+          (powerOk ? 'var(--pass)' : 'var(--fail)') + ';font-weight:700">' +
+          p('pmax', ' W') + '</span>' + (data.wattage ?
+          ' <span style="color:var(--ink3)">of ' + data.wattage + ' W</span>' : ''),
+          e.pmax == null) +
+        fqcCell('Voc', p('voc', ' V'), e.voc == null) +
+        fqcCell('Isc', p('isc', ' A'), e.isc == null) +
+        fqcCell('Fill factor', p('ff', ' %'), e.ff == null) +
+        fqcCell('EL/VI verdict', '<span style="color:' +
+          (elClean ? 'var(--pass)' : 'var(--fail)') + ';font-weight:700">' +
+          fqcEsc(e.el || e.el_state || 'NC') + '</span>', !e.el) +
+        fqcCell('EL/VI image', e.el_path ?
+          '<button class="lnk" onclick="iconShowEl()">View image</button>' : '—',
+          !e.el_path) +
+      '</div>' +
+
+      /* Where the evidence came from, not whether it is good news. These
+         were green, which read as two more passes beside a rejection -
+         "Read live from Line A" is not a verdict on anything. They go
+         neutral unless the source could not be read, which is worth
+         seeing. */
+      '<div class="gates">' +
+        '<span class="gate ' + (e.ss_state === 'OK' ? '' : 'warn') + '">' +
+          fqcEsc(e.ss_note || 'Sun Simulator evidence unavailable') + '</span>' +
+        '<span class="gate ' + (e.el_state === 'OK' ? '' : 'warn') + '">' +
+          fqcEsc(e.el_note || 'EL evidence unavailable') + '</span>' +
+      '</div>' +
+
+      (bad ? '' :
+      '<div class="card-b" style="border-top:1px solid var(--line2);background:' +
+        (canPass ? 'var(--pass-lt)' : 'var(--review-lt)') + '">' +
+        '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">' +
+          '<div><label style="font-size:9.5px;font-weight:700;' +
+            'color:var(--ink3);text-transform:uppercase;letter-spacing:.6px">' +
+            'Proposed</label>' +
+            '<div style="font-family:var(--f-mono);font-size:26px;' +
+            'font-weight:700;line-height:1;color:' +
+            (canPass ? 'var(--pass)' : 'var(--fail)') + '">' +
+            (canPass ? 'PASS' : 'REJECT') + '</div></div>' +
+          '<div style="font-size:12px;max-width:560px"><b>Why</b><br>' +
+            fqcEsc(e.why || '') +
+            (canPass ? '' : '<br><span style="color:var(--ink3)">' + (elOnly
+              ? 'It makes its wattage, so if the image does not support this ' +
+                'verdict you may overrule it — with a reason.'
+              : 'A reading below the wattage cannot be overruled — if this ' +
+                'module should make it, retest it in the Sun Simulator.') +
+              '</span>') +
+          '</div>' +
+        '</div></div><div id="fqcLiveOverride"></div>') +
+      '</div>';
   }
 
   window.fqcLookup = function () {
@@ -276,32 +391,431 @@
     if (!serial) return;
     fetch('/api/fqc/lookup?serial=' + encodeURIComponent(serial), {cache: 'no-store'})
       .then(function (r) { return r.json(); })
-      .then(function (d) { if (!d.ok) toast(d.why); else fqcShowLive(d); })
+      .then(function (d) {
+        if (!d.ok) { toast(d.why); return; }
+        fqcShowLive(d);
+        /* Enter leaves the caret in the scan box, so the next Space typed a
+           space instead of confirming. The module is on screen now and the
+           box has nothing more to take. */
+        if (input) { input.blur(); input.disabled = true; }
+      })
       .catch(function (e) { toast('FQC lookup failed: ' + e.message); });
   };
+  /* Rejecting. No grade here: what is rejected is called GY or BGY by
+     Quality, from the EL, the SS reading and what is captured below. */
   window.fqcShowLiveOverride = function () {
     var host = document.getElementById('fqcLiveOverride');
-    if (!host) return;
-    host.innerHTML = '<div class="card-f"><div class="fld"><label>Final grade</label>' +
-      '<select id="fqcLiveGrade"><option>A</option><option>GY</option><option>BGY</option></select></div>' +
-      '<div class="fld"><label>Override reason</label><input id="fqcLiveReason" placeholder="Required"></div>' +
-      '<button class="btn btn-danger" onclick="fqcCommitLive(true)">Save grade</button></div>';
+    if (!host || !liveFqcHold) return;
+    var e = liveFqcHold.evidence || {};
+    var codes = (typeof ELVI_CODES !== 'undefined' ? ELVI_CODES : [])
+      .filter(function (c) { return c.ng; });
+    var verdict = (e.el || '').trim();
+    host.innerHTML =
+      '<div class="card-f" style="border-top:1px solid var(--line2);' +
+        'align-items:flex-start;flex-wrap:wrap;gap:10px">' +
+      '<div class="fld" style="margin:0;min-width:180px"><label>Defect</label>' +
+        '<select id="fqcLiveDefect"><option value="">— what is wrong —</option>' +
+        codes.map(function (c) {
+          return '<option' + (c.label === verdict || c.raw === verdict ?
+            ' selected' : '') + '>' + fqcEsc(c.label) + '</option>';
+        }).join('') + '<option>Other</option></select></div>' +
+      /* The reason is for OVERRULING. Agreeing with a proposed rejection
+         overrules nothing, so the field is not shown there - it was asking
+         for a coded reason to do exactly what the evidence said. */
+      (e.proposed === 'pass' ?
+      '<div class="fld" style="margin:0;min-width:230px">' +
+        '<label>Override reason (required)</label>' +
+        '<select id="fqcLiveReason"><option value="">— coded reason —</option>' +
+        '<option>OV-RETEST — retested, value differs</option>' +
+        '<option>OV-IMAGE — image reviewed, verdict wrong</option>' +
+        '<option>OV-EVIDENCE — evidence missing, judged visually</option>' +
+        '<option>OV-CUST — customer accepts this condition</option>' +
+        '<option>OV-QUALITY — quality engineer instruction</option>' +
+        '<option>OV-OTHER — other</option></select></div>' : '') +
+      '<div class="fld" style="margin:0;flex:1;min-width:240px">' +
+        '<label>Note / remark <span id="fqcNoteReq" ' +
+          'style="color:var(--ink3)">optional</span></label>' +
+        '<input id="fqcLiveNote" placeholder="anything worth recording"></div>' +
+      '<button class="btn btn-danger self-end" ' +
+        'onclick="fqcCommitLive(\'reject\')">Record rejection</button></div>';
+
+    /* "Other" says nothing on its own - the note becomes the reason. */
+    var reason = document.getElementById('fqcLiveReason');
+    if (reason) {
+      reason.onchange = function () {
+        var other = /^OV-OTHER/.test(reason.value);
+        var flag = document.getElementById('fqcNoteReq');
+        flag.textContent = other ? 'required' : 'optional';
+        flag.style.color = other ? 'var(--fail)' : 'var(--ink3)';
+      };
+    }
   };
-  window.fqcCommitLive = function (override) {
+  /* Overruling an EL-only rejection into a pass. Offered only when the
+     module makes its wattage, and it always costs a coded reason: the
+     operator is saying they looked at the image and the folder name is
+     wrong. */
+  window.fqcShowPassOverride = function () {
+    var host = document.getElementById('fqcLiveOverride');
+    if (!host || !liveFqcHold) return;
+    var e = liveFqcHold.evidence || {};
+    host.innerHTML =
+      '<div class="card-f" style="border-top:1px solid var(--line2);' +
+        'align-items:flex-start;flex-wrap:wrap;gap:10px;' +
+        'background:var(--pass-lt)">' +
+      '<div style="font-size:11.5px;max-width:340px;color:var(--ink3)">' +
+        'Pmax ' + fqcEsc(e.pmax) + ' W makes the ' +
+        fqcEsc(liveFqcHold.wattage) + ' W wattage. The EL reads ' +
+        '<b>' + fqcEsc(e.el || '—') + '</b> — pass it only if the image ' +
+        'does not support that.</div>' +
+      '<div class="fld" style="margin:0;min-width:240px">' +
+        '<label>Reason (required)</label>' +
+        '<select id="fqcPassReason"><option value="">— coded reason —</option>' +
+        '<option>OV-IMAGE — image reviewed, verdict wrong</option>' +
+        '<option>OV-RETEST — retested, value differs</option>' +
+        '<option>OV-QUALITY — quality engineer instruction</option>' +
+        '<option>OV-OTHER — other</option></select></div>' +
+      '<div class="fld" style="margin:0;flex:1;min-width:220px">' +
+        '<label>Note / remark <span id="fqcPassNoteReq" ' +
+          'style="color:var(--ink3)">optional</span></label>' +
+        '<input id="fqcPassNote" placeholder="what the image shows"></div>' +
+      '<button class="btn btn-solar self-end" ' +
+        'onclick="fqcCommitLive(\'pass\')">Pass — grade A</button></div>';
+    var sel = document.getElementById('fqcPassReason');
+    sel.onchange = function () {
+      var other = /^OV-OTHER/.test(sel.value);
+      var flag = document.getElementById('fqcPassNoteReq');
+      flag.textContent = other ? 'required' : 'optional';
+      flag.style.color = other ? 'var(--fail)' : 'var(--ink3)';
+    };
+  };
+
+  window.fqcCommitLive = function (outcome) {
     if (!liveFqcHold) return;
-    var grade = override ? document.getElementById('fqcLiveGrade').value : liveFqcHold.evidence.proposed;
-    var reason = override ? document.getElementById('fqcLiveReason').value.trim() : '';
-    if (!grade || (override && !reason)) { toast('Final grade and an override reason are required.'); return; }
+    var e = liveFqcHold.evidence || {};
+    var g = function (id) {
+      var el = document.getElementById(id);
+      return el ? (el.value || '').trim() : '';
+    };
+    var reason = outcome === 'reject' ? g('fqcLiveReason') : g('fqcPassReason');
+    var defect = outcome === 'reject' ? g('fqcLiveDefect') : '';
+    var note = outcome === 'reject' ? g('fqcLiveNote') : g('fqcPassNote');
+
+    if (outcome === 'pass' && e.proposed !== 'pass') {
+      var watt = liveFqcHold.wattage;
+      if (e.pmax == null || watt == null || e.pmax < watt) {
+        toast('A reading below the wattage cannot be overruled. Retest it in ' +
+              'the Sun Simulator.');
+        return;
+      }
+      if (!reason) {
+        /* the power is there and only the EL objects - offer the form
+           rather than refusing a click the operator meant */
+        fqcShowPassOverride();
+        toast('Passing this needs a coded reason — you are overruling the ' +
+              'EL verdict.');
+        return;
+      }
+    }
+    if (outcome === 'reject' && e.proposed === 'pass' && !reason) {
+      toast('The evidence proposes a pass, so rejecting it needs a coded reason.');
+      return;
+    }
+    if (/^OV-OTHER/.test(reason) && !note) {
+      toast('“Other” is not a reason on its own — write what it was in ' +
+            'Note / remark.');
+      return;
+    }
+    /* Going against the evidence is asked about once. Agreeing with it is
+       not - that is the common case and stays a single key. */
+    var against = (outcome !== e.proposed) && e.proposed;
+    if (against && !window.confirm(
+        'The evidence proposes ' + e.proposed.toUpperCase() + ':\n\n' +
+        (e.why || '') + '\n\n' +
+        'You are recording ' + outcome.toUpperCase() + ' instead' +
+        (reason ? ' — ' + reason : '') + '.\n\nRecord it?')) {
+      return;
+    }
+    /* The judgement only. The reading is the server's to take, from the
+       same source this screen read - sending it from here is how a module
+       the tester failed to read ended up recorded at 631 W. The token says
+       which reading was on screen, so a tab left open while the module was
+       retested is told rather than overwriting the newer one. */
     api('fqc', {method: 'POST', body: JSON.stringify({
-      serial: liveFqcHold.serial, grade: grade, reason: reason,
-      mode: liveFqcHold.evidence.mode || 'provisional', evidence: liveFqcHold.evidence
+      serial: liveFqcHold.serial, outcome: outcome, reason: reason,
+      defect: defect, note: note,
+      evidence_token: liveFqcHold.evidence_token
     })}).then(function (d) {
       if (!d.ok) { toast(d.why); return; }
-      toast(d.serial + ' graded ' + d.grade + ' and saved to the serial master.');
+      toast(d.serial + (d.outcome === 'pass'
+        ? ' passed — grade A, ready to pack.'
+        : ' rejected — Quality decides GY or BGY.'));
       renderLiveFqcRecent(); renderLiveFqcDash();
+      if (window.iconQualityRefresh) iconQualityRefresh();
       fqcCancelLive();
     });
   };
+  /* The keyboard the scan hint promises. v4's handler tests `fqcHold`, its
+     own variable, which the live flow never sets - so Space and Esc did
+     nothing at all while a module was on screen. Bound here against
+     liveFqcHold, and only when the operator is not typing: Space in the
+     note field is a space. */
+  function wireFqcKeys() {
+    if (document.__fqcKeys) return;
+    document.__fqcKeys = true;
+    document.addEventListener('keydown', function (e) {
+      var t = e.target || {};
+      var typing = /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '') ||
+                   t.isContentEditable;
+      var mdl = document.getElementById('mdl');
+
+      if (e.key === 'Escape') {
+        if (mdl && mdl.classList.contains('on')) return;   // v4 closes it
+        if (liveFqcHold) { e.preventDefault(); fqcCancelLive(); }
+        return;
+      }
+      if (e.code === 'Space' && !typing && liveFqcHold) {
+        if (mdl && mdl.classList.contains('on')) return;
+        var e2 = liveFqcHold.evidence || {};
+        if (e2.fault || e2.ss_state === 'BAD') return;
+        e.preventDefault();
+        /* Space confirms the proposal, whichever way it went. Agreeing with
+           a rejection is the common case and should cost one key: the
+           defect comes off the EL, and the note is there for anyone who
+           wants to add to it. */
+        if (e2.proposed === 'pass' || e2.proposed === 'reject') {
+          fqcCommitLive(e2.proposed);
+        }
+      }
+    });
+  }
+
+  /* ---- EL/VI image viewer ------------------------------------------
+   * v4's showImg() drew a placeholder saying "EL/VI image renders here at
+   * full size". A crack is the reason the module is in front of you, so the
+   * image has to be the real one and it has to be examinable: wheel to
+   * zoom at the pointer, drag to move, double-click to fit, keyboard for
+   * the same without a mouse.
+   */
+  window.iconShowEl = function (serial) {
+    serial = serial || (liveFqcHold && liveFqcHold.serial);
+    if (!serial) return;
+    /* Opened from Quality, the module on screen is not the one FQC is
+       holding - so its verdict has to be looked up rather than borrowed
+       from whatever was scanned last. */
+    if (!liveFqcHold || liveFqcHold.serial !== serial) {
+      fetch('/api/fqc/lookup?serial=' + encodeURIComponent(serial),
+            { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { elModal(serial, (d && d.evidence) || {}); })
+        .catch(function () { elModal(serial, {}); });
+      return;
+    }
+    elModal(serial, liveFqcHold.evidence || {});
+  };
+
+  function elModal(serial, e) {
+    var host = document.getElementById('mdlGeneric');
+    var mdl = document.getElementById('mdl');
+    if (!host || !mdl) return;
+    var title = document.getElementById('mdlTitle');
+    var sub = document.getElementById('mdlSub');
+    if (title) title.textContent = 'EL/VI image · ' + serial;
+    if (sub) {
+      sub.textContent = 'Verdict "' + (e.el || 'unrecorded') + '"' +
+        (e.el_line ? ' · Line ' + e.el_line : '') +
+        ' · wheel to zoom, drag to move, double-click to fit';
+    }
+    if (typeof modalMode === 'function') modalMode(true);
+    host.innerHTML =
+      '<div class="card" style="margin:0">' +
+      '<div class="card-h"><h3>EL/VI image</h3><div class="ch-r">' +
+        '<button class="btn btn-ghost btn-sm" onclick="iconElZoom(-1)">−</button>' +
+        '<span class="tag t-mute mono" id="elZoomLbl">100%</span>' +
+        '<button class="btn btn-ghost btn-sm" onclick="iconElZoom(1)">+</button>' +
+        '<button class="btn btn-ghost btn-sm" onclick="iconElFit()">Fit</button>' +
+        '<a class="btn btn-ghost btn-sm" target="_blank" href="/api/el/image?serial=' +
+          encodeURIComponent(serial) + '">Open</a>' +
+      '</div></div>' +
+      '<div id="elStage" style="position:relative;overflow:hidden;height:64vh;' +
+        'background:#0E1A2B;cursor:grab;touch-action:none">' +
+        '<img id="elImg" alt="EL/VI image of ' + fqcEsc(serial) + '" ' +
+          'src="/api/el/image?serial=' + encodeURIComponent(serial) + '" ' +
+          'style="position:absolute;transform-origin:0 0;user-select:none;' +
+          '-webkit-user-drag:none;max-width:none">' +
+        '<div id="elMsg" style="position:absolute;inset:0;display:flex;' +
+          'align-items:center;justify-content:center;color:#8FB4D4;' +
+          'font-size:12px">Loading…</div>' +
+      '</div></div>';
+    mdl.classList.add('on');
+    elWire();
+  }
+
+  /* The full Sun Simulator reading - the same values the Flash Test Report
+     carries. Quality decides GY or BGY from the measurement as much as the
+     image, and until now the screen showed it only Pmax. */
+  window.iconShowFtr = function (serial) {
+    if (!serial) return;
+    fetch('/api/fqc/lookup?serial=' + encodeURIComponent(serial),
+          { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var host = document.getElementById('mdlGeneric');
+        var mdl = document.getElementById('mdl');
+        if (!host || !mdl) return;
+        var e = (d && d.evidence) || {};
+        var params = e.params || [];
+        var title = document.getElementById('mdlTitle');
+        var sub = document.getElementById('mdlSub');
+        if (title) title.textContent = 'Sun Simulator reading · ' + serial;
+        if (sub) {
+          sub.textContent = (e.ss_note || '') +
+            (e.tested_at ? ' · tested ' + e.tested_at : '') +
+            (e.ss_attempts > 1 ? ' · retested ' + e.ss_attempts + ' times' : '');
+        }
+        if (typeof modalMode === 'function') modalMode(true);
+        host.innerHTML =
+          '<div class="card" style="margin:0"><div class="card-h">' +
+          '<h3>Flash test values</h3><div class="ch-r">' +
+          traceTag(e.ss_state || 'NC',
+                   e.ss_state === 'OK' ? 't-pass' : 't-rev') +
+          (d.wattage ? traceTag(d.wattage + ' W rated') : '') + '</div></div>' +
+          '<div class="card-b flush"><table><thead><tr><th>Measurement</th>' +
+          '<th class="num">Value</th><th>Unit</th></tr></thead><tbody>' +
+          (params.length ? params.map(function (p) {
+            var low = p.key === 'pmax' && d.wattage && p.value != null &&
+                      p.value < d.wattage;
+            return '<tr><td>' + fqcEsc(p.label) + '</td>' +
+              '<td class="num"' + (low ? ' style="color:var(--fail);' +
+                'font-weight:700"' : '') + '>' +
+              (p.value == null ? '—' : p.value) + '</td>' +
+              '<td class="mono" style="color:var(--ink3)">' +
+              fqcEsc(p.unit || '') + '</td></tr>';
+          }).join('') :
+            '<tr><td colspan="3" style="padding:16px;color:var(--ink3)">' +
+            fqcEsc(e.ss_note || 'No reading is available for this serial.') +
+            '</td></tr>') +
+          '</tbody></table></div>' +
+          '<div class="card-f"><span style="font-size:11.5px;' +
+          'color:var(--ink3)">Read from the tester at ' +
+          (e.ss_line ? 'Line ' + fqcEsc(e.ss_line) : 'the configured source') +
+          '. These are the values the customer’s Flash Test Report ' +
+          'carries.</span></div></div>';
+        mdl.classList.add('on');
+      })
+      .catch(function (err) {
+        if (typeof toast === 'function')
+          toast('Could not read the tester for ' + serial + ': ' + err.message);
+      });
+  };
+
+  var elView = { z: 1, x: 0, y: 0, fit: 1 };
+
+  function elWire() {
+    var stage = document.getElementById('elStage');
+    var img = document.getElementById('elImg');
+    var msg = document.getElementById('elMsg');
+    if (!stage || !img) return;
+
+    img.onload = function () {
+      if (msg) msg.remove();
+      iconElFit();
+    };
+    img.onerror = function () {
+      if (msg) {
+        msg.textContent = 'No EL/VI image could be read for this serial.';
+        msg.style.color = 'var(--review)';
+      }
+      img.style.display = 'none';
+    };
+
+    function paint() {
+      img.style.transform = 'translate(' + elView.x + 'px,' + elView.y +
+        'px) scale(' + elView.z + ')';
+      var lbl = document.getElementById('elZoomLbl');
+      if (lbl) lbl.textContent = Math.round(elView.z / elView.fit * 100) + '%';
+    }
+    elView.paint = paint;
+
+    /* zoom at the pointer, so the detail under the cursor stays under it */
+    stage.addEventListener('wheel', function (ev) {
+      ev.preventDefault();
+      var r = stage.getBoundingClientRect();
+      var px = ev.clientX - r.left, py = ev.clientY - r.top;
+      var factor = ev.deltaY < 0 ? 1.15 : 1 / 1.15;
+      var next = Math.min(elView.fit * 40, Math.max(elView.fit * 0.2,
+                                                    elView.z * factor));
+      var k = next / elView.z;
+      elView.x = px - (px - elView.x) * k;
+      elView.y = py - (py - elView.y) * k;
+      elView.z = next;
+      paint();
+    }, { passive: false });
+
+    var drag = null;
+    stage.addEventListener('pointerdown', function (ev) {
+      if (ev.button !== 0) return;
+      drag = { x: ev.clientX - elView.x, y: ev.clientY - elView.y };
+      stage.setPointerCapture(ev.pointerId);
+      stage.style.cursor = 'grabbing';
+    });
+    stage.addEventListener('pointermove', function (ev) {
+      if (!drag) return;
+      elView.x = ev.clientX - drag.x;
+      elView.y = ev.clientY - drag.y;
+      paint();
+    });
+    ['pointerup', 'pointercancel'].forEach(function (t) {
+      stage.addEventListener(t, function () {
+        drag = null;
+        stage.style.cursor = 'grab';
+      });
+    });
+    stage.addEventListener('dblclick', function () { iconElFit(); });
+
+    /* the same without a mouse */
+    stage.tabIndex = 0;
+    stage.addEventListener('keydown', function (ev) {
+      var step = 40;
+      if (ev.key === '+' || ev.key === '=') iconElZoom(1);
+      else if (ev.key === '-') iconElZoom(-1);
+      else if (ev.key === '0') iconElFit();
+      else if (ev.key === 'ArrowLeft') { elView.x += step; paint(); }
+      else if (ev.key === 'ArrowRight') { elView.x -= step; paint(); }
+      else if (ev.key === 'ArrowUp') { elView.y += step; paint(); }
+      else if (ev.key === 'ArrowDown') { elView.y -= step; paint(); }
+      else return;
+      ev.preventDefault();
+    });
+  }
+
+  window.iconElFit = function () {
+    var stage = document.getElementById('elStage');
+    var img = document.getElementById('elImg');
+    if (!stage || !img || !img.naturalWidth) return;
+    var r = stage.getBoundingClientRect();
+    elView.fit = Math.min(r.width / img.naturalWidth,
+                          r.height / img.naturalHeight);
+    elView.z = elView.fit;
+    elView.x = (r.width - img.naturalWidth * elView.z) / 2;
+    elView.y = (r.height - img.naturalHeight * elView.z) / 2;
+    if (elView.paint) elView.paint();
+  };
+
+  window.iconElZoom = function (dir) {
+    var stage = document.getElementById('elStage');
+    if (!stage) return;
+    var r = stage.getBoundingClientRect();
+    var px = r.width / 2, py = r.height / 2;      // zoom on the middle
+    var factor = dir > 0 ? 1.25 : 1 / 1.25;
+    var next = Math.min(elView.fit * 40,
+                        Math.max(elView.fit * 0.2, elView.z * factor));
+    var k = next / elView.z;
+    elView.x = px - (px - elView.x) * k;
+    elView.y = py - (py - elView.y) * k;
+    elView.z = next;
+    if (elView.paint) elView.paint();
+  };
+
   window.fqcCancelLive = function () {
     liveFqcHold = null;
     var p = document.getElementById('fqcPending'); if (p) p.innerHTML = '';
@@ -795,6 +1309,222 @@
     });
     if (window.iconTable) window.iconTable.wireAll();
   }
+  /* END wireScreenTables - test_screens.js reads up to this line. Keep it,
+     and put new code after it rather than above. */
+
+  /* ---- Packing -----------------------------------------------------
+   * v4's packing screen was a demonstration: it decided whether a module
+   * had passed FQC from the LAST DIGIT of its serial, held the pallet in a
+   * JavaScript array and saved nothing, so a refresh at 18 of 36 lost the
+   * box. Every scan now goes through the real gate - graded, matching grade
+   * and model, not already in a box - and the box is a row from the first
+   * scan, so a refresh finds it still there.
+   */
+  var packBox = null;                 // the open box, as the server has it
+
+  function packGrade() {
+    var el = document.querySelector('#v-pack .grade-pick .on, #v-pack [data-grade].on');
+    if (el) return el.getAttribute('data-grade') || el.textContent.trim();
+    return (typeof grade !== 'undefined' && grade) || 'A';
+  }
+
+  function packCap() {
+    var sel = document.getElementById('capSel');
+    return parseInt(sel && sel.value, 10) ||
+           (typeof cap !== 'undefined' ? cap : 36);
+  }
+
+  /* The box is opened on the first accepted scan, not when the screen is,
+     so an operator who opens Packing and walks away leaves no empty box
+     behind. Its grade and model come from that first module. */
+  function packEnsureBox(info) {
+    if (packBox) return Promise.resolve(packBox);
+    var bin = document.getElementById('binOn');
+    return api('box/open', { method: 'POST', body: JSON.stringify({
+      grade: info.grade, model: info.model, customer: info.customer_code || null,
+      capacity: packCap(),
+      bin: (bin && bin.checked) ?
+           (document.getElementById('binNo') || {}).value : null,
+      shift: null
+    }) }).then(function (d) {
+      packBox = { box_id: d.box_id, seq: d.seq, grade: info.grade,
+                  model: info.model, qty: 0, capacity: packCap() };
+      packPaintBox();
+      return packBox;
+    });
+  }
+
+  function packPaintBox() {
+    var el = document.getElementById('boxNo');
+    if (el && packBox && packBox.seq != null) {
+      el.textContent = packBox.label || ('#' + packBox.seq);
+    }
+  }
+
+  /* Restore whatever is still open, so a refresh mid-pallet does not lose
+     the work - the whole reason boxes are rows and not an array. */
+  function packRestore() {
+    var view = document.getElementById('v-pack');
+    if (!view || view.__restored) return;
+    view.__restored = true;
+    fetch('/api/boxes?state=open', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (rows) {
+        var open = (rows || [])[0];
+        if (!open) return;
+        packBox = { box_id: open.box_id, seq: open.seq, grade: open.grade,
+                    model: open.model, qty: open.qty,
+                    capacity: open.capacity, label: open.label };
+        packPaintBox();
+        fetch('/api/box/' + open.box_id, { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (typeof buildSlots === 'function') buildSlots();
+            (d.serials || []).forEach(function (s) {
+              if (typeof addSlot === 'function') addSlot(s.serial || s);
+            });
+            if (typeof toast === 'function') {
+              toast('Box ' + (open.label || open.seq) + ' was still open with ' +
+                    (d.serials || []).length + ' module(s).');
+            }
+          });
+      })
+      .catch(function () { /* nothing open, or the server is down */ });
+  }
+
+  function wirePacking() {
+    if (typeof packLookup !== 'function' || packLookup.__live) return;
+
+    /* the preview, through the same gate the scan enforces */
+    var patchedLookup = function () {
+      var el = document.getElementById('packScan');
+      var serial = (el && el.value || '').trim().toUpperCase();
+      if (!serial) return;
+      var q = '/api/box/check?serial=' + encodeURIComponent(serial) +
+              (packBox ? '&box_id=' + packBox.box_id : '');
+      fetch(q, { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          packHold = { s: serial, ok: d.ok, info: d };
+          if (el) el.disabled = true;
+          var host = document.getElementById('packPending');
+          if (!host) return;
+          host.innerHTML =
+            '<div class="pending' + (d.ok ? '' : ' blocked') + '">' +
+            '<div class="pending-h"><span class="ph-t">' +
+              (d.ok ? 'Confirm to add' : 'Cannot add') + '</span>' +
+            '<span class="ph-s">' + fqcEsc(serial) + '</span><div class="ph-r">' +
+            (d.ok ? '<span class="tag t-mute">Space to add</span>' +
+              '<button class="btn btn-solar btn-sm" onclick="packCommit()">' +
+              'Add to box</button>' : '') +
+            '<button class="btn btn-ghost btn-sm" onclick="packCancel()">' +
+              'Discard</button></div></div>' +
+            '<div class="lookup">' +
+              '<div><label>Customer</label><div class="lv">' +
+                fqcEsc(d.customer || '—') + '</div></div>' +
+              '<div><label>Model</label><div class="lv mono">' +
+                fqcEsc(d.model || '—') + '</div></div>' +
+              '<div><label>Wattage</label><div class="lv mono">' +
+                (d.wattage ? d.wattage + 'W' : '—') + '</div></div>' +
+              '<div><label>FQC</label><div class="lv">' +
+                fqcEsc(d.outcome === 'pass' ? 'Passed' :
+                       d.outcome === 'reject' ? 'Rejected' : '—') + '</div></div>' +
+              '<div><label>Grade</label><div class="lv">' +
+                (d.grade ? '<span class="tag t-pass">' + fqcEsc(d.grade) +
+                  '</span>' : '<span class="tag t-rev">none yet</span>') +
+                '</div></div>' +
+              '<div><label>Judged</label><div class="lv mono" ' +
+                'style="font-size:11px">' +
+                fqcEsc((d.graded_at || '—').replace('T', ' ').slice(0, 16)) +
+                '</div></div>' +
+            '</div>' +
+            '<div class="gates"><span class="gate ' + (d.ok ? 'ok' : 'no') +
+              '">' + fqcEsc(d.ok ? 'Ready to pack' : d.why) + '</span></div>' +
+            '</div>';
+        })
+        .catch(function (err) {
+          if (typeof toast === 'function')
+            toast('Could not check ' + serial + ': ' + err.message);
+        });
+    };
+    patchedLookup.__live = true;
+    window.packLookup = patchedLookup;
+
+    /* the scan itself - the server decides, and the slot is only drawn
+       once the row exists */
+    window.packCommit = function () {
+      if (!packHold || !packHold.ok) return;
+      var serial = packHold.s;
+      packEnsureBox(packHold.info)
+        .then(function (box) {
+          return api('box/' + box.box_id + '/scan',
+                     { method: 'POST', body: JSON.stringify({ serial: serial }) });
+        })
+        .then(function (d) {
+          if (d && d.ok === false) {
+            if (typeof toast === 'function') toast(d.why);
+            return;
+          }
+          packBox.qty = d.qty;
+          if (typeof addSlot === 'function') addSlot(serial);
+          if (typeof packCancel === 'function') packCancel();
+        })
+        .catch(function (err) {
+          if (typeof toast === 'function')
+            toast('Not added — ' + err.message + '. The box is unchanged.');
+        });
+    };
+
+    /* pulling a slot has to pull the row with it, or the box says 18 and
+       the record says 19 */
+    var origPull = window.pullSlot;
+    window.pullSlot = function (i) {
+      var serial = (typeof packed !== 'undefined') ? packed[i] : null;
+      if (!packBox || !serial) { if (origPull) origPull(i); return; }
+      api('box/' + packBox.box_id + '/remove',
+          { method: 'POST', body: JSON.stringify({ serial: serial }) })
+        .then(function (d) {
+          if (d && d.ok === false) {
+            if (typeof toast === 'function') toast(d.why);
+            return;
+          }
+          packBox.qty = d.qty;
+          if (origPull) origPull(i);
+        });
+    };
+
+    /* saving closes the box on the server; the packing list prints from it */
+    var origSave = window.savePallet;
+    window.savePallet = function (print) {
+      if (!packBox) {
+        if (typeof toast === 'function')
+          toast('Nothing to save — scan a module first.');
+        return;
+      }
+      api('box/' + packBox.box_id + '/close', { method: 'POST', body: '{}' })
+        .then(function (d) {
+          if (d && d.ok === false) {
+            if (typeof toast === 'function') toast(d.why);
+            return;
+          }
+          if (typeof toast === 'function') {
+            toast('Box saved with ' + d.qty + ' module(s)' +
+                  (d.partial ? ' — partial box, and recorded as one.' : '.'));
+          }
+          var closed = packBox;
+          packBox = null;
+          if (typeof buildSlots === 'function') buildSlots();
+          if (window.iconRefresh) iconRefresh();
+          if (print) printWindow('/box/' + closed.box_id + '/sheet');
+        })
+        .catch(function (err) {
+          if (typeof toast === 'function')
+            toast('Not saved — ' + err.message);
+        });
+    };
+
+    packRestore();
+  }
 
   /* Two controls the backlog asks for that v4 never drew: a Reset on the
      Production Dashboard filter bar, and an Export on Line & shift
@@ -1209,6 +1939,8 @@
     addScreens();
     sidebarToggle();
     wireDateResets();
+    wireFqcKeys();
+    wirePacking();
     addMissingControls();
     wireScreenTables();
     wireMaterialMaster();
@@ -1610,6 +2342,7 @@
     }
     planTidy();
     planDropdowns();
+    planAllocType();
     planEntry();
     renderAllocations();
 
@@ -1655,6 +2388,7 @@
             customer: L.cust, shift: serials.length ?
               (typeof parseSerial === 'function' ? parseSerial(a).shift : 1) : 1,
             date_produced: (document.getElementById('pDate') || {}).value || null,
+            alloc_type: (document.getElementById('pAllocType') || {}).value || null,
             materials: planMaterialRows()
           }) })
           .then(function (d) {
@@ -1672,6 +2406,12 @@
             iconRefresh().then(function () {
               renderAllocations();
               planLineFigures();
+              /* The Indent screen decides Edit vs Header from whether
+                 anything has been allocated. Allocating here changes that
+                 answer, and without this the button kept saying Edit until
+                 the page was reloaded - then refused the edit it had just
+                 offered. */
+              if (window.indRefresh) indRefresh();
               if (typeof rangeCalc === 'function') rangeCalc();
               var work = document.querySelector('#v-plan .work');
               if (work) work.style.display = 'none';
@@ -1692,6 +2432,27 @@
       wrapped.__wired = true;
       window.loadMaster = wrapped;
     }
+  }
+
+  /* Pre-shared or post-shared. Pre-shared is serials issued against a
+     customer's allocation BEFORE the modules exist - how Unit-1 worked, and
+     how a customer gets its numbers in advance. Post-shared is allocated out
+     of what has already been built. The floor already says which is which,
+     so it is recorded at allocation rather than guessed at afterwards. */
+  function planAllocType() {
+    var view = document.getElementById('v-plan');
+    if (!view || document.getElementById('pAllocType')) return;
+    var from = document.getElementById('rgFrom');
+    var host = from && from.closest('.grid');
+    if (!host) return;
+    var fld = document.createElement('div');
+    fld.className = 'fld req';
+    fld.innerHTML = '<label>Allocation type</label>' +
+      '<select id="pAllocType">' +
+      '<option value="post">Post-shared — allocated from what is built</option>' +
+      '<option value="pre">Pre-shared — serials issued before production</option>' +
+      '</select>';
+    host.appendChild(fld);
   }
 
   function planMaterialRows() {
@@ -1904,7 +2665,9 @@
           return '<tr>' +
             /* the server renders the batch number - one place knows the rule */
             '<td class="mono">' + (a.batch_no ||
-              ('BAT-' + String(a.alloc_id).padStart(5, '0'))) + '</td>' +
+              ('BAT-' + String(a.alloc_id).padStart(5, '0'))) +
+              (a.alloc_type_label ? '<div class="hint">' +
+                a.alloc_type_label + '</div>' : '') + '</td>' +
             '<td class="mono">' + (a.indent_no || '\u2014') +
               (a.line_no ? ' \u00b7 item ' + a.line_no : '') + '</td>' +
             '<td>' + (a.customer || '\u2014') + '</td>' +
@@ -1959,6 +2722,9 @@
         renderAllocations();
         iconRefresh().then(function () {
           try { planLineFigures(); rangeCalc(); } catch (e) {}
+          /* withdrawing gives the quantity back, so the indent's status
+             changes here too */
+          if (window.indRefresh) indRefresh();
         });
       });
   };
@@ -2142,6 +2908,8 @@
     });
   };
 
+  /* payload: serial, grade, reason, evidence_token, sandbox. Any evidence
+     in it is ignored by the server, which reads the tester itself. */
   window.iconGradeSerial = function (payload) {
     return api('fqc', { method: 'POST', body: JSON.stringify(payload) });
   };
@@ -2172,6 +2940,13 @@
     { id: 'items', label: 'Item Master', icon: '\u25A5', after: 'admin',
       roles: ['Admin'], url: '/view/items',
       title: 'Maintained by Admin, not by operators' },
+    /* FQC passes or rejects; what is rejected is called GY or BGY here.
+       Beside the FQC dashboard, because that is where the rejections come
+       from and where somebody notices they are piling up. */
+    { id: 'quality', label: 'Quality Decision', icon: '\u2696', after: 'dash',
+      roles: ['Admin', 'Production Incharge', 'FQC Operator'],
+      url: '/view/quality',
+      title: 'Call a rejected module GY or BGY' },
     /* Evidence Sources is NOT a screen of its own. Admin already has a
        "Stations & sources" tab whose data_source card describes where
        evidence comes from; a second page configuring the same thing is two
@@ -2449,12 +3224,41 @@
       .then(function (r) { return r.json(); })
       .then(function (d) {
         fails = 0;
-        if (B.build && d.build && d.build !== B.build) {
+        /* Two different problems, and they are fixed by different people.
+
+           The page is stale when it was served before the files changed:
+           reloading fixes it, and anyone can do that.
+
+           The SERVER is stale when the files changed after it started -
+           Waitress imports the app once, so its Python is whatever was on
+           disk at startup however many times the page is reloaded. Only
+           somebody who can restart it can fix that, so only they are told;
+           an operator cannot act on it and does not need the noise. */
+        var admin = (typeof USER !== 'undefined' && USER && USER.role === 'Admin');
+        if (d.server_stale && admin) {
+          setChip('stale', 'The server is running code from ' +
+                  (d.started || 'before the last change'));
+          banner('stale',
+            '<b>The server is running older code.</b> It loaded at ' +
+            fqcEsc(d.started || '') + ', and the files have changed since — ' +
+            'restart it to pick them up. Reloading the page updates the ' +
+            'screens only.');
+          return;
+        }
+        /* boot_build is missing on a server that predates it — which is
+           exactly a server too old to have restarted, so falling silent
+           there was the worst possible answer. Compare against whatever it
+           does report. */
+        var theirs = d.boot_build || d.build;
+        if (B.build && theirs && theirs !== B.build) {
           setChip('stale', 'This page was built from different code');
           banner('stale',
-            'This page is out of date — the server is running newer code. ' +
+            'This page is out of date. ' +
             '<a href="#" style="color:#fff;text-decoration:underline" ' +
-            'onclick="location.reload(true);return false">Reload</a>');
+            'onclick="location.reload(true);return false">Reload</a>' +
+            (d.boot_build ? '' :
+              ' — and this server is old enough that it cannot tell you ' +
+              'whether it needs restarting. Restart it.'));
           return;
         }
         setChip('up', 'Server reachable · build ' + d.build + ' · ' + d.store);

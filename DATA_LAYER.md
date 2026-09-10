@@ -72,34 +72,38 @@ format changed once already and will change again.
 This is the contract. Packing reads it directly, and refuses anything that
 does not satisfy it.
 
-### On every grading decision, two writes in one transaction
+### On every decision, two writes in one transaction
 
 ```python
 with store.conn() as (cx, cur):
     # 1. the evidence, snapshotted
     store.insert(cur, "fqc_record", {
         "serial": serial,
-        "grade": grade,               # 'A' | 'GY' | 'BGY'
+        "outcome": outcome,           # 'pass' | 'reject'
+        "grade": "A" if outcome == "pass" else None,   # NULL until Quality
         "mode": mode,                 # 'confirmed' | 'provisional'
         "ss_pmax": ev.get("pmax"),
         "ss_state": ev.get("ss_state"),      # 'OK' | 'NC' | 'NA' | 'BAD'
         "el_verdict": ev.get("el"),
         "el_state": ev.get("el_state"),
-        "proposed": ev.get("proposed"),      # what the system suggested
-        "reason": reason,                    # required on an override
+        "proposed": ev.get("proposed"),      # what the evidence suggested
+        "defect": defect,                    # coded, on a rejection
+        "reason": reason,                    # required to overrule a pass
+        "note": note,                        # required when reason is OTHER
         "decided_by": actor(),
         "at": datetime.datetime.now().isoformat(timespec="seconds"),
     })
 
     # 2. the module's own state
-    cur.execute("UPDATE serial SET grade=%s, state='graded' "
-                "WHERE serial=%s AND build_instance=1", (grade, serial))
+    cur.execute("UPDATE serial SET grade=%s, state=%s "
+                "WHERE serial=%s AND build_instance=1",
+                (grade, "graded" if outcome == "pass" else "rejected", serial))
 ```
 
-`db.record_fqc(cur, serial, grade, evidence, decided_by, mode, reason)` does
-both. Use it rather than writing the two by hand — a grade on `serial` with no
-`fqc_record` behind it is a decision with no evidence, and the Search screen
-will show a module that was graded by nobody for no reason.
+`db.record_fqc(...)` does both. Use it rather than writing the two by hand —
+a grade on `serial` with no `fqc_record` behind it is a decision with no
+evidence, and the Search screen will show a module that was judged by nobody
+for no reason.
 
 ### Evidence is copied, not referenced
 
@@ -108,14 +112,77 @@ joined to at read time. A re-import of the SS export must never be able to
 change why a module was graded last week. Where a value was unavailable, that
 absence is recorded explicitly rather than left null-and-ambiguous.
 
+### FQC does not grade. It passes or rejects.
+
+A pass is grade A, and **A means Pmax at or above the nameplate with a clean
+EL** — measured against the number on the label, not a tolerance band below
+it. A 590 W module reading 585 W is not a 590 W module.
+
+**A pass cannot be overruled.** No reason text turns a module that measures
+short into one that does not; the way up is the Sun Simulator, and it is
+tested again. Rejecting is always allowed — a person may see what the
+evidence does not, and rejecting against a proposed pass needs a coded
+reason.
+
+What is rejected has **no grade at all**. Quality calls it GY or BGY on its
+own screen, reading the SS figure, the EL verdict and image, and what FQC
+recorded — the coded defect, the override reason, the note. No grade is what
+keeps a reject out of a box: packing wants `state='graded'` with a grade
+matching the label, and a reject is neither.
+
+```
+planned
+  └ FQC pass    → graded   · A        → packable
+  └ FQC reject  → rejected · no grade → NOT packable
+                   └ Quality → graded · GY | BGY → packable
+```
+
+`db.record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason,
+defect, note)` writes the record and the serial's state together, as before.
+`db.record_quality(cur, serial, grade, decided_by, note)` is the second half.
+A coded reason of `OV-OTHER` says nothing on its own, so the note becomes
+compulsory with it. Tested in `test_fqc.py`.
+
+### The operator supplies the judgement; the server reads the measurement
+
+`evidence` is gathered **inside the route**, from the tester, and is never
+taken from the request. `/api/fqc` accepts a serial, an outcome, a coded
+defect and reason, a note, `sandbox`, and the `evidence_token` the lookup
+handed out. Nothing
+else it sends is read.
+
+It used to accept the evidence, and this was enough to record a module the
+tester had failed to read twice as a clean 631 W:
+
+```
+POST /api/fqc {"serial":"…","outcome":"pass",
+               "evidence":{"ss_state":"OK","pmax":631.0}}   → 200, stored
+```
+
+With the measurement in the body, the `BAD` block is decorative and
+`fqc_record` can hold a reading no tester ever produced — which is the one
+thing this table exists to make impossible. The same applies to `proposed`
+(the override-reason rule has to fire against what the *server* proposed) and
+to `mode`: confirmed or provisional is a property of the evidence, not a
+field a client sets.
+
+**`evidence_token`** is a fingerprint of the reading the screen was shown,
+compared and then discarded — never read back as a value. If the module was
+retested while the operator was deciding, the grade is refused with what it
+reads now rather than silently overwriting the newer reading. A failed
+retest is *not* a change: the latest valid row still wins, which is the
+retest rule.
+
+Tested in `test_fqc.py`.
+
 ### The four evidence states
 
 | State | Means | FQC behaviour |
 |---|---|---|
-| `OK` | read cleanly | propose a grade |
-| `NC` | source unreachable | grade provisionally, confirm later |
+| `OK` | read cleanly | propose pass or reject |
+| `NC` | source unreachable | reject provisionally; a PASS needs evidence |
 | `NA` | reachable, serial absent | review — it may never have been tested |
-| `BAD` | row exists, reading invalid | **grading disabled** — probe fault |
+| `BAD` | row exists, reading invalid | **no decision at all** — probe fault |
 
 `BAD` is the strongest signal in the system. Pmax around 0.005 W, Isc `nan`,
 Voc negative — the module *was* tested and could not be read. Junction box,
@@ -123,10 +190,12 @@ polarity or soldering. It is not missing data.
 
 ### Confirmed versus provisional
 
-- Evidence present and the operator picks a different grade → **override**.
-  A reason is required. Not a review item; a recorded judgement.
-- Evidence absent (`NC`) and the grade comes from verbal information →
-  **provisional**. When evidence arrives: agreement confirms it, disagreement
+- Evidence present and the operator rejects what it would pass → **override**.
+  A coded reason is required. Not a review item; a recorded judgement. The
+  other direction does not exist: a pass cannot be overruled.
+- Evidence absent (`NC`) and the decision comes from verbal information →
+  **provisional**, and it can only be a rejection — nothing is passed on an
+  absent reading. When evidence arrives: agreement confirms it, disagreement
   puts the serial on hold.
 
 ---

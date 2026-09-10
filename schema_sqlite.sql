@@ -483,7 +483,11 @@ SELECT
   0                                             AS dispatched_qty,
   il.qty                                        AS remaining_qty
 FROM indent i
-JOIN indent_line il ON il.indent_id = i.indent_id;
+-- LEFT, not INNER. An indent whose items were emptied joined to nothing and
+-- vanished from every list, while its number went on refusing to be used
+-- again - an indent that cannot be seen and cannot be recreated. It shows,
+-- with no item against it, so somebody can put one back.
+LEFT JOIN indent_line il ON il.indent_id = i.indent_id;
 
 -- ------------------------------------------------------------
 -- An indent line whose pallet instruction exceeds the physical ceiling.
@@ -502,6 +506,12 @@ WHERE il.pallet_qty IS NOT NULL AND il.pallet_qty > 36;
 CREATE TABLE IF NOT EXISTS allocation (
   alloc_id       INTEGER PRIMARY KEY AUTOINCREMENT,
   indent_line_id INTEGER      NOT NULL,
+  -- Pre-shared: serials issued to a customer's allocation BEFORE the modules
+  -- are produced, which is how Unit-1 worked and how a customer gets its
+  -- numbers in advance. Post-shared: allocated after production, out of what
+  -- was actually built. The two are traced differently and the floor already
+  -- says which is which, so it is recorded rather than inferred.
+  alloc_type     TEXT NULL,            -- 'pre' | 'post'
   model          TEXT NOT NULL,
   wattage        INT         NOT NULL,
   customer       TEXT NULL,
@@ -554,20 +564,51 @@ CREATE TABLE IF NOT EXISTS serial (
 
 -- Evidence is SNAPSHOTTED here, not foreign-keyed. A later re-import must
 -- never be able to rewrite why a module was graded.
+-- ==========================================================================
+-- FQC decides PASS or REJECTED. It does not grade.
+--
+-- A passed module is grade A, and A means Pmax >= the nameplate wattage with
+-- a clean EL. There is no overruling a module up into a pass: if it measures
+-- short it goes back to the Sun Simulator and is tested again. Pass is the
+-- only thing that cannot be argued with, because it is the only thing that
+-- reaches a customer as a full-power module.
+--
+-- What is REJECTED at FQC is not yet GY or BGY. Quality decides that on its
+-- own screen, reading the EL, the SS reading and what FQC recorded - the
+-- coded defect, the override reason, the note. Until then the module has no
+-- grade at all, which is what keeps it out of a box: the packing gate wants
+-- state='graded' and a grade matching the label.
+-- ==========================================================================
 CREATE TABLE IF NOT EXISTS fqc_record (
   fqc_id      INTEGER PRIMARY KEY AUTOINCREMENT,
   serial      TEXT NOT NULL,
-  grade       TEXT NOT NULL,
+  outcome     TEXT NULL,              -- 'pass' | 'reject'
+  grade       TEXT NULL,              -- 'A' on a pass; NULL until Quality
   mode        TEXT NOT NULL,
   ss_pmax     REAL NULL,
   ss_state    TEXT NULL,
   el_verdict  TEXT NULL,
   el_state    TEXT NULL,
   proposed    TEXT NULL,
-  reason      TEXT NULL,
+  defect      TEXT NULL,              -- coded, from the EL/VI code list
+  reason      TEXT NULL,              -- coded override reason
+  note        TEXT NULL,              -- free remark; required when reason=OTHER
   decided_by  TEXT NOT NULL,
-  at          TEXT    NOT NULL
+  at          TEXT    NOT NULL,
 
+  -- Quality's call on a reject, kept beside the evidence it was made from
+  quality_grade TEXT NULL,            -- 'GY' | 'BGY'
+  quality_note  TEXT NULL,
+  quality_by    TEXT NULL,
+  quality_at    TEXT NULL,
+
+  -- A module can come round again: retested after a rework, or looked at a
+  -- second time. The new decision is the one that counts, and the old one is
+  -- SUPERSEDED, never deleted - it is why the module was treated as it was
+  -- at the time, and the audit needs it. Superseded rows are excluded from
+  -- every count, so a retested module is one module and not two.
+  superseded_by INTEGER NULL,         -- the fqc_id that replaced this
+  superseded_at TEXT NULL
 ) ;
 
 CREATE TABLE IF NOT EXISTS gp_counter (

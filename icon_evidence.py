@@ -67,6 +67,12 @@ PARAMS = [("pmax", "Pmax", "ss_pmax_col", 2, "W"),
           ("irr", "Irradiance", "ss_irr_col", 14, "W/m2")]
 
 
+# (key, label, default column, unit) - the shape gather() iterates, without
+# needing a config to resolve positions it is not going to use
+PARAMS_KEYS = [(k, lab, default, unit)
+               for (k, lab, _cfg_key, default, unit) in PARAMS]
+
+
 def param_cols(cfg):
     """(key, label, column, unit) for every SS parameter, each read from its
     own Settings field rather than assumed at the default position."""
@@ -427,26 +433,51 @@ def simulate(serial, wattage):
             {"state": OK, "verdict": "OK", "note": "SIMULATED"})
 
 
-def propose_grade(wattage, ss, el):
-    """Propose, never decide. The operator confirms or overrides."""
+# EL verdicts that mean "nothing wrong with this module". Anything else is a
+# defect, whatever the module measures - a cracked cell is not an A module on
+# the strength of its power.
+EL_CLEAN = ("ok", "pass", "")
+
+
+def propose_outcome(wattage, ss, el):
+    """PASS or REJECT, proposed. Never decided here.
+
+    A module passes when it makes its rated wattage AND the EL is clean:
+
+        Pmax >= wattage   and   EL verdict clean   ->  pass
+        anything else                              ->  reject
+
+    Pmax is measured against the module's own wattage, not a tolerance band
+    below it. A 590 W module reading 585 W is not a 590 W module, and the
+    customer is buying the number on the label.
+
+    Returns (outcome, why) where outcome is 'pass', 'reject', or None when
+    there is not enough evidence to propose anything.
+    """
     if ss["state"] == BAD:
-        return None, ("The tester could not read this module. That is a fault, "
-                      "not missing data - send it to review before grading.")
+        return None, ("The tester could not read this module. That is a "
+                      "fault, not missing data - it has to be looked at "
+                      "before it can be judged.")
     if ss["state"] != OK or el["state"] != OK:
-        return None, "Evidence incomplete - grade on verbal information and "\
-                     "it will be confirmed when the source returns."
-    v = (el.get("verdict") or "").strip().lower()
-    if v in ("ok", "pass", ""):
-        base = "A"
-    elif v in ("patches", "chip cut"):
-        base = "GY"
-    else:
-        base = "BGY"
-    ratio = (ss["pmax"] or 0) / float(wattage or 1)
-    if base == "A" and ratio < 0.97:
-        return "GY", "EL is clean but Pmax is %.1f%% of nameplate." % (ratio*100)
-    return base, "EL verdict %r, Pmax %.1f%% of nameplate." % (
-        el.get("verdict"), ratio * 100)
+        return None, ("Evidence incomplete - decide on what is in front of "
+                      "you and it will be confirmed when the source returns.")
+
+    pmax = ss.get("pmax") or 0
+    want = float(wattage or 0)
+    verdict = (el.get("verdict") or "").strip()
+    clean = verdict.strip().lower() in EL_CLEAN
+
+    if pmax >= want and clean:
+        return "pass", "EL clean and Pmax %.1f W is at or above the %g W " \
+                       "wattage." % (pmax, want)
+    if pmax < want and not clean:
+        return "reject", "EL reads %r and Pmax %.1f W is below the %g W " \
+                         "wattage." % (verdict, pmax, want)
+    if pmax < want:
+        return "reject", "EL is clean but Pmax %.1f W is below the %g W " \
+                         "wattage." % (pmax, want)
+    return "reject", "Pmax %.1f W meets the %g W wattage, but the EL " \
+                     "reads %r." % (pmax, want, verdict)
 
 
 def gather(cfg, serial, wattage, sandbox=False, line=None):
@@ -461,18 +492,27 @@ def gather(cfg, serial, wattage, sandbox=False, line=None):
     else:
         ss = read_sun_simulator(cfg, serial, line)
         el = read_el(cfg, serial, line)
-    grade, why = propose_grade(wattage, ss, el)
+    outcome, why = propose_outcome(wattage, ss, el)
     degraded = ss["state"] != OK or el["state"] != OK
-    return {
+    out = {
         "pmax": ss.get("pmax"), "params": ss.get("params") or [],
+        "wattage": wattage,
         "ss_state": ss["state"], "ss_note": ss["note"],
         "ss_attempts": ss.get("attempts"), "tested_at": ss.get("tested_at"),
         "ss_line": ss.get("line"), "el_line": el.get("line"),
         "fault": ss["state"] == BAD,
         "el": el.get("verdict"), "el_state": el["state"], "el_note": el["note"],
         "el_path": el.get("path"),
-        "proposed": grade, "why": why,
+        "proposed": outcome, "why": why,
         "degraded": degraded,
         "mode": "provisional" if degraded else "confirmed",
         "sandbox": sandbox,
     }
+    # Every measured value, not only Pmax. The FQC screen shows Voc, Isc and
+    # Fill factor beside it and they were reaching it as nothing at all -
+    # gather() returned the list in `params` but none of the values by name,
+    # so the panel read e.voc and found undefined.
+    for (k, _lab, _i, _u) in PARAMS_KEYS:
+        if k not in out:
+            out[k] = ss.get(k)
+    return out

@@ -631,14 +631,26 @@ def serials_for(cur, alloc_id=None, state=None, limit=500):
 # FQC
 # ==========================================================================
 
-def record_fqc(cur, serial, grade, evidence, decided_by, mode, reason=None):
+def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
+               defect=None, note=None):
     """Snapshot the evidence onto the record. A later re-import must never
-    be able to rewrite why a module was graded."""
-    rec = {"serial": serial, "grade": grade, "mode": mode,
+    be able to rewrite why a module was judged.
+
+    FQC records PASS or REJECT, not a grade. A pass is grade A and is ready
+    to pack. A reject has NO grade until Quality gives it one, and no grade
+    is what keeps it out of a box: the packing gate wants state='graded'
+    with a grade matching the label, and a reject is neither.
+    """
+    outcome = (outcome or "").strip().lower()
+    if outcome not in ("pass", "reject"):
+        raise ValueError("outcome must be 'pass' or 'reject', not %r" % outcome)
+    grade = "A" if outcome == "pass" else None
+    rec = {"serial": serial, "outcome": outcome, "grade": grade, "mode": mode,
            "ss_pmax": evidence.get("pmax"), "ss_state": evidence.get("ss_state"),
            "el_verdict": evidence.get("el"), "el_state": evidence.get("el_state"),
            "proposed": evidence.get("proposed"),
-           "reason": reason, "decided_by": decided_by,
+           "defect": defect, "reason": reason, "note": note,
+           "decided_by": decided_by,
            "at": datetime.datetime.now().isoformat(timespec="seconds")}
     if cur is None:
         _demo["fqc"].append(rec)
@@ -647,14 +659,84 @@ def record_fqc(cur, serial, grade, evidence, decided_by, mode, reason=None):
         cur.execute("INSERT INTO fqc_record (%s) VALUES (%s)"
                     % (", ".join(cols), ", ".join(["%s"] * len(cols))),
                     list(rec.values()))
-    set_serial(cur, serial, state="graded", grade=grade)
+        new_id = cur.lastrowid
+        # A module judged again - retested after a rework, or looked at a
+        # second time - has ONE live decision. The earlier one is superseded
+        # rather than deleted: it is why the module was treated as it was at
+        # the time, and every count reads the live row only, so a retested
+        # module is one module and not two.
+        cur.execute("UPDATE fqc_record SET superseded_by=%s, superseded_at=%s "
+                    "WHERE serial=%s AND fqc_id<>%s AND superseded_by IS NULL",
+                    (new_id, rec["at"], serial, new_id))
+        rec["fqc_id"] = new_id
+    set_serial(cur, serial,
+               state="graded" if outcome == "pass" else "rejected",
+               grade=grade)
     return rec
 
 
-def fqc_recent(cur, n=25):
+def record_quality(cur, serial, grade, decided_by, note=None):
+    """Quality's call on a module FQC rejected: GY or BGY.
+
+    Only then does the module get a grade, and only then can it be packed -
+    into a box of that grade. Written onto the FQC record it belongs to, so
+    the decision sits beside the evidence it was made from.
+    """
+    grade = (grade or "").strip().upper()
+    if grade not in ("GY", "BGY"):
+        raise ValueError("Quality decides GY or BGY, not %r" % grade)
+    at = datetime.datetime.now().isoformat(timespec="seconds")
+    if cur is not None:
+        # onto the LIVE decision, explicitly. A superseded row is why the
+        # module was treated as it was before it came round again, and
+        # writing a quality call onto it would rewrite that history.
+        cur.execute(
+            "UPDATE fqc_record SET quality_grade=%s, quality_note=%s, "
+            "quality_by=%s, quality_at=%s "
+            "WHERE serial=%s AND superseded_by IS NULL",
+            (grade, note, decided_by, at, serial))
+    set_serial(cur, serial, state="graded", grade=grade)
+    return {"serial": serial, "grade": grade, "quality_by": decided_by,
+            "quality_note": note, "quality_at": at}
+
+
+def quality_pending(cur, n=200):
+    """Modules FQC rejected that Quality has not yet called."""
+    if cur is None:
+        return []
+    cur.execute("""
+        SELECT f.*, s.model AS model, s.wattage AS wattage,
+               s.customer AS customer, s.state AS state
+        FROM fqc_record f
+        JOIN serial s ON s.serial = f.serial
+        WHERE f.outcome = 'reject' AND f.quality_grade IS NULL
+          AND s.state = 'rejected'
+          AND f.superseded_by IS NULL
+        ORDER BY f.fqc_id DESC LIMIT %s""", (n,))
+    return cur.fetchall()
+
+
+def fqc_recent(cur, n=25, include_superseded=False):
+    """The live decisions, newest first.
+
+    A superseded row is history: it says why the module was treated as it
+    was before it came round again. It stays in the table and out of the
+    counts - ask for it explicitly to see the trail.
+    """
     if cur is None:
         return list(reversed(_demo["fqc"]))[:n]
-    cur.execute("SELECT * FROM fqc_record ORDER BY fqc_id DESC LIMIT %s", (n,))
+    where = "" if include_superseded else "WHERE superseded_by IS NULL "
+    cur.execute("SELECT * FROM fqc_record %sORDER BY fqc_id DESC LIMIT %%s"
+                % where, (n,))
+    return cur.fetchall()
+
+
+def fqc_history(cur, serial):
+    """Every decision ever recorded for one module, newest first."""
+    if cur is None:
+        return [r for r in _demo["fqc"] if r.get("serial") == serial]
+    cur.execute("SELECT * FROM fqc_record WHERE serial=%s ORDER BY fqc_id DESC",
+                (serial,))
     return cur.fetchall()
 
 
