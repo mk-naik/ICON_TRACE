@@ -300,12 +300,28 @@ def t_quality_needs_reasoning():
     assert serial_row(SHORT)["state"] == "rejected", "it was graded anyway"
 
 
-@test("Quality cannot pass a module - that decision was FQC's")
-def t_quality_cannot_pass():
+@test("Quality can pass a module back to A when the image was the objection")
+def t_quality_can_pass():
+    c = setup()
+    # full power, rejected on the EL verdict alone
+    c.post("/api/fqc", json={"serial": CRACKED, "outcome": "reject"})
+    r = c.post("/api/quality", json={"serial": CRACKED, "grade": "A",
+                                     "note": "image shows a handling mark, "
+                                             "not a cell crack"})
+    assert r.status_code == 200, r.get_json()
+    s = serial_row(CRACKED)
+    assert s["grade"] == "A" and s["state"] == "graded", s
+
+
+@test("but not one that measured short - A is a measurement, not a judgement")
+def t_quality_cannot_pass_short():
     c = setup()
     c.post("/api/fqc", json={"serial": SHORT, "outcome": "reject"})
-    r = c.post("/api/quality", json={"serial": SHORT, "grade": "A"})
-    assert r.status_code == 400, "a rejected module was made an A by review"
+    r = c.post("/api/quality", json={"serial": SHORT, "grade": "A",
+                                     "note": "looks fine to me"})
+    assert r.status_code == 400,         "a module below its wattage was made an A by review"
+    assert "retest" in (r.get_json().get("why") or "").lower(), r.get_json()
+    assert serial_row(SHORT)["state"] == "rejected"
 
 
 @test("Quality cannot grade a module FQC passed")

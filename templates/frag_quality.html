@@ -24,8 +24,9 @@
     </tr></thead><tbody id="qRows"></tbody></table>
   </div>
   <div class="card-b hint">A module is only listed once FQC has rejected it.
-    Nothing here can be made an A &mdash; that decision was FQC&rsquo;s, and a
-    module that failed to make its nameplate does not make it by review.</div>
+    Quality may pass it back to <b>A</b> where the image does not support the
+    verdict &mdash; but not one that measured short: A means Pmax at or above
+    the wattage, and that is measured, not judged.</div>
 </div>
 
 <script>
@@ -73,6 +74,9 @@
               esc((r.at || '').replace('T', ' ').slice(0, 16)) + '</td>' +
             '<td style="white-space:nowrap">' +
               '<button class="btn btn-ghost btn-sm" onclick="qDecide(\'' +
+                esc(r.serial) + '\',\'A\')" title="Pass it back to A — only ' +
+                'if it makes its wattage">Pass A</button> ' +
+              '<button class="btn btn-ghost btn-sm" onclick="qDecide(\'' +
                 esc(r.serial) + '\',\'GY\')">GY</button> ' +
               '<button class="btn btn-ghost btn-sm" onclick="qDecide(\'' +
                 esc(r.serial) + '\',\'BGY\')">BGY</button></td>' +
@@ -96,8 +100,8 @@
     var title = document.getElementById('mdlTitle');
     var sub = document.getElementById('mdlSub');
     if (title) title.textContent = 'Quality decision · ' + serial;
-    if (sub) sub.textContent = 'Grading it ' + grade +
-      ' — say what the evidence shows';
+    if (sub) sub.textContent = (grade === 'A' ? 'Passing it back to A'
+      : 'Grading it ' + grade) + ' — say what the evidence shows';
     if (typeof modalMode === 'function') modalMode(true);
     host.innerHTML =
       '<div class="card" style="margin:0"><div class="card-b">' +
@@ -122,7 +126,8 @@
           esc(serial) + '\')">View EL image</button>' +
         '<button class="btn btn-ghost btn-sm" onclick="iconShowFtr(\'' +
           esc(serial) + '\')">Flash test values</button></div>' +
-      '<div class="fld"><label>Why ' + grade + '? (required)</label>' +
+      '<div class="fld"><label>Why ' +
+        (grade === 'A' ? 'pass this' : grade) + '? (required)</label>' +
         '<textarea id="qWhy" rows="3" placeholder="what the image and the ' +
         'reading show, and why that makes it ' + grade + '"></textarea></div>' +
       '</div><div class="card-f">' +

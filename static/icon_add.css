@@ -83,7 +83,12 @@
   font-size:13px;cursor:pointer;padding:0}
 .side-toggle:hover{background:rgba(255,255,255,.1);color:#fff}
 #app.side-collapsed{grid-template-columns:46px 1fr}
-#app.side-collapsed .side{width:46px;overflow:visible;transition:width .12s ease}
+/* overflow-y:auto, not overflow:visible. Collapsed, the rail still holds
+   more items than fit, and `visible` meant it could not scroll at all — the
+   wheel over the menu went to the page behind it. The hover expansion does
+   not need it: the rail widens itself to 198px and #app does not clip, so
+   the labels still slide out over the page. */
+#app.side-collapsed .side{width:46px;overflow-y:auto;transition:width .12s ease}
 #app.side-collapsed .side .nav-sec{opacity:0;height:6px;padding:0;overflow:hidden}
 #app.side-collapsed .side .nav-i{gap:0;padding:9px 0;justify-content:center;
   font-size:0;white-space:nowrap}

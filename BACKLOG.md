@@ -26,6 +26,10 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       row and its own `overflow-y:auto` never engaged. The wheel over the
       menu scrolled the page behind it. `min-height:0` lets the scroll it
       already asked for work.
+      Collapsed it needed a second fix: that state set `overflow:visible`,
+      which meant the rail could not scroll at all. `overflow-y:auto` there
+      instead — the hover expansion never needed it, since the rail widens
+      itself and `#app` does not clip.
 
 - [x] Indent and Loading Verification are now **real v4 views** — a
       `<section class="view">` in `.main`, a nav button, and the id added to
@@ -327,6 +331,18 @@ A new screen gets both for free.
       left the serial reading `graded`, so only the box knew. Both writes
       happen together, as DATA_LAYER always said they did; pulling a slot
       puts the state back.
+- [x] **What a box IS cannot be typed into it.** New Pallet offered a
+      Customer dropdown of four demo names and three grade buttons, none of
+      them connected to the modules being scanned — so a pallet could be
+      labelled SAI BABUJI, grade A, and filled with ICON STOCK GY modules.
+      The screen said one thing and the box said another, and the label is
+      what the transporter reads.
+      Customer, model and grade come from the first module scanned and are
+      fixed for the life of the box; the gate refuses anything that does not
+      match. Capacity and bin stay the operator's, and capacity locks once
+      the box is a row, because that is what it was opened with. The packing
+      date shows the date the box was actually opened rather than a date
+      typed into v4 two years ago.
 - [x] **The box reports its real number.** `render()` wants a date and the
       column holds text, so every box was quietly reporting its bare
       sequence instead of `ISPL260909/K001`.
@@ -345,9 +361,44 @@ A new screen gets both for free.
       `ISPL260901/T001` with the indirect grade letter. Reading this as
       *use the layout*, not the numbering — confirm.
 
-## 12. Repack
+## 12. Repack  *(built)*
 
-- [ ] One scroll on Open Boxes, listing every packed box.
+- [x] One scroll on Open Boxes, listing every **closed** pallet from the
+      database, with its customer, model, grade and quantity. v4 listed five
+      pallets from a fixed array and generated their contents by counting up
+      from a base serial.
+- [x] Saves. v4's Complete button raised a toast and wrote nothing.
+      `POST /api/repack` retires the source pallets, mints new numbers for
+      the children and writes `box_lineage`, so the trail from a dispatched
+      module back through every pallet it sat in stays whole.
+- [x] **Every module is accounted for.** What is placed goes into a new box,
+      what is left is released back to graded stock, and what nobody mentions
+      stays together as the remainder of its own pallet. Repacking twenty of
+      thirty-six and saying nothing about the other sixteen is how sixteen
+      modules stop existing.
+- [x] The retired pallet **keeps its contents**, so "what did K001 hold?" is
+      still answerable after the pallet is gone. `serial_in_live_box()`
+      ignores retired boxes, so a module sitting in both blocks nothing.
+- [x] A pallet named on a **challan cannot be opened** — the document the
+      transporter carries would stop being true. Those rows show as locked
+      in the list rather than being refused after half a pallet is scanned.
+- [x] A new box claims one grade and one model, set by the first module put
+      in it. Quality may have moved a grade since packing — usually that is
+      *why* the pallet is open — so the master record decides, not the label
+      the modules came in under.
+- [x] Any pallet size, typed. v4 offered 36 / 27 / 26 / 18 from a menu.
+- [x] An unrecognised scan is refused and told why: which pallet it is in, or
+      that it is not packed at all. v4 added it as "fresh FG".
+- [x] A reason is required, and *Other* on its own is not one.
+- [x] Modules are placed in the browser and nothing is written until Complete.
+      New pallet numbers are only issued at that point, so an abandoned
+      session burns no numbers.
+- [x] Tests: `test_repack.py` (21) and `test_repack.js` (19).
+
+- [x] After saving, each new pallet is listed with its number and a **Print
+      pallet sheet** button. Opening a tab per pallet gets all but the first
+      blocked by the browser, and a blocked print is one nobody knows is
+      missing.
 
 ## 13. Stock & Dispatch
 

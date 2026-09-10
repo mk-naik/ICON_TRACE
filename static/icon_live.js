@@ -1341,14 +1341,17 @@
     if (packBox) return Promise.resolve(packBox);
     var bin = document.getElementById('binOn');
     return api('box/open', { method: 'POST', body: JSON.stringify({
-      grade: info.grade, model: info.model, customer: info.customer_code || null,
+      grade: packGrade(), model: info.model,
+      customer: info.customer_code || null,
       capacity: packCap(),
       bin: (bin && bin.checked) ?
            (document.getElementById('binNo') || {}).value : null,
       shift: null
     }) }).then(function (d) {
-      packBox = { box_id: d.box_id, seq: d.seq, grade: info.grade,
-                  model: info.model, qty: 0, capacity: packCap() };
+      packBox = { box_id: d.box_id, seq: d.seq, label: d.label,
+                  grade: packGrade(), model: info.model,
+                  customer: info.customer, pack_date: d.pack_date,
+                  qty: 0, capacity: d.capacity || packCap() };
       packPaintBox();
       return packBox;
     });
@@ -1359,6 +1362,124 @@
     if (el && packBox && packBox.seq != null) {
       el.textContent = packBox.label || ('#' + packBox.seq);
     }
+    packLockFields();
+  }
+
+  /* What a box IS cannot be typed into it.
+   *
+   * New Pallet offered a Customer dropdown of four demo names and three
+   * grade buttons, none of them connected to the modules being scanned - so
+   * an operator could build a pallet labelled SAI BABUJI, grade A, and fill
+   * it with ICON STOCK GY modules. The screen said one thing and the box
+   * said another, and the label is what the transporter reads.
+   *
+   * Customer, model and grade come from the FIRST module scanned and are
+   * then fixed for the life of the box: the gate refuses anything that does
+   * not match, so the box cannot become a mixture. Capacity and bin are
+   * facts about the pallet itself and stay the operator's to set - until
+   * the box exists, after which capacity is what it was opened with.
+   */
+  function packLockFields() {
+    var view = document.getElementById('v-pack');
+    if (!view) return;
+
+    /* the customer picker becomes a read-out, once */
+    var custFld = null;
+    view.querySelectorAll('.fld').forEach(function (f) {
+      var lab = f.querySelector('label');
+      if (lab && /^customer$/i.test(lab.textContent.trim())) custFld = f;
+    });
+    if (custFld && !custFld.__locked) {
+      custFld.__locked = true;
+      var sel = custFld.querySelector('select');
+      if (sel) sel.remove();
+      var out = document.createElement('div');
+      out.id = 'packCust';
+      out.className = 'lv';
+      out.style.cssText = 'padding:7px 0;font-weight:600';
+      out.textContent = '— from the first module scanned';
+      custFld.appendChild(out);
+      var hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = 'Read from the module, never chosen — the label ' +
+                         'claims every module in the box matches.';
+      custFld.appendChild(hint);
+    }
+
+    var open = !!packBox;
+    var cust = document.getElementById('packCust');
+    if (cust) {
+      cust.textContent = open ? (packBox.customer || 'ICON STOCK')
+                              : '— from the first module scanned';
+      cust.style.color = open ? '' : 'var(--ink3)';
+    }
+
+    /* Grade IS the operator's: you set out to build an A box or a GY box,
+       and the gate then refuses anything that does not match. It locks once
+       the box is a row, because its label already claims that grade. */
+    view.querySelectorAll('.seg button').forEach(function (b) {
+      var g = (b.textContent || '').trim();
+      b.disabled = open;
+      b.style.cursor = open ? 'default' : '';
+      if (open) b.classList.toggle('on', g === packBox.grade);
+      b.title = open ? 'Fixed when this box was opened — its label says ' +
+                       packBox.grade
+                     : 'What this box will hold; anything else is refused';
+    });
+
+    /* Capacity is the operator's too, and it is a QUANTITY, not one of four
+       choices: 26 good modules out of a 120 indent is a 26 pallet, and the
+       screen offered 36 / 27 / 26 / 18. Any number up to the physical
+       ceiling - the frame decides the maximum, nothing else does. */
+    var capSel = document.getElementById('capSel');
+    if (capSel && capSel.tagName === 'SELECT') {
+      var num = document.createElement('input');
+      num.type = 'number';
+      num.id = 'capSel';
+      num.min = '1';
+      num.step = '1';
+      num.value = capSel.value || '36';
+      num.style.cssText = capSel.style.cssText;
+      num.onchange = function () { if (typeof setCap === 'function') setCap(); };
+      capSel.parentNode.replaceChild(num, capSel);
+      capSel = num;
+      var ceil = (B.config && B.config.pallet_ceiling) || 36;
+      capSel.max = String(ceil);
+      var h = document.createElement('div');
+      h.className = 'hint';
+      h.textContent = 'Any quantity up to ' + ceil +
+                      ' — the frame sets the maximum, the indent may ask ' +
+                      'for fewer.';
+      capSel.parentNode.appendChild(h);
+    }
+    if (capSel) {
+      capSel.disabled = open;
+      capSel.title = open ? 'Fixed when this box was opened' : '';
+      if (open && packBox.capacity) capSel.value = String(packBox.capacity);
+    }
+
+    /* the meta strip on the pallet itself */
+    var meta = view.querySelector('.pallet-meta');
+    if (meta) {
+      var spans = meta.querySelectorAll('span');
+      if (spans[0]) {
+        spans[0].innerHTML = 'Customer <b>' +
+          fqcEsc(open ? (packBox.customer || 'ICON STOCK') : '—') + '</b>';
+      }
+    }
+    var mg = document.getElementById('metaGrade');
+    if (mg) mg.textContent = open ? (packBox.grade || '—') : '—';
+    var mm = document.getElementById('metaModel');
+    if (mm) mm.textContent = open ? (packBox.model || '—') : '—';
+
+    /* the packing date the box actually carries */
+    view.querySelectorAll('input[type=date]').forEach(function (d) {
+      if (open && packBox.pack_date) d.value = packBox.pack_date;
+      else if (!d.__today) { d.__today = true;
+        d.value = new Date().toISOString().slice(0, 10); }
+      d.readOnly = true;
+      d.title = 'The date this box was opened';
+    });
   }
 
   /* Restore whatever is still open, so a refresh mid-pallet does not lose
@@ -1374,6 +1495,7 @@
         if (!open) return;
         packBox = { box_id: open.box_id, seq: open.seq, grade: open.grade,
                     model: open.model, qty: open.qty,
+                    customer: open.customer_name, pack_date: open.pack_date,
                     capacity: open.capacity, label: open.label };
         packPaintBox();
         fetch('/api/box/' + open.box_id, { cache: 'no-store' })
@@ -1401,7 +1523,8 @@
       var serial = (el && el.value || '').trim().toUpperCase();
       if (!serial) return;
       var q = '/api/box/check?serial=' + encodeURIComponent(serial) +
-              (packBox ? '&box_id=' + packBox.box_id : '');
+              (packBox ? '&box_id=' + packBox.box_id
+                       : '&grade=' + encodeURIComponent(packGrade()));
       fetch(q, { cache: 'no-store' })
         .then(function (r) { return r.json(); })
         .then(function (d) {
@@ -1523,6 +1646,7 @@
         });
     };
 
+    packLockFields();
     packRestore();
   }
 
@@ -2007,6 +2131,7 @@
     if (id === 'plan') {
       try { wirePlanChecks(); renderAllocations(); } catch (e) {}
     }
+    if (id === 'repack') { try { wireRepack(); } catch (e) {} }
   };
 
   /* ---- Planning: the serial must agree with the indent line -----------
@@ -3311,10 +3436,612 @@
   /* v4's simulate-outage button must not fight the real status */
   window.toggleConn = function () { ping(); };
 
+  /* ---- Repack: real pallets, not the five in the demo array -----------
+   *
+   * v4's Repack screen works off a fixed SRC array of five boxes whose
+   * contents are generated by counting up from a base serial, and its
+   * Complete button raises a toast and saves nothing. The workflow it draws
+   * is the right one - open boxes, pool what comes out, build new boxes,
+   * whatever is left goes back to stock - so it is kept and pointed at the
+   * database.
+   *
+   * The rule the server enforces and this screen shows: a printed box number
+   * is never edited underneath itself. Opening a pallet retires it and mints
+   * new numbers, and every module that went in comes out somewhere.
+   */
+  var rpSrc = [], rpPicked = {}, rpPool = [], rpTargets = [], rpActive = 0,
+      rpQ = '', rpLoaded = false;
+
+  function rpEl(id) { return document.getElementById(id); }
+
+  function rpCap() {
+    var e = rpEl('rpCap');
+    var n = parseInt(e && e.value, 10);
+    return n > 0 ? n : 36;
+  }
+
+  /* The pallet size is a number, not a menu. v4 offers 36/27/26/18; a
+     repack that ends up with 5 modules in a box is an ordinary outcome and
+     the operator should not have to pick the nearest listed size. */
+  function rpCapField() {
+    var sel = rpEl('rpCap');
+    if (!sel || sel.tagName !== 'SELECT') return;
+    var box = document.createElement('input');
+    box.id = 'rpCap';
+    box.type = 'number';
+    box.min = '1';
+    box.value = '36';
+    box.className = 'mfil';
+    box.setAttribute('aria-label', 'New box size');
+    box.style.cssText = 'width:64px;padding:3px 7px;font-size:11.5px';
+    box.title = 'How many modules the new pallet holds';
+    sel.parentNode.replaceChild(box, sel);
+  }
+
+  function rpLoad(force) {
+    if (rpLoaded && !force) { rpRenderSrc(); return; }
+    fetch('/api/boxes?state=closed', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (rows) {
+        rpLoaded = true;
+        rpSrc = (rows || []).map(function (b) {
+          return { id: b.box_id, no: b.label || ('box ' + b.seq),
+                   cust: b.customer_name || 'ICON STOCK', model: b.model,
+                   g: b.grade, q: b.qty, cap: b.capacity,
+                   date: b.pack_date,
+                   lock: !!b.on_challan,
+                   lockWhy: b.on_challan ? 'On challan ' + b.on_challan : '' };
+        });
+        rpRenderSrc();
+      })
+      .catch(function () {
+        var host = rpEl('srcList');
+        if (host) host.innerHTML = '<div class="empty-state"><p>The server ' +
+          'did not answer. Closed pallets could not be listed.</p></div>';
+      });
+  }
+
+  function rpRenderSrc() {
+    var host = rpEl('srcList');
+    if (!host) return;
+    var shown = rpSrc.filter(function (b) {
+      return !rpQ || (b.no || '').toUpperCase().indexOf(rpQ) >= 0 ||
+             (b.model || '').toUpperCase().indexOf(rpQ) >= 0;
+    });
+    host.innerHTML = shown.map(function (b) {
+      return '<label class="srcrow' + (b.lock ? ' lock' :
+               (rpPicked[b.id] ? ' pick' : '')) + '">' +
+        '<input type="checkbox" ' + (b.lock ? 'disabled' : '') +
+          (rpPicked[b.id] ? ' checked' : '') +
+          ' onchange="pickSrc(' + b.id + ',this.checked)">' +
+        '<span class="si"><b>' + fqcEsc(b.no) + '</b><span>' +
+          (b.lock ? fqcEsc(b.lockWhy) + ' · cannot be opened'
+                  : fqcEsc(b.cust) + ' · ' + fqcEsc(b.model) + ' · ' +
+                    fqcEsc(b.g || '—')) + '</span></span>' +
+        '<span class="sq">' + b.q + '</span></label>';
+    }).join('') || '<div class="empty-state"><p>' + (rpSrc.length
+      ? 'No pallet matches that filter.'
+      : 'No closed pallet yet. A pallet appears here once it is closed on ' +
+        'the Packing screen.') + '</p></div>';
+  }
+
+  function rpSelected() {
+    return rpSrc.filter(function (b) { return rpPicked[b.id]; });
+  }
+
+  function rpPaintSelection() {
+    var sel = rpSelected();
+    if (rpEl('selBoxes')) rpEl('selBoxes').textContent = sel.length;
+    if (rpEl('selMods')) {
+      rpEl('selMods').textContent = sel.reduce(function (a, b) {
+        return a + (b.q || 0); }, 0);
+    }
+    if (rpEl('goStep2')) rpEl('goStep2').disabled = sel.length === 0;
+    var models = {};
+    sel.forEach(function (b) { models[b.model] = 1; });
+    var warn = rpEl('selWarn');
+    if (warn) {
+      warn.innerHTML = Object.keys(models).length > 1 ?
+        '<div class="note n-warn" style="font-size:11.5px"><span>⚑</span>' +
+        '<span>You have opened pallets of different models. A box claims one ' +
+        'model, so they cannot be mixed into one new pallet.</span></div>' : '';
+    }
+  }
+
+  window.srcFilter = function (v) {
+    rpQ = (v || '').toUpperCase();
+    rpRenderSrc();
+  };
+
+  window.pickSrc = function (id, on) {
+    if (id >= 0) rpPicked[id] = on;
+    rpRenderSrc();
+    rpPaintSelection();
+  };
+
+  window.clearSrc = function () {
+    rpPicked = {}; rpPool = []; rpTargets = []; rpActive = 0;
+    rpRenderSrc(); rpPaintSelection();
+  };
+
+  window.repackReset = function () {
+    if (!confirm('Reset the whole repack session? Nothing has been saved ' +
+                 'yet, so this only clears the screen.')) return;
+    rpPicked = {}; rpPool = []; rpTargets = []; rpActive = 0; rpQ = '';
+    rpLoad(true); rpPaintSelection(); repackStep(1);
+    if (typeof toast === 'function') toast('Repack session cleared.');
+  };
+
+  window.repackStep = function (n) {
+    [1, 2, 3].forEach(function (i) {
+      var v = rpEl('rs' + i), s = rpEl('st' + i);
+      if (v) v.classList.toggle('on', i === n);
+      if (s) { s.classList.toggle('on', i === n);
+               s.classList.toggle('done', i < n); }
+    });
+    if (n === 2) rpBuildPool();
+    if (n === 3) rpConfirm();
+    var main = document.querySelector('.main');
+    if (main) main.scrollTop = 0;
+    if (n === 2) setTimeout(function () {
+      var s = rpEl('rpScan'); if (s) s.focus(); }, 60);
+  };
+
+  /* Everything in the opened pallets is loose on the table until it is put
+     somewhere. Each module carries its OWN grade - a pallet is opened
+     precisely when that has stopped matching the label. */
+  function rpBuildPool() {
+    var sel = rpSelected();
+    var placed = {};
+    rpTargets.forEach(function (t) {
+      t.items.forEach(function (m) { placed[m.s] = 1; }); });
+    var want = {};
+    sel.forEach(function (b) { want[b.id] = b; });
+    rpPool = rpPool.filter(function (m) { return want[m.box_id]; });
+    var have = {};
+    rpPool.forEach(function (m) { have[m.s] = 1; });
+
+    Promise.all(sel.map(function (b) {
+      return fetch('/api/box/' + b.id, { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { return { box: b, rows: d.serials || [] }; });
+    })).then(function (all) {
+      all.forEach(function (x) {
+        x.rows.forEach(function (r) {
+          var s = r.serial || r;
+          if (have[s] || placed[s]) return;
+          rpPool.push({ s: s, box_id: x.box.id, from: x.box.no,
+                        g: r.grade || x.box.g, model: r.model || x.box.model });
+        });
+      });
+      if (!rpTargets.length) addTarget();
+      rpRenderPool(); rpRenderTargets();
+    });
+  }
+
+  function rpRenderPool() {
+    if (rpEl('poolN')) rpEl('poolN').textContent = rpPool.length;
+    var placed = rpTargets.reduce(function (a, t) {
+      return a + t.items.length; }, 0);
+    if (rpEl('placedN')) rpEl('placedN').textContent = placed;
+    /* nothing is "fresh" here: a module that was not in an opened pallet is
+       refused rather than invented */
+    /* v4 counts "fresh added" here, meaning modules it invented into the
+       repack. Nothing is invented, so the same figure is relabelled to what
+       it now means: what is still loose goes back to stock. */
+    var fresh = rpEl('freshN');
+    if (fresh) {
+      var lbl = fresh.parentNode;
+      if (lbl && !lbl.__relabelled) {
+        lbl.__relabelled = true;
+        lbl.innerHTML = 'Back to stock <b id="freshN">0</b>';
+        fresh = rpEl('freshN');
+      }
+      if (fresh) fresh.textContent = rpPool.length;
+    }
+    var host = rpEl('pool');
+    if (!host) return;
+    host.innerHTML = rpPool.length ? rpPool.map(function (m, i) {
+      return '<button class="mchip" onclick="poolClick(' + i + ')" ' +
+        'title="From ' + fqcEsc(m.from) + ' · grade ' + fqcEsc(m.g || '—') +
+        ' — click, or Tab to it and press Enter, to put it in the active box">' +
+        fqcEsc(m.s) + '<small>' + fqcEsc(m.g || '?') + '</small></button>';
+    }).join('') : '<div class="empty-state" style="padding:18px"><p>Nothing ' +
+      'loose — every module from the opened pallets is in a box.</p></div>';
+  }
+
+  function rpRenderTargets() {
+    var host = rpEl('targets');
+    if (!host) return;
+    host.innerHTML = rpTargets.map(function (t, i) {
+      var pct = Math.min(100, Math.round(t.items.length / t.cap * 100));
+      return '<div class="tbox' + (i === rpActive ? ' active' : '') + '">' +
+        '<div class="tbox-h"><b onclick="setActive(' + i + ')">New box ' +
+          (i + 1) + '</b><div class="tg">' +
+        '<span class="tag ' + (t.g === 'A' ? 't-pass' : 't-rev') + '">' +
+          fqcEsc(t.g || 'any grade') + '</span>' +
+        (i === rpActive ? '<span class="tag t-solar">Active</span>' :
+          '<button class="btn btn-ghost btn-sm" onclick="setActive(' + i +
+            ')">Use</button>') +
+        '<button class="btn btn-ghost btn-sm" onclick="removeTarget(' + i +
+          ')" title="Remove this box">×</button>' +
+        '</div></div><div class="mini-bar"><i style="width:' + pct +
+        '%"></i></div>' +
+        '<div class="tbox-c">' + t.items.length + ' of ' + t.cap +
+          (t.items.length === t.cap ? ' · full' :
+           t.items.length === 0 ? ' · empty' : '') +
+          ' · number issued when you save</div>' +
+        '<div class="tbox-items">' + t.items.map(function (m, j) {
+          return '<span class="mchip">' + fqcEsc(m.s) +
+            '<button onclick="toPool(' + i + ',' + j +
+            ')" title="Take it back out">×</button></span>';
+        }).join('') + '</div></div>';
+    }).join('');
+    var a = rpTargets[rpActive];
+    if (rpEl('activeName')) {
+      rpEl('activeName').textContent = a ? 'new box ' + (rpActive + 1)
+                                         : '— add a box first —';
+    }
+  }
+
+  window.addTarget = function () {
+    rpTargets.push({ cap: rpCap(), g: null, model: null, items: [] });
+    rpActive = rpTargets.length - 1;
+    rpRenderTargets(); rpRenderPool();
+  };
+
+  window.removeTarget = function (i) {
+    var t = rpTargets[i];
+    if (!t) return;
+    if (t.items.length && !confirm('New box ' + (i + 1) + ' holds ' +
+        t.items.length + ' module(s). Remove it and send them back to the ' +
+        'loose pool?')) return;
+    t.items.forEach(function (m) { rpPool.push(m); });
+    rpTargets.splice(i, 1);
+    if (rpActive >= rpTargets.length) rpActive = Math.max(0, rpTargets.length - 1);
+    rpRenderPool(); rpRenderTargets();
+    if (typeof toast === 'function') {
+      toast('Box removed. No number was used — numbers are only issued when ' +
+            'the repack is saved.');
+    }
+  };
+
+  window.setActive = function (i) { rpActive = i; rpRenderTargets(); };
+
+  window.toPool = function (ti, mi) {
+    var t = rpTargets[ti];
+    if (!t) return;
+    rpPool.push(t.items.splice(mi, 1)[0]);
+    if (!t.items.length) { t.g = null; t.model = null; }
+    rpRenderPool(); rpRenderTargets();
+  };
+
+  function rpMsg(cls, txt) {
+    var host = rpEl('rpMsg');
+    if (!host) return;
+    host.innerHTML = '<div class="scan-msg ' + cls + '">' +
+      (cls === 'ok' ? '✓' : cls === 'warn' ? '⚑' : '✕') +
+      '<span>' + txt + '</span></div>';
+  }
+
+  /* A box claims one grade and one model. The first module decides both,
+     and the rest have to agree - the same claim the server checks before it
+     will write the box. */
+  function rpPlace(i) {
+    var t = rpTargets[rpActive];
+    if (!t) { rpMsg('bad', 'Add a new box first — there is nowhere to put ' +
+                    'this module.'); return; }
+    var m = rpPool[i];
+    if (t.items.length >= t.cap) {
+      rpMsg('bad', 'New box ' + (rpActive + 1) + ' is full (' + t.cap +
+            '). Make another box active, or raise the box size.');
+      return;
+    }
+    if (t.g && m.g !== t.g) {
+      rpMsg('bad', m.s + ' is grade ' + (m.g || 'ungraded') + ' and new box ' +
+            (rpActive + 1) + ' is ' + t.g + '. The label claims every module ' +
+            'in a box matches.');
+      return;
+    }
+    if (t.model && m.model !== t.model) {
+      rpMsg('bad', m.s + ' is ' + m.model + ' and new box ' + (rpActive + 1) +
+            ' is ' + t.model + '. A box claims one model.');
+      return;
+    }
+    if (!m.g) {
+      rpMsg('bad', m.s + ' has no grade, so no box can claim it. Quality has ' +
+            'to call it first.');
+      return;
+    }
+    rpPool.splice(i, 1);
+    t.g = m.g; t.model = m.model;
+    t.items.push(m);
+    rpRenderPool(); rpRenderTargets();
+    rpMsg('ok', m.s + ' → new box ' + (rpActive + 1) + '  ·  from ' + m.from +
+          '  ·  ' + t.items.length + ' of ' + t.cap);
+  }
+
+  window.poolClick = function (i) { rpPlace(i); };
+
+  window.poolAll = function () {
+    var t = rpTargets[rpActive];
+    if (!t) { rpMsg('bad', 'Add a new box first.'); return; }
+    var room = t.cap - t.items.length;
+    if (room <= 0) {
+      rpMsg('bad', 'New box ' + (rpActive + 1) + ' is already full.'); return; }
+    /* only what this box may lawfully claim, so "fill" never quietly mixes
+       two grades into one label */
+    var moved = 0;
+    for (var i = 0; i < rpPool.length && moved < room; ) {
+      var m = rpPool[i];
+      if ((t.g && m.g !== t.g) || (t.model && m.model !== t.model) || !m.g) {
+        i++; continue;
+      }
+      rpPool.splice(i, 1);
+      t.g = m.g; t.model = m.model;
+      t.items.push(m);
+      moved++;
+    }
+    rpRenderPool(); rpRenderTargets();
+    if (!moved) {
+      rpMsg('warn', 'Nothing loose matches new box ' + (rpActive + 1) +
+            ' — it is ' + (t.g || 'empty') + ' and the rest are not.');
+    } else {
+      rpMsg('ok', moved + ' module(s) placed  ·  ' + t.items.length + ' of ' +
+            t.cap);
+    }
+  };
+
+  /* v4 treats an unrecognised scan as "fresh FG" and adds it. Here it is
+     refused and told why: a module that was not in an opened pallet is
+     either in another pallet, or not packed at all, and inventing it into
+     this box is how a module ends up recorded in two places. */
+  window.rpScanGo = function () {
+    var el = rpEl('rpScan');
+    var bc = (el && el.value || '').trim().toUpperCase();
+    if (el) { el.value = ''; el.focus(); }
+    if (!bc) return;
+    for (var t = 0; t < rpTargets.length; t++) {
+      for (var j = 0; j < rpTargets[t].items.length; j++) {
+        if (rpTargets[t].items[j].s === bc) {
+          rpMsg('bad', bc + ' is already in new box ' + (t + 1) + '.');
+          return;
+        }
+      }
+    }
+    for (var i = 0; i < rpPool.length; i++) {
+      if (rpPool[i].s === bc) { rpPlace(i); return; }
+    }
+    fetch('/api/trace/serial/' + encodeURIComponent(bc), { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d) {
+          rpMsg('bad', bc + ' is not in the serial master. Nothing here can ' +
+                'take it.');
+          return;
+        }
+        var packed = (d.journey || []).filter(function (j) {
+          return j.stage === 'Packed' && j.done; })[0];
+        if (packed) {
+          rpMsg('bad', bc + ' is in pallet ' + packed.value + '. Tick that ' +
+                'pallet in step 1 before scanning this module.');
+        } else {
+          rpMsg('bad', bc + ' is not packed in any pallet, so it cannot come ' +
+                'out of one. Pack it on the Packing screen.');
+        }
+      })
+      .catch(function () { rpMsg('bad', bc + ' — the server did not answer.'); });
+  };
+
+  function rpReason() {
+    var host = rpEl('rs3');
+    if (!host) return '';
+    var sel = host.querySelector('select');
+    var note = host.querySelector('textarea');
+    var why = (sel && sel.value || '').trim();
+    var extra = (note && note.value || '').trim();
+    return extra ? why + ' — ' + extra : why;
+  }
+
+  function rpConfirm() {
+    var sel = rpSelected();
+    var used = rpTargets.filter(function (t) { return t.items.length; });
+    var g = rpEl('geneal');
+    if (g) {
+      g.innerHTML = '<div class="gcol">' + sel.map(function (b) {
+          return '<div class="gbox close">' + fqcEsc(b.no) + ' · ' + b.q +
+                 '</div>'; }).join('') +
+        '</div><div class="garrow">→</div><div class="gcol">' +
+        (used.map(function (t, i) {
+          return '<div class="gbox newb">new box ' + (i + 1) + ' · ' +
+                 t.items.length + ' · ' + fqcEsc(t.g || '—') + '</div>';
+        }).join('') || '<div class="gbox">no new box yet</div>') + '</div>' +
+        (rpPool.length ? '<div class="garrow">+</div><div class="gcol">' +
+          '<div class="gbox">' + rpPool.length + ' back to stock</div></div>'
+          : '');
+    }
+    var rows = rpEl('confirmRows');
+    if (rows) {
+      rows.innerHTML = used.length ? used.map(function (t, i) {
+        var froms = {};
+        t.items.forEach(function (m) { froms[m.from] = (froms[m.from] || 0) + 1; });
+        return '<tr><td class="mono">new box ' + (i + 1) +
+          '<div class="hint">number issued on save</div></td>' +
+          '<td><span class="tag ' + (t.g === 'A' ? 't-pass' : 't-rev') + '">' +
+            fqcEsc(t.g || '—') + '</span></td>' +
+          '<td class="num">' + t.items.length + ' of ' + t.cap + '</td>' +
+          '<td style="font-size:11.5px">' + Object.keys(froms).map(function (f) {
+            return fqcEsc(f) + ' (' + froms[f] + ')'; }).join(', ') + '</td></tr>';
+      }).join('') : '<tr><td colspan="4"><div class="empty-state"><p>No new ' +
+        'box has any modules yet.</p></div></td></tr>';
+    }
+    var warn = rpEl('confirmWarn');
+    if (warn) {
+      warn.innerHTML = rpPool.length ?
+        '<div class="note n-warn" style="font-size:11.5px"><span>⚑</span>' +
+        '<span>' + rpPool.length + ' module(s) were never placed. They will ' +
+        'be recorded as taken out and returned to graded stock, ready to ' +
+        'pack again. Check the physical count before saving.</span></div>' : '';
+    }
+  }
+
+  /* The new pallets need labels printed. Opening a tab per pallet gets all
+     but the first blocked by the browser, and a blocked print is one an
+     operator does not know is missing - so the sheets are offered as buttons
+     and opened one at a time, by hand. */
+  function rpShowResult(d) {
+    var rows = rpEl('confirmRows');
+    if (rows) {
+      rows.innerHTML = (d.children || []).map(function (c) {
+        return '<tr><td class="mono"><b>' + fqcEsc(c.label) + '</b>' +
+          (c.remainder ? '<div class="hint">the rest of ' +
+            fqcEsc((c.from || []).join(', ')) + '</div>' : '') + '</td>' +
+          '<td><span class="tag ' + (c.grade === 'A' ? 't-pass' : 't-rev') +
+            '">' + fqcEsc(c.grade) + '</span></td>' +
+          '<td class="num">' + c.qty + (c.partial ? ' · partial' : '') + '</td>' +
+          '<td><button class="btn btn-ghost btn-sm" onclick="window.open(\'' +
+            '/box/' + c.box_id + '/sheet\',\'_blank\')">Print pallet sheet' +
+            '</button></td></tr>';
+      }).join('');
+    }
+    var g = rpEl('geneal');
+    if (g) {
+      g.innerHTML = '<div class="gcol">' + (d.retired || []).map(function (n) {
+          return '<div class="gbox close">' + fqcEsc(n) + ' · retired</div>';
+        }).join('') + '</div><div class="garrow">→</div><div class="gcol">' +
+        (d.children || []).map(function (c) {
+          return '<div class="gbox newb">' + fqcEsc(c.label) + ' · ' + c.qty +
+                 '</div>'; }).join('') + '</div>' +
+        (d.released && d.released.length ?
+          '<div class="garrow">+</div><div class="gcol"><div class="gbox">' +
+          d.released.length + ' back to stock</div></div>' : '');
+    }
+    var warn = rpEl('confirmWarn');
+    if (warn) {
+      warn.innerHTML = '<div class="note n-ok" style="font-size:11.5px">' +
+        '<span>✓</span><span>Saved. The retired pallet numbers stay in the ' +
+        'system and still list what they held. Print the new sheets above, ' +
+        'then start another repack from step 1.</span></div>';
+    }
+  }
+
+  window.repackSave = function () {
+    var sel = rpSelected();
+    if (!sel.length) {
+      if (typeof toast === 'function') toast('Tick the pallets you opened.');
+      return;
+    }
+    var reason = rpReason();
+    if (!reason) {
+      if (typeof toast === 'function') {
+        toast('Choose a reason. The label each pallet carried said something ' +
+              'else, and the reason is what explains the difference later.');
+      }
+      return;
+    }
+    /* "Other" names no reason at all. Whoever reads this in six months gets
+       the word Other and nothing else, which is the same as no record. */
+    if (reason === 'Other') {
+      if (typeof toast === 'function') {
+        toast('"Other" does not say anything. Write in Notes what was ' +
+              'actually done.');
+      }
+      var n = rpEl('rs3') && rpEl('rs3').querySelector('textarea');
+      if (n && n.focus) n.focus();
+      return;
+    }
+    var used = rpTargets.filter(function (t) { return t.items.length; });
+    if (!used.length && !rpPool.length) {
+      if (typeof toast === 'function') toast('Nothing has been moved.');
+      return;
+    }
+    var kept = rpPool.length;
+    if (kept && !confirm(kept + ' module(s) were not placed in any box. They ' +
+        'will be taken out of packing and returned to graded stock. ' +
+        sel.length + ' pallet(s) will be retired and cannot be un-retired. ' +
+        'Save the repack?')) return;
+    if (!kept && !confirm(sel.length + ' pallet(s) will be retired and ' +
+        used.length + ' new one(s) created with new numbers. A retired pallet ' +
+        'cannot be un-retired. Save the repack?')) return;
+
+    var body = {
+      sources: sel.map(function (b) { return b.id; }),
+      reason: reason,
+      release: rpPool.map(function (m) { return m.s; }),
+      groups: used.map(function (t) {
+        return { grade: t.g, model: t.model, capacity: t.cap,
+                 serials: t.items.map(function (m) { return m.s; }) };
+      })
+    };
+    fetch('/api/repack', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) {
+          if (typeof toast === 'function') toast(d.why || 'Repack refused.');
+          return;
+        }
+        if (typeof toast === 'function') {
+          toast('Repack saved. ' + (d.retired || []).join(', ') + ' retired · ' +
+                (d.children || []).length + ' new pallet(s)' +
+                (d.released && d.released.length
+                  ? ' · ' + d.released.length + ' back to stock' : ''));
+        }
+        rpPicked = {}; rpPool = []; rpTargets = []; rpActive = 0;
+        rpLoad(true);
+        rpPaintSelection();
+        rpShowResult(d);
+      })
+      .catch(function () {
+        if (typeof toast === 'function') {
+          toast('The server did not answer. Nothing was saved.');
+        }
+      });
+  };
+
+  function wireRepack() {
+    var view = document.getElementById('v-repack');
+    if (!view) return;
+    if (!view.__live) {
+      view.__live = true;
+      rpCapField();
+      /* v4's session tag is a made-up reference and its Complete button only
+         raises a toast */
+      var tag = view.querySelector('.pg-act .tag');
+      if (tag) {
+        tag.textContent = 'nothing is saved until you press Complete';
+      }
+      var done = view.querySelector('#rs3 .rail-acts .btn-primary');
+      if (done) {
+        done.removeAttribute('onclick');
+        done.textContent = 'Complete repack & print';
+        done.addEventListener('click', function () { repackSave(); });
+      }
+      var sel = view.querySelector('#rs3 select');
+      if (sel) {
+        /* "Other" with nothing else said is not a reason */
+        sel.insertBefore(new Option('— choose —', ''), sel.firstChild);
+        sel.value = '';
+      }
+      var note = view.querySelector('#rs3 textarea');
+      if (note) {
+        note.placeholder = 'what was actually done, in a sentence';
+      }
+    }
+    rpLoad(true);
+    rpPaintSelection();
+  }
+  /* END repack — test_repack.js reads to here */
+
   /* delegated, so a screen rendered later gets it too */
   wireExports();
   pruneDemoControls();
   wireSearchOrder();
+  /* v4 paints its five demo pallets into Repack during page load, before
+     this file runs. Wiring it here replaces them at once, so the screen is
+     never briefly showing pallets that do not exist. */
+  try { wireRepack(); } catch (e) {}
 
   registerSW();
   window.addEventListener('online', function () { fails = 2; ping(); });

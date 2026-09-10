@@ -683,8 +683,8 @@ def record_quality(cur, serial, grade, decided_by, note=None):
     the decision sits beside the evidence it was made from.
     """
     grade = (grade or "").strip().upper()
-    if grade not in ("GY", "BGY"):
-        raise ValueError("Quality decides GY or BGY, not %r" % grade)
+    if grade not in ("A", "GY", "BGY"):
+        raise ValueError("Quality decides A, GY or BGY, not %r" % grade)
     at = datetime.datetime.now().isoformat(timespec="seconds")
     if cur is not None:
         # onto the LIVE decision, explicitly. A superseded row is why the
@@ -1059,8 +1059,11 @@ def trace_serial(cur, serial):
         return out
     cur.execute("SELECT * FROM fqc_record WHERE serial=%s ORDER BY at", (serial,))
     out["fqc"] = cur.fetchall()
+    # A repacked module is in the retired box AND the live one. The live
+    # one is where it is; the retired one is only where it has been.
     cur.execute("SELECT b.* FROM box b JOIN box_serial bs ON bs.box_id=b.box_id "
-                "WHERE bs.serial=%s", (serial,))
+                "WHERE bs.serial=%s "
+                "ORDER BY (b.state='retired'), b.box_id DESC", (serial,))
     out["box"] = cur.fetchone()
     cur.execute("SELECT c.* FROM challan c JOIN challan_serial cs "
                 "ON cs.challan_id=c.challan_id WHERE cs.serial=%s", (serial,))

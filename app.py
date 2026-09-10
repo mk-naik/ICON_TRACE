@@ -294,6 +294,10 @@ def boot_payload():
         db.seed_materials(cur)
         mats = db.materials(cur)
         cell_eff = db.cell_efficiencies(cur)
+        try:
+            cfg_ceiling = int(db.get_config(cur).get("pallet_ceiling") or 36)
+        except (TypeError, ValueError):
+            cfg_ceiling = 36
     import icon_materials as MM
     mat_cats = MM.MAT_CATS
     return {
@@ -328,6 +332,8 @@ def boot_payload():
                   for i in M.all_items()],
         # the bill of materials, which used to live only in the browser
         "materials": mats, "mat_cats": mat_cats, "cell_eff": cell_eff,
+        # what a pallet can physically hold; the screen offers up to this
+        "config": {"pallet_ceiling": int(cfg_ceiling or 36)},
         "counts": {"serials": counts["serial"], "invoices": counts["invoice"],
                    "challans": counts["challan"], "boxes": counts["box"],
                    "indents": counts["indent"]},
@@ -385,11 +391,30 @@ def api_customer_resolve():
 def api_box_open():
     d = request.get_json(force=True)
     with store.conn() as (cx, cur):
+        ceiling = int(db.get_config(cur).get("pallet_ceiling") or 36)
+        try:
+            capacity = int(d.get("capacity") or ceiling)
+        except (TypeError, ValueError):
+            capacity = ceiling
+        # Any quantity the operator wants, up to what the frame holds. 26
+        # good modules out of a 120 indent is a 26 pallet; the indent may
+        # instruct fewer, never more.
+        if capacity < 1:
+            return jsonify({"ok": False, "why": "A pallet holds at least "
+                                                "one module."}), 400
+        if capacity > ceiling:
+            return jsonify({"ok": False, "why":
+                "%d per pallet is impossible — the frame takes at most %d."
+                % (capacity, ceiling)}), 400
         bid, seq = store.open_box(
             cur, d.get("pack_date") or datetime.date.today().isoformat(),
             d.get("grade", "A"), d["model"], d.get("customer"),
-            int(d.get("capacity", 36)), d.get("shift"), d.get("bin"), actor())
-    return jsonify({"box_id": bid, "seq": seq})
+            capacity, d.get("shift"), d.get("bin"), actor())
+    with store.conn() as (cx, cur):
+        b = dict(store.box_row(cur, bid))
+    return jsonify({"box_id": bid, "seq": seq, "label": _box_label(b),
+                    "pack_date": b.get("pack_date"),
+                    "capacity": b.get("capacity")})
 
 
 @app.route("/api/box/<int:box_id>/scan", methods=["POST"])
@@ -450,7 +475,9 @@ def _pack_refusal(cur, b, serial):
         if s.get("grade") != b["grade"]:
             return ("Box is grade %s, %s is %s. The label claims every module "
                     "matches." % (b["grade"], serial, s.get("grade")))
-        if s.get("model") != b["model"]:
+        # model is None while the box is only intended, not yet opened - the
+        # first module is what decides it
+        if b.get("model") and s.get("model") != b["model"]:
             return "Box is %s, %s is %s." % (b["model"], serial, s.get("model"))
     return None
 
@@ -482,20 +509,41 @@ def api_boxes():
     state = (request.args.get("state") or "").strip() or None
     with store.conn() as (cx, cur):
         rows = [dict(r) for r in store.boxes_by_state(cur, state)]
+        # A pallet named on a challan cannot be opened, and Repack has to
+        # show that as a locked row rather than refuse it after the operator
+        # has already ticked it and scanned half of it.
+        locked = {r["box_id"]: r["no"] for r in store.rows(
+            cur, "SELECT bs.box_id, MIN(c.seq) AS no FROM box_serial bs "
+                 "JOIN challan_serial cs ON cs.serial=bs.serial "
+                 "JOIN challan c ON c.challan_id=cs.challan_id "
+                 "WHERE c.status<>'cancelled' GROUP BY bs.box_id")}
     for b in rows:
         b["label"] = _box_label(b)
+        cr = customers.get(b.get("customer"))
+        b["customer_name"] = cr["name"] if cr else b.get("customer")
+        b["on_challan"] = locked.get(b["box_id"])
     return jsonify(rows)
 
 
 @app.route("/api/box/check")
 def api_box_check():
-    """Preview, through the same gate the scan uses."""
+    """Preview, through the same gate the scan uses.
+
+    Before the first scan there is no box yet, so the grade the operator has
+    set out to build is passed instead - otherwise the first module of the
+    wrong grade is accepted, opens the box, and is then refused by the box
+    it just created.
+    """
     serial = (request.args.get("serial") or "").strip().upper()
     box_id = request.args.get("box_id")
     if not serial:
         return jsonify({"ok": False, "why": "Scan or enter a serial."}), 400
     with store.conn() as (cx, cur):
         b = store.box_row(cur, int(box_id)) if box_id else None
+        if b is None and (request.args.get("grade") or "").strip():
+            # a box that does not exist yet, described by what it will be
+            b = {"grade": request.args.get("grade").strip().upper(),
+                 "model": None, "capacity": None, "qty": 0}
         why = _pack_refusal(cur, b, serial)
         s = db.find_serial(cur, serial) or {}
         rec = next((dict(r) for r in db.fqc_recent(cur, 1000)
@@ -506,6 +554,8 @@ def api_box_check():
         "model": s.get("model"), "wattage": s.get("wattage"),
         "grade": s.get("grade"), "state": s.get("state"),
         "customer": cr["name"] if cr else s.get("customer"),
+        # the code is what a box stores; the name is what the screen shows
+        "customer_code": s.get("customer"),
         "graded_at": (rec or {}).get("at"),
         "outcome": (rec or {}).get("outcome"),
     })
@@ -527,6 +577,199 @@ def api_box_remove(box_id):
         db.audit(cur, actor(), "box.remove", "box", box_id, {"serial": serial})
         b = store.box_row(cur, box_id)
     return jsonify({"ok": True, "qty": b["qty"], "capacity": b["capacity"]})
+
+
+class _Refuse(Exception):
+    """A repack that would lose a module, told to the operator in words."""
+    def __init__(self, why, code=400):
+        Exception.__init__(self, why)
+        self.why, self.code = why, code
+
+
+def _repack(cur, box_ids, groups, release, reason):
+    """Retire boxes and build new ones from their modules.
+
+    The number went out on a printed label and onto a packing list, so a box
+    is never edited underneath it: ISPL260909/K001 meaning thirty-six modules
+    must not quietly come to mean thirty-four. The sources are retired and
+    keep their contents; the modules move into boxes with new numbers, and
+    the parentage is written to box_lineage so the trail from a dispatched
+    module back through every box it sat in stays whole.
+
+    Every module is accounted for, the way icon_box_number.repack() insists.
+    Groups say what moves, `release` says what leaves packing altogether, and
+    whatever is named in neither stays together as the remainder of its own
+    source box. Repacking twenty of thirty-six and saying nothing about the
+    other sixteen is how sixteen modules stop existing.
+    """
+    if not reason:
+        raise _Refuse("Say why these boxes are being opened. The label each "
+                      "one carried said something else, and the reason is "
+                      "what explains the difference later.")
+    if not box_ids:
+        raise _Refuse("Choose the box being repacked.")
+
+    sources, held, owner = [], [], {}
+    for bid in box_ids:
+        b = store.box_row(cur, bid)
+        if not b:
+            raise _Refuse("No such box.", 404)
+        if b["state"] == "retired":
+            raise _Refuse("Box %s has already been repacked." % _box_label(b))
+        if b["state"] == "dispatched":
+            raise _Refuse("Box %s has left the factory. What comes back is a "
+                          "return, not a repack." % _box_label(b))
+        if b["state"] == "open":
+            raise _Refuse("Box %s is still open - take modules out of it "
+                          "directly rather than repacking it." % _box_label(b))
+        mine = store.box_serials(cur, bid)
+        # A pallet named on a challan has been described to a customer in a
+        # document. Changing what is inside it afterwards makes the document
+        # wrong, and the document is the one the transporter carries.
+        gone = db.serials_already_dispatched(cur, mine)
+        if gone:
+            raise _Refuse("Box %s is on a challan — %s is already on a "
+                          "customer document. Cancel the challan before "
+                          "opening the pallet."
+                          % (_box_label(b), gone[0]))
+        sources.append(b)
+        for s in mine:
+            held.append(s)
+            owner[s] = b
+
+    groups = [dict(g) for g in (groups or []) if g.get("serials")]
+    release = [s.strip().upper() for s in (release or [])]
+
+    # One module, one destination. Naming it twice means the operator has
+    # lost track of which box they meant it for, and the count will not add up.
+    claimed = set()
+    for s in [x for g in groups for x in g["serials"]] + release:
+        s = s.strip().upper()
+        if s in claimed:
+            raise _Refuse("%s is named twice. A module goes to one place." % s)
+        claimed.add(s)
+    stray = sorted(claimed - set(held))
+    if stray:
+        raise _Refuse("%s is not in %s." % (
+            stray[0], " or ".join(_box_label(b) for b in sources)))
+    if not claimed:
+        raise _Refuse("Nothing was moved or released, so there is nothing "
+                      "to repack.")
+
+    # What nobody mentioned stays as it was, in a box of its own, so the
+    # count coming out equals the count that went in.
+    for b in sources:
+        rest = [s for s in store.box_serials(cur, b["box_id"])
+                if s not in claimed]
+        if rest:
+            groups.append({"grade": b["grade"], "model": b["model"],
+                           "customer": b["customer"], "serials": rest,
+                           "capacity": b["capacity"], "remainder": True})
+
+    # A repacked pallet is made up on the day it is repacked, so that is the
+    # date its number carries - not the date of the box it came out of.
+    today = datetime.date.today().isoformat()
+    children = []
+    for g in groups:
+        serials = [s.strip().upper() for s in g["serials"]]
+        grade = (g.get("grade") or "").strip().upper()
+        model = g.get("model") or ""
+        # Every child box makes the claim its parent made: one grade, one
+        # model, every module matching. Quality may have moved a grade since
+        # packing - usually that is WHY the box is open - so the master
+        # record decides, not the label the modules came in under.
+        for s in serials:
+            row = db.find_serial(cur, s)
+            if not row:
+                raise _Refuse("%s is not in the serial master." % s)
+            if not grade:
+                grade = (row.get("grade") or "").strip().upper()
+            if not model:
+                model = row.get("model")
+            if (row.get("grade") or "") != grade:
+                raise _Refuse(
+                    "%s is grade %s and cannot go in a %s box. The label "
+                    "claims every module matches."
+                    % (s, row.get("grade") or "ungraded", grade or "blank"))
+            if row.get("model") != model:
+                raise _Refuse("Box is %s, %s is %s." % (model, s,
+                                                        row.get("model")))
+        parents = sorted({owner[s]["box_id"] for s in serials})
+        src0 = owner[serials[0]]
+        cap = g.get("capacity") or src0["capacity"] or len(serials)
+        if len(serials) > cap:
+            raise _Refuse("%d modules will not fit a box of %d."
+                          % (len(serials), cap))
+        bid, seq = store.open_box(
+            cur, today, grade, model,
+            g.get("customer") if "customer" in g else src0["customer"],
+            cap, src0["pack_shift"], src0["bin_no"], actor())
+        # The parents KEEP their box_serial rows. "What did K001 hold?" has
+        # to stay answerable, and serial_in_live_box() ignores retired boxes,
+        # so a module sitting in both does not block anything.
+        for s in serials:
+            store.add_to_box(cur, bid, s, actor())
+            db.set_serial(cur, s, state="packed")
+        store.close_box(cur, bid)
+        for pid in parents:
+            cur.execute("INSERT INTO box_lineage (parent_box_id, child_box_id)"
+                        " VALUES (%s,%s)", (pid, bid))
+        b = store.box_row(cur, bid)
+        children.append({"box_id": bid, "seq": seq, "label": _box_label(b),
+                         "qty": b["qty"], "grade": grade, "model": model,
+                         "capacity": cap, "partial": bool(b["is_partial"]),
+                         "from": [_box_label(store.box_row(cur, p))
+                                  for p in parents],
+                         "remainder": bool(g.get("remainder"))})
+
+    # Released modules go back to graded stock and can be packed again. This
+    # is the usual reason a closed pallet is opened: one module turned out to
+    # be wrong and has to come out.
+    for s in release:
+        db.set_serial(cur, s, state="graded")
+        db.audit(cur, actor(), "box.release", "serial", s,
+                 {"box": owner[s]["box_id"], "reason": reason})
+
+    at = datetime.datetime.now().isoformat(timespec="seconds")
+    for b in sources:
+        # retired, never deleted: the box is what its label said
+        cur.execute("UPDATE box SET state='retired', retired_reason=%s, "
+                    "retired_at=%s, retired_by=%s WHERE box_id=%s",
+                    (reason, at, actor(), b["box_id"]))
+        db.audit(cur, actor(), "box.repack", "box", b["box_id"],
+                 {"reason": reason, "released": release,
+                  "into": [c["label"] for c in children]})
+    return {"ok": True, "retired": [_box_label(b) for b in sources],
+            "released": release, "children": children}
+
+
+@app.route("/api/repack", methods=["POST"])
+@_sync_guard
+def api_repack():
+    """Several pallets opened at once - the Repack screen's own workflow."""
+    d = request.get_json(force=True) or {}
+    ids = [int(x) for x in (d.get("sources") or [])]
+    try:
+        with store.conn() as (cx, cur):
+            out = _repack(cur, ids, d.get("groups"), d.get("release"),
+                          (d.get("reason") or "").strip())
+    except _Refuse as e:
+        return jsonify({"ok": False, "why": e.why}), e.code
+    return jsonify(out)
+
+
+@app.route("/api/box/<int:box_id>/repack", methods=["POST"])
+@_sync_guard
+def api_box_repack(box_id):
+    """One closed pallet, opened from the Packing screen."""
+    d = request.get_json(force=True) or {}
+    try:
+        with store.conn() as (cx, cur):
+            out = _repack(cur, [box_id], d.get("groups"), d.get("release"),
+                          (d.get("reason") or "").strip())
+    except _Refuse as e:
+        return jsonify({"ok": False, "why": e.why}), e.code
+    return jsonify(out)
 
 
 @app.route("/api/box/<int:box_id>/close", methods=["POST"])
@@ -552,7 +795,16 @@ def api_box(box_id):
         if not b:
             abort(404)
         b = dict(b)
-        b["serials"] = store.box_serials(cur, box_id)
+        b["label"] = _box_label(b)
+        # Each module carries its OWN grade and model, not the box's claim
+        # about them. Repack exists precisely for the case where the two have
+        # come apart, so it cannot be shown a list that assumes they agree.
+        b["serials"] = [dict(r) for r in store.rows(
+            cur, "SELECT bs.serial, s.grade, s.model, s.wattage, s.state, "
+                 "bs.added_at, bs.added_by FROM box_serial bs "
+                 "LEFT JOIN serial s ON s.serial=bs.serial "
+                 "AND s.build_instance=bs.build_instance "
+                 "WHERE bs.box_id=%s ORDER BY bs.added_at", (box_id,))]
     return jsonify(b)
 
 
@@ -1617,12 +1869,11 @@ def api_trace_serial(serial):
     cust = customers.get(first["customer"])
     cust_name = cust["name"] if cust else (first["customer"] or "ICON STOCK")
 
-    def box_label(b):
-        try:
-            return boxno.render(b["pack_date"], b["seq"], b["grade"],
-                                b["code_map_version"])
-        except Exception:
-            return "box %s" % b["seq"]
+    # pack_date comes back from SQLite as TEXT and boxno.render() wants a
+    # date, so calling it directly threw on every row and the journey said
+    # "box 3" - which is a row id, not the number printed on the pallet and
+    # not what any packing list carries. _box_label() parses it.
+    box_label = _box_label
 
     # ---- build instances ------------------------------------------------
     # DCR eligibility is derived here, never stored - a flag beside the grade
@@ -1685,11 +1936,22 @@ def api_trace_serial(serial):
         journey.append({"stage": "FQC", "value": "—", "done": False,
                         "detail": ["not judged yet"], "tag": "pending",
                         "tone": "t-mute"})
-    if boxes:
-        b = boxes[-1]
+    # A repacked module sits in two boxes: the retired one it was packed
+    # into and the live one it moved to. Where it IS now is the live one -
+    # reading the newest row alone would report a module released back to
+    # stock as still packed in a box that no longer exists.
+    live_box = [b for b in boxes if b["state"] != "retired"]
+    if live_box:
+        b = live_box[-1]
         journey.append({"stage": "Packed", "value": box_label(b), "done": True,
                         "detail": [b["bin_no"] or "—", b["added_by"] or "—"],
                         "tag": b["added_at"] or "", "tone": "t-mute"})
+    elif boxes:
+        b = boxes[-1]
+        journey.append({"stage": "Packed", "value": "—", "done": False,
+                        "detail": ["was in " + box_label(b) + ", repacked out",
+                                   b["retired_reason"] or ""],
+                        "tag": "back in stock", "tone": "t-mute"})
     else:
         journey.append({"stage": "Packed", "value": "—", "done": False,
                         "detail": ["not packed yet"], "tag": "pending",
@@ -2600,8 +2862,9 @@ def api_quality_grade():
     serial = (d.get("serial") or "").strip().upper()
     grade = (d.get("grade") or "").strip().upper()
     note = (d.get("note") or "").strip() or None
-    if grade not in ("GY", "BGY"):
-        return jsonify({"ok": False, "why": "Quality decides GY or BGY."}), 400
+    if grade not in ("A", "GY", "BGY"):
+        return jsonify({"ok": False, "why":
+                        "Quality decides A, GY or BGY."}), 400
     # GY and BGY are not interchangeable and the difference is a judgement,
     # so the judgement is written down. A grade with no reasoning behind it
     # is one nobody can defend to a customer later.
@@ -2618,6 +2881,24 @@ def api_quality_grade():
             return jsonify({"ok": False, "why":
                 "%s is %s, not awaiting a quality decision."
                 % (serial, rec.get("state"))}), 400
+
+        # Quality can pass a module back to A - it sees the image and the
+        # reading, and FQC may have called it on a verdict the image does
+        # not support. What it cannot do is pass one that MEASURED SHORT: A
+        # means Pmax at or above the wattage, and that is a measurement, not
+        # a judgement. Retest it in the Sun Simulator instead.
+        if grade == "A":
+            cfg = db.get_config(cur)
+            e = ev.gather(cfg, serial, rec.get("wattage") or 0)
+            pmax, want = e.get("pmax"), (rec.get("wattage") or 0)
+            if pmax is None or pmax < want:
+                return jsonify({"ok": False, "why":
+                    "%s cannot be passed: %s A means Pmax at or above the "
+                    "wattage, which is measured, not judged — retest it in "
+                    "the Sun Simulator."
+                    % (serial, e.get("why") or "the reading is unavailable.")
+                    }), 400
+
         saved = db.record_quality(cur, serial, grade, actor(), note)
         db.audit(cur, actor(), "quality.grade", "serial", serial,
                  {"grade": grade, "note": note})

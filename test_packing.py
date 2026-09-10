@@ -257,7 +257,9 @@ def t_survives_refresh():
     open_now = c.get("/api/boxes?state=open").get_json()
     assert len(open_now) == 1 and open_now[0]["qty"] == 3, open_now
     got = c.get("/api/box/%d" % b["box_id"]).get_json()["serials"]
-    assert got == [serial(0), serial(1), serial(2)], got
+    assert [r["serial"] for r in got] == [serial(0), serial(1), serial(2)], got
+    # each module carries its own grade, not the box's claim about it
+    assert all(r["grade"] == "A" for r in got), got
 
 
 @test("the box carries its real number, not its bare sequence")
@@ -267,6 +269,31 @@ def t_box_label():
     label = c.get("/api/boxes").get_json()[0]["label"]
     assert label.startswith("ISPL") and "/" in label, \
         "a box must report the number printed on it, got %r" % label
+
+
+@test("a box's identity comes back with it, so it need never be typed")
+def t_box_identity():
+    c = setup()
+    pass_fqc(c, 0)
+    # what the screen fills the pallet header from, rather than offering a
+    # customer dropdown and grade buttons of its own
+    chk = c.get("/api/box/check?serial=" + serial(0)).get_json()
+    assert chk["customer"] == "ICON STOCK", chk["customer"]
+    assert chk["customer_code"] == "STOCK", \
+        "the box stores the code; the screen shows the name"
+    assert chk["grade"] == "A" and chk["model"] == MODEL, chk
+
+    b = c.post("/api/box/open", json={"grade": chk["grade"],
+                                      "model": chk["model"],
+                                      "customer": chk["customer_code"],
+                                      "capacity": 36}).get_json()
+    assert b["label"].startswith("ISPL"), b
+    assert b["pack_date"] and b["capacity"] == 36, b
+
+    c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(0)})
+    row = c.get("/api/boxes?state=open").get_json()[0]
+    assert row["customer_name"] == "ICON STOCK", row["customer_name"]
+    assert row["grade"] == "A" and row["label"] == b["label"], row
 
 
 @test("an empty box cannot be saved")
