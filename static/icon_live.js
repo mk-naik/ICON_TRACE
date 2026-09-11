@@ -157,16 +157,74 @@
     });
   }
 
+  function fmtIST(iso) {
+    if (!iso) return '—';
+    var s = String(iso);
+    if (s.length < 19 || s.charAt(10) !== 'T') return s;
+    var yr = s.substr(0,4), mo = s.substr(5,2), dy = s.substr(8,2);
+    var hr = parseInt(s.substr(11,2), 10), mn = s.substr(14,2), sc = s.substr(17,2);
+    var ampm = hr >= 12 ? 'PM' : 'AM';
+    var h12 = hr % 12;
+    if (h12 === 0) h12 = 12;
+    var hstr = h12 < 10 ? '0' + h12 : h12;
+    return dy + '-' + mo + '-' + yr + ' ' + hstr + ':' + mn + ':' + sc + ' ' + ampm;
+  }
+  window.fmtIST = fmtIST;
+
   function fqcState(evidence, key) {
     return evidence && evidence[key] ? evidence[key] : 'NC';
   }
 
   function renderLiveFqcRecent() {
-    fetch('/api/fqc/recent?limit=25', {cache: 'no-store'})
+    fetch('/api/fqc/recent?limit=1000', {cache: 'no-store'})
       .then(function (r) { return r.json(); })
       .then(function (rows) {
         var host = document.getElementById('fqcRows');
         if (!host) return;
+
+        var card = host.closest('.card');
+        if (card && !card.hasAttribute('data-itable')) {
+          card.setAttribute('data-itable', 'fqcRecent');
+          card.setAttribute('data-export', 'fqcRecent');
+          var filterHtml = '<div class="card-b" style="border-bottom:1px solid var(--line2);padding-bottom:12px">' +
+            '<div class="grid g5" style="align-items:end">' +
+            '<div class="fld"><label>Search</label><input data-role="search" placeholder="serial, model, customer"></div>' +
+            '<div class="fld"><label>Result</label><select data-role="filter" data-col="7" data-match="has">' +
+            '<option value="">All</option><option value="pass">Pass</option><option value="reject">Reject</option></select></div>' +
+            '<div class="fld"><label>Customer</label><select data-role="filter" data-col="10" data-match="has" id="fqcCust">' +
+            '<option value="">All</option></select></div>' +
+            '<div class="fld"><label>Wattage</label><select data-role="filter" data-col="10" data-match="has" id="fqcWatt">' +
+            '<option value="">All</option></select></div>' +
+            '<div class="fld"><label>Defect</label><select data-role="filter" data-col="8" data-match="has" id="fqcDefect">' +
+            '<option value="">All</option></select></div>' +
+            '</div>' +
+            '<div class="table-tools" style="margin-top:10px">' +
+            '<button class="btn btn-ghost" data-role="reset">Reset</button>' +
+            '<span class="tag t-mute" data-role="count"></span></div></div>';
+          var cb = document.createElement('div');
+          cb.innerHTML = filterHtml;
+          card.insertBefore(cb.firstChild, card.firstChild);
+        }
+
+        var custs = {}, watts = {}, defects = {};
+        rows.forEach(function(r) { 
+          if(r.customer) custs[r.customer]=1; 
+          if(r.wattage) watts[r.wattage]=1;
+          if(r.defect) defects[r.defect]=1;
+        });
+        var fillSel = function(id, map, pfx) {
+          var sel = document.getElementById(id);
+          if(!sel) return;
+          var cur = sel.value;
+          sel.innerHTML = '<option value="">All</option>' + Object.keys(map).sort().map(function(k){
+            return '<option value="' + (pfx||'') + fqcEsc(k).toLowerCase() + '">' + fqcEsc(k) + (pfx==='watt:'?'W':'') + '</option>';
+          }).join('');
+          sel.value = cur;
+        };
+        fillSel('fqcCust', custs, 'cust:');
+        fillSel('fqcWatt', watts, 'watt:');
+        fillSel('fqcDefect', defects);
+
         var count = document.getElementById('fqcN');
         var overrides = document.getElementById('fqcOv');
         var blind = document.getElementById('fqcBlind');
@@ -174,18 +232,101 @@
         if (overrides) overrides.textContent = rows.filter(function (r) { return !!r.reason; }).length;
         if (blind) blind.textContent = rows.filter(function (r) { return r.ss_state !== 'OK'; }).length;
         host.innerHTML = rows.length ? rows.map(function (r) {
-          var pass = r.grade === 'A';
-          return '<tr><td class="mono">' + fqcEsc(r.at) + '</td>' +
+          var pass = r.outcome === 'pass';
+          return '<tr><td class="mono">' + fmtIST(r.at) + '</td>' +
             '<td class="mono">' + fqcEsc(r.serial) + '</td><td class="mono">1</td>' +
-            '<td class="mono">—</td><td class="num">' + (r.ss_pmax == null ? '—' : r.ss_pmax) + '</td>' +
+            '<td class="mono">' + fqcEsc(r.model || '—') + '</td><td class="num">' + (r.ss_pmax == null ? '—' : r.ss_pmax) + '</td>' +
             '<td>' + fqcEsc(r.el_verdict || '—') + '</td><td>' + fqcEsc(r.proposed || '—') + '</td>' +
-            '<td><span class="tag ' + (pass ? 't-pass' : 't-fail') + '">' + r.grade + '</span></td>' +
-            '<td>—</td><td>—</td><td>' + (r.mode === 'provisional' ? '<span class="tag t-rev">Provisional</span>' : '') +
-            (r.reason ? '<span class="tag t-rev">Override</span>' : '') + '</td></tr>';
+            '<td><span class="tag ' + (pass ? 't-pass' : 't-fail') + '">' + fqcEsc(r.grade || (pass ? 'A' : (r.quality_grade || 'Reject'))) + '</span><span style="display:none">' + (pass ? 'pass' : 'reject') + '</span></td>' +
+            '<td>' + fqcEsc(r.defect || '—') + '</td><td>—</td><td>' + (r.mode === 'provisional' ? '<span class="tag t-rev">Provisional</span> ' : '') +
+            (r.reason ? '<span class="tag t-rev">Override</span> ' : '') + '<span style="display:none">cust:' + fqcEsc((r.customer||'').toLowerCase()) + ' watt:' + (r.wattage||'') + '</span></td></tr>';
         }).join('') : '<tr data-empty><td colspan="11"><div class="empty-state">No grading decisions recorded yet.</div></td></tr>';
+
+        if (window.iconTable) window.iconTable.wireAll();
       });
   }
   window.renderLiveFqcRecent = renderLiveFqcRecent;
+
+  window.renderPackLog = function() {
+    fetch('/api/boxes', {cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (rows) {
+        var host = document.getElementById('pkBoxRows');
+        if (!host) return;
+
+        var fDateEl = document.querySelector('#v-packdash input[type=date]');
+        var fDate = fDateEl ? fDateEl.value : '';
+        var fShift = (document.getElementById('pkShift') || {}).value;
+        var fCust = (document.getElementById('pkCust') || {}).value;
+        var fModel = (document.getElementById('pkModel') || {}).value;
+        var fGrade = (document.getElementById('pkGrade') || {}).value;
+        var fStatus = (document.getElementById('pkStatus') || {}).value;
+
+        // Ensure Date filter matches reality
+        if (!fDateEl.__wired) {
+          if (B.range && B.range.from && fDateEl) fDateEl.value = B.range.from;
+          fDate = fDateEl ? fDateEl.value : '';
+          fDateEl.__wired = true;
+        }
+
+        var shown = rows.filter(function(b) {
+          var ok = true;
+          if (fDate && b.pack_date && b.pack_date.indexOf(fDate) !== 0) ok = false;
+          if (fShift && fShift !== 'All shifts' && b.pack_shift !== fShift) ok = false;
+          if (fCust && fCust !== 'All customers' && b.customer_name !== fCust && b.customer !== fCust) ok = false;
+          if (fModel && fModel !== 'All' && b.model !== fModel) ok = false;
+          if (fGrade && fGrade !== 'All' && b.grade !== fGrade) ok = false;
+          if (fStatus && fStatus !== 'All' && b.state !== fStatus.toLowerCase()) ok = false;
+          return ok;
+        });
+
+        // Update KPIs
+        var kpis = document.querySelectorAll('#v-packdash .kpi .v');
+        if (kpis.length >= 4) {
+           kpis[0].textContent = shown.length;
+           var mods = 0, aMods = 0, gyMods = 0;
+           var awaitingMods = 0;
+           shown.forEach(function(b) {
+             mods += (b.qty || 0);
+             if (b.grade === 'A') aMods += (b.qty || 0);
+             else gyMods += (b.qty || 0);
+             if (b.state !== 'dispatched' && b.state !== 'challaned') awaitingMods += (b.qty || 0);
+           });
+           kpis[1].textContent = mods.toLocaleString();
+           var d1 = document.querySelectorAll('#v-packdash .kpi .d');
+           if (d1.length >= 2) d1[1].textContent = aMods + ' A · ' + gyMods + ' Other';
+           kpis[2].textContent = shown.filter(function(b) { return b.origin && b.origin.indexOf('RPK') >= 0; }).length;
+           kpis[3].textContent = shown.filter(function(b) { return b.state !== 'dispatched' && b.state !== 'challaned'; }).length;
+           if (d1.length >= 4) d1[3].textContent = awaitingMods + ' modules';
+        }
+
+        host.innerHTML = shown.length ? shown.map(function(b) {
+          var state = b.state || 'open';
+          var stTag = state === 'packed' ? '<span class="tag t-info">Packed</span>'
+                    : state === 'dispatched' ? '<span class="tag t-solar">Dispatched</span>'
+                    : state === 'repacked' ? '<span class="tag t-mute">Repacked</span>'
+                    : '<span class="tag">' + fqcEsc(state) + '</span>';
+          var gTag = b.grade === 'A' ? '<span class="tag t-pass">A</span>'
+                   : '<span class="tag t-rev">' + fqcEsc(b.grade || '—') + '</span>';
+          var actBtn = state === 'repacked' 
+            ? '<button class="btn btn-ghost btn-sm" onclick="qTry(\'' + fqcEsc(b.label || b.seq) + '\')">History</button>'
+            : '<button class="btn btn-ghost btn-sm" onclick="printDoc(\'Packing list\',\'' + fqcEsc(b.label || b.seq) + '\',3)">Print</button>';
+          return '<tr>' +
+            '<td><button class="lnk" onclick="qTry(\'' + fqcEsc(b.label || b.seq) + '\')">' + fqcEsc(b.label || b.seq) + '</button></td>' +
+            '<td class="mono">' + (b.bin_no ? 'BIN-' + b.bin_no : '—') + '</td>' +
+            '<td>' + fqcEsc(b.customer_name || b.customer || '—') + '</td>' +
+            '<td class="mono">' + fqcEsc(b.model || '—') + '</td>' +
+            '<td>' + gTag + '</td><td class="num">' + (b.qty || 0) + '</td>' +
+            '<td class="mono">' + (typeof fmtIST === 'function' ? fmtIST(b.pack_date).slice(0, 10) : fqcEsc(b.pack_date)) + '</td>' +
+            '<td class="s' + fqcEsc(b.pack_shift||'') + '">' + fqcEsc(b.pack_shift || '—') + '</td>' +
+            '<td>' + stTag + '</td>' +
+            '<td class="mono" style="font-size:10.5px;color:var(--ink3)">' + fqcEsc(b.origin || 'system') + '</td>' +
+            '<td>' + actBtn + '</td>' +
+            '</tr>';
+        }).join('') : '<tr><td colspan="11"><div class="empty-state">No boxes found matching these filters.</div></td></tr>';
+      });
+  };
+  window.packApply = window.renderPackLog;
 
   /* ---- FQC Dashboard: one real, filtered picture, everywhere on the page
    *
@@ -207,18 +348,19 @@
     var g = function (id) { var e = document.getElementById(id); return e ? e.value : ''; };
     var range = (typeof fqcRange === 'function') ?
       fqcRange() : { from: g('fFrom'), to: g('fTo') || g('fFrom') };
-    var custName = g('fDashCust'), custCode = '';
-    if (custName && custName !== 'All customers' && B.customers) {
-      var hit = B.customers.filter(function (c) { return c.name === custName; })[0];
-      custCode = hit ? hit.code : '';
-    }
+    var custName = g('fDashCust');
+    var customer = (custName && custName !== 'All customers') ? custName : '';
     var model = g('fDashModel'); if (model === 'All') model = '';
-    var shift = g('fDashShift'); if (shift === 'All shifts') shift = '';
+    var shift = g('fDashShift'); 
+    if (shift === 'All shifts') shift = '';
+    else if (shift === 'A') shift = 1;
+    else if (shift === 'B') shift = 2;
+    else if (shift === 'C') shift = 3;
     var resultSel = g('fDashResult');
     var result = resultSel === 'Passed only' ? 'pass' :
                  resultSel === 'Rejected only' ? 'reject' : '';
     return { from: range.from || '', to: range.to || range.from || '',
-            shift: shift, customer: custCode, custName: custName,
+            shift: shift, customer: customer, custName: customer,
             model: model, result: result, resultLabel: resultSel };
   }
 
@@ -235,32 +377,46 @@
 
   function renderLiveFqcDash() {
     var f = fqcDashFilters();
+    console.log("fetching dashboard with f=", f);
     fetch('/api/fqc/dashboard' + fqcDashQuery(f), { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         var totals = d.totals || {}, rows = d.rows || [];
         var grid = document.querySelector('#v-dash .grid.g5');
         if (grid) {
+          var kwPassed = totals.watts ? Math.round(totals.watts / 1000).toLocaleString() : '0';
           var vals = [totals.inspected || 0, totals.passed || 0,
-                      totals.rejected || 0, '—', '—'];
+                      totals.rejected || 0, kwPassed, '—'];
           grid.querySelectorAll('.kpi .v').forEach(function (el, i) {
             el.textContent = vals[i].toLocaleString ? vals[i].toLocaleString() : vals[i];
           });
-          var rejD = grid.querySelectorAll('.kpi .d')[2];
-          if (rejD) rejD.textContent = (totals.gy || 0) + ' GY · ' + (totals.bgy || 0) + ' BGY';
+          var dEl = grid.querySelectorAll('.kpi .d');
+          if (dEl.length >= 3) {
+            if (f.shift) {
+              dEl[0].textContent = 'Shift ' + ({1:'A', 2:'B', 3:'C'}[f.shift] || f.shift);
+            } else {
+              var sMap = {};
+              rows.forEach(function(r) { sMap[r.shift] = 1; });
+              var c = Object.keys(sMap).length;
+              dEl[0].textContent = c + (c === 1 ? ' shift' : ' shifts');
+            }
+            dEl[2].textContent = (totals.gy || 0) + ' GY · ' + (totals.bgy || 0) + ' BGY';
+          }
         }
 
         var body = document.getElementById('shiftRows');
         if (body) {
           body.innerHTML = rows.length ? rows.map(function (r) {
             var pct = r.inspected ? (r.rejected / r.inspected * 100).toFixed(2) : '0.00';
-            return '<tr><td class="s' + fqcEsc(r.shift) + '">' + fqcEsc(r.shift) + '</td>' +
-              '<td class="mono">—</td><td class="mono">' + fqcEsc(r.model) + '</td>' +
+            var sMap = {1: 'A', 2: 'B', 3: 'C'};
+            var shiftName = sMap[r.shift] || r.shift;
+            return '<tr><td class="s' + fqcEsc(shiftName) + '">' + fqcEsc(shiftName) + '</td>' +
+              '<td class="mono">' + (r.wattage || '—') + '</td><td class="mono">' + fqcEsc(r.model) + '</td>' +
               '<td class="num">' + r.inspected + '</td><td class="num">' + r.passed + '</td>' +
               '<td class="num">' + r.rejected + '</td>' +
               '<td><div class="bar-wrap"><div class="bar"><i style="width:' +
                 Math.min(pct * 12, 100) + '%"></i></div><span class="mono">' + pct +
-                '%</span></div></td><td>—</td></tr>';
+                '%</span></div></td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:\'Shift '+fqcEsc(shiftName)+' · '+fqcEsc(r.model)+'\',shift:\''+fqcEsc(r.shift)+'\',model:\''+fqcEsc(r.model)+'\'})">View '+r.inspected+'</button></td></tr>';
           }).join('') : '<tr data-empty><td colspan="8"><div class="empty-state">' +
             'Nothing matches these filters.</div></td></tr>';
         }
@@ -285,7 +441,7 @@
           cat.innerHTML = catRows.map(function (x) {
             var pct = catTot ? (x[2] / catTot * 100).toFixed(1) : '0.0';
             return '<tr><td>' + x[0] + '</td><td>' + x[1] + '</td><td class="num">' +
-              x[2] + '</td><td class="mono">' + pct + '%</td><td>—</td></tr>';
+              x[2] + '</td><td class="mono">' + pct + '%</td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:\'Category '+x[0]+'\',cat:\''+x[0]+'\'})">⊞</button></td></tr>';
           }).join('');
         }
 
@@ -301,7 +457,7 @@
             var pct = maxQ ? Math.round(x.qty / maxQ * 100) : 0;
             return '<tr><td>' + fqcEsc(x.defect) + '</td><td class="num">' + x.qty +
               '</td><td><div class="bar-wrap"><div class="bar"><i style="width:' + pct +
-              '%"></i></div></div></td><td>—</td></tr>';
+              '%"></i></div><span class="mono">' + pct + '%</span></div></td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:\'Rejection — '+fqcEsc(x.defect)+'\',result:\'Rejected only\',remark:\''+fqcEsc(x.defect)+'\'})">⊞</button></td></tr>';
           }).join('') : '<tr data-empty><td colspan="4"><div class="empty-state">' +
             'No rejections in this range.</div></td></tr>';
         }
@@ -321,7 +477,7 @@
             var pct = x.inspected ? (x.rejected / x.inspected * 100).toFixed(2) + '%' : '—';
             return '<tr><td class="mono">' + day + '</td><td>—</td><td class="num">' +
               x.inspected + '</td><td class="num">' + x.passed + '</td><td class="num">' +
-              x.rejected + '</td><td class="mono">' + pct + '</td><td>—</td><td>—</td></tr>';
+              x.rejected + '</td><td class="mono">' + pct + '</td><td>—</td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:\''+day+'\',date:\''+day+'\'})">⊞</button></td></tr>';
           }).join('') : '<tr data-empty><td colspan="8"><div class="empty-state">' +
             'No FQC decisions in this range.</div></td></tr>';
         }
@@ -337,6 +493,36 @@
         if (donutNote) {
           donutNote.textContent = totals.inspected ?
             (totals.passed / totals.inspected * 100).toFixed(2) + '% yield' : '—';
+        }
+
+        // Dynamically update available customers and models based on current visible data
+        var custSet = {}, modelSet = {};
+        rows.forEach(function(r) {
+          if (r.customer) {
+            var hit = (B.customers || []).find(function(c) { return c.code === r.customer; });
+            custSet[hit ? hit.name : r.customer] = 1;
+          }
+          if (r.model) modelSet[r.model] = 1;
+        });
+        
+        var cSel = document.getElementById('fDashCust');
+        if (cSel && (!f.customer || cSel.value === 'All customers')) {
+          var cPrev = cSel.value;
+          cSel.innerHTML = '<option>All customers</option>' + Object.keys(custSet).sort().map(function(c) {
+            return '<option value="' + fqcEsc(c) + '">' + fqcEsc(c) + '</option>';
+          }).join('');
+          cSel.value = cPrev;
+          if (cSel.selectedIndex < 0) cSel.value = 'All customers';
+        }
+        
+        var mSel = document.getElementById('fDashModel');
+        if (mSel && (!f.model || mSel.value === 'All')) {
+          var mPrev = mSel.value;
+          mSel.innerHTML = '<option>All</option>' + Object.keys(modelSet).sort().map(function(m) {
+            return '<option value="' + fqcEsc(m) + '">' + fqcEsc(m) + '</option>';
+          }).join('');
+          mSel.value = mPrev;
+          if (mSel.selectedIndex < 0) mSel.value = 'All';
         }
 
         var note = document.getElementById('fDashNote');
@@ -380,10 +566,32 @@
      with fabricated ones. Replacing them outright is the only way Apply
      and Reset end up asking the one real question this screen has. */
   function wireFqcDash() {
+    console.log("wireFqcDash called!");
     fqcDashModelSelect();
+    
+    var fFrom = document.getElementById('fFrom');
+    var fTo = document.getElementById('fTo');
+    var today = new Date().toISOString().slice(0, 10);
+    if (fFrom && (fFrom.value === '2026-08-19' || !fFrom.value)) fFrom.value = today;
+    if (fTo && (fTo.value === '2026-08-19' || !fTo.value)) fTo.value = today;
+
+    if (B.customers) {
+      var sel = document.getElementById('fDashCust');
+      if (sel) {
+        var prev = sel.value;
+        sel.innerHTML = '<option>All customers</option>' + B.customers.map(function(c) {
+          return '<option value="' + fqcEsc(c.name) + '">' + fqcEsc(c.name) + '</option>';
+        }).join('');
+        if (prev) sel.value = prev;
+        if (sel.selectedIndex < 0) sel.value = 'All customers';
+      }
+    }
     if (window.fqcApply && window.fqcApply.__live) return;
 
-    window.fqcApply = function () { renderLiveFqcDash(); };
+    window.fqcApply = function () { 
+      console.log("fqcApply called!");
+      renderLiveFqcDash(); 
+    };
     window.fqcApply.__live = true;
 
     /* From/To already call v4's own fqcRange() on change, which only ever
@@ -414,6 +622,104 @@
     };
   }
   window.wireFqcDash = wireFqcDash;
+
+  window.openModules = function(o) {
+    o = o || {};
+    var f = fqcDashFilters();
+    if (o.shift) f.shift = o.shift;
+    if (o.model) f.model = o.model;
+    if (o.cat) f.cat = o.cat;
+    if (o.result) f.result = (o.result === 'Passed only' ? 'pass' : (o.result === 'Rejected only' ? 'reject' : ''));
+    if (o.remark) f.remark = o.remark;
+    if (o.date) { f.from = o.date; f.to = o.date; }
+
+    var q = fqcDashQuery(f);
+    if (f.cat) q += (q ? '&' : '?') + 'cat=' + encodeURIComponent(f.cat);
+    if (f.remark) q += (q ? '&' : '?') + 'remark=' + encodeURIComponent(f.remark);
+
+    document.getElementById('mdlTitle').textContent = o.title || 'Modules';
+    document.getElementById('mdlCount').textContent = 'Loading...';
+    document.getElementById('mdlRows').innerHTML = '<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--ink3)">Loading database records...</td></tr>';
+    
+    document.getElementById('mdlSearch').value = '';
+    document.getElementById('mdlRes').value = o.result || 'All results';
+    document.getElementById('mdlCat').value = o.cat || 'All categories';
+    var shiftName = {1:'A', 2:'B', 3:'C'}[o.shift] || o.shift || 'All shifts';
+    document.getElementById('mdlShift').value = shiftName;
+    
+    var remSel = document.getElementById('mdlRem');
+    if (remSel) {
+      remSel.innerHTML = '<option>All remarks</option>' + (o.remark ? '<option value="' + fqcEsc(o.remark) + '">' + fqcEsc(o.remark) + '</option>' : '');
+      remSel.value = o.remark || 'All remarks';
+    }
+    
+    if (typeof modalMode === 'function') modalMode(false);
+    var mdl = document.getElementById('mdl');
+    if (mdl) mdl.classList.add('on');
+
+    fetch('/api/fqc/dashboard/modules' + q, {cache: 'no-store'})
+      .then(function(r) { return r.json(); })
+      .then(function(rows) {
+        window.MDL_LIVE = rows; // Store for filtering
+        
+        var remSel = document.getElementById('mdlRem');
+        if (remSel) {
+          var remSet = {};
+          rows.forEach(function(m) { if (m.defect) remSet[m.defect] = 1; });
+          var prev = remSel.value;
+          remSel.innerHTML = '<option>All remarks</option>' + Object.keys(remSet).sort().map(function(r) { return '<option value="'+fqcEsc(r)+'">'+fqcEsc(r)+'</option>'; }).join('');
+          remSel.value = prev;
+          if (remSel.selectedIndex < 0) remSel.value = 'All remarks';
+        }
+
+        mdlFilter(); // initial render
+      });
+  };
+
+  window.mdlFilter = function() {
+    var q = document.getElementById('mdlSearch').value.trim().toUpperCase();
+    var r = document.getElementById('mdlRes').value;
+    var c = document.getElementById('mdlCat').value;
+    var rm = document.getElementById('mdlRem').value;
+    var sh = document.getElementById('mdlShift').value;
+
+    var rows = (window.MDL_LIVE || []).filter(function(m) {
+      if (q && m.serial.indexOf(q) < 0) return false;
+      var pass = m.outcome === 'pass';
+      if (r === 'Passed only' && !pass) return false;
+      if (r === 'Rejected only' && pass) return false;
+      var cat = pass ? 'A' : (m.quality_grade || '—');
+      if (c !== 'All categories' && cat !== c) return false;
+      var rem = m.defect || '—';
+      if (rm !== 'All remarks' && rem !== rm) return false;
+      var sMap = {1:'A', 2:'B', 3:'C'};
+      var mShift = sMap[m.shift] || m.shift;
+      if (sh !== 'All shifts' && mShift != sh) return false; // != handles type difference just in case
+      return true;
+    });
+
+    var countEl = document.getElementById('mdlCount');
+    if (countEl) countEl.textContent = rows.length + (window.MDL_LIVE && window.MDL_LIVE.length === 250 ? '+ shown (capped)' : ' shown');
+    
+    var tbody = document.getElementById('mdlRows');
+    if (tbody) {
+      tbody.innerHTML = rows.length ? rows.map(function(m, i) {
+        var sMap = {1:'A', 2:'B', 3:'C'};
+        var mShift = sMap[m.shift] || m.shift;
+        var pass = m.outcome === 'pass';
+        var cat = pass ? 'A' : (m.quality_grade || '—');
+        var rem = m.defect || '—';
+        return '<tr><td class="num" style="color:var(--ink3)">'+(i+1)+'</td>'+
+          '<td class="mono"><button class="lnk" onclick="qTry(\''+fqcEsc(m.serial)+'\')">'+fqcEsc(m.serial)+'</button></td>'+
+          '<td class="mono">'+fqcEsc(m.model)+'</td><td>'+fqcEsc(m.customer || '—')+'</td>'+
+          '<td class="mono">'+(typeof fmtIST === 'function' ? fmtIST(m.at) : fqcEsc(m.at))+'</td>'+
+          '<td class="s'+fqcEsc(mShift)+'">'+fqcEsc(mShift)+'</td><td>'+fqcEsc(cat)+'</td>'+
+          '<td>'+fqcEsc(rem)+'</td><td><span class="tag '+(pass?'t-pass">Passed':'t-fail">Rejected')+'</span></td>'+
+          '<td class="mono">'+(m.wattage||'—')+'</td></tr>';
+      }).join('') : '<tr><td colspan="10"><div class="empty-state">No modules match these filters.</div></td></tr>';
+    }
+  };
+
   /* END fqc dashboard - test_fqc_dashboard.js reads from "function
      fqcDashFilters" to here. */
 
@@ -429,7 +735,7 @@
   function fqcPrior(data) {
     var p = data.record;
     if (!p) return '<span style="color:var(--ink3)">first inspection</span>';
-    var when = (p.at || '').replace('T', ' ').slice(0, 16);
+    var when = typeof fmtIST === 'function' ? fmtIST(p.at) : (p.at || '').replace('T', ' ').slice(0, 16);
     var what = p.outcome === 'pass' ? 'Passed · A'
              : p.quality_grade ? ('Rejected · ' + p.quality_grade)
              : 'Rejected · awaiting Quality';
@@ -2206,7 +2512,7 @@
       '<div class="card-b flush"><table><thead><tr><th>Timestamp</th>' +
       '<th>Stage</th><th>Reference</th><th>Detail</th><th>User</th></tr></thead>' +
       '<tbody>' + traceRows(d.events, [
-        { cls: 'mono', get: function (e) { return fqcEsc(e.at || DASH); } },
+        { cls: 'mono', get: function (e) { return typeof fmtIST === 'function' ? fmtIST(e.at || DASH) : fqcEsc(e.at || DASH); } },
         { get: function (e) { return fqcEsc(e.stage || DASH); } },
         { cls: 'mono', get: function (e) { return fqcEsc(e.reference || DASH); } },
         { get: function (e) { return fqcEsc(e.detail || DASH); } },

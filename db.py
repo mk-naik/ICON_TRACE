@@ -722,12 +722,22 @@ def fqc_recent(cur, n=25, include_superseded=False):
     A superseded row is history: it says why the module was treated as it
     was before it came round again. It stays in the table and out of the
     counts - ask for it explicitly to see the trail.
+
+    JOINs serial so the caller gets model, wattage and customer — which
+    live on the serial row, not on fqc_record. Without this the Recent
+    Gradings table's Model column is blank.
     """
     if cur is None:
         return list(reversed(_demo["fqc"]))[:n]
-    where = "" if include_superseded else "WHERE superseded_by IS NULL "
-    cur.execute("SELECT * FROM fqc_record %sORDER BY fqc_id DESC LIMIT %%s"
-                % where, (n,))
+    where = ("f.superseded_by IS NULL" if not include_superseded
+             else "1=1")
+    cur.execute(
+        "SELECT f.*, s.model AS model, s.wattage AS wattage, "
+        "s.customer AS customer "
+        "FROM fqc_record f "
+        "LEFT JOIN serial s ON s.serial = f.serial AND s.build_instance = 1 "
+        "WHERE %s "
+        "ORDER BY f.fqc_id DESC LIMIT %%s" % where, (n,))
     return cur.fetchall()
 
 

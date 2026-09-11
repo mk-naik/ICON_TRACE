@@ -3110,6 +3110,12 @@ def api_fqc_recent():
     limit = min(100, max(1, int(request.args.get("limit") or 25)))
     with store.conn() as (cx, cur):
         rows = [dict(r) for r in db.fqc_recent(cur, limit)]
+    # resolve customer codes to display names — the Recent Gradings table
+    # needs them for filtering and for the column itself
+    for r in rows:
+        cr = customers.get(r.get("customer"))
+        if cr:
+            r["customer"] = cr["name"]
     return jsonify(rows)
 
 
@@ -3153,13 +3159,13 @@ def api_fqc_dashboard():
 
     with store.conn() as (cx, cur):
         summary = store.rows(cur,
-            "SELECT substr(f.at, 1, 10) AS day, s.model AS model, "
-            "s.shift AS shift, COUNT(*) AS inspected, "
+            "SELECT substr(f.at, 1, 10) AS day, s.model AS model, s.wattage AS wattage, "
+            "s.customer AS customer, s.shift AS shift, COUNT(*) AS inspected, "
             "SUM(CASE WHEN f.outcome='pass' THEN 1 ELSE 0 END) AS passed, "
             "SUM(CASE WHEN f.outcome='reject' THEN 1 ELSE 0 END) AS rejected "
             "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
             "WHERE " + clause + " "
-            "GROUP BY day, s.model, s.shift ORDER BY day DESC, s.shift, s.model",
+            "GROUP BY day, s.model, s.wattage, s.customer, s.shift ORDER BY day DESC, s.shift, s.model, s.wattage",
             args)
         totals = store.one(cur,
             "SELECT COUNT(*) AS inspected, "
@@ -3168,7 +3174,8 @@ def api_fqc_dashboard():
             "SUM(CASE WHEN f.outcome='reject' AND f.quality_grade IS NULL "
             "         THEN 1 ELSE 0 END) AS awaiting_quality, "
             "SUM(CASE WHEN f.quality_grade='GY' THEN 1 ELSE 0 END) AS gy, "
-            "SUM(CASE WHEN f.quality_grade='BGY' THEN 1 ELSE 0 END) AS bgy "
+            "SUM(CASE WHEN f.quality_grade='BGY' THEN 1 ELSE 0 END) AS bgy, "
+            "SUM(CASE WHEN f.outcome='pass' THEN s.wattage ELSE 0 END) AS watts "
             "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
             "WHERE " + clause, args)
         # Rejection reasons, from the record that was actually made -
@@ -3188,6 +3195,58 @@ def api_fqc_dashboard():
                     "filters": {"from": frm, "to": to, "shift": shift,
                                "customer": customer, "model": model,
                                "result": result}})
+
+@app.route("/api/fqc/dashboard/modules")
+def api_fqc_dashboard_modules():
+    frm = (request.args.get("from") or "").strip()
+    to = (request.args.get("to") or "").strip() or frm
+    shift = (request.args.get("shift") or "").strip()
+    customer = (request.args.get("customer") or "").strip()
+    model = (request.args.get("model") or "").strip()
+    result = (request.args.get("result") or "").strip().lower()
+    cat = (request.args.get("cat") or "").strip()
+    remark = (request.args.get("remark") or "").strip()
+
+    where = ["f.superseded_by IS NULL"]
+    args = []
+    if frm:
+        where.append("substr(f.at,1,10) >= %s"); args.append(frm)
+    if to:
+        where.append("substr(f.at,1,10) <= %s"); args.append(to)
+    if shift:
+        where.append("s.shift = %s"); args.append(shift)
+    if customer:
+        where.append("s.customer = %s"); args.append(customer)
+    if model:
+        where.append("s.model = %s"); args.append(model)
+    if result in ("pass", "reject"):
+        where.append("f.outcome = %s"); args.append(result)
+    if cat:
+        if cat == 'A':
+            where.append("f.outcome = 'pass'")
+        elif cat in ('GY', 'BGY'):
+            where.append("f.quality_grade = %s"); args.append(cat)
+    if remark:
+        where.append("COALESCE(f.defect, '(no defect recorded)') = %s"); args.append(remark)
+
+    clause = " AND ".join(where)
+    args = tuple(args)
+
+    with store.conn() as (cx, cur):
+        rows = store.rows(cur,
+            "SELECT s.serial, s.model, s.customer, s.shift, s.wattage, "
+            "f.at, f.outcome, f.quality_grade, f.defect "
+            "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
+            "WHERE " + clause + " ORDER BY f.at DESC LIMIT 250", args)
+    
+    out = []
+    for r in rows:
+        d = dict(r)
+        cr = customers.get(d.get("customer"))
+        if cr:
+            d["customer"] = cr["name"]
+        out.append(d)
+    return jsonify(out)
 
 @app.route("/fqc", methods=["GET", "POST"])
 def fqc():
