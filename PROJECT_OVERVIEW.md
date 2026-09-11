@@ -207,10 +207,10 @@ del icontrace.db                   start clean
 python icon_invoice_parser.py --selftest
 python test_box_number.py          32 tests · box numbering, grade letters
 python test_evidence.py            26 tests · two lines of SS and EL, NC vs NA
-python test_fqc.py                 39 tests · pass/reject, and what a record may hold
+python test_fqc.py                 49 tests · pass/reject, and what a record may hold
 python test_indent.py               7 tests · one number, and an edit that cannot empty it
-python test_packing.py             17 tests · the gate that keeps a reject off a truck
-python test_repack.py              21 tests · a printed box number is never edited
+python test_packing.py             33 tests · the gate that keeps a reject off a truck
+python test_repack.py              29 tests · a printed box number is never edited
 python test_styles.py               9 tests · the stylesheet reaches v4's page
 ```
 
@@ -222,7 +222,9 @@ does not — no install either way:
 node test_trace.js                 33 tests · Search & Trace renders the record
 node test_export.js                19 tests · what lands in the Excel export
 node test_screens.js               17 tests · the shared table wiring
-node test_repack.js                19 tests · what Repack refuses before it asks
+node test_repack.js                27 tests · what Repack refuses before it asks
+node test_packing.js               26 tests · New Pallet trusts the module, not a click
+node test_fqc_dashboard.js         18 tests · one filtered answer, painted everywhere
 
 cscript //Nologo //E:JScript test_trace.js      the same, without Node
 ```

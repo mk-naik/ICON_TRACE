@@ -299,6 +299,28 @@ A new screen gets both for free.
       Every card holding a table is now claimed by the shared layer — its
       own scroll box, its own search, Reset and row count — across all
       fifteen screens, so one added later gets it by existing.
+- [x] **The filter bar reaches the server, and one filtered answer is what
+      every number on the page shows.** From/To, Shift, Customer, Model and
+      Result reached nothing: Apply filtered a fixed sample array
+      (`SHIFT_ROWS`) and wrote what it found into the Shift table's Total
+      row — the same row a second, separate path (real data, but always
+      unfiltered) never touched. Whichever ran last decided what was on
+      screen, and neither was ever both real and filtered — a screenshot
+      showed the Total row still reading v4's demo "2,847 / 2,791 / 56"
+      under real, filtered-looking cards above it.
+      `/api/fqc/dashboard` now takes `from`/`to`/`shift`/`customer`/`model`/
+      `result`, and one client function paints the KPI cards, the shift
+      table **and its Total row**, category composition (real GY/BGY
+      counts, not one lumped bucket), rejection reasons (real defects,
+      grouped — the old version showed one row reading "Recorded FQC
+      decisions" no matter what was actually wrong with anything), the
+      day-wise table and the donut from that one filtered answer. Customer
+      is picked by name and sent as its code; Model is populated from the
+      real model master rather than v4's fixed five.
+      Tests: `test_fqc.py` (10 new, server-side filtering and the defect
+      breakdown) and `test_fqc_dashboard.js` (18, what the screen paints
+      from one filtered answer, and that Apply/Reset/changing a date all
+      ask the real question).
 
 ## 9. FQC Entry
 
@@ -343,6 +365,20 @@ A new screen gets both for free.
       the box is a row, because that is what it was opened with. The packing
       date shows the date the box was actually opened rather than a date
       typed into v4 two years ago.
+      **Bug found and fixed:** the box was still being opened with whichever
+      grade button was lit on screen, not the grade the check had just read
+      off the module — the segment could disagree with the module and win.
+      `packEnsureBox` now opens the box with the module's own server-verified
+      grade; the pre-box preview no longer sends a guessed grade at all, so
+      there is nothing for a click to override. The segment is disabled at
+      every point in a box's life and only ever displays what the box already
+      is, never a choice.
+      **Second bug found and fixed:** a capacity refusal from `/api/box/open`
+      (over the ceiling) was being read as a successful open — `packBox` got
+      set from a body with no `box_id`, and every later scan believed a box
+      existed that the server had refused to create. The response is now
+      checked before anything is assigned, and a refusal leaves the screen
+      able to open a real box on the very next scan.
 - [x] **The box reports its real number.** `render()` wants a date and the
       column holds text, so every box was quietly reporting its bare
       sequence instead of `ISPL260909/K001`.
@@ -353,7 +389,14 @@ A new screen gets both for free.
       fabricated box in the record — the same reason the invoice screen's
       simulate buttons went. The button is removed and `fillDemo()` is
       neutralised, so nothing can reach it by another route.
-- [ ] Survive a refresh mid-pallet — see Foundations, box persistence.
+- [x] Survive a refresh mid-pallet. The box is a row from the first scan;
+      `packRestore()` reads `/api/boxes?state=open` on load and rebuilds the
+      slots from `/api/box/<id>`, once per screen load.
+- [x] Tests: `test_packing.py` (17, server gate) and the new `test_packing.js`
+      (16, the screen's own wiring) — first-module authority, a refused
+      open leaving nothing corrupted, an ungraded/duplicate/mismatched
+      module never reaching the server at all, the segment staying inert,
+      and a part-packed pallet surviving a reload.
 - [x] Label layout per the reference images (Lighthouse pallet sheet): header
       block, Voucher No / Voucher Date, Model Type, Pallet No, Pallet Grade,
       Order No, QR, then a **two-column UID barcode table**.
@@ -387,18 +430,49 @@ A new screen gets both for free.
       *why* the pallet is open — so the master record decides, not the label
       the modules came in under.
 - [x] Any pallet size, typed. v4 offered 36 / 27 / 26 / 18 from a menu.
-- [x] An unrecognised scan is refused and told why: which pallet it is in, or
-      that it is not packed at all. v4 added it as "fresh FG".
 - [x] A reason is required, and *Other* on its own is not one.
 - [x] Modules are placed in the browser and nothing is written until Complete.
       New pallet numbers are only issued at that point, so an abandoned
       session burns no numbers.
-- [x] Tests: `test_repack.py` (21) and `test_repack.js` (19).
-
 - [x] After saving, each new pallet is listed with its number and a **Print
       pallet sheet** button. Opening a tab per pallet gets all but the first
       blocked by the browser, and a blocked print is one nobody knows is
       missing.
+
+- [x] **Topping up a short pallet from fresh graded stock.** A repack was
+      only ever a split: whatever a group named had to already be in one of
+      the source pallets, and anything else was refused as "not in this
+      box." Mukesh: a pallet opened because two modules were pulled for a
+      dispatch should be toppable back up to a full pallet, not condemned to
+      stay short — an operator can scan genuinely fresh stock into a group,
+      not only what came out of a source.
+      A serial not from any source pallet is now a candidate rather than an
+      automatic refusal: it goes through exactly what a normal scan checks
+      — graded, matching the group's grade and model, not already claimed by
+      some other live pallet — via `_pack_refusal`, the same function the
+      packing screen's own scan uses, rather than a second copy that could
+      drift from it. The Repack screen's scan box does the same: an
+      unrecognised serial is checked against `/api/box/check` and, if it
+      clears, tops up the active box with a `fresh` tag; taken back out, it
+      is discarded rather than manufactured into a "loose from a pallet" row
+      that was never true.
+      The result reports `moved`, `released` and `added` separately, and
+      each child box lists which of its modules were added fresh.
+- [x] **A pallet must be filled to exactly its own declared capacity, or the
+      save is refused.** "Partial" quietly let a box close short of what it
+      was opened for — the fix for a pallet that will not reach its number
+      is not to let it through anyway, it is to scan the rest in, take
+      modules out, or change what the box is declared to hold. `/close`
+      (New Pallet and Repack alike) now refuses unless filled qty equals
+      capacity exactly, naming the shortfall; a new `/api/box/<id>/capacity`
+      lets an open box's declared size be changed, never below what is
+      already in it nor past the frame's ceiling. On the Repack screen, a
+      target box's own capacity stays editable after it is created, for the
+      same reason. `is_partial` stays in the schema for historical rows;
+      nothing sets it true any more.
+- [x] Tests: `test_repack.py` (29, was 21) and `test_repack.js` (27, was 19);
+      `test_packing.py` (33, was 27) and `test_packing.js` (26, was 22) for
+      the capacity-must-match rule on the New Pallet side.
 
 ## 13. Stock & Dispatch
 

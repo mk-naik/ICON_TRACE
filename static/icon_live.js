@@ -135,6 +135,7 @@
     if (typeof window.iconTable !== 'undefined') window.iconTable.wireAll();
     /* before wireResets(), so the Reset it injects gets wired this pass */
     if (typeof addMissingControls === 'function') addMissingControls();
+    if (typeof wireFqcDash === 'function') wireFqcDash();
     if (typeof wirePacking === 'function') wirePacking();
     if (typeof wireScreenTables === 'function') wireScreenTables();
     if (typeof wireMaterialMaster === 'function') wireMaterialMaster();
@@ -186,64 +187,235 @@
   }
   window.renderLiveFqcRecent = renderLiveFqcRecent;
 
+  /* ---- FQC Dashboard: one real, filtered picture, everywhere on the page
+   *
+   * v4's Apply button filtered a fixed SHIFT_ROWS sample array and wrote a
+   * FABRICATED total into the footer - worse than doing nothing, since it
+   * looked like a question had been answered. This function's first version
+   * read real data but always ALL of it, and never touched that same
+   * footer - so the footer stayed v4's demo "2,847 / 2,791 / 56" forever,
+   * and the filter bar had no effect on anything real. Whichever path ran
+   * last decided what was on screen, and neither was both real and
+   * filtered.
+   *
+   * One function now reads the filter bar, asks the server for exactly
+   * that, and paints every card and table on the page from the one answer
+   * - so a KPI card and a table footer can no longer disagree about what
+   * they are both supposed to be counting.
+   */
+  function fqcDashFilters() {
+    var g = function (id) { var e = document.getElementById(id); return e ? e.value : ''; };
+    var range = (typeof fqcRange === 'function') ?
+      fqcRange() : { from: g('fFrom'), to: g('fTo') || g('fFrom') };
+    var custName = g('fDashCust'), custCode = '';
+    if (custName && custName !== 'All customers' && B.customers) {
+      var hit = B.customers.filter(function (c) { return c.name === custName; })[0];
+      custCode = hit ? hit.code : '';
+    }
+    var model = g('fDashModel'); if (model === 'All') model = '';
+    var shift = g('fDashShift'); if (shift === 'All shifts') shift = '';
+    var resultSel = g('fDashResult');
+    var result = resultSel === 'Passed only' ? 'pass' :
+                 resultSel === 'Rejected only' ? 'reject' : '';
+    return { from: range.from || '', to: range.to || range.from || '',
+            shift: shift, customer: custCode, custName: custName,
+            model: model, result: result, resultLabel: resultSel };
+  }
+
+  function fqcDashQuery(f) {
+    var q = [];
+    if (f.from) q.push('from=' + encodeURIComponent(f.from));
+    if (f.to) q.push('to=' + encodeURIComponent(f.to));
+    if (f.shift) q.push('shift=' + encodeURIComponent(f.shift));
+    if (f.customer) q.push('customer=' + encodeURIComponent(f.customer));
+    if (f.model) q.push('model=' + encodeURIComponent(f.model));
+    if (f.result) q.push('result=' + encodeURIComponent(f.result));
+    return q.length ? '?' + q.join('&') : '';
+  }
+
   function renderLiveFqcDash() {
-    fetch('/api/fqc/dashboard', {cache: 'no-store'})
+    var f = fqcDashFilters();
+    fetch('/api/fqc/dashboard' + fqcDashQuery(f), { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        var totals = d.totals || {}, grid = document.querySelector('#v-dash .grid.g5');
+        var totals = d.totals || {}, rows = d.rows || [];
+        var grid = document.querySelector('#v-dash .grid.g5');
         if (grid) {
           var vals = [totals.inspected || 0, totals.passed || 0,
                       totals.rejected || 0, '—', '—'];
           grid.querySelectorAll('.kpi .v').forEach(function (el, i) {
             el.textContent = vals[i].toLocaleString ? vals[i].toLocaleString() : vals[i];
           });
+          var rejD = grid.querySelectorAll('.kpi .d')[2];
+          if (rejD) rejD.textContent = (totals.gy || 0) + ' GY · ' + (totals.bgy || 0) + ' BGY';
         }
+
         var body = document.getElementById('shiftRows');
-        if (body) body.innerHTML = (d.rows || []).map(function (r) {
-          return '<tr><td class="s' + fqcEsc(r.shift) + '">' + fqcEsc(r.shift) + '</td>' +
-            '<td class="mono">—</td><td class="mono">' + fqcEsc(r.model) + '</td>' +
-            '<td class="num">' + r.inspected + '</td><td class="num">' + r.passed + '</td>' +
-            '<td class="num">' + r.rejected + '</td><td>—</td><td>—</td></tr>';
-        }).join('') || '<tr data-empty><td colspan="8"><div class="empty-state">No FQC decisions recorded yet.</div></td></tr>';
+        if (body) {
+          body.innerHTML = rows.length ? rows.map(function (r) {
+            var pct = r.inspected ? (r.rejected / r.inspected * 100).toFixed(2) : '0.00';
+            return '<tr><td class="s' + fqcEsc(r.shift) + '">' + fqcEsc(r.shift) + '</td>' +
+              '<td class="mono">—</td><td class="mono">' + fqcEsc(r.model) + '</td>' +
+              '<td class="num">' + r.inspected + '</td><td class="num">' + r.passed + '</td>' +
+              '<td class="num">' + r.rejected + '</td>' +
+              '<td><div class="bar-wrap"><div class="bar"><i style="width:' +
+                Math.min(pct * 12, 100) + '%"></i></div><span class="mono">' + pct +
+                '%</span></div></td><td>—</td></tr>';
+          }).join('') : '<tr data-empty><td colspan="8"><div class="empty-state">' +
+            'Nothing matches these filters.</div></td></tr>';
+        }
+        // the row a screenshot pointed at: this used to be the one thing
+        // on the page that never changed, no matter what was filtered
+        var foot = document.getElementById('shiftFoot');
+        if (foot) {
+          var t = totals.inspected || 0, ok = totals.passed || 0, rj = totals.rejected || 0;
+          foot.innerHTML = '<td>Total</td><td style="color:var(--ink3)">—</td>' +
+            '<td style="color:var(--ink3)">—</td><td class="num">' + t.toLocaleString() +
+            '</td><td class="num">' + ok.toLocaleString() + '</td><td class="num">' + rj +
+            '</td><td class="mono">' + (t ? (rj / t * 100).toFixed(2) + '%' : '—') +
+            '</td><td></td>';
+        }
+
         var cat = document.getElementById('catRows');
+        if (cat) {
+          var catRows = [['A', 'Passed', totals.passed || 0],
+                         ['GY', 'Rejected', totals.gy || 0],
+                         ['BGY', 'Rejected', totals.bgy || 0]];
+          var catTot = catRows.reduce(function (a, x) { return a + x[2]; }, 0);
+          cat.innerHTML = catRows.map(function (x) {
+            var pct = catTot ? (x[2] / catTot * 100).toFixed(1) : '0.0';
+            return '<tr><td>' + x[0] + '</td><td>' + x[1] + '</td><td class="num">' +
+              x[2] + '</td><td class="mono">' + pct + '%</td><td>—</td></tr>';
+          }).join('');
+        }
+
+        // real defects now, grouped and counted under the same filter -
+        // v4's own version, and the first version of this function, both
+        // showed one row reading "Recorded FQC decisions" regardless of
+        // what was actually wrong with anything
         var rej = document.getElementById('rejRows');
+        var byDef = d.by_defect || [];
+        if (rej) {
+          var maxQ = byDef.length ? byDef[0].qty : 0;
+          rej.innerHTML = byDef.length ? byDef.map(function (x) {
+            var pct = maxQ ? Math.round(x.qty / maxQ * 100) : 0;
+            return '<tr><td>' + fqcEsc(x.defect) + '</td><td class="num">' + x.qty +
+              '</td><td><div class="bar-wrap"><div class="bar"><i style="width:' + pct +
+              '%"></i></div></div></td><td>—</td></tr>';
+          }).join('') : '<tr data-empty><td colspan="4"><div class="empty-state">' +
+            'No rejections in this range.</div></td></tr>';
+        }
+
         var days = document.getElementById('dayRows');
-        if (cat) cat.innerHTML = [
-          ['A', totals.passed || 0, 'Passed'],
-          ['GY', (totals.rejected || 0), 'Rejected'],
-          ['BGY', 0, 'Rejected']
-        ].map(function (x) {
-          return '<tr><td>' + x[0] + '</td><td>' + x[2] + '</td><td class="num">' + x[1] +
-            '</td><td>—</td><td>—</td></tr>';
-        }).join('');
-        if (rej) rej.innerHTML = (d.rows || []).length ?
-          '<tr><td>Recorded FQC decisions</td><td class="num">' + (totals.rejected || 0) +
-          '</td><td>—</td><td>—</td></tr>' :
-          '<tr data-empty><td colspan="4"><div class="empty-state">No rejection data recorded yet.</div></td></tr>';
         if (days) {
           var byDay = {};
-          (d.rows || []).forEach(function (r) {
-            byDay[r.day] = byDay[r.day] || {inspected: 0, passed: 0, rejected: 0};
+          rows.forEach(function (r) {
+            byDay[r.day] = byDay[r.day] || { inspected: 0, passed: 0, rejected: 0 };
             byDay[r.day].inspected += r.inspected || 0;
             byDay[r.day].passed += r.passed || 0;
             byDay[r.day].rejected += r.rejected || 0;
           });
-          days.innerHTML = Object.keys(byDay).sort().reverse().map(function (day) {
+          var dayKeys = Object.keys(byDay).sort().reverse();
+          days.innerHTML = dayKeys.length ? dayKeys.map(function (day) {
             var x = byDay[day];
+            var pct = x.inspected ? (x.rejected / x.inspected * 100).toFixed(2) + '%' : '—';
             return '<tr><td class="mono">' + day + '</td><td>—</td><td class="num">' +
               x.inspected + '</td><td class="num">' + x.passed + '</td><td class="num">' +
-              x.rejected + '</td><td>—</td><td>—</td><td>—</td></tr>';
-          }).join('') || '<tr data-empty><td colspan="8"><div class="empty-state">No FQC decisions recorded yet.</div></td></tr>';
+              x.rejected + '</td><td class="mono">' + pct + '</td><td>—</td><td>—</td></tr>';
+          }).join('') : '<tr data-empty><td colspan="8"><div class="empty-state">' +
+            'No FQC decisions in this range.</div></td></tr>';
         }
+
         if (typeof drawDonut === 'function') {
           drawDonut('fqDonut', 'fqLegend', [
-            {n: 'A - passed', v: totals.passed || 0, c: C.green},
-            {n: 'GY / BGY - rejected', v: totals.rejected || 0, c: C.red}
+            { n: 'A - passed', v: totals.passed || 0, c: C.green },
+            { n: 'GY - downgraded', v: totals.gy || 0, c: C.amber },
+            { n: 'BGY - rejected', v: totals.bgy || 0, c: C.red }
           ], String(totals.inspected || 0), 'inspected');
         }
+        var donutNote = document.getElementById('fqDonutNote');
+        if (donutNote) {
+          donutNote.textContent = totals.inspected ?
+            (totals.passed / totals.inspected * 100).toFixed(2) + '% yield' : '—';
+        }
+
+        var note = document.getElementById('fDashNote');
+        if (note) {
+          var act = [];
+          if (f.shift) act.push('Shift ' + f.shift);
+          if (f.customer) act.push(f.custName);
+          if (f.model) act.push(f.model);
+          if (f.result) act.push(f.resultLabel);
+          note.innerHTML = act.length ?
+            '<div class="note n-info" style="font-size:11.5px"><span>&#9432;</span>' +
+            '<span>Filtered by <b>' + act.map(fqcEsc).join('</b>, <b>') + '</b> · ' +
+            (totals.inspected || 0).toLocaleString() +
+            ' inspected. Clear with Reset.</span></div>' : '';
+        }
+      })
+      .catch(function (err) {
+        if (typeof toast === 'function')
+          toast('Could not load the FQC dashboard: ' + err.message);
       });
   }
   window.renderLiveFqcDash = renderLiveFqcDash;
+
+  /* v4's model options were a fixed list of five; the real master (B.models)
+     may not agree with it, and a filter that cannot name a real model
+     cannot select anything by it. Populated once - the select is not
+     rebuilt out from under an operator mid-choice. */
+  function fqcDashModelSelect() {
+    var sel = document.getElementById('fDashModel');
+    if (!sel || sel.__live || !B.models || !B.models.length) return;
+    sel.__live = true;
+    var keep = sel.value;
+    sel.innerHTML = '<option>All</option>' + B.models.map(function (m) {
+      return '<option>' + m.model + '</option>'; }).join('');
+    if (keep) sel.value = keep;
+  }
+
+  /* Wired once: v4's fqcApply()/fqcResetFilters() filtered a fixed sample
+     array (SHIFT_ROWS) and wrote what it found straight into the same
+     footer renderLiveFqcDash uses - a click on Apply replaced real numbers
+     with fabricated ones. Replacing them outright is the only way Apply
+     and Reset end up asking the one real question this screen has. */
+  function wireFqcDash() {
+    fqcDashModelSelect();
+    if (window.fqcApply && window.fqcApply.__live) return;
+
+    window.fqcApply = function () { renderLiveFqcDash(); };
+    window.fqcApply.__live = true;
+
+    /* From/To already call v4's own fqcRange() on change, which only ever
+       updated the Period readout - the table and cards underneath kept
+       showing whatever range Apply was last pressed with. A listener
+       alongside that inline handler, rather than wrapping fqcRange()
+       itself, asks the real question again without fqcRange calling back
+       into the render that calls fqcRange for its {from, to}. */
+    ['fFrom', 'fTo'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el && !el.__liveRange) {
+        el.__liveRange = true;
+        el.addEventListener('change', function () { renderLiveFqcDash(); });
+      }
+    });
+
+    window.fqcResetFilters = function () {
+      [['fDashShift', 'All shifts'], ['fDashCust', 'All customers'],
+       ['fDashModel', 'All'], ['fDashResult', 'All']].forEach(function (x) {
+        var e = document.getElementById(x[0]); if (e) e.value = x[1];
+      });
+      var today = new Date().toISOString().slice(0, 10);
+      var fr = document.getElementById('fFrom'), t = document.getElementById('fTo');
+      if (fr) fr.value = today; if (t) t.value = today;
+      if (typeof fqcRange === 'function') fqcRange();
+      renderLiveFqcDash();
+      if (typeof toast === 'function') toast('Filters reset.');
+    };
+  }
+  window.wireFqcDash = wireFqcDash;
+  /* END fqc dashboard - test_fqc_dashboard.js reads from "function
+     fqcDashFilters" to here. */
 
   /* One cell of the lookup grid, in v4's own markup. */
   function fqcCell(label, value, absent) {
@@ -1322,12 +1494,6 @@
    */
   var packBox = null;                 // the open box, as the server has it
 
-  function packGrade() {
-    var el = document.querySelector('#v-pack .grade-pick .on, #v-pack [data-grade].on');
-    if (el) return el.getAttribute('data-grade') || el.textContent.trim();
-    return (typeof grade !== 'undefined' && grade) || 'A';
-  }
-
   function packCap() {
     var sel = document.getElementById('capSel');
     return parseInt(sel && sel.value, 10) ||
@@ -1336,20 +1502,33 @@
 
   /* The box is opened on the first accepted scan, not when the screen is,
      so an operator who opens Packing and walks away leaves no empty box
-     behind. Its grade and model come from that first module. */
+     behind. Its grade, model and customer come from that first module -
+     info.grade is what the check just read off the module in the database,
+     never a button pressed beforehand. A box that took its grade from a
+     click instead of the module is exactly how a label ends up claiming
+     something the contents do not. */
   function packEnsureBox(info) {
     if (packBox) return Promise.resolve(packBox);
     var bin = document.getElementById('binOn');
+    var dateEl = document.querySelector('#v-pack input[type=date]');
     return api('box/open', { method: 'POST', body: JSON.stringify({
-      grade: packGrade(), model: info.model,
+      grade: info.grade, model: info.model,
       customer: info.customer_code || null,
       capacity: packCap(),
+      pack_date: dateEl ? dateEl.value : null,
       bin: (bin && bin.checked) ?
            (document.getElementById('binNo') || {}).value : null,
       shift: null
     }) }).then(function (d) {
+      if (d && d.ok === false) {
+        // refused - capacity above the ceiling, usually. Nothing opened,
+        // so packBox must stay null: assigning it here from a body with no
+        // box_id is how a refusal turned into a box that every later scan
+        // believed was real and the server never created.
+        throw new Error(d.why || 'The box could not be opened.');
+      }
       packBox = { box_id: d.box_id, seq: d.seq, label: d.label,
-                  grade: packGrade(), model: info.model,
+                  grade: info.grade, model: info.model,
                   customer: info.customer, pack_date: d.pack_date,
                   qty: 0, capacity: d.capacity || packCap() };
       packPaintBox();
@@ -1414,17 +1593,21 @@
       cust.style.color = open ? '' : 'var(--ink3)';
     }
 
-    /* Grade IS the operator's: you set out to build an A box or a GY box,
-       and the gate then refuses anything that does not match. It locks once
-       the box is a row, because its label already claims that grade. */
+    /* Grade is not the operator's to declare: it is read from the first
+       module scanned, never guessed at in advance. A box labelled A because
+       someone clicked A before scanning, then filled with GY modules
+       because the two disagreed and nobody noticed which one was believed,
+       is the exact failure the label exists to prevent - so the segment is
+       read-only at every point in a box's life and only ever shows what
+       the box already IS, not what it is meant to become. */
     view.querySelectorAll('.seg button').forEach(function (b) {
       var g = (b.textContent || '').trim();
-      b.disabled = open;
-      b.style.cursor = open ? 'default' : '';
-      if (open) b.classList.toggle('on', g === packBox.grade);
-      b.title = open ? 'Fixed when this box was opened — its label says ' +
+      b.disabled = true;
+      b.style.cursor = 'default';
+      b.classList.toggle('on', open && g === packBox.grade);
+      b.title = open ? 'Set by the first module scanned — its label says ' +
                        packBox.grade
-                     : 'What this box will hold; anything else is refused';
+                     : 'Set automatically by the first module scanned';
     });
 
     /* Capacity is the operator's too, and it is a QUANTITY, not one of four
@@ -1440,7 +1623,8 @@
       num.step = '1';
       num.value = capSel.value || '36';
       num.style.cssText = capSel.style.cssText;
-      num.onchange = function () { if (typeof setCap === 'function') setCap(); };
+      // onchange is wired below, every call - it has to branch on whether
+      // a box already exists, which is only known there
       capSel.parentNode.replaceChild(num, capSel);
       capSel = num;
       var ceil = (B.config && B.config.pallet_ceiling) || 36;
@@ -1452,10 +1636,47 @@
                       'for fewer.';
       capSel.parentNode.appendChild(h);
     }
+    /* Capacity used to lock once a box existed. A pallet short of it is now
+       refused at Save rather than let through as "partial" - so the way
+       out of a short pallet has to include changing what it is declared to
+       hold, not just adding or removing modules. Editable at every point in
+       a box's life; while one is open, a change posts to the box itself
+       instead of rebuilding the (real, scanned) slot grid from nothing. */
     if (capSel) {
-      capSel.disabled = open;
-      capSel.title = open ? 'Fixed when this box was opened' : '';
+      capSel.disabled = false;
+      capSel.title = open ?
+        'Change what this pallet is meant to hold — the count filled has ' +
+        'to match this exactly before it can be saved' : capSel.title;
       if (open && packBox.capacity) capSel.value = String(packBox.capacity);
+      capSel.onchange = function () {
+        if (!packBox) {
+          if (typeof setCap === 'function') setCap();
+          return;
+        }
+        var val = parseInt(capSel.value, 10);
+        if (!val || val < 1) {
+          capSel.value = String(packBox.capacity);
+          return;
+        }
+        api('box/' + packBox.box_id + '/capacity',
+            { method: 'POST', body: JSON.stringify({ capacity: val }) })
+          .then(function (d) {
+            if (d && d.ok === false) {
+              if (typeof toast === 'function') toast(d.why);
+              capSel.value = String(packBox.capacity);
+              return;
+            }
+            packBox.capacity = d.capacity;
+            if (typeof cap !== 'undefined') cap = d.capacity;
+            if (typeof paintCount === 'function') paintCount();
+            if (typeof toast === 'function')
+              toast('Pallet capacity set to ' + d.capacity + '.');
+          })
+          .catch(function (err) {
+            if (typeof toast === 'function') toast('Not changed — ' + err.message);
+            capSel.value = String(packBox.capacity);
+          });
+      };
     }
 
     /* the meta strip on the pallet itself */
@@ -1472,13 +1693,27 @@
     var mm = document.getElementById('metaModel');
     if (mm) mm.textContent = open ? (packBox.model || '—') : '—';
 
-    /* the packing date the box actually carries */
+    /* Packing date defaults to today but is the operator's to set until a
+       box exists - a pallet finished just after midnight, or logged the
+       next morning, is still packed the day it was physically built. It
+       locks once the box is a row, to whatever date it was actually opened
+       with; the server refuses anything after today regardless of what is
+       typed here, so this only ever offers a date it will accept. */
+    var todayStr = new Date().toISOString().slice(0, 10);
     view.querySelectorAll('input[type=date]').forEach(function (d) {
-      if (open && packBox.pack_date) d.value = packBox.pack_date;
-      else if (!d.__today) { d.__today = true;
-        d.value = new Date().toISOString().slice(0, 10); }
-      d.readOnly = true;
-      d.title = 'The date this box was opened';
+      if (open) {
+        d.value = packBox.pack_date || todayStr;
+        d.readOnly = true;
+        d.title = 'Fixed when this box was opened — its label carries ' +
+                  'this date';
+      } else {
+        if (!d.__today) { d.__today = true; d.value = todayStr; }
+        d.max = todayStr;
+        d.readOnly = false;
+        d.title = 'When this pallet is being packed — defaults to today, ' +
+                  'changeable for a late entry, never a date that has not ' +
+                  'happened yet';
+      }
     });
   }
 
@@ -1517,14 +1752,19 @@
   function wirePacking() {
     if (typeof packLookup !== 'function' || packLookup.__live) return;
 
-    /* the preview, through the same gate the scan enforces */
+    /* the preview, through the same gate the scan enforces
+     *
+     * Before a box exists there is nothing to compare a module against, so
+     * nothing is declared here - no grade guessed in advance to be checked
+     * against and possibly refused. The module's own grade, read back in
+     * the response, is what packEnsureBox opens the box as. Once the box
+     * IS a row, box_id is enough: the box's own grade and model settle it. */
     var patchedLookup = function () {
       var el = document.getElementById('packScan');
       var serial = (el && el.value || '').trim().toUpperCase();
       if (!serial) return;
       var q = '/api/box/check?serial=' + encodeURIComponent(serial) +
-              (packBox ? '&box_id=' + packBox.box_id
-                       : '&grade=' + encodeURIComponent(packGrade()));
+              (packBox ? '&box_id=' + packBox.box_id : '');
       fetch(q, { cache: 'no-store' })
         .then(function (r) { return r.json(); })
         .then(function (d) {
@@ -1630,10 +1870,10 @@
             if (typeof toast === 'function') toast(d.why);
             return;
           }
-          if (typeof toast === 'function') {
-            toast('Box saved with ' + d.qty + ' module(s)' +
-                  (d.partial ? ' — partial box, and recorded as one.' : '.'));
-          }
+          // a close can only ever succeed exactly full now - short of it
+          // is refused above, with d.why saying how many are missing
+          if (typeof toast === 'function')
+            toast('Box saved with ' + d.qty + ' module(s).');
           var closed = packBox;
           packBox = null;
           if (typeof buildSlots === 'function') buildSlots();
@@ -1646,9 +1886,54 @@
         });
     };
 
+    /* "Clear pallet" only ever had one honest use: an empty box opened by
+       mistake - the wrong grade's first module refused, or a browser closed
+       between opening the box and the first scan landing. v4's version only
+       rebuilt the local slot grid; it never told the server, so the real,
+       empty, open box stayed behind and locked the screen to its grade for
+       every visit after, including a fresh one after a refresh - there was
+       no way back to a clean pallet without going around this file. A
+       pallet that already holds a real module is not "cleared" by this
+       button: that would throw away a scan that really happened, a
+       different and much worse mistake than freeing a number nothing was
+       ever printed against. */
+    var origReset = window.resetPallet;
+    window.resetPallet = function () {
+      if (!packBox) { if (origReset) origReset(); return; }
+      if (packBox.qty) {
+        if (typeof toast === 'function') {
+          toast('This pallet already holds ' + packBox.qty + ' module(s) — ' +
+                'take them out one at a time, or close it as it is. Clear ' +
+                'is only for a box nothing has been scanned into yet.');
+        }
+        return;
+      }
+      var closing = packBox;
+      api('box/' + closing.box_id + '/abandon', { method: 'POST', body: '{}' })
+        .then(function (d) {
+          if (d && d.ok === false) {
+            if (typeof toast === 'function') toast(d.why);
+            return;
+          }
+          packBox = null;
+          if (origReset) origReset();
+          packLockFields();
+          if (typeof toast === 'function') {
+            toast((d.abandoned || closing.label || 'The pallet') +
+                  ' was abandoned — nothing had been scanned into it. Its ' +
+                  'number is not reused.');
+          }
+        })
+        .catch(function (err) {
+          if (typeof toast === 'function')
+            toast('Not cleared — ' + err.message);
+        });
+    };
+
     packLockFields();
     packRestore();
   }
+  /* END packing - test_packing.js reads from "var packBox = null" to here. */
 
   /* Two controls the backlog asks for that v4 never drew: a Reset on the
      Production Dashboard filter bar, and an Export on Line & shift
@@ -3667,12 +3952,23 @@
           ')" title="Remove this box">×</button>' +
         '</div></div><div class="mini-bar"><i style="width:' + pct +
         '%"></i></div>' +
-        '<div class="tbox-c">' + t.items.length + ' of ' + t.cap +
+        // A save is refused unless this box is filled to exactly this
+        // number - so the number itself has to stay changeable here, not
+        // only at the moment the box was first added.
+        '<div class="tbox-c">' + t.items.length + ' of ' +
+          '<input type="number" min="1" max="' +
+          ((B.config && B.config.pallet_ceiling) || 36) + '" value="' + t.cap +
+          '" style="width:48px;padding:1px 4px;font:inherit;text-align:center" ' +
+          'onchange="rpSetCap(' + i + ',this.value)" title="What this box ' +
+          'must be filled to exactly before it can be saved">' +
           (t.items.length === t.cap ? ' · full' :
-           t.items.length === 0 ? ' · empty' : '') +
+           t.items.length === 0 ? ' · empty' :
+           ' · ' + (t.cap - t.items.length) + ' short') +
           ' · number issued when you save</div>' +
         '<div class="tbox-items">' + t.items.map(function (m, j) {
-          return '<span class="mchip">' + fqcEsc(m.s) +
+          return '<span class="mchip' + (m.fresh ? ' fresh' : '') +
+            '" title="' + fqcEsc(m.fresh ? 'fresh graded stock, topping ' +
+              'this pallet up' : 'from ' + m.from) + '">' + fqcEsc(m.s) +
             '<button onclick="toPool(' + i + ',' + j +
             ')" title="Take it back out">×</button></span>';
         }).join('') + '</div></div>';
@@ -3688,6 +3984,33 @@
     rpTargets.push({ cap: rpCap(), g: null, model: null, items: [] });
     rpActive = rpTargets.length - 1;
     rpRenderTargets(); rpRenderPool();
+  };
+
+  /* A save is refused unless a box is filled to exactly its own declared
+     capacity - so a target that will end up short of the number it was
+     created with needs a way to say so, not just more modules found for
+     it. Never below what is already placed: that would make the box
+     already over what it claims, before it even exists. */
+  window.rpSetCap = function (i, raw) {
+    var t = rpTargets[i];
+    if (!t) return;
+    var val = parseInt(raw, 10);
+    if (!val || val < 1) { rpRenderTargets(); return; }
+    if (val < t.items.length) {
+      rpMsg('bad', 'New box ' + (i + 1) + ' already holds ' + t.items.length +
+            ' — capacity cannot go below that. Take modules out first.');
+      rpRenderTargets();
+      return;
+    }
+    var ceil = (B.config && B.config.pallet_ceiling) || 36;
+    if (val > ceil) {
+      rpMsg('bad', val + ' per pallet is impossible — the frame takes at ' +
+            'most ' + ceil + '.');
+      rpRenderTargets();
+      return;
+    }
+    t.cap = val;
+    rpRenderTargets();
   };
 
   window.removeTarget = function (i) {
@@ -3711,7 +4034,10 @@
   window.toPool = function (ti, mi) {
     var t = rpTargets[ti];
     if (!t) return;
-    rpPool.push(t.items.splice(mi, 1)[0]);
+    var m = t.items.splice(mi, 1)[0];
+    // fresh stock was never loose from an opened pallet, so there is no
+    // pool row to give it back to - scan it again if it is wanted back
+    if (m && !m.fresh) rpPool.push(m);
     if (!t.items.length) { t.g = null; t.model = null; }
     rpRenderPool(); rpRenderTargets();
   };
@@ -3727,32 +4053,36 @@
   /* A box claims one grade and one model. The first module decides both,
      and the rest have to agree - the same claim the server checks before it
      will write the box. */
-  function rpPlace(i) {
-    var t = rpTargets[rpActive];
-    if (!t) { rpMsg('bad', 'Add a new box first — there is nowhere to put ' +
-                    'this module.'); return; }
-    var m = rpPool[i];
+  /* Grade, model and capacity are exactly what a box may claim - whether
+     the module came from the loose pool or was scanned in fresh, one set
+     of rules decides, not two that could drift apart. */
+  function rpPlacementRefusal(t, m) {
+    if (!t) return 'Add a new box first — there is nowhere to put this module.';
     if (t.items.length >= t.cap) {
-      rpMsg('bad', 'New box ' + (rpActive + 1) + ' is full (' + t.cap +
-            '). Make another box active, or raise the box size.');
-      return;
+      return 'New box ' + (rpActive + 1) + ' is full (' + t.cap +
+             '). Make another box active, or raise the box size.';
     }
     if (t.g && m.g !== t.g) {
-      rpMsg('bad', m.s + ' is grade ' + (m.g || 'ungraded') + ' and new box ' +
-            (rpActive + 1) + ' is ' + t.g + '. The label claims every module ' +
-            'in a box matches.');
-      return;
+      return m.s + ' is grade ' + (m.g || 'ungraded') + ' and new box ' +
+             (rpActive + 1) + ' is ' + t.g + '. The label claims every ' +
+             'module in a box matches.';
     }
     if (t.model && m.model !== t.model) {
-      rpMsg('bad', m.s + ' is ' + m.model + ' and new box ' + (rpActive + 1) +
-            ' is ' + t.model + '. A box claims one model.');
-      return;
+      return m.s + ' is ' + m.model + ' and new box ' + (rpActive + 1) +
+             ' is ' + t.model + '. A box claims one model.';
     }
     if (!m.g) {
-      rpMsg('bad', m.s + ' has no grade, so no box can claim it. Quality has ' +
-            'to call it first.');
-      return;
+      return m.s + ' has no grade, so no box can claim it. Quality has to ' +
+             'call it first.';
     }
+    return null;
+  }
+
+  function rpPlace(i) {
+    var t = rpTargets[rpActive];
+    var m = rpPool[i];
+    var why = rpPlacementRefusal(t, m);
+    if (why) { rpMsg('bad', why); return; }
     rpPool.splice(i, 1);
     t.g = m.g; t.model = m.model;
     t.items.push(m);
@@ -3812,23 +4142,30 @@
     for (var i = 0; i < rpPool.length; i++) {
       if (rpPool[i].s === bc) { rpPlace(i); return; }
     }
-    fetch('/api/trace/serial/' + encodeURIComponent(bc), { cache: 'no-store' })
-      .then(function (r) { return r.ok ? r.json() : null; })
+    /* Not loose from an opened pallet - a candidate to top the active box
+       back up from fresh graded stock. A pallet opened because two modules
+       were pulled for a dispatch should not be condemned to stay short;
+       checked through the SAME gate the packing screen's own scan uses
+       (graded, not already claimed by some other live pallet), not a
+       second copy of it that could drift from it. */
+    fetch('/api/box/check?serial=' + encodeURIComponent(bc), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (!d) {
-          rpMsg('bad', bc + ' is not in the serial master. Nothing here can ' +
-                'take it.');
+        if (!d.ok) {
+          rpMsg('bad', bc + ' — ' + (d.why || 'cannot be added.'));
           return;
         }
-        var packed = (d.journey || []).filter(function (j) {
-          return j.stage === 'Packed' && j.done; })[0];
-        if (packed) {
-          rpMsg('bad', bc + ' is in pallet ' + packed.value + '. Tick that ' +
-                'pallet in step 1 before scanning this module.');
-        } else {
-          rpMsg('bad', bc + ' is not packed in any pallet, so it cannot come ' +
-                'out of one. Pack it on the Packing screen.');
-        }
+        var m = { s: bc, g: d.grade, model: d.model, from: 'fresh stock',
+                 fresh: true };
+        var why = rpPlacementRefusal(rpTargets[rpActive], m);
+        if (why) { rpMsg('bad', why); return; }
+        var target = rpTargets[rpActive];
+        target.g = m.g; target.model = m.model;
+        target.items.push(m);
+        rpRenderTargets();
+        rpMsg('ok', bc + ' → new box ' + (rpActive + 1) +
+              '  ·  fresh graded stock  ·  ' + target.items.length + ' of ' +
+              target.cap);
       })
       .catch(function () { rpMsg('bad', bc + ' — the server did not answer.'); });
   };
@@ -3877,11 +4214,25 @@
     }
     var warn = rpEl('confirmWarn');
     if (warn) {
-      warn.innerHTML = rpPool.length ?
-        '<div class="note n-warn" style="font-size:11.5px"><span>⚑</span>' +
-        '<span>' + rpPool.length + ' module(s) were never placed. They will ' +
-        'be recorded as taken out and returned to graded stock, ready to ' +
-        'pack again. Check the physical count before saving.</span></div>' : '';
+      var short = used.filter(function (t) { return t.items.length < t.cap; });
+      var msgs = [];
+      if (short.length) {
+        msgs.push((short.length === 1 ? 'One new box is' : short.length +
+          ' new boxes are') + ' short of the size ' +
+          (short.length === 1 ? 'it was' : 'they were') + ' given (' +
+          short.map(function (t) { return (t.cap - t.items.length) + ' short'; })
+            .join(', ') + '). Scan more, or change the number on the box, ' +
+          'before saving — a short box will be refused.');
+      }
+      if (rpPool.length) {
+        msgs.push(rpPool.length + ' module(s) were never placed. They will ' +
+          'be recorded as taken out and returned to graded stock, ready to ' +
+          'pack again. Check the physical count before saving.');
+      }
+      warn.innerHTML = msgs.length ? msgs.map(function (m) {
+        return '<div class="note n-warn" style="font-size:11.5px">' +
+          '<span>⚑</span><span>' + m + '</span></div>';
+      }).join('') : '';
     }
   }
 

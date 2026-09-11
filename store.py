@@ -277,11 +277,11 @@ def remove_from_box(cur, box_id, serial):
 
 
 def close_box(cur, box_id):
-    b = box_row(cur, box_id)
-    partial = 1 if (b["qty"] or 0) < (b["capacity"] or 0) else 0
-    cur.execute("UPDATE box SET state='closed', is_partial=%s WHERE box_id=%s",
-                (partial, box_id))
-    return partial
+    """The caller has already made sure qty matches capacity - closing
+    short of it is refused before this is ever reached, so is_partial is
+    never set true here. The column stays, read-only now, because
+    historical boxes closed under the old rule still carry it."""
+    cur.execute("UPDATE box SET state='closed' WHERE box_id=%s", (box_id,))
 
 
 def serial_in_live_box(cur, serial):

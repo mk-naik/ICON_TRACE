@@ -587,6 +587,141 @@ def t_failed_retest_is_not_stale():
         % r.get_json()
 
 
+# --------------------------------------------------------------------------
+# the dashboard's numbers are the same filtered set everywhere they appear
+#
+# The screen offers From/To, Shift, Customer, Model and Result - and until
+# now none of them reached the server. The filter bar overwrote a real,
+# unfiltered total with a FABRICATED one from v4's own sample rows, which is
+# worse than doing nothing: it looked like the screen had answered a
+# question it had not. Every number below - the totals, the day/shift/model
+# breakdown, and the defect breakdown - comes from ONE endpoint reading ONE
+# filter, so a card and a table footer can never disagree about what they
+# are both supposed to be counting.
+# --------------------------------------------------------------------------
+
+D1, D2 = "2026-09-05", "2026-09-08"
+
+
+def dash_setup():
+    """Six modules spread across two days, two shifts, two customers, two
+    models and both outcomes - varied enough that a filter which does
+    nothing cannot hide behind a coincidence."""
+    store.wipe()
+    with store.conn() as (cx, cur):
+        rows = [
+            # serial,                day,  shift, customer, model,          outcome, defect
+            ("ICON625R1290510001", D1, 1, "STOCK",  "ISEN625-G12R", "pass",   None),
+            ("ICON625R1290510002", D1, 1, "STOCK",  "ISEN625-G12R", "reject", "Cell Crack"),
+            ("ICON625R1290510003", D1, 2, "SGMEDA", "ISEN625-G12R", "pass",   None),
+            ("ICON630R1290510004", D2, 1, "SGMEDA", "ISEN630-G12R", "reject", "Cell Crack"),
+            ("ICON630R1290510005", D2, 2, "STOCK",  "ISEN630-G12R", "reject", "Micro Crack"),
+            ("ICON630R1290510006", D2, 2, "STOCK",  "ISEN630-G12R", "pass",   None),
+        ]
+        for i, (s, day, shift, cust, model, outcome, defect) in enumerate(rows):
+            store.insert(cur, "serial", {
+                "serial": s, "build_instance": 1, "model": model,
+                "wattage": 625, "customer": cust, "dcr": "DCR",
+                "format_version": 2, "date_produced": day,
+                "shift": shift, "sequence": 510 + i,
+                "state": "graded" if outcome == "pass" else "rejected",
+                "grade": "A" if outcome == "pass" else None})
+            store.insert(cur, "fqc_record", {
+                "serial": s, "outcome": outcome,
+                "grade": "A" if outcome == "pass" else None,
+                "mode": "confirmed", "decided_by": "operator",
+                "at": day + " 10:00:00", "defect": defect})
+    return APP.app.test_client()
+
+
+@test("with no filter, the dashboard counts every live record")
+def t_dash_no_filter():
+    c = dash_setup()
+    t = c.get("/api/fqc/dashboard").get_json()["totals"]
+    assert t["inspected"] == 6, t
+    assert t["passed"] == 3 and t["rejected"] == 3, t
+
+
+@test("the date range only counts inspections that fall inside it")
+def t_dash_date_range():
+    c = dash_setup()
+    t = c.get("/api/fqc/dashboard?from=%s&to=%s" % (D1, D1)).get_json()["totals"]
+    assert t["inspected"] == 3, "day one has 3 records, got %s" % t["inspected"]
+    t2 = c.get("/api/fqc/dashboard?from=%s&to=%s" % (D2, D2)).get_json()["totals"]
+    assert t2["inspected"] == 3, t2
+
+
+@test("the shift filter counts only that shift's records")
+def t_dash_shift():
+    c = dash_setup()
+    t = c.get("/api/fqc/dashboard?shift=2").get_json()["totals"]
+    assert t["inspected"] == 3, t
+    assert t["passed"] == 2 and t["rejected"] == 1, t
+
+
+@test("the customer filter counts only that customer's modules")
+def t_dash_customer():
+    c = dash_setup()
+    t = c.get("/api/fqc/dashboard?customer=SGMEDA").get_json()["totals"]
+    assert t["inspected"] == 2, t
+    assert t["passed"] == 1 and t["rejected"] == 1, t
+
+
+@test("the model filter counts only that model")
+def t_dash_model():
+    c = dash_setup()
+    t = c.get("/api/fqc/dashboard?model=ISEN630-G12R").get_json()["totals"]
+    assert t["inspected"] == 3, t
+
+
+@test("result=pass and result=reject each count only their own outcome")
+def t_dash_result():
+    c = dash_setup()
+    tp = c.get("/api/fqc/dashboard?result=pass").get_json()["totals"]
+    assert tp["inspected"] == 3 and tp["rejected"] == 0, tp
+    tr = c.get("/api/fqc/dashboard?result=reject").get_json()["totals"]
+    assert tr["inspected"] == 3 and tr["passed"] == 0, tr
+
+
+@test("filters combine, not just apply one at a time")
+def t_dash_filters_combine():
+    c = dash_setup()
+    t = c.get("/api/fqc/dashboard?customer=STOCK&result=reject").get_json()["totals"]
+    # STOCK rejects: 002 (day1) and 005 (day2) - SGMEDA's reject (004) excluded
+    assert t["inspected"] == 2, t
+
+
+@test("the shift/model breakdown rows obey the same filter as the totals")
+def t_dash_rows_match_totals():
+    c = dash_setup()
+    d = c.get("/api/fqc/dashboard?shift=1").get_json()
+    row_sum = sum(r["inspected"] for r in d["rows"])
+    assert row_sum == d["totals"]["inspected"], \
+        "the table (%d) and the total (%d) counted different things" % \
+        (row_sum, d["totals"]["inspected"])
+
+
+@test("top rejection reasons are real defects, grouped, under the same filter")
+def t_dash_by_defect():
+    c = dash_setup()
+    d = c.get("/api/fqc/dashboard").get_json()
+    by = {r["defect"]: r["qty"] for r in d["by_defect"]}
+    assert by.get("Cell Crack") == 2, by
+    assert by.get("Micro Crack") == 1, by
+
+    filtered = c.get("/api/fqc/dashboard?customer=SGMEDA").get_json()
+    by2 = {r["defect"]: r["qty"] for r in filtered["by_defect"]}
+    assert by2 == {"Cell Crack": 1}, \
+        "the defect breakdown ignored the customer filter: %s" % by2
+
+
+@test("a filter matching nothing returns real zeros, not the last query's")
+def t_dash_empty_result():
+    c = dash_setup()
+    t = c.get("/api/fqc/dashboard?customer=NOBODY").get_json()["totals"]
+    assert (t.get("inspected") or 0) == 0, t
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0

@@ -19,7 +19,7 @@ what an operator is shown before pressing Add is what decides.
 Each test names the rule it defends, so a failure says which decision broke.
 """
 
-import csv, os, shutil, sys, tempfile, traceback
+import csv, datetime, os, shutil, sys, tempfile, traceback
 
 TMP = tempfile.mkdtemp(prefix="icontrace_pack_")
 os.environ["ICON_DB_FILE"] = os.path.join(TMP, "test.db")
@@ -304,24 +304,224 @@ def t_no_empty_close():
     assert r.status_code == 400, "an empty box was closed"
 
 
-@test("closing says whether it was a partial box")
-def t_partial():
+@test("a box short of its own capacity is refused, not closed as partial")
+def t_close_refuses_short():
     c = setup()
     pass_fqc(c, 0)
     b = open_box(c, capacity=36)
     c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(0)})
-    d = c.post("/api/box/%d/close" % b["box_id"], json={}).get_json()
-    assert d["ok"] and d["partial"] is True and d["qty"] == 1, d
+    r = c.post("/api/box/%d/close" % b["box_id"], json={})
+    assert r.status_code == 400, "a box of 1 in a pallet of 36 was closed"
+    d = r.get_json()
+    assert "35" in d["why"], d
+    with store.conn() as (cx, cur):
+        row = dict(store.box_row(cur, b["box_id"]))
+    assert row["state"] == "open", "a refused close still closed the box"
+
+
+@test("a box filled to exactly its own capacity closes")
+def t_close_exact_capacity():
+    c = setup(n=2)
+    pass_fqc(c, 0); pass_fqc(c, 1)
+    b = open_box(c, capacity=2)
+    c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(0)})
+    c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(1)})
+    r = c.post("/api/box/%d/close" % b["box_id"], json={})
+    assert r.status_code == 200 and r.get_json()["qty"] == 2, r.get_json()
 
 
 @test("the packing list renders for a real box")
 def t_sheet():
     c = setup()
     pass_fqc(c, 0)
-    b = open_box(c)
+    b = open_box(c, capacity=1)
     c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(0)})
     c.post("/api/box/%d/close" % b["box_id"], json={})
     assert c.get("/box/%d/sheet" % b["box_id"]).status_code == 200
+
+
+# --------------------------------------------------------------------------
+# abandoning a box that was opened and never packed
+# --------------------------------------------------------------------------
+
+@test("an empty open box can be abandoned")
+def t_abandon_empty():
+    c = setup()
+    b = open_box(c, grade="GY")
+    r = c.post("/api/box/%d/abandon" % b["box_id"], json={})
+    assert r.status_code == 200, r.get_json()
+    with store.conn() as (cx, cur):
+        row = dict(store.box_row(cur, b["box_id"]))
+    assert row["state"] == "retired", row["state"]
+    assert row["retired_reason"], "no reason was recorded"
+
+
+@test("a box that already holds a module cannot be abandoned")
+def t_abandon_refuses_with_contents():
+    c = setup()
+    pass_fqc(c, 0)
+    b = open_box(c)
+    c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(0)})
+    r = c.post("/api/box/%d/abandon" % b["box_id"], json={})
+    assert r.status_code == 400, "a pallet with a real module was abandoned"
+    with store.conn() as (cx, cur):
+        row = dict(store.box_row(cur, b["box_id"]))
+    assert row["state"] == "open", "abandon changed a box it should have refused"
+    assert row["qty"] == 1, "abandon dropped a module that was really packed"
+
+
+@test("an already-closed box cannot be abandoned")
+def t_abandon_refuses_closed():
+    c = setup()
+    pass_fqc(c, 0)
+    b = open_box(c, capacity=1)
+    c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(0)})
+    c.post("/api/box/%d/close" % b["box_id"], json={})
+    r = c.post("/api/box/%d/abandon" % b["box_id"], json={})
+    assert r.status_code == 400, "a closed pallet was abandoned"
+
+
+@test("abandoning twice is refused the second time")
+def t_abandon_twice():
+    c = setup()
+    b = open_box(c, grade="BGY")
+    c.post("/api/box/%d/abandon" % b["box_id"], json={})
+    r = c.post("/api/box/%d/abandon" % b["box_id"], json={})
+    assert r.status_code == 400, "an already-abandoned box was abandoned again"
+
+
+@test("abandoning a box never reuses its number for the next one")
+def t_abandon_number_not_reused():
+    c = setup()
+    b1 = open_box(c, grade="BGY")
+    c.post("/api/box/%d/abandon" % b1["box_id"], json={})
+    pass_fqc(c, 0)
+    b2 = open_box(c)
+    r = c.post("/api/box/%d/scan" % b2["box_id"], json={"serial": serial(0)})
+    assert r.status_code == 200, r.get_json()
+    assert b2["box_id"] != b1["box_id"]
+    from app import _box_label
+    with store.conn() as (cx, cur):
+        l1 = _box_label(dict(store.box_row(cur, b1["box_id"])))
+        l2 = _box_label(dict(store.box_row(cur, b2["box_id"])))
+    assert l1 != l2, "the abandoned box's number was handed to the next pallet"
+
+
+@test("a stray open box can be picked up and abandoned by id even after a "
+     "restart lost the client's memory of it")
+def t_abandon_after_restore():
+    c = setup()
+    open_box(c, grade="GY")           # nobody ever scans into it
+    rows = c.get("/api/boxes?state=open").get_json()
+    assert len(rows) == 1, rows
+    r = c.post("/api/box/%d/abandon" % rows[0]["box_id"], json={})
+    assert r.status_code == 200, r.get_json()
+    assert c.get("/api/boxes?state=open").get_json() == []
+
+
+# --------------------------------------------------------------------------
+# the packing date is a fact about when the pallet was packed
+# --------------------------------------------------------------------------
+
+@test("with no date given, a box is opened as packed today")
+def t_pack_date_default():
+    c = setup()
+    b = open_box(c)
+    assert b["pack_date"] == datetime.date.today().isoformat(), b
+
+@test("a past date is accepted — a late entry for a pallet packed earlier")
+def t_pack_date_past_accepted():
+    c = setup()
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    r = c.post("/api/box/open", json={"grade": "A", "model": MODEL,
+                                      "capacity": 36, "pack_date": yesterday})
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()
+    assert d["pack_date"] == yesterday, d
+    assert yesterday.replace("-", "")[2:] in d["label"], d["label"]
+
+@test("a future date is refused — a pallet cannot be packed before it happens")
+def t_pack_date_future_refused():
+    c = setup()
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    r = c.post("/api/box/open", json={"grade": "A", "model": MODEL,
+                                      "capacity": 36, "pack_date": tomorrow})
+    assert r.status_code == 400, "a box was opened dated tomorrow"
+    assert "future" in r.get_json()["why"].lower(), r.get_json()
+
+@test("a malformed date is refused rather than silently ignored")
+def t_pack_date_malformed_refused():
+    c = setup()
+    r = c.post("/api/box/open", json={"grade": "A", "model": MODEL,
+                                      "capacity": 36, "pack_date": "not-a-date"})
+    assert r.status_code == 400, r.get_json()
+
+
+# --------------------------------------------------------------------------
+# a partial pallet is real, but it has to SAY so - capacity is what the
+# operator declared, and what is filled has to match it exactly before it
+# can be saved. Short of it: add more, take some out, or change the
+# capacity to what is actually there.
+# --------------------------------------------------------------------------
+
+@test("capacity can be reduced on an open box to match what is really there")
+def t_capacity_reduce():
+    c = setup()
+    pass_fqc(c, 0)
+    b = open_box(c, capacity=36)
+    c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(0)})
+    r = c.post("/api/box/%d/capacity" % b["box_id"], json={"capacity": 1})
+    assert r.status_code == 200, r.get_json()
+    d = c.post("/api/box/%d/close" % b["box_id"], json={}).get_json()
+    assert d["ok"] and d["qty"] == 1, d
+
+
+@test("capacity cannot be reduced below what is already scanned in")
+def t_capacity_reduce_below_qty_refused():
+    c = setup()
+    pass_fqc(c, 0); pass_fqc(c, 1)
+    b = open_box(c, capacity=36)
+    c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(0)})
+    c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(1)})
+    r = c.post("/api/box/%d/capacity" % b["box_id"], json={"capacity": 1})
+    assert r.status_code == 400, "capacity dropped below 2 real modules"
+    with store.conn() as (cx, cur):
+        row = dict(store.box_row(cur, b["box_id"]))
+    assert row["capacity"] == 36, "the capacity changed even though refused"
+
+
+@test("capacity cannot be raised past the frame's ceiling")
+def t_capacity_raise_above_ceiling_refused():
+    c = setup()
+    b = open_box(c, capacity=10)
+    r = c.post("/api/box/%d/capacity" % b["box_id"], json={"capacity": 999})
+    assert r.status_code == 400, r.get_json()
+    assert "999" in r.get_json()["why"], r.get_json()
+
+
+@test("capacity can be raised on an open box, so more can be scanned in")
+def t_capacity_raise():
+    c = setup(n=2)
+    pass_fqc(c, 0); pass_fqc(c, 1)
+    b = open_box(c, capacity=1)
+    c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(0)})
+    r = c.post("/api/box/%d/capacity" % b["box_id"], json={"capacity": 2})
+    assert r.status_code == 200, r.get_json()
+    r = c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(1)})
+    assert r.status_code == 200, r.get_json()
+    d = c.post("/api/box/%d/close" % b["box_id"], json={}).get_json()
+    assert d["ok"] and d["qty"] == 2, d
+
+
+@test("capacity cannot be changed on a box that is not open")
+def t_capacity_change_refused_when_not_open():
+    c = setup()
+    pass_fqc(c, 0)
+    b = open_box(c, capacity=1)
+    c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(0)})
+    c.post("/api/box/%d/close" % b["box_id"], json={})
+    r = c.post("/api/box/%d/capacity" % b["box_id"], json={"capacity": 5})
+    assert r.status_code == 400, "capacity changed on a closed box"
 
 
 if __name__ == "__main__":

@@ -116,6 +116,7 @@ var document = {
    calls them from onclick="" - so window has to BE the global object here,
    or nothing it exports can be reached by name */
 var window = (typeof global !== 'undefined') ? global : this;
+var B = { config: { pallet_ceiling: 36 } };
 var toasts = [];
 function toast(t) { toasts.push(t); }
 function fqcEsc(v) {
@@ -141,9 +142,15 @@ function thenable(v) {
     'catch': function () { return this; }
   };
 }
+var CHECK_REPLY = null;
+var CHECK_CALLS = [];
 function fetch(url, opts) {
   if (url.indexOf('/api/repack') === 0) {
     SENT = { url: url, body: opts && opts.body ? JSON.parse(opts.body) : null };
+  }
+  if (url.indexOf('/api/box/check') === 0) {
+    CHECK_CALLS.push(url);
+    return thenable({ ok: true, json: function () { return thenable(CHECK_REPLY); } });
   }
   /* the screen reloads its pallet list after saving; that call answers with
      a list, not with the repack result */
@@ -183,7 +190,9 @@ function reset() {
     el(id); });
   el('freshN').parentNode = new El('span');
   el('rpCap').value = '36';
+  B = { config: { pallet_ceiling: 36 } };
   toasts = []; SENT = null; CONFIRM = true; OPENED = [];
+  CHECK_REPLY = null; CHECK_CALLS = [];
   /* the server always answers with a body; a test that cares sets its own */
   REPLY = { ok: false, why: 'stub: no reply configured for this test' };
   rpSrc = []; rpPicked = {}; rpPool = []; rpTargets = []; rpActive = 0;
@@ -272,6 +281,34 @@ test('any pallet size is allowed, not only the four v4 offers', function () {
 });
 
 
+/* ---- a save is refused unless a box is filled to exactly its own
+   capacity, so that number has to stay changeable after the box is made -- */
+
+test('a target\'s capacity can be changed after it is created', function () {
+  reset();
+  addTarget();
+  rpSetCap(0, '20');
+  assert(rpTargets[0].cap === 20, rpTargets[0].cap);
+});
+
+test('capacity cannot be set below what the box already holds', function () {
+  reset();
+  rpPool = [loose('S1', 'A'), loose('S2', 'A')];
+  addTarget();
+  poolClick(0); poolClick(0);
+  rpSetCap(0, '1');
+  assert(rpTargets[0].cap === 36, // unchanged - default from rpCap
+    'capacity dropped below the 2 modules already placed: ' + rpTargets[0].cap);
+});
+
+test('capacity cannot be set past the frame\'s ceiling', function () {
+  reset();
+  addTarget();
+  rpSetCap(0, '999');
+  assert(rpTargets[0].cap === 36, 'a target claimed to hold 999');
+});
+
+
 /* ---- filling a box --------------------------------------------------- */
 
 test('"fill" takes only what the box may claim, never mixing grades',
@@ -328,6 +365,69 @@ test('a scan matching a loose module places it', function () {
   el('rpScan').value = 's1';           /* scanners send what they read */
   rpScanGo();
   assert(rpTargets[0].items.length === 1, 'a lower-case scan was not matched');
+});
+
+
+/* ---- topping up with fresh stock: a scan matching nothing in any
+   opened pallet, checked through the same gate the packing screen uses --- */
+
+test('a fresh graded module scanned in tops up the active box', function () {
+  reset();
+  addTarget();
+  CHECK_REPLY = { ok: true, serial: 'F1', grade: 'A', model: 'ISEN625-G12R' };
+  el('rpScan').value = 'F1';
+  rpScanGo();
+  assert(rpTargets[0].items.length === 1, msg());
+  assert(rpTargets[0].items[0].fresh === true, rpTargets[0].items[0]);
+  assert(CHECK_CALLS.length === 1 && CHECK_CALLS[0].indexOf('F1') !== -1,
+    'the fresh module was never checked with the server');
+});
+
+test('a fresh module the server refuses is not added, and says why', function () {
+  reset();
+  addTarget();
+  CHECK_REPLY = { ok: false, why: 'F2 has not been through FQC.' };
+  el('rpScan').value = 'F2';
+  rpScanGo();
+  assert(rpTargets[0].items.length === 0, 'a refused module was added anyway');
+  assert(msg().indexOf('FQC') !== -1, msg());
+});
+
+test('a fresh module of the wrong grade is refused, same as a pool module',
+function () {
+  reset();
+  rpPool = [loose('S1', 'A')];
+  addTarget();
+  poolClick(0);                        // active box is now grade A
+  CHECK_REPLY = { ok: true, serial: 'F3', grade: 'GY', model: 'ISEN625-G12R' };
+  el('rpScan').value = 'F3';
+  rpScanGo();
+  assert(rpTargets[0].items.length === 1, 'a GY module topped up an A box');
+  assert(msg().indexOf('GY') !== -1, msg());
+});
+
+test('a fresh module already placed by its own serial is not sent to the server',
+function () {
+  reset();
+  addTarget();
+  rpTargets[0].items.push({ s: 'F4', g: 'A', model: 'M', fresh: true });
+  el('rpScan').value = 'F4';
+  rpScanGo();
+  assert(CHECK_CALLS.length === 0, 'a module already in the box was re-checked');
+  assert(msg().indexOf('already') !== -1, msg());
+});
+
+test('taking a fresh module back out does not manufacture a pool row for it',
+function () {
+  reset();
+  addTarget();
+  CHECK_REPLY = { ok: true, serial: 'F5', grade: 'A', model: 'M' };
+  el('rpScan').value = 'F5';
+  rpScanGo();
+  toPool(0, 0);
+  assert(rpPool.length === 0,
+    'fresh stock came back as a "loose from a pallet" row: ' +
+    JSON.stringify(rpPool));
 });
 
 

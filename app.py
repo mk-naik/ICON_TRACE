@@ -406,8 +406,29 @@ def api_box_open():
             return jsonify({"ok": False, "why":
                 "%d per pallet is impossible — the frame takes at most %d."
                 % (capacity, ceiling)}), 400
+
+        # The date defaults to today, but a pallet finished just after
+        # midnight, or logged the next morning, is still packed the day it
+        # was physically built - so it is a field, not a fixed stamp. It is
+        # not, however, the operator's to backdate past the frame's own
+        # truth: nothing can be packed before it happens.
+        today = datetime.date.today()
+        raw_date = (d.get("pack_date") or "").strip()
+        if raw_date:
+            try:
+                pack_date = datetime.date.fromisoformat(raw_date)
+            except ValueError:
+                return jsonify({"ok": False, "why":
+                                "%r is not a date." % raw_date}), 400
+            if pack_date > today:
+                return jsonify({"ok": False, "why":
+                    "%s is in the future — a pallet cannot be packed "
+                    "before it is built." % pack_date.strftime("%d-%m-%Y")}), 400
+        else:
+            pack_date = today
+
         bid, seq = store.open_box(
-            cur, d.get("pack_date") or datetime.date.today().isoformat(),
+            cur, pack_date.isoformat(),
             d.get("grade", "A"), d["model"], d.get("customer"),
             capacity, d.get("shift"), d.get("bin"), actor())
     with store.conn() as (cx, cur):
@@ -648,28 +669,34 @@ def _repack(cur, box_ids, groups, release, reason):
         if s in claimed:
             raise _Refuse("%s is named twice. A module goes to one place." % s)
         claimed.add(s)
-    stray = sorted(claimed - set(held))
-    if stray:
+
+    # `release` can only ever be modules that were actually in a source -
+    # releasing something that was never packed here does not mean anything.
+    stray_release = sorted(set(release) - set(held))
+    if stray_release:
         raise _Refuse("%s is not in %s." % (
-            stray[0], " or ".join(_box_label(b) for b in sources)))
+            stray_release[0], " or ".join(_box_label(b) for b in sources)))
     if not claimed:
         raise _Refuse("Nothing was moved or released, so there is nothing "
                       "to repack.")
 
     # What nobody mentioned stays as it was, in a box of its own, so the
-    # count coming out equals the count that went in.
+    # count coming out equals the count that went in. Sized to exactly what
+    # is left - a remainder is a smaller pallet now, not still claiming the
+    # capacity the box was opened with.
     for b in sources:
         rest = [s for s in store.box_serials(cur, b["box_id"])
                 if s not in claimed]
         if rest:
             groups.append({"grade": b["grade"], "model": b["model"],
                            "customer": b["customer"], "serials": rest,
-                           "capacity": b["capacity"], "remainder": True})
+                           "capacity": len(rest), "remainder": True})
 
     # A repacked pallet is made up on the day it is repacked, so that is the
     # date its number carries - not the date of the box it came out of.
     today = datetime.date.today().isoformat()
     children = []
+    moved_all, added_all = [], []
     for g in groups:
         serials = [s.strip().upper() for s in g["serials"]]
         grade = (g.get("grade") or "").strip().upper()
@@ -677,8 +704,14 @@ def _repack(cur, box_ids, groups, release, reason):
         # Every child box makes the claim its parent made: one grade, one
         # model, every module matching. Quality may have moved a grade since
         # packing - usually that is WHY the box is open - so the master
-        # record decides, not the label the modules came in under.
-        for s in serials:
+        # record decides, not the label the modules came in under. Checked
+        # here only for modules that came FROM a source: their state is
+        # already 'packed', which is expected and not itself a question -
+        # the only thing left to ask about them is whether grade and model
+        # still agree with the group they are going into.
+        from_owner = [s for s in serials if s in owner]
+        added = sorted(s for s in serials if s not in owner)
+        for s in from_owner:
             row = db.find_serial(cur, s)
             if not row:
                 raise _Refuse("%s is not in the serial master." % s)
@@ -694,16 +727,52 @@ def _repack(cur, box_ids, groups, release, reason):
             if row.get("model") != model:
                 raise _Refuse("Box is %s, %s is %s." % (model, s,
                                                         row.get("model")))
-        parents = sorted({owner[s]["box_id"] for s in serials})
-        src0 = owner[serials[0]]
-        cap = g.get("capacity") or src0["capacity"] or len(serials)
+        if not from_owner and not grade and added:
+            # an all-fresh group with nothing declared: the first module's
+            # own record decides, the same as the first scan into an empty
+            # box on the packing screen does
+            first = db.find_serial(cur, added[0])
+            if not first:
+                raise _Refuse("%s is not in the serial master." % added[0])
+            grade = (first.get("grade") or "").strip().upper()
+            if not model:
+                model = first.get("model")
+
+        # A repack is not only a split. A pallet opened because two modules
+        # were pulled for a dispatch can be topped back up from graded
+        # stock rather than being condemned to stay short - so a serial
+        # named here that came from none of the source pallets is FRESH
+        # stock, not an error by itself. It is trusted exactly as far as a
+        # normal scan trusts a module: graded, matching this group, and not
+        # already spoken for in some other live pallet - the SAME gate the
+        # packing screen's scan uses, not a second one that could drift
+        # from it, and with its own state-aware reasons (not through FQC,
+        # rejected and waiting on Quality, already packed elsewhere).
+        for s in added:
+            why = _pack_refusal(cur, {"grade": grade, "model": model}, s)
+            if why:
+                raise _Refuse(why)
+
+        parents = sorted({owner[s]["box_id"] for s in from_owner})
+        src0 = owner[from_owner[0]] if from_owner else None
+        cap = g.get("capacity") or len(serials)
         if len(serials) > cap:
             raise _Refuse("%d modules will not fit a box of %d."
                           % (len(serials), cap))
+        if len(serials) < cap:
+            short = cap - len(serials)
+            raise _Refuse(
+                "This group has %d module(s) for a box of %d - %d short. "
+                "Add %d more (from a source pallet or fresh graded stock), "
+                "or set this group's capacity to %d."
+                % (len(serials), cap, short, short, len(serials)))
+
         bid, seq = store.open_box(
             cur, today, grade, model,
-            g.get("customer") if "customer" in g else src0["customer"],
-            cap, src0["pack_shift"], src0["bin_no"], actor())
+            g.get("customer") if "customer" in g else
+            (src0["customer"] if src0 else None),
+            cap, src0["pack_shift"] if src0 else None,
+            src0["bin_no"] if src0 else None, actor())
         # The parents KEEP their box_serial rows. "What did K001 hold?" has
         # to stay answerable, and serial_in_live_box() ignores retired boxes,
         # so a module sitting in both does not block anything.
@@ -715,11 +784,14 @@ def _repack(cur, box_ids, groups, release, reason):
             cur.execute("INSERT INTO box_lineage (parent_box_id, child_box_id)"
                         " VALUES (%s,%s)", (pid, bid))
         b = store.box_row(cur, bid)
+        moved_all.extend(from_owner)
+        added_all.extend(added)
         children.append({"box_id": bid, "seq": seq, "label": _box_label(b),
                          "qty": b["qty"], "grade": grade, "model": model,
-                         "capacity": cap, "partial": bool(b["is_partial"]),
+                         "capacity": cap,
                          "from": [_box_label(store.box_row(cur, p))
                                   for p in parents],
+                         "added": added,
                          "remainder": bool(g.get("remainder"))})
 
     # Released modules go back to graded stock and can be packed again. This
@@ -737,10 +809,11 @@ def _repack(cur, box_ids, groups, release, reason):
                     "retired_at=%s, retired_by=%s WHERE box_id=%s",
                     (reason, at, actor(), b["box_id"]))
         db.audit(cur, actor(), "box.repack", "box", b["box_id"],
-                 {"reason": reason, "released": release,
+                 {"reason": reason, "released": release, "added": added_all,
                   "into": [c["label"] for c in children]})
     return {"ok": True, "retired": [_box_label(b) for b in sources],
-            "released": release, "children": children}
+            "released": release, "moved": sorted(set(moved_all)),
+            "added": sorted(set(added_all)), "children": children}
 
 
 @app.route("/api/repack", methods=["POST"])
@@ -775,17 +848,122 @@ def api_box_repack(box_id):
 @app.route("/api/box/<int:box_id>/close", methods=["POST"])
 @_sync_guard
 def api_box_close(box_id):
+    """A pallet less than its own declared capacity is not "partial" - it is
+    short, and short is something the operator fixes before it is saved, not
+    after. What was allowed to slide through as partial is now a refusal
+    naming exactly how many are missing: add that many, take modules out, or
+    change the capacity itself to what is really there.
+    """
     with store.conn() as (cx, cur):
         b = store.box_row(cur, box_id)
         if not b or b["state"] != "open":
             return jsonify({"ok": False, "why": "not open"}), 400
-        if not (b["qty"] or 0):
+        qty, cap = b["qty"] or 0, b["capacity"] or 0
+        if not qty:
             return jsonify({"ok": False, "why": "Box is empty."}), 400
-        partial = store.close_box(cur, box_id)
+        if qty < cap:
+            short = cap - qty
+            return jsonify({"ok": False, "why":
+                "%d of %d — %d short. Add %d more module(s), take some out, "
+                "or change the pallet's capacity to %d to close it as it is."
+                % (qty, cap, short, short, qty)}), 400
+        if qty > cap:
+            # the scan gate already refuses at capacity, so this should be
+            # unreachable - but a close never silently accepts a box lying
+            # about what it holds
+            return jsonify({"ok": False, "why":
+                "%d modules in a box of %d — more than it should hold."
+                % (qty, cap)}), 400
+        store.close_box(cur, box_id)
+        db.audit(cur, actor(), "box.close", "box", box_id, {"qty": qty})
+    return jsonify({"ok": True, "qty": qty})
+
+
+@app.route("/api/box/<int:box_id>/capacity", methods=["POST"])
+@_sync_guard
+def api_box_capacity(box_id):
+    """Change what an OPEN box has declared it will hold.
+
+    A pallet is packed to what is actually there, not to a number chosen
+    before the first scan and never revisited - two modules pulled for a
+    dispatch should not condemn the other thirty-four to stay unsaved
+    forever. Lowered to what is already scanned in, at the least: capacity
+    is a claim about the box, and a box cannot hold fewer than it already
+    does.
+    """
+    d = request.get_json(force=True) or {}
+    with store.conn() as (cx, cur):
         b = store.box_row(cur, box_id)
-        db.audit(cur, actor(), "box.close", "box", box_id,
-                 {"qty": b["qty"], "partial": bool(partial)})
-    return jsonify({"ok": True, "partial": bool(partial), "qty": b["qty"]})
+        if not b or b["state"] != "open":
+            return jsonify({"ok": False, "why": "That box is not open."}), 400
+        try:
+            cap = int(d.get("capacity"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "why": "Not a number."}), 400
+        ceiling = int(db.get_config(cur).get("pallet_ceiling") or 36)
+        qty = b["qty"] or 0
+        if cap < 1:
+            return jsonify({"ok": False, "why":
+                            "A pallet holds at least one module."}), 400
+        if cap > ceiling:
+            return jsonify({"ok": False, "why":
+                "%d per pallet is impossible — the frame takes at most %d."
+                % (cap, ceiling)}), 400
+        if cap < qty:
+            return jsonify({"ok": False, "why":
+                "This pallet already holds %d module(s) — capacity cannot "
+                "go below what is really in it. Take modules out first."
+                % qty}), 400
+        cur.execute("UPDATE box SET capacity=%s WHERE box_id=%s", (cap, box_id))
+        db.audit(cur, actor(), "box.capacity", "box", box_id,
+                 {"capacity": cap})
+    return jsonify({"ok": True, "capacity": cap})
+
+
+@app.route("/api/box/<int:box_id>/abandon", methods=["POST"])
+@_sync_guard
+def api_box_abandon(box_id):
+    """Give up a box that was opened and never packed.
+
+    A box is a row from its first scan, which is what lets a refresh at 18
+    of 36 find the pallet again - but it also means a wrong grade clicked
+    by mistake, or a browser closed between opening the box and the first
+    scan landing, leaves a real, empty, open box behind. Nothing else on
+    this screen can get past it: its grade is fixed, because that is what
+    an open box's label already claims, and an empty box claims a grade as
+    firmly as a full one.
+
+    Refused the instant the box holds even one module - losing a module
+    that was actually scanned is a different, much worse mistake than
+    freeing up a number nothing was ever printed against, and this endpoint
+    only ever does the second one. The number itself is never reused,
+    the same as everywhere else a box is retired rather than deleted.
+    """
+    d = request.get_json(force=True) or {}
+    reason = (d.get("reason") or "").strip() or \
+        "Abandoned — opened, nothing was ever scanned into it."
+    with store.conn() as (cx, cur):
+        b = store.box_row(cur, box_id)
+        if not b:
+            return jsonify({"ok": False, "why": "No such box."}), 404
+        if b["state"] != "open":
+            return jsonify({"ok": False, "why":
+                            "Box %s is %s, not open." %
+                            (_box_label(b), b["state"])}), 400
+        if b["qty"]:
+            return jsonify({"ok": False, "why":
+                "Box %s already holds %d module(s) — take them out one at a "
+                "time, or close the pallet as it is. Abandon is only for a "
+                "box nothing was ever scanned into."
+                % (_box_label(b), b["qty"])}), 400
+        cur.execute("UPDATE box SET state='retired', retired_reason=%s, "
+                    "retired_at=%s, retired_by=%s WHERE box_id=%s",
+                    (reason,
+                     datetime.datetime.now().isoformat(timespec="seconds"),
+                     actor(), box_id))
+        db.audit(cur, actor(), "box.abandon", "box", box_id, {"reason": reason})
+        label = _box_label(b)
+    return jsonify({"ok": True, "abandoned": label})
 
 
 @app.route("/api/box/<int:box_id>")
@@ -2937,31 +3115,79 @@ def api_fqc_recent():
 
 @app.route("/api/fqc/dashboard")
 def api_fqc_dashboard():
+    """Every number this screen shows - the KPI cards, the shift/model
+    table AND ITS OWN TOTAL ROW, the defect breakdown - comes from here,
+    filtered the same way every time. v4's filter bar used to overwrite a
+    real, unfiltered total with a FABRICATED one built from its own sample
+    rows: worse than doing nothing, because it looked like a question had
+    been answered when it had not. One query, one filter, read by every
+    card and every table on the page - a footer and a KPI card can no
+    longer disagree about what they are both supposed to be counting.
+    """
+    frm = (request.args.get("from") or "").strip()
+    to = (request.args.get("to") or "").strip() or frm
+    shift = (request.args.get("shift") or "").strip()
+    customer = (request.args.get("customer") or "").strip()
+    model = (request.args.get("model") or "").strip()
+    result = (request.args.get("result") or "").strip().lower()
+
+    # counted on the OUTCOME, not the grade: a reject has no grade until
+    # Quality calls it, and counting grades would drop it from both
+    # columns while it waits.
+    where = ["f.superseded_by IS NULL"]
+    args = []
+    if frm:
+        where.append("substr(f.at,1,10) >= %s"); args.append(frm)
+    if to:
+        where.append("substr(f.at,1,10) <= %s"); args.append(to)
+    if shift:
+        where.append("s.shift = %s"); args.append(shift)
+    if customer:
+        where.append("s.customer = %s"); args.append(customer)
+    if model:
+        where.append("s.model = %s"); args.append(model)
+    if result in ("pass", "reject"):
+        where.append("f.outcome = %s"); args.append(result)
+    clause = " AND ".join(where)
+    args = tuple(args)
+
     with store.conn() as (cx, cur):
-        # counted on the OUTCOME, not the grade: a reject has no grade until
-        # Quality calls it, and counting grades would drop it from both
-        # columns while it waits.
-        summary = store.rows(cur, """
-            SELECT substr(f.at, 1, 10) AS day, s.model AS model, s.shift AS shift,
-                   COUNT(*) AS inspected,
-                   SUM(CASE WHEN f.outcome='pass' THEN 1 ELSE 0 END) AS passed,
-                   SUM(CASE WHEN f.outcome='reject' THEN 1 ELSE 0 END) AS rejected
-            FROM fqc_record f JOIN serial s ON s.serial=f.serial
-            WHERE f.superseded_by IS NULL
-            GROUP BY day, s.model, s.shift ORDER BY day DESC, s.shift, s.model
-        """)
-        totals = store.one(cur, """
-            SELECT COUNT(*) AS inspected,
-                   SUM(CASE WHEN outcome='pass' THEN 1 ELSE 0 END) AS passed,
-                   SUM(CASE WHEN outcome='reject' THEN 1 ELSE 0 END) AS rejected,
-                   SUM(CASE WHEN outcome='reject' AND quality_grade IS NULL
-                            THEN 1 ELSE 0 END) AS awaiting_quality,
-                   SUM(CASE WHEN quality_grade='GY' THEN 1 ELSE 0 END) AS gy,
-                   SUM(CASE WHEN quality_grade='BGY' THEN 1 ELSE 0 END) AS bgy
-            FROM fqc_record WHERE superseded_by IS NULL
-        """)
-    return jsonify({"rows": [dict(r) for r in summary],
-                    "totals": dict(totals or {})})
+        summary = store.rows(cur,
+            "SELECT substr(f.at, 1, 10) AS day, s.model AS model, "
+            "s.shift AS shift, COUNT(*) AS inspected, "
+            "SUM(CASE WHEN f.outcome='pass' THEN 1 ELSE 0 END) AS passed, "
+            "SUM(CASE WHEN f.outcome='reject' THEN 1 ELSE 0 END) AS rejected "
+            "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
+            "WHERE " + clause + " "
+            "GROUP BY day, s.model, s.shift ORDER BY day DESC, s.shift, s.model",
+            args)
+        totals = store.one(cur,
+            "SELECT COUNT(*) AS inspected, "
+            "SUM(CASE WHEN f.outcome='pass' THEN 1 ELSE 0 END) AS passed, "
+            "SUM(CASE WHEN f.outcome='reject' THEN 1 ELSE 0 END) AS rejected, "
+            "SUM(CASE WHEN f.outcome='reject' AND f.quality_grade IS NULL "
+            "         THEN 1 ELSE 0 END) AS awaiting_quality, "
+            "SUM(CASE WHEN f.quality_grade='GY' THEN 1 ELSE 0 END) AS gy, "
+            "SUM(CASE WHEN f.quality_grade='BGY' THEN 1 ELSE 0 END) AS bgy "
+            "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
+            "WHERE " + clause, args)
+        # Rejection reasons, from the record that was actually made -
+        # never grouped away, the way the shift/model summary above groups
+        # away everything but the count.
+        by_defect = store.rows(cur,
+            "SELECT COALESCE(f.defect, '(no defect recorded)') AS defect, "
+            "COUNT(*) AS qty "
+            "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
+            "WHERE " + clause + " AND f.outcome='reject' "
+            "GROUP BY f.defect ORDER BY qty DESC", args)
+    t = dict(totals or {})
+    for k in ("inspected", "passed", "rejected", "awaiting_quality", "gy", "bgy"):
+        t[k] = t.get(k) or 0
+    return jsonify({"rows": [dict(r) for r in summary], "totals": t,
+                    "by_defect": [dict(r) for r in by_defect],
+                    "filters": {"from": frm, "to": to, "shift": shift,
+                               "customer": customer, "model": model,
+                               "result": result}})
 
 @app.route("/fqc", methods=["GET", "POST"])
 def fqc():

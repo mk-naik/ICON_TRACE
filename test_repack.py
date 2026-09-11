@@ -76,8 +76,21 @@ def setup(n=6, models=None):
     return APP.app.test_client()
 
 
-def packed_box(c, idx, capacity=36, grade="A", model=MODEL, close=True):
-    """A closed pallet holding the modules at those indexes."""
+def pass_fqc(c, i):
+    """Graded but never packed - a candidate for a fresh top-up."""
+    r = c.post("/api/fqc", json={"serial": serial(i), "outcome": "pass"})
+    assert r.status_code == 200, r.get_json()
+
+
+def packed_box(c, idx, capacity=None, grade="A", model=MODEL, close=True):
+    """A closed pallet holding the modules at those indexes.
+
+    A close now only succeeds when the count filled matches the capacity
+    the box was opened with, so unless a test asks for a specific ceiling
+    it gets one sized to exactly what it is about to pack.
+    """
+    if capacity is None:
+        capacity = len(idx)
     for i in idx:
         r = c.post("/api/fqc", json={"serial": serial(i), "outcome": "pass"})
         assert r.status_code == 200, r.get_json()
@@ -306,16 +319,34 @@ def t_model_must_match():
     assert OTHER_MODEL in r.get_json()["why"], r.get_json()
 
 
-@test("a child holding less than the pallet takes is recorded as partial")
-def t_partial():
+@test("a group with no capacity of its own defaults to its own size, and "
+     "closes full rather than short")
+def t_default_capacity_matches_own_size():
     c = setup()
-    src = packed_box(c, [0, 1, 2, 3], capacity=36)
+    src = packed_box(c, [0, 1, 2, 3], capacity=4)
     r = c.post("/api/box/%d/repack" % src,
                json={"reason": REASON,
                      "groups": [{"serials": [serial(0), serial(1)]}]})
+    assert r.status_code == 200, r.get_json()
     kids = r.get_json()["children"]
-    assert all(k["partial"] for k in kids), \
-        "a 2-module box of a 36 pallet called itself full: %s" % kids
+    for k in kids:
+        assert k["qty"] == k["capacity"], \
+            "%s holds %d of a declared %d - that is short, not full" % (
+                k["label"], k["qty"], k["capacity"])
+
+
+@test("a group short of its OWN declared capacity is refused, not closed short")
+def t_group_short_of_declared_capacity():
+    c = setup()
+    src = packed_box(c, [0, 1, 2, 3], capacity=4)
+    r = c.post("/api/box/%d/repack" % src,
+               json={"reason": REASON,
+                     "groups": [{"capacity": 3,
+                                 "serials": [serial(0), serial(1)]}]})
+    assert r.status_code == 400, \
+        "a box declared to hold 3 was closed with 2 in it"
+    assert box_row(src)["state"] == "closed", \
+        "the source was retired even though the repack was refused"
 
 
 @test("more modules than the new box holds is refused")
@@ -394,6 +425,140 @@ def t_trace_released():
     d = c.get("/api/trace/serial/%s" % serial(0)).get_json()
     packed = [j for j in d["journey"] if j["stage"] == "Packed"][0]
     assert not packed["done"], "a module on the table read as packed"
+
+
+# --------------------------------------------------------------------------
+# topping up with fresh graded stock
+#
+# A repack is not only a split. A pallet opened because two modules were
+# pulled for a dispatch can be topped back up to a full pallet from graded
+# stock, rather than being condemned to stay short - so a group may name
+# serials that were never in any source pallet at all. A fresh module is
+# not trusted on its own word: it goes through exactly what a normal scan
+# checks - graded, matching the group's grade and model, and not already
+# spoken for in some other live pallet - the same gate, not a second one
+# that could drift from it.
+# --------------------------------------------------------------------------
+
+@test("a fresh graded module can be added to a repack group")
+def t_fresh_added():
+    c = setup()
+    src = packed_box(c, [0, 1], capacity=2)
+    pass_fqc(c, 2)                     # graded, never packed anywhere
+    r = c.post("/api/box/%d/repack" % src,
+               json={"reason": REASON,
+                     "groups": [{"capacity": 3,
+                                 "serials": [serial(0), serial(1), serial(2)]}]})
+    assert r.status_code == 200, r.get_json()
+    kid = r.get_json()["children"][0]
+    assert kid["qty"] == 3, kid
+    assert state_of(serial(2)) == "packed", state_of(serial(2))
+    with store.conn() as (cx, cur):
+        live = store.serial_in_live_box(cur, serial(2))
+    assert live and live["box_id"] == kid["box_id"], \
+        "the fresh module is not recorded as being in the box it was added to"
+
+
+@test("an ungraded fresh module is refused - it has not been through FQC")
+def t_fresh_ungraded_refused():
+    c = setup()
+    src = packed_box(c, [0, 1], capacity=2)
+    # serial(2) never goes through FQC: state stays 'planned'
+    r = c.post("/api/box/%d/repack" % src,
+               json={"reason": REASON,
+                     "groups": [{"capacity": 3,
+                                 "serials": [serial(0), serial(1), serial(2)]}]})
+    assert r.status_code == 400, "an unjudged module was added to a pallet"
+    assert "FQC" in r.get_json()["why"], r.get_json()
+    assert box_row(src)["state"] == "closed", \
+        "the source was retired even though the top-up was refused"
+
+
+@test("a fresh module already in a live pallet is refused")
+def t_fresh_already_packed_refused():
+    c = setup()
+    src = packed_box(c, [0, 1], capacity=2)
+    other = packed_box(c, [2], capacity=1)   # serial(2) is packed elsewhere
+    r = c.post("/api/box/%d/repack" % src,
+               json={"reason": REASON,
+                     "groups": [{"capacity": 3,
+                                 "serials": [serial(0), serial(1), serial(2)]}]})
+    assert r.status_code == 400, "a module packed elsewhere was added again"
+    assert serial(2) in r.get_json()["why"], r.get_json()
+    assert box_row(other)["state"] == "closed", \
+        "the OTHER pallet was touched by a repack that named its module"
+
+
+@test("a fresh module of the wrong grade is refused")
+def t_fresh_wrong_grade_refused():
+    c = setup()
+    src = packed_box(c, [0, 1], capacity=2)     # grade A
+    pass_fqc(c, 2)
+    with store.conn() as (cx, cur):
+        db.set_serial(cur, serial(2), grade="GY")
+    r = c.post("/api/box/%d/repack" % src,
+               json={"reason": REASON,
+                     "groups": [{"capacity": 3,
+                                 "serials": [serial(0), serial(1), serial(2)]}]})
+    assert r.status_code == 400, "a GY module topped up an A pallet"
+    assert "grade" in r.get_json()["why"].lower(), r.get_json()
+
+
+@test("a fresh module of the wrong model is refused")
+def t_fresh_wrong_model_refused():
+    c = setup(models={2: OTHER_MODEL})
+    src = packed_box(c, [0, 1], capacity=2)
+    pass_fqc(c, 2)
+    r = c.post("/api/box/%d/repack" % src,
+               json={"reason": REASON,
+                     "groups": [{"capacity": 3,
+                                 "serials": [serial(0), serial(1), serial(2)]}]})
+    assert r.status_code == 400, "a different model topped up the pallet"
+    assert OTHER_MODEL in r.get_json()["why"], r.get_json()
+
+
+@test("topping up a short pallet with fresh stock fills it, and the "
+     "source is retired with nothing left over")
+def t_top_up_no_remainder():
+    c = setup()
+    # a 4-module pallet with 2 pulled for a dispatch leaves 2 behind -
+    # in the real case this is 34 of 36; the rule is the same at any scale
+    src = packed_box(c, [0, 1, 2, 3], capacity=4)
+    pass_fqc(c, 4)
+    pass_fqc(c, 5)
+    r = c.post("/api/box/%d/repack" % src,
+               json={"reason": "topped up after a dispatch pull",
+                     "release": [serial(0), serial(1)],
+                     "groups": [{"capacity": 4,
+                                 "serials": [serial(2), serial(3),
+                                             serial(4), serial(5)]}]})
+    assert r.status_code == 200, r.get_json()
+    kids = r.get_json()["children"]
+    assert len(kids) == 1, "a topped-up pallet produced a remainder: %s" % kids
+    assert kids[0]["qty"] == 4 and kids[0]["capacity"] == 4, kids[0]
+    assert not kids[0]["remainder"], kids[0]
+    assert box_row(src)["state"] == "retired"
+    d = r.get_json()
+    assert sorted(d["released"]) == sorted([serial(0), serial(1)]), d["released"]
+    assert sorted(d["moved"]) == sorted([serial(2), serial(3)]), d["moved"]
+    assert sorted(d["added"]) == sorted([serial(4), serial(5)]), d["added"]
+
+
+@test("lineage records the real parent; a fresh module contributes none, "
+     "and that is not an error")
+def t_fresh_lineage_not_an_error():
+    c = setup()
+    src = packed_box(c, [0, 1], capacity=2)
+    pass_fqc(c, 2)
+    r = c.post("/api/box/%d/repack" % src,
+               json={"reason": REASON,
+                     "groups": [{"capacity": 3,
+                                 "serials": [serial(0), serial(1), serial(2)]}]})
+    assert r.status_code == 200, r.get_json()
+    kid = r.get_json()["children"][0]
+    assert lineage(src) == [kid["box_id"]], \
+        "the one real parent was not recorded"
+    assert kid["from"] == [APP._box_label(box_row(src))], kid["from"]
 
 
 # --------------------------------------------------------------------------
