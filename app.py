@@ -3108,8 +3108,16 @@ def api_el_image():
 @app.route("/api/fqc/recent")
 def api_fqc_recent():
     limit = min(100, max(1, int(request.args.get("limit") or 25)))
+    filters = {
+        "shift": (request.args.get("shift") or "").strip(),
+        "customer": (request.args.get("customer") or "").strip(),
+        "model": (request.args.get("model") or "").strip(),
+        "wattage": (request.args.get("wattage") or "").strip(),
+        "defect": (request.args.get("defect") or "").strip(),
+        "result": (request.args.get("result") or "").strip()
+    }
     with store.conn() as (cx, cur):
-        rows = [dict(r) for r in db.fqc_recent(cur, limit)]
+        rows = [dict(r) for r in db.fqc_recent(cur, limit, filters=filters)]
     # resolve customer codes to display names — the Recent Gradings table
     # needs them for filtering and for the column itself
     for r in rows:

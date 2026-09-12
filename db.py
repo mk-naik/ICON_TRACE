@@ -716,7 +716,7 @@ def quality_pending(cur, n=200):
     return cur.fetchall()
 
 
-def fqc_recent(cur, n=25, include_superseded=False):
+def fqc_recent(cur, n=25, include_superseded=False, filters=None):
     """The live decisions, newest first.
 
     A superseded row is history: it says why the module was treated as it
@@ -729,15 +729,41 @@ def fqc_recent(cur, n=25, include_superseded=False):
     """
     if cur is None:
         return list(reversed(_demo["fqc"]))[:n]
-    where = ("f.superseded_by IS NULL" if not include_superseded
-             else "1=1")
+    
+    where = ["f.superseded_by IS NULL"] if not include_superseded else ["1=1"]
+    args = []
+    
+    if filters:
+        if filters.get("shift"):
+            where.append("s.shift = %s")
+            args.append(filters["shift"])
+        if filters.get("customer"):
+            where.append("s.customer = %s")
+            args.append(filters["customer"])
+        if filters.get("model"):
+            where.append("s.model = %s")
+            args.append(filters["model"])
+        if filters.get("wattage"):
+            where.append("s.wattage = %s")
+            args.append(filters["wattage"])
+        if filters.get("defect"):
+            where.append("f.defect = %s")
+            args.append(filters["defect"])
+        if filters.get("result"):
+            res = filters["result"].lower()
+            if res in ("pass", "reject"):
+                where.append("f.outcome = %s")
+                args.append(res)
+                
+    args.append(n)
+    
     cur.execute(
         "SELECT f.*, s.model AS model, s.wattage AS wattage, "
-        "s.customer AS customer "
+        "s.customer AS customer, s.shift AS pack_shift "
         "FROM fqc_record f "
         "LEFT JOIN serial s ON s.serial = f.serial AND s.build_instance = 1 "
         "WHERE %s "
-        "ORDER BY f.fqc_id DESC LIMIT %%s" % where, (n,))
+        "ORDER BY f.fqc_id DESC LIMIT %%s" % (" AND ".join(where)), tuple(args))
     return cur.fetchall()
 
 
