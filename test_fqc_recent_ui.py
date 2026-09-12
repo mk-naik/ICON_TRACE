@@ -20,10 +20,6 @@ def test_fqc_recent():
         filters = page.locator("#v-fqc .filters").count()
         print(f"Filters found: {filters}")
         
-        # Output the inner HTML of the FQC card header to see what is there
-        card_b_html = page.evaluate("document.querySelector('#v-fqc .card-b.flush').previousElementSibling.innerHTML")
-        print(f"Card header HTML: {card_b_html}")
-
         # Check if the existing data-role="filter" elements are present
         data_filters = page.locator("#v-fqc [data-role='filter']").count()
         print(f"Data-role filters found: {data_filters}")

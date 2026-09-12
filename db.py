@@ -215,6 +215,36 @@ def audit(cur, actor, action, entity, entity_id=None, detail=None):
          json.dumps(detail, default=str) if detail else None))
 
 
+def get_invoice_by_id(cur, invoice_id):
+    if cur is None: return None
+    cur.execute("SELECT * FROM invoice WHERE invoice_id = ?", (invoice_id,))
+    return cur.fetchone()
+
+def search_invoices(cur, q=None, date_from=None, date_to=None):
+    if cur is None: return []
+    sql = """
+        SELECT i.invoice_id as id, i.invoice_no, i.invoice_date, i.buyer_name, i.buyer_gstin,
+               i.declared_qty, i.superseded_by,
+               (SELECT group_concat(c.fy || '/' || c.seq, ', ') FROM challan c WHERE c.invoice_id = i.invoice_id AND c.status != 'CANCELLED') as challan
+        FROM invoice i
+        WHERE 1=1
+    """
+    params = []
+    if q:
+        sql += " AND (i.invoice_no LIKE ? OR i.buyer_name LIKE ? OR i.consignee_name LIKE ? OR i.buyer_gstin LIKE ? OR i.consignee_gstin LIKE ?)"
+        lq = f"%{q}%"
+        params.extend([lq, lq, lq, lq, lq])
+    if date_from:
+        sql += " AND i.invoice_date >= ?"
+        params.append(date_from)
+    if date_to:
+        sql += " AND i.invoice_date <= ?"
+        params.append(date_to)
+    
+    sql += " ORDER BY i.invoice_id DESC LIMIT 100"
+    cur.execute(sql, params)
+    return cur.fetchall()
+
 def recent_invoices(cur, n=20):
     if cur is None:
         return list(reversed(_demo["invoice"]))[:n]

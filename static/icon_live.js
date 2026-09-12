@@ -136,6 +136,7 @@
     /* before wireResets(), so the Reset it injects gets wired this pass */
     if (typeof addMissingControls === 'function') addMissingControls();
     if (typeof wireFqcDash === 'function') wireFqcDash();
+    if (typeof wireFqcRecent === 'function') wireFqcRecent();
     if (typeof wirePacking === 'function') wirePacking();
     if (typeof wireScreenTables === 'function') wireScreenTables();
     if (typeof wireMaterialMaster === 'function') wireMaterialMaster();
@@ -176,54 +177,84 @@
   }
 
   function renderLiveFqcRecent() {
-    fetch('/api/fqc/recent?limit=1000', {cache: 'no-store'})
+    var shift = '';
+    var cust = '';
+    var watt = '';
+    var defect = '';
+    var result = '';
+    
+    if (window.fqcRecentApply && window.fqcRecentApply.__live) {
+      var sEl = document.getElementById('rShift');
+      if (sEl) shift = sEl.value === 'All shifts' ? '' : sEl.value;
+      var cEl = document.getElementById('rCust');
+      if (cEl) cust = cEl.value === 'All customers' ? '' : cEl.value;
+      var wEl = document.getElementById('rWatt');
+      if (wEl) watt = wEl.value === 'All' ? '' : wEl.value;
+      var dEl = document.getElementById('rDefect');
+      if (dEl) defect = dEl.value === 'All' ? '' : dEl.value;
+      var rEl = document.getElementById('rResult');
+      if (rEl) result = rEl.value === 'All' ? '' : rEl.value;
+    }
+
+    var qs = '?limit=1000';
+    if (shift) qs += '&shift=' + encodeURIComponent(shift);
+    if (cust) qs += '&customer=' + encodeURIComponent(cust);
+    if (watt) qs += '&wattage=' + encodeURIComponent(watt);
+    if (defect) qs += '&defect=' + encodeURIComponent(defect);
+    if (result) qs += '&result=' + encodeURIComponent(result);
+
+    fetch('/api/fqc/recent' + qs, {cache: 'no-store'})
       .then(function (r) { return r.json(); })
       .then(function (rows) {
         var host = document.getElementById('fqcRows');
         if (!host) return;
 
         var card = host.closest('.card');
-        if (card && !card.hasAttribute('data-itable')) {
-          card.setAttribute('data-itable', 'fqcRecent');
-          card.setAttribute('data-export', 'fqcRecent');
-          var filterHtml = '<div class="card-b" style="border-bottom:1px solid var(--line2);padding-bottom:12px">' +
-            '<div class="grid g5" style="align-items:end">' +
-            '<div class="fld"><label>Search</label><input data-role="search" placeholder="serial, model, customer"></div>' +
-            '<div class="fld"><label>Result</label><select data-role="filter" data-col="7" data-match="has">' +
-            '<option value="">All</option><option value="pass">Pass</option><option value="reject">Reject</option></select></div>' +
-            '<div class="fld"><label>Customer</label><select data-role="filter" data-col="10" data-match="has" id="fqcCust">' +
-            '<option value="">All</option></select></div>' +
-            '<div class="fld"><label>Wattage</label><select data-role="filter" data-col="10" data-match="has" id="fqcWatt">' +
-            '<option value="">All</option></select></div>' +
-            '<div class="fld"><label>Defect</label><select data-role="filter" data-col="8" data-match="has" id="fqcDefect">' +
-            '<option value="">All</option></select></div>' +
-            '</div>' +
-            '<div class="table-tools" style="margin-top:10px">' +
-            '<button class="btn btn-ghost" data-role="reset">Reset</button>' +
-            '<span class="tag t-mute" data-role="count"></span></div></div>';
+        if (card && !card.hasAttribute('data-filters-injected')) {
+          card.setAttribute('data-filters-injected', 'true');
+          var filterHtml = '<div class="filters" style="padding:12px 20px;border-bottom:1px solid var(--line2);background:var(--card-alt)">' +
+            '<div class="grid g6" style="align-items:end">' +
+            '<div class="fld"><label>Shift</label><select id="rShift" onchange="if(window.fqcRecentApply) window.fqcRecentApply()"><option>All shifts</option><option>A</option><option>B</option><option>C</option></select></div>' +
+            '<div class="fld"><label>Customer</label><select id="rCust" onchange="if(window.fqcRecentApply) window.fqcRecentApply()"><option>All customers</option></select></div>' +
+            '<div class="fld"><label>Wattage</label><select id="rWatt" onchange="if(window.fqcRecentApply) window.fqcRecentApply()"><option>All</option></select></div>' +
+            '<div class="fld"><label>Result</label><select id="rResult" onchange="if(window.fqcRecentApply) window.fqcRecentApply()"><option value="">All</option><option value="pass">Pass</option><option value="reject">Reject</option></select></div>' +
+            '<div class="fld"><label>Defect</label><select id="rDefect" onchange="if(window.fqcRecentApply) window.fqcRecentApply()"><option>All</option></select></div>' +
+            '</div></div>';
           var cb = document.createElement('div');
           cb.innerHTML = filterHtml;
-          card.insertBefore(cb.firstChild, card.firstChild);
+          // Insert after card-h
+          var cardH = card.querySelector('.card-h');
+          if (cardH) cardH.insertAdjacentElement('afterend', cb.firstChild);
         }
 
-        var custs = {}, watts = {}, defects = {};
-        rows.forEach(function(r) { 
-          if(r.customer) custs[r.customer]=1; 
-          if(r.wattage) watts[r.wattage]=1;
-          if(r.defect) defects[r.defect]=1;
-        });
-        var fillSel = function(id, map, pfx) {
-          var sel = document.getElementById(id);
-          if(!sel) return;
-          var cur = sel.value;
-          sel.innerHTML = '<option value="">All</option>' + Object.keys(map).sort().map(function(k){
-            return '<option value="' + (pfx||'') + fqcEsc(k).toLowerCase() + '">' + fqcEsc(k) + (pfx==='watt:'?'W':'') + '</option>';
+        if (window.B && B.customers && document.getElementById('rCust')) {
+          var sel = document.getElementById('rCust');
+          var prev = sel.value;
+          sel.innerHTML = '<option>All customers</option>' + B.customers.map(function(c) {
+            return '<option value="' + fqcEsc(c.name) + '">' + fqcEsc(c.name) + '</option>';
           }).join('');
-          sel.value = cur;
-        };
-        fillSel('fqcCust', custs, 'cust:');
-        fillSel('fqcWatt', watts, 'watt:');
-        fillSel('fqcDefect', defects);
+          if (prev) sel.value = prev;
+        }
+
+        if (window.B && B.models && document.getElementById('rWatt')) {
+          var sel = document.getElementById('rWatt');
+          var prev = sel.value;
+          var watts = {};
+          B.models.forEach(function(m) { if(m.wattage) watts[m.wattage] = 1; });
+          sel.innerHTML = '<option>All</option>' + Object.keys(watts).sort().map(function(k) {
+            return '<option value="' + fqcEsc(k) + '">' + fqcEsc(k) + 'W</option>';
+          }).join('');
+          if (prev) sel.value = prev;
+        }
+        
+        if (window.B && B.defects && document.getElementById('rDefect')) {
+          var sel = document.getElementById('rDefect');
+          var prev = sel.value;
+          sel.innerHTML = '<option>All</option>' + B.defects.map(function(d) {
+            return '<option value="' + fqcEsc(d) + '">' + fqcEsc(d) + '</option>';
+          }).join('');
+          if (prev) sel.value = prev;
+        }
 
         var count = document.getElementById('fqcN');
         var overrides = document.getElementById('fqcOv');
@@ -246,6 +277,15 @@
       });
   }
   window.renderLiveFqcRecent = renderLiveFqcRecent;
+
+  function wireFqcRecent() {
+    if (window.fqcRecentApply && window.fqcRecentApply.__live) return;
+    window.fqcRecentApply = function() {
+      renderLiveFqcRecent();
+    };
+    window.fqcRecentApply.__live = true;
+  }
+  window.wireFqcRecent = wireFqcRecent;
 
   window.renderPackLog = function() {
     fetch('/api/boxes', {cache: 'no-store'})
@@ -3515,8 +3555,8 @@
    * telling the truth.
    */
   function invoiceRealParse() {
-    var zone = document.querySelector('#v-invoice .drop') ||
-               document.querySelector('#v-invoice .card-b');
+    var zone = document.querySelector('#v-invoice-parser .drop') ||
+               document.querySelector('#v-invoice-parser .card-b');
     if (!zone || document.getElementById('invFile')) return;
 
     var inp = document.createElement('input');
@@ -3526,7 +3566,7 @@
 
     var pick = document.createElement('button');
     pick.className = 'btn btn-primary';
-    pick.textContent = 'Read a real invoice PDF';
+    pick.textContent = 'Read Invoice';
     pick.onclick = function (e) { e.preventDefault(); inp.click(); };
 
     /* The simulate buttons are removed outright. A demo control on a live
@@ -4699,6 +4739,99 @@
      this file runs. Wiring it here replaces them at once, so the screen is
      never briefly showing pallets that do not exist. */
   try { wireRepack(); } catch (e) {}
+
+  window.renderInvoiceList = function() {
+    var tbody = document.getElementById('invoiceListBody');
+    if (!tbody) return;
+    
+    var q = document.getElementById('invListSearch').value || '';
+    var dFrom = document.getElementById('invListDateFrom').value || '';
+    var dTo = document.getElementById('invListDateTo').value || '';
+    
+    tbody.innerHTML = '<tr><td colspan="7" class="mute" style="text-align:center;padding:30px">Loading...</td></tr>';
+    
+    var qs = '?q=' + encodeURIComponent(q) + '&from=' + encodeURIComponent(dFrom) + '&to=' + encodeURIComponent(dTo);
+    fetch('/api/invoices' + qs).then(function(r){return r.json()}).then(function(data){
+      if (!data.invoices || data.invoices.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="mute" style="text-align:center;padding:30px">No invoices found</td></tr>';
+        return;
+      }
+      var html = '';
+      data.invoices.forEach(function(inv) {
+        var status = inv.superseded_by ? '<span class="tag t-mute">Superseded</span>' : 
+                     (inv.challan ? '<span class="tag t-pass">Challan '+inv.challan+'</span>' : '<span class="tag t-info">Pending</span>');
+        html += '<tr>' +
+          '<td>' + (inv.invoice_no || '—') + '</td>' +
+          '<td>' + (inv.invoice_date || '—') + '</td>' +
+          '<td>' + (inv.buyer_name || '—') + '</td>' +
+          '<td>' + (inv.buyer_gstin || '—') + '</td>' +
+          '<td>' + (inv.declared_qty || '—') + '</td>' +
+          '<td>' + status + '</td>' +
+          '<td style="text-align:right">' +
+          '<a href="/view/invoice/pdf/' + inv.id + '" target="_blank" class="btn btn-ghost btn-sm" style="margin-right:4px">PDF</a>' +
+          (inv.challan || inv.superseded_by ? '' : '<button class="btn btn-ghost btn-sm" onclick="editInvoice(' + inv.id + ')">Edit</button>') +
+          '</td>' +
+          '</tr>';
+      });
+      tbody.innerHTML = html;
+    }).catch(function(e) {
+      tbody.innerHTML = '<tr><td colspan="7" class="mute" style="text-align:center;padding:30px;color:var(--fail)">Error loading invoices</td></tr>';
+    });
+  };
+
+  window.editInvoice = function(id) {
+    fetch('/api/invoice/' + id).then(function(r){return r.json()}).then(function(data){
+      if (data.error) {
+        toast(data.error);
+        return;
+      }
+      window.INV_STATE = {
+        invoice_id: data.invoice_id,
+        qr: data.qr || {einvoice: true},
+        fields: data.fields,
+        edited: data.edited_fields || {},
+        bad: false
+      };
+      window.INV_SCANNED = data.fields.quantity ? parseInt(String(data.fields.quantity.value).replace(/,/g, ''), 10) : 0;
+      
+      var dz = document.getElementById('invDz');
+      if (dz) {
+        dz.classList.add('hasfile');
+        document.getElementById('invDzT').textContent = data.pdf_name || 'Loaded from database';
+        document.getElementById('invDzS').textContent = 'Editing existing record';
+      }
+      
+      if(window.renderInvFields) window.renderInvFields();
+      if(window.go) window.go('invoice-parser');
+    }).catch(function(e){
+      toast('Failed to load invoice for editing.');
+    });
+  };
+  window.resetInvoiceForm = function() {
+    window.INV_STATE = null;
+    var dz = document.getElementById('invDz');
+    if(dz) dz.classList.remove('hasfile');
+    var dzT = document.getElementById('invDzT');
+    if(dzT) dzT.textContent = 'Drop the invoice PDF here';
+    var dzS = document.getElementById('invDzS');
+    if(dzS) dzS.textContent = '';
+    if(window.renderInvFields) window.renderInvFields();
+    
+    var flds = ['invNo', 'invQty', 'invDiff', 'invEwb'];
+    flds.forEach(function(f) {
+      var el = document.getElementById(f);
+      if(el) el.textContent = '—';
+    });
+    
+    var stat = document.getElementById('invStatus');
+    if(stat) stat.innerHTML = '';
+    
+    var qr = document.getElementById('invQr');
+    if(qr) qr.innerHTML = '<div style="font-size:11.5px;color:var(--ink3)">Nothing decoded yet.</div>';
+    
+    var host = document.getElementById('invFields');
+    if(host) host.innerHTML = '<div class="empty-state" style="padding:26px"><div class="es-i">&#9636;</div><p>No invoice loaded. Every field stays editable before submission, and anything the parser could not find is left <b>blank and flagged</b> — a blank catches the eye, a wrong-but-plausible value does not.</p></div>';
+  };
 
   registerSW();
   window.addEventListener('online', function () { fails = 2; ping(); });

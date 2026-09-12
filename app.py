@@ -2398,10 +2398,150 @@ def api_invoice_parse():
     with open(tmp, "wb") as fh:
         fh.write(raw)
     try:
-        return jsonify(invparse.parse(tmp))
-    finally:
+        result = invparse.parse(tmp)
+        if result["fingerprint"]["ok"]:
+            session["pending"] = {"tmp": tmp, "sha": sha, "orig": f.filename}
+        else:
+            safe_remove(tmp)
+        return jsonify(result)
+    except Exception as e:
         safe_remove(tmp)
+        return jsonify({"error": str(e)}), 500
 
+
+@app.route("/api/invoice/confirm", methods=["POST"])
+def api_invoice_confirm():
+    pend = session.get("pending")
+    if not pend or not os.path.exists(pend["tmp"]):
+        return jsonify({"ok": False, "why": "That upload expired. Start again."}), 400
+
+    try:
+        payload = request.get_json() or {}
+    except Exception:
+        payload = {}
+
+    # re-parse rather than trust a round-trip through the browser
+    result = invparse.parse(pend["tmp"])
+    data, edited = {}, {}
+    for group in ("fields", "compare_only"):
+        for key, meta in result[group].items():
+            posted = payload.get(key)
+            if posted is not None:
+                posted = posted.strip() or None
+                orig = meta["value"]
+                if str(posted) != str(orig) if orig is not None else bool(posted):
+                    edited[key] = {"from": orig, "to": posted}
+                data[key] = posted
+            else:
+                data[key] = meta["value"]
+
+    # compare-only fields keep their own names in the invoice table
+    data["declared_qty"] = data.pop("quantity", None)
+    data["declared_model"] = data.pop("model", None)
+    data["declared_hsn"] = data.pop("hsn", None)
+    if data.get("declared_qty"):
+        try:
+            data["declared_qty"] = int(str(data["declared_qty"]).replace(",", ""))
+        except ValueError:
+            data["declared_qty"] = None
+    
+    consignee_same = payload.get("consignee_same_as_buyer")
+    data["consignee_same_as_buyer"] = 1 if consignee_same in ("1", "True", "on", "true", True, 1) else 0
+
+    expect = payload.get("expect_qty")
+    if expect:
+        if data.get("declared_qty") is None:
+            return jsonify({"ok": False, "why": "Invoice quantity is blank. Type it before continuing."}), 400
+        try:
+            expect_int = int(str(expect).replace(",", ""))
+        except ValueError:
+            expect_int = -1
+        if expect_int != data["declared_qty"]:
+            return jsonify({"ok": False, "why": f"Invoice declares {data['declared_qty']}, boxes scanned total {expect_int}. No override — fix the packing or have HO reissue."}), 400
+
+    if data.get("ewb_valid_upto"):
+        try:
+            if datetime.date.fromisoformat(str(data["ewb_valid_upto"])) < datetime.date.today():
+                return jsonify({"ok": False, "why": f"e-Way Bill expired on {data['ewb_valid_upto']}. The vehicle must not move."}), 400
+        except ValueError:
+            pass
+
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe = "".join(c for c in (data.get("invoice_no") or "invoice") if c.isalnum() or c in "-_")
+    final = os.path.join(STORE, "%s_%s_%s.pdf" % (stamp, safe, pend["sha"][:8]))
+    os.replace(pend["tmp"], final)
+
+    try:
+        with db.conn() as (cx, cur):
+            inv_id = db.insert_invoice(
+                cur, data, os.path.relpath(final, BASE), pend["sha"],
+                result, bool(result["qr"].get("einvoice")), edited, actor())
+            
+            for pid in payload.get("supersede_ids") or []:
+                db.supersede_invoice(cur, pid, inv_id)
+            
+            db.audit(cur, actor(), "invoice.load", "invoice", inv_id,
+                     {"file": pend["orig"], "sha256": pend["sha"],
+                      "edited": list(edited.keys()),
+                      "qr": bool(result["qr"].get("einvoice"))})
+
+        session.pop("pending", None)
+        return jsonify({"ok": True, "invoice_no": data.get("invoice_no"), "edited_count": len(edited)})
+    except Exception as e:
+        app.logger.error(traceback.format_exc())
+        return jsonify({"ok": False, "why": "Database error: " + str(e)}), 500
+
+
+@app.route("/api/invoices")
+def api_invoices_list():
+    q = request.args.get('q', '').strip()
+    from_d = request.args.get('from', '').strip()
+    to_d = request.args.get('to', '').strip()
+    with store.conn() as (cx, cur):
+        invoices = db.search_invoices(cur, q=q, date_from=from_d, date_to=to_d)
+    return jsonify({"invoices": invoices})
+
+@app.route("/api/invoice/<int:invoice_id>")
+def api_invoice_get(invoice_id):
+    with store.conn() as (cx, cur):
+        inv = db.get_invoice_by_id(cur, invoice_id)
+        if not inv:
+            return jsonify({"error": "Invoice not found"}), 404
+    
+    fields = {}
+    keys = ['invoice_no', 'invoice_date', 'ack_no', 'ack_date', 'irn', 'buyer_name', 'buyer_gstin', 'buyer_address', 'buyer_contact_name', 'buyer_contact_phone', 'buyer_state', 'consignee_name', 'consignee_gstin', 'consignee_address', 'consignee_contact_name', 'consignee_contact_phone', 'tax_mode', 'po_no', 'po_date', 'ho_reference', 'transporter', 'transporter_id', 'vehicle_no', 'lr_no', 'destination', 'ewb_no', 'ewb_valid_upto']
+    for k in keys:
+        if k in inv and inv[k] is not None:
+            fields[k] = {"value": inv[k], "found": True, "optional": True}
+    
+    fields['consignee_same_as_buyer'] = {"value": bool(inv.get('consignee_same_as_buyer')), "found": True, "optional": True}
+    fields['quantity'] = {"value": inv.get('declared_qty'), "found": True, "optional": False}
+    fields['model'] = {"value": inv.get('declared_model'), "found": True, "optional": False}
+    fields['hsn'] = {"value": inv.get('declared_hsn'), "found": True, "optional": True}
+    if inv.get('ewb_distance_km') is not None:
+        fields['ewb_distance_km'] = {"value": inv['ewb_distance_km'], "found": True, "optional": True}
+    
+    qr = {"einvoice": bool(inv.get('qr_decoded'))}
+    pdf_name = os.path.basename(inv.get('pdf_path', ''))
+    
+    return jsonify({
+        "invoice_id": inv['invoice_id'],
+        "fields": fields,
+        "qr": qr,
+        "pdf_name": pdf_name,
+        "edited_fields": json.loads(inv.get('edited_fields') or '{}')
+    })
+
+@app.route("/view/invoice/pdf/<int:invoice_id>")
+def view_invoice_pdf(invoice_id):
+    with store.conn() as (cx, cur):
+        inv = db.get_invoice_by_id(cur, invoice_id)
+        if not inv or not inv.get('pdf_path'):
+            abort(404)
+        pdf_path = inv['pdf_path']
+        if not os.path.exists(pdf_path):
+            abort(404)
+        return send_file(pdf_path, mimetype='application/pdf', as_attachment=False)
 
 @app.route("/legacy")
 def home():
