@@ -127,6 +127,8 @@ def no_store(resp):
     still opened with the server stopped. Static files already revalidate;
     the document did not.
     """
+    if request.path == "/static/sw.js":
+        resp.headers["Service-Worker-Allowed"] = "/"
     ct = resp.headers.get("Content-Type", "")
     if "text/html" in ct or "application/json" in ct:
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -307,6 +309,7 @@ def boot_payload():
         "indents": indents,
         "challan_seq": {"fy": fy, "next": (r or {}).get("next_seq", 1)},
         "prod": _prod_rows(),
+        "shifts": _shift_rows(),
         "range": _data_range(),
         "customers": [{"code": c["customer_code"], "name": c["name"],
                        "gstin": c["gstin"], "state": c["state"],
@@ -356,6 +359,19 @@ def _data_range():
 def _prod_rows():
     with app.test_request_context():
         return api_prod().get_json()
+
+
+def _shift_rows():
+    with store.conn() as (cx, cur):
+        rows = store.rows(cur, """
+            SELECT s.shift AS s, s.model AS m, s.wattage AS w,
+                   COUNT(*) AS t,
+                   SUM(CASE WHEN f.outcome='pass' THEN 1 ELSE 0 END) AS ok,
+                   SUM(CASE WHEN f.outcome='reject' THEN 1 ELSE 0 END) AS r
+            FROM fqc_record f JOIN serial s ON s.serial=f.serial
+            GROUP BY s, m, w ORDER BY s, m, w""")
+        return [{"s": r["s"] or "", "m": r["m"], "w": str(r["w"])+"W",
+                 "t": r["t"], "ok": r["ok"], "r": r["r"]} for r in rows]
 
 
 def _open_boxes():
@@ -1321,6 +1337,134 @@ def api_prod():
     return jsonify(out)
 
 
+@app.route("/api/prod/dashboard")
+def api_prod_dashboard():
+    """Live endpoint for the Production Dashboard, allowing filtering by date,
+    shift, customer, and model. It returns both aggregated KPIs and a shift breakdown.
+    """
+    frm = (request.args.get("from") or "").strip()
+    to = (request.args.get("to") or "").strip() or frm
+    shift = (request.args.get("shift") or "").strip()
+    customer = (request.args.get("customer") or "").strip()
+    model = (request.args.get("model") or "").strip()
+
+    where = ["1=1"]
+    args = []
+
+    if frm:
+        where.append("s.date_produced >= ?")
+        args.append(frm)
+    if to:
+        where.append("s.date_produced <= ?")
+        args.append(to)
+    if shift and shift.lower() != "all shifts":
+        where.append("s.shift = ?")
+        args.append(shift.replace("Shift ", ""))
+    if customer and customer.lower() != "all customers":
+        # Handle the special stock option from frontend
+        if customer == "G2G (M10R) — General stock":
+            where.append("(s.customer IS NULL OR s.customer='ICON STOCK')")
+        else:
+            where.append("s.customer = ?")
+            args.append(customer)
+    if model and model.lower() != "all" and model.lower() != "all models":
+        where.append("s.model = ?")
+        args.append(model)
+
+    clause = " AND ".join(where)
+
+    with store.conn() as (cx, cur):
+        kpi_row = store.one(cur, f"""
+            SELECT COUNT(*) AS alloc,
+                   SUM(CASE WHEN s.state<>'planned' THEN 1 ELSE 0 END) AS prod,
+                   SUM(CASE WHEN s.grade IS NOT NULL THEN 1 ELSE 0 END) AS fqc,
+                   SUM(CASE WHEN s.grade IN ('GY','BGY') THEN 1 ELSE 0 END) AS rej,
+                   SUM(CASE WHEN s.state IN ('packed','dispatched') THEN 1 ELSE 0 END) AS packed,
+                   SUM(CASE WHEN s.state='dispatched' THEN 1 ELSE 0 END) AS disp
+            FROM serial s
+            WHERE {clause}""", args)
+
+        shift_rows = store.rows(cur, f"""
+            SELECT s.shift AS shift,
+                   SUM(CASE WHEN s.state<>'planned' THEN 1 ELSE 0 END) AS t,
+                   SUM(CASE WHEN s.grade IN ('GY','BGY') THEN 1 ELSE 0 END) AS r
+            FROM serial s
+            WHERE {clause}
+            GROUP BY s.shift ORDER BY s.shift""", args)
+
+    kpi = dict(kpi_row) if kpi_row else {"alloc":0, "prod":0, "fqc":0, "rej":0, "packed":0, "disp":0}
+    for k in kpi:
+        if kpi[k] is None: kpi[k] = 0
+
+    shifts = []
+    for sr in shift_rows:
+        if not sr["shift"]: continue
+        shifts.append({
+            "s": sr["shift"],
+            "t": sr["t"] or 0,
+            "r": sr["r"] or 0
+        })
+
+    return jsonify({
+        "kpi": kpi,
+        "shifts": shifts
+    })
+
+
+@app.route("/api/packing/log")
+def api_packing_log():
+    frm = (request.args.get("from") or "").strip()
+    to = (request.args.get("to") or "").strip() or frm
+    shift = (request.args.get("shift") or "").strip()
+    customer = (request.args.get("customer") or "").strip()
+    model = (request.args.get("model") or "").strip()
+    grade = (request.args.get("grade") or "").strip()
+    status = (request.args.get("status") or "").strip()
+
+    where = ["b.state<>'retired'"]
+    args = []
+
+    if frm:
+        where.append("b.pack_date >= ?")
+        args.append(frm)
+    if to:
+        where.append("b.pack_date <= ?")
+        args.append(to)
+    if shift and shift.lower() != "all shifts":
+        where.append("b.pack_shift = ?")
+        args.append(shift.replace("Shift ", ""))
+    if customer and customer.lower() != "all customers":
+        if customer == "G2G (M10R) — General stock":
+            where.append("(b.customer IS NULL OR b.customer='ICON STOCK')")
+        else:
+            where.append("b.customer = ?")
+            args.append(customer)
+    if model and model.lower() != "all" and model.lower() != "all models":
+        where.append("b.model = ?")
+        args.append(model)
+    if grade and grade.lower() != "all":
+        where.append("b.grade = ?")
+        args.append(grade)
+    if status and status.lower() != "all":
+        where.append("b.state = ?")
+        args.append(status.lower())
+
+    clause = " AND ".join(where)
+
+    with store.conn() as (cx, cur):
+        rows = store.rows(cur, f"""
+            SELECT b.box_id, b.pack_date, b.pack_shift, b.model, b.grade,
+                   b.qty, b.capacity, b.customer, b.bin_no, b.state,
+                   b.created_by AS packed_by,
+                   COALESCE(b.legacy_box_no, b.seq) AS ident
+            FROM box b
+            WHERE {clause}
+            ORDER BY b.pack_date DESC, b.box_id DESC
+        """, args)
+
+    return jsonify({"rows": rows})
+
+
 @app.route("/view/<name>")
 def view_fragment(name):
     """A screen's markup only - no shell. Dropped into a v4 <section class=
@@ -2092,24 +2236,36 @@ def api_trace_serial(serial):
         "tag": (first["date_produced"] or "") + " · shift " + str(first["shift"] or "—"),
         "tone": "t-mute",
     }]
+    cfg = db.get_config(cur)
+    anomaly = ev.find_anomaly(cfg, s)
+    if anomaly:
+        journey.append({"stage": "Anomaly", "value": "Tester Error", "done": True,
+                        "detail": [anomaly["why"], "Attempts: " + str(anomaly["attempts"])],
+                        "tag": anomaly["at"] or "", "tone": "t-fail"})
+
     if fqc:
         f = fqc[-1]
-        # FQC records pass or reject, and a reject has no grade until
-        # Quality calls it - reading the grade column alone put the word
-        # "None" on the journey of every rejected module.
+        # FQC records pass or reject
         if f["outcome"] == "pass":
-            value, tone = f["grade"] or "A", "t-pass"
+            value, tone = "Pass", "t-pass"
             detail = [f["decided_by"] or "—", f["mode"] or ""]
-        elif f["quality_grade"]:
-            value, tone = "Rejected · " + f["quality_grade"], "t-fail"
-            detail = [f["decided_by"] or "—",
-                      "Quality: " + (f["quality_by"] or "—")]
+            journey.append({"stage": "FQC", "value": value, "done": True,
+                            "detail": detail, "tag": f["at"] or "", "tone": tone})
         else:
-            value, tone = "Rejected", "t-fail"
-            detail = [f["decided_by"] or "—",
-                      f["defect"] or "awaiting a quality decision"]
-        journey.append({"stage": "FQC", "value": value, "done": True,
-                        "detail": detail, "tag": f["at"] or "", "tone": tone})
+            value, tone = "Reject", "t-fail"
+            detail = [f["decided_by"] or "—", f["defect"] or ""]
+            journey.append({"stage": "FQC", "value": value, "done": True,
+                            "detail": detail, "tag": f["at"] or "", "tone": tone})
+            
+            # Quality Decision step
+            if f["quality_grade"]:
+                q_value, q_tone = f["quality_grade"], "t-fail"
+                q_detail = ["Quality: " + (f["quality_by"] or "—")]
+            else:
+                q_value, q_tone = "—", "t-mute"
+                q_detail = ["awaiting a quality decision"]
+            journey.append({"stage": "Quality Decision", "value": q_value, "done": bool(f["quality_grade"]),
+                            "detail": q_detail, "tag": (f["at"] if f["quality_grade"] else "pending"), "tone": q_tone})
     else:
         journey.append({"stage": "FQC", "value": "—", "done": False,
                         "detail": ["not judged yet"], "tag": "pending",
@@ -3264,7 +3420,19 @@ def api_fqc_recent():
         cr = customers.get(r.get("customer"))
         if cr:
             r["customer"] = cr["name"]
-    return jsonify(rows)
+    return jsonify({"rows": rows})
+
+
+@app.route("/api/fqc/anomalies")
+def api_fqc_anomalies():
+    """Anomalous unmappable reads from the sun simulator/tester."""
+    line = (request.args.get("line") or "").strip().upper()
+    with store.conn() as (cx, cur):
+        cfg = db.get_config(cur)
+    anomalies = ev.scan_anomalies(cfg, line=line)
+    
+    # scan_anomalies returns {"available": True/False, "junk": [...], "failed": [...]}
+    return jsonify(anomalies)
 
 
 @app.route("/api/fqc/dashboard")
@@ -3306,6 +3474,7 @@ def api_fqc_dashboard():
     args = tuple(args)
 
     with store.conn() as (cx, cur):
+        cfg = db.get_config(cur)
         summary = store.rows(cur,
             "SELECT substr(f.at, 1, 10) AS day, s.model AS model, s.wattage AS wattage, "
             "s.customer AS customer, s.shift AS shift, COUNT(*) AS inspected, "
@@ -3338,6 +3507,13 @@ def api_fqc_dashboard():
     t = dict(totals or {})
     for k in ("inspected", "passed", "rejected", "awaiting_quality", "gy", "bgy"):
         t[k] = t.get(k) or 0
+        
+    try:
+        anomalies_data = ev.scan_anomalies(cfg)
+        t["anomalies"] = len(anomalies_data.get("junk") or []) + len(anomalies_data.get("failed") or [])
+    except Exception:
+        t["anomalies"] = 0
+
     return jsonify({"rows": [dict(r) for r in summary], "totals": t,
                     "by_defect": [dict(r) for r in by_defect],
                     "filters": {"from": frm, "to": to, "shift": shift,
@@ -3374,6 +3550,8 @@ def api_fqc_dashboard_modules():
             where.append("f.outcome = 'pass'")
         elif cat in ('GY', 'BGY'):
             where.append("f.quality_grade = %s"); args.append(cat)
+        elif cat == 'Pending':
+            where.append("f.outcome = 'reject' AND f.quality_grade IS NULL")
     if remark:
         where.append("COALESCE(f.defect, '(no defect recorded)') = %s"); args.append(remark)
 

@@ -178,12 +178,19 @@ A new screen gets both for free.
 
 ## 3. Production Dashboard
 
+- [x] **Live data binding and filters.** Filters are fully functional via new API endpoint `/api/prod/dashboard`.
+- [x] **OEE disabled.** Line performance table ignores missing Line data and removes OEE/efficiency metrics until further notice.
 - [x] **Export works, and Reset exists at all.** The filter bar had Apply and
       nothing to undo it with, so a Reset is injected beside it and
       `wireResets()` picks it up by its label like every other one.
 - [x] **Export on Line & Shift Performance.** That card had no Export button
       to begin with — one is injected into its header and goes through the
       same handler as the rest.
+
+## 3b. Packing Log
+
+- [x] **Live data binding.** Filters are fully functional via new API endpoint `/api/packing/log`.
+- [x] **Operator-defined pallet capacity.** The Packing Log shows `qty / capacity` exactly as recorded by the operator in the database (`box` table), rather than capping or assuming from the indent.
 
 ## 4. Indent  *(done, keep in step with later changes)*
 

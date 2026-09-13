@@ -559,7 +559,7 @@ def _parse(doc, path, expect_qty=None):
         "value": desc.group(1) if desc else None, "found": bool(desc),
         "label": "Description of Goods", "class": "compare", "edited": False}
 
-    qm = re.search(r"([\d,]+)\.\d{3}\s*pcs", p0.text)
+    qm = re.search(r"([\d,]+)\.\d{3}\s*pcs", p0.text, re.IGNORECASE)
     qty = int(qm.group(1).replace(",", "")) if qm else None
     r["compare_only"]["quantity"] = {"value": qty, "found": qty is not None,
         "label": "Quantity", "class": "compare", "edited": False}
@@ -602,6 +602,11 @@ def _parse(doc, path, expect_qty=None):
     r["fields"]["buyer_state"] = {
         "value": STATE_CODES.get(code, code) if code else None,
         "found": bool(code), "label": "derived from GSTIN",
+        "class": "copy", "edited": False}
+    c_code = cg[:2] if cg else None
+    r["fields"]["consignee_state"] = {
+        "value": STATE_CODES.get(c_code, c_code) if c_code else None,
+        "found": bool(c_code), "label": "derived from GSTIN",
         "class": "copy", "edited": False}
     r["fields"]["tax_mode"] = {
         "value": ("IGST" if code != OWN_GSTIN[:2] else "CGST/SGST")

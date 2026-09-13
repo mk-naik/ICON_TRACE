@@ -102,6 +102,10 @@
       B.prod.forEach(function (r) { PROD.push(r); });
       fillCustomerSelects();
     }
+    if (B.shifts && typeof SHIFT_ROWS !== 'undefined') {
+      SHIFT_ROWS.length = 0;
+      B.shifts.forEach(function (r) { SHIFT_ROWS.push(r); });
+    }
 
     /* Customer dropdowns come from the master, so one company cannot appear
        under three spellings in a filter. */
@@ -125,6 +129,61 @@
   /* Ask v4 to redraw whatever screen is showing, using its own render
      functions. Calling them by name keeps the arithmetic in v4 where it
      belongs - this layer supplies data, never recomputes it. */
+  
+  function wireDynamicFilters() {
+    if (!window.B) return;
+    
+    // Customers
+    var custSelects = ['fDashCust', 'mgCust', 'pdCust', 'pkCust'];
+    custSelects.forEach(function(id) {
+      var sel = document.getElementById(id);
+      if (!sel) return;
+      var prev = sel.value;
+      sel.innerHTML = '<option>All customers</option>' + (B.customers || []).map(function(c) {
+        return '<option value="' + fqcEsc(c.name) + '">' + fqcEsc(c.name) + '</option>';
+      }).join('');
+      if (prev) sel.value = prev;
+    });
+
+    // Models - extract unique models from B.prod
+    var models = [];
+    if (B.prod) {
+      var mSet = {};
+      B.prod.forEach(function(p) { mSet[p.model] = 1; });
+      models = Object.keys(mSet).sort();
+    }
+    var modelSelects = ['fDashModel', 'mgModel', 'pdModel', 'pkModel'];
+    modelSelects.forEach(function(id) {
+      var sel = document.getElementById(id);
+      if (!sel) return;
+      var prev = sel.value;
+      sel.innerHTML = '<option>All</option>' + models.map(function(m) {
+        return '<option value="' + fqcEsc(m) + '">' + fqcEsc(m) + '</option>';
+      }).join('');
+      if (prev) sel.value = prev;
+    });
+    
+    // Shifts - extract unique shifts
+    var shifts = [];
+    if (B.shifts) {
+      shifts = B.shifts.map(function(s) { return s.shift; }).sort();
+    } else {
+      shifts = [1, 2, 3];
+    }
+    var sMap = {1: 'A', 2: 'B', 3: 'C'};
+    var shiftSelects = ['fDashShift', 'pkShift'];
+    shiftSelects.forEach(function(id) {
+      var sel = document.getElementById(id);
+      if (!sel) return;
+      var prev = sel.value;
+      sel.innerHTML = '<option>All shifts</option>' + shifts.map(function(s) {
+        return '<option value="' + sMap[s] + '">' + sMap[s] + '</option>';
+      }).join('');
+      if (prev) sel.value = prev;
+    });
+  }
+  window.wireDynamicFilters = wireDynamicFilters;
+
   function rerender() {
     ['renderMgmt', 'renderProd', 'renderFqcDash', 'renderLiveFqcDash',
      'renderLiveFqcRecent', 'renderPackLog',
@@ -135,8 +194,12 @@
     if (typeof window.iconTable !== 'undefined') window.iconTable.wireAll();
     /* before wireResets(), so the Reset it injects gets wired this pass */
     if (typeof addMissingControls === 'function') addMissingControls();
-    if (typeof wireFqcDash === 'function') wireFqcDash();
+    if (typeof wireDynamicFilters === 'function') wireDynamicFilters();
+      if (typeof wireFqcDash === 'function') wireFqcDash();
+    if (typeof wireProdDash === 'function') wireProdDash();
+    if (typeof wirePackLog === 'function') wirePackLog();
     if (typeof wireFqcRecent === 'function') wireFqcRecent();
+    if (typeof wireFqcAnomalies === 'function') wireFqcAnomalies();
     if (typeof wirePacking === 'function') wirePacking();
     if (typeof wireScreenTables === 'function') wireScreenTables();
     if (typeof wireMaterialMaster === 'function') wireMaterialMaster();
@@ -204,8 +267,8 @@
     if (result) qs += '&result=' + encodeURIComponent(result);
 
     fetch('/api/fqc/recent' + qs, {cache: 'no-store'})
-      .then(function (r) { return r.json(); })
-      .then(function (rows) {
+        .then(function (r) { return r.json(); })
+        .then(function (data) { var rows = data.rows || data;
         var host = document.getElementById('fqcRows');
         if (!host) return;
 
@@ -213,13 +276,12 @@
         if (card && !card.hasAttribute('data-filters-injected')) {
           card.setAttribute('data-filters-injected', 'true');
           var filterHtml = '<div class="filters" style="padding:12px 20px;border-bottom:1px solid var(--line2);background:var(--card-alt)">' +
-            '<div class="grid g6" style="align-items:end">' +
             '<div class="fld"><label>Shift</label><select id="rShift" onchange="if(window.fqcRecentApply) window.fqcRecentApply()"><option>All shifts</option><option>A</option><option>B</option><option>C</option></select></div>' +
             '<div class="fld"><label>Customer</label><select id="rCust" onchange="if(window.fqcRecentApply) window.fqcRecentApply()"><option>All customers</option></select></div>' +
             '<div class="fld"><label>Wattage</label><select id="rWatt" onchange="if(window.fqcRecentApply) window.fqcRecentApply()"><option>All</option></select></div>' +
             '<div class="fld"><label>Result</label><select id="rResult" onchange="if(window.fqcRecentApply) window.fqcRecentApply()"><option value="">All</option><option value="pass">Pass</option><option value="reject">Reject</option></select></div>' +
             '<div class="fld"><label>Defect</label><select id="rDefect" onchange="if(window.fqcRecentApply) window.fqcRecentApply()"><option>All</option></select></div>' +
-            '</div></div>';
+            '</div>';
           var cb = document.createElement('div');
           cb.innerHTML = filterHtml;
           // Insert after card-h
@@ -286,6 +348,70 @@
     window.fqcRecentApply.__live = true;
   }
   window.wireFqcRecent = wireFqcRecent;
+
+  function renderAnomalies() {
+    var vFqc = document.getElementById('v-fqc');
+    if (!vFqc) return;
+    var lineMatch = (document.getElementById('fqcStation') || {}).textContent || '';
+    var line = 'A';
+    if (lineMatch.indexOf('B-Line') >= 0) line = 'B';
+    
+    fetch('/api/fqc/anomalies?line=' + line, {cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (anomalies) {
+        var existing = document.getElementById('fqcAnomaliesCard');
+        if (existing) existing.remove();
+        
+        if (!anomalies || !anomalies.available) return;
+        
+        var html = '<div class="card" id="fqcAnomaliesCard"><div class="card-h"><h3>What the tester wrote that no lookup will find</h3><span class="sp hint">last 200 rows</span></div><div class="card-b">';
+        
+        if (anomalies.junk && anomalies.junk.length > 0) {
+          html += '<p><b>' + anomalies.junk.length + ' row(s) under a hand-typed ID.</b> The barcode would not scan, so the operator entered something to let the test run. The module exists; its result is filed under nothing.</p>';
+          html += '<div class="scroll" style="max-height:130px"><table><thead><tr><th>Time</th><th>ID as typed</th><th>Pmax</th></tr></thead><tbody>';
+          anomalies.junk.forEach(function(j) {
+            html += '<tr><td>' + (j.at || '') + '</td><td class="mono"><span class="tag t-fail">' + fqcEsc(j.id) + '</span></td><td class="mono">' + (j.pmax || '') + '</td></tr>';
+          });
+          html += '</tbody></table></div>';
+        }
+        
+        if (anomalies.failed && anomalies.failed.length > 0) {
+          html += '<p style="margin-top:10px"><b>' + anomalies.failed.length + ' module(s) tested and never read.</b> Probe or Zig at the JB connector, polarity, or soldering.</p>';
+          html += '<div class="scroll" style="max-height:130px"><table><thead><tr><th>Serial</th><th>Attempts</th><th>Last try</th><th>Why</th></tr></thead><tbody>';
+          anomalies.failed.forEach(function(f) {
+            html += '<tr><td class="mono">' + fqcEsc(f.serial) + '</td><td style="text-align:right">' + f.attempts + '</td><td>' + (f.at || '') + '</td><td class="hint">' + fqcEsc(f.why) + '</td></tr>';
+          });
+          html += '</tbody></table></div>';
+        }
+        
+        if ((!anomalies.junk || anomalies.junk.length === 0) && (!anomalies.failed || anomalies.failed.length === 0)) {
+          html += '<p class="hint">Nothing anomalous in the last 200 rows.</p>';
+        }
+        
+        html += '</div></div>';
+        
+        var recentCard = vFqc.querySelector('.card:last-of-type'); // Assuming the last card in v-fqc is "Recent gradings"
+        if (recentCard && recentCard.querySelector('h3') && recentCard.querySelector('h3').textContent.indexOf('Recent gradings') >= 0) {
+          recentCard.insertAdjacentHTML('beforebegin', html);
+        }
+      })
+      .catch(function(e) { console.error('Anomalies fetch failed:', e); });
+  }
+
+function wireFqcAnomalies() {
+    var vDash = document.getElementById('v-dash');
+    if (!vDash) return;
+    var act = vDash.querySelector('.pg-act');
+    if (act && !document.getElementById('btnFqcAnomalies')) {
+      var btn = document.createElement('button');
+      btn.className = 'btn btn-ghost';
+      btn.id = 'btnFqcAnomalies';
+      btn.textContent = 'View anomalies';
+      btn.onclick = function() { renderAnomalies(); };
+      act.insertBefore(btn, act.firstChild);
+    }
+  }
+  window.wireFqcAnomalies = wireFqcAnomalies;
 
   window.renderPackLog = function() {
     fetch('/api/boxes', {cache: 'no-store'})
@@ -415,6 +541,224 @@
     return q.length ? '?' + q.join('&') : '';
   }
 
+  function wireProdDash() {
+    var pd = document.getElementById('v-proddash');
+    if (!pd) return;
+    
+    var flds = pd.querySelectorAll('.filters .fld');
+    if (flds.length < 5) return;
+    
+    // Assign IDs if missing
+    var fFrom = flds[0].querySelector('input'); if (!fFrom.id) fFrom.id = 'pdFrom';
+    var fTo = flds[1].querySelector('input'); if (!fTo.id) fTo.id = 'pdTo';
+    var fShift = flds[2].querySelector('select'); if (!fShift.id) fShift.id = 'pdShift';
+    var fCust = flds[3].querySelector('select'); // already has id pdCust
+    var fModel = flds[4].querySelector('select'); if (!fModel.id) fModel.id = 'pdModel';
+    
+    // Wire change events
+    [fFrom, fTo, fShift, fCust, fModel].forEach(function(el) {
+      if (el) {
+        el.onchange = function() { window.renderProd(); };
+      }
+    });
+    
+    // Populate dropdowns from models if empty
+    if (B.models && fModel && fModel.options.length <= 1) {
+      fModel.innerHTML = '<option>All models</option>' + B.models.map(function(m) {
+        return '<option value="' + fqcEsc(m.model) + '">' + fqcEsc(m.model) + '</option>';
+      }).join('');
+    }
+  }
+  window.wireProdDash = wireProdDash;
+
+  function renderLiveProdDash() {
+    var g = function(id) { var e = document.getElementById(id); return e ? e.value : ''; };
+    var f = {
+      from: g('pdFrom'),
+      to: g('pdTo'),
+      shift: g('pdShift'),
+      customer: g('pdCust'),
+      model: g('pdModel')
+    };
+    
+    var qs = [];
+    if (f.from) qs.push('from=' + encodeURIComponent(f.from));
+    if (f.to) qs.push('to=' + encodeURIComponent(f.to));
+    if (f.shift && f.shift !== 'All shifts') qs.push('shift=' + encodeURIComponent(f.shift));
+    if (f.customer && f.customer !== 'All customers') qs.push('customer=' + encodeURIComponent(f.customer));
+    if (f.model && f.model !== 'All' && f.model !== 'All models') qs.push('model=' + encodeURIComponent(f.model));
+    var query = qs.length ? '?' + qs.join('&') : '';
+    
+    fetch('/api/prod/dashboard' + query, { cache: 'no-store' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        var k = d.kpi || {};
+        var running = (k.prod || 0) - (k.fqc || 0);
+        var pending = (k.packed || 0) - (k.disp || 0);
+        var remaining = (k.alloc || 0) - (k.prod || 0);
+        
+        var el = function(id, text) { var e = document.getElementById(id); if(e) e.textContent = text; };
+        el('pk1', (k.alloc || 0).toLocaleString());
+        el('pk2', running.toLocaleString());
+        el('pk3', (k.rej || 0).toLocaleString());
+        el('pk4', (k.disp || 0).toLocaleString());
+        el('pk5', remaining.toLocaleString());
+        
+        if (typeof drawDonut === 'function') {
+          drawDonut('pdDonut', 'pdLegend', [
+            {n:'Passed FQC', v:(k.fqc || 0)-(k.rej || 0), c:C.navy},
+            {n:'Rejected at FQC', v:k.rej || 0, c:C.red},
+            {n:'Produced, not yet at FQC', v:running, c:C.amber},
+            {n:'Not yet produced', v:remaining, c:C.grey}
+          ], ((k.alloc || 0)/1000).toFixed(1)+'k', 'allocated');
+        }
+        
+        var tBody = document.getElementById('pdLineRows');
+        if (tBody) {
+          if (!d.shifts || d.shifts.length === 0) {
+            tBody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><p>Nothing produced under these filters.</p></div></td></tr>';
+          } else {
+            tBody.innerHTML = d.shifts.map(function(r) {
+              return '<tr><td>?</td><td class="s' + r.s + '">' + r.s + '</td>' +
+                '<td class="num">' + r.t.toLocaleString() + '</td>' +
+                '<td class="num">' + r.r.toLocaleString() + '</td>' +
+                '<td class="num">?</td><td class="num">?</td><td>?</td></tr>';
+            }).join('');
+          }
+        }
+      });
+  }
+  window.renderProd = renderLiveProdDash;
+
+  function wirePackLog() {
+    var pd = document.getElementById('v-packdash');
+    if (!pd) return;
+    
+    var flds = pd.querySelectorAll('.filters .fld');
+    if (flds.length < 6) return;
+    
+    // Assign IDs if missing
+    var fFrom = flds[0].querySelector('input'); if (!fFrom.id) fFrom.id = 'plFrom';
+    // The "Date" input is originally just one field "Date" in v4!
+    // Let's assume it's just 'Date' - meaning 'From'. The second date is missing in v4 filters!
+    
+    var fShift = flds[1].querySelector('select'); // already has pkShift
+    var fCust = flds[2].querySelector('select'); // already has pkCust
+    var fModel = flds[3].querySelector('select'); // already has pkModel
+    var fGrade = flds[4].querySelector('select'); // already has pkGrade
+    var fStatus = flds[5].querySelector('select'); // already has pkStatus
+    
+    [fFrom, fShift, fCust, fModel, fGrade, fStatus].forEach(function(el) {
+      if (el) el.onchange = function() { window.packApply(); };
+    });
+    
+    if (B.customers && fCust && fCust.options.length <= 1) {
+      fCust.innerHTML = '<option>All customers</option>' + B.customers.map(function(c) {
+        return '<option value="' + fqcEsc(c.name) + '">' + fqcEsc(c.name) + '</option>';
+      }).join('');
+    }
+    if (B.models && fModel && fModel.options.length <= 1) {
+      fModel.innerHTML = '<option>All models</option>' + B.models.map(function(m) {
+        return '<option value="' + fqcEsc(m.model) + '">' + fqcEsc(m.model) + '</option>';
+      }).join('');
+    }
+  }
+  window.wirePackLog = wirePackLog;
+
+  function renderLivePackLog() {
+    var g = function(id) { var e = document.getElementById(id); return e ? e.value : ''; };
+    var f = {
+      from: g('plFrom') || g('pkDate'), // handle whatever ID it got
+      shift: g('pkShift'),
+      customer: g('pkCust'),
+      model: g('pkModel'),
+      grade: g('pkGrade'),
+      status: g('pkStatus')
+    };
+    
+    var qs = [];
+    if (f.from) qs.push('from=' + encodeURIComponent(f.from));
+    if (f.shift && f.shift !== 'All shifts') qs.push('shift=' + encodeURIComponent(f.shift));
+    if (f.customer && f.customer !== 'All customers') qs.push('customer=' + encodeURIComponent(f.customer));
+    if (f.model && f.model !== 'All' && f.model !== 'All models') qs.push('model=' + encodeURIComponent(f.model));
+    if (f.grade && f.grade !== 'All') qs.push('grade=' + encodeURIComponent(f.grade));
+    if (f.status && f.status !== 'All') qs.push('status=' + encodeURIComponent(f.status));
+    var query = qs.length ? '?' + qs.join('&') : '';
+    
+    fetch('/api/packing/log' + query, { cache: 'no-store' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        var rows = d.rows || [];
+        var kLists = 0, kMods = 0, kA = 0, kGy = 0, kRepacks = 0, kCRe = 0, kNRe = 0;
+        var kWaitBoxes = 0, kWaitMods = 0, kWaitKw = 0;
+        
+        var tBody = document.getElementById('pkBoxRows');
+        if (tBody) {
+          if (rows.length === 0) {
+            tBody.innerHTML = '<tr><td colspan="11"><div class="empty-state"><p>Nothing found under these filters.</p></div></td></tr>';
+          } else {
+            tBody.innerHTML = rows.map(function(r) {
+              kLists++;
+              kMods += (r.qty || 0);
+              if (r.grade === 'A') kA += (r.qty || 0);
+              if (r.grade === 'GY' || r.grade === 'BGY') kGy += (r.qty || 0);
+              if (r.state === 'repacked') {
+                kRepacks++;
+                kCRe++;
+              }
+              if (r.state === 'packed') {
+                kWaitBoxes++;
+                kWaitMods += (r.qty || 0);
+              }
+              
+              var gClass = 't-pass';
+              if (r.grade === 'GY') gClass = 't-rev';
+              if (r.grade === 'BGY') gClass = 't-fail';
+              
+              var sClass = 't-info';
+              if (r.state === 'repacked') sClass = 't-mute';
+              
+              var modelW = parseInt((r.model||'').replace(/\D/g, '')) || 0;
+              if (r.state === 'packed') kWaitKw += (r.qty * modelW / 1000);
+              
+              return '<tr><td><button class="lnk" onclick="qTry(\'' + r.ident + '\')">' + r.ident + '</button></td>' +
+                '<td class="mono">BIN-' + (r.bin_no || '?') + '</td>' +
+                '<td>' + (r.customer || 'ICON STOCK') + '</td>' +
+                '<td class="mono">' + r.model + '</td>' +
+                '<td><span class="tag ' + gClass + '">' + r.grade + '</span></td>' +
+                '<td class="num">' + r.qty + ' / ' + (r.capacity || '?') + '</td>' +
+                '<td class="mono">' + (r.pack_date || '').slice(0, 10) + '</td>' +
+                '<td class="s' + (r.pack_shift || '') + '">' + (r.pack_shift || '') + '</td>' +
+                '<td><span class="tag ' + sClass + '">' + r.state + '</span></td>' +
+                '<td class="mono" style="font-size:10.5px;color:var(--ink3)">' + (r.packed_by || '') + '</td>' +
+                '<td><button class="btn btn-ghost btn-sm" onclick="printDoc(\'Packing list\',\'' + r.ident + '\',3)">Print</button></td></tr>';
+            }).join('');
+          }
+        }
+        
+        var countEl = document.getElementById('pkCount');
+        if (countEl) countEl.textContent = kLists + ' boxes';
+        
+        var grid = document.querySelector('#v-packdash .grid.g4');
+        if (grid) {
+          var kpis = grid.querySelectorAll('.kpi');
+          if (kpis.length >= 4) {
+            kpis[0].querySelector('.v').textContent = kLists.toLocaleString();
+            
+            kpis[1].querySelector('.v').textContent = kMods.toLocaleString();
+            kpis[1].querySelector('.d').textContent = kA.toLocaleString() + ' A \u2014 ' + kGy.toLocaleString() + ' GY';
+            
+            kpis[2].querySelector('.v').textContent = kRepacks.toLocaleString();
+            kpis[2].querySelector('.d').textContent = kCRe + ' boxes closed';
+            
+            kpis[3].querySelector('.v').textContent = kWaitBoxes.toLocaleString();
+            kpis[3].querySelector('.d').textContent = kWaitMods.toLocaleString() + ' modules \u2014 ' + kWaitKw.toFixed(1) + ' KW';
+          }
+        }
+      });
+  }
+  window.packApply = renderLivePackLog;
+
   function renderLiveFqcDash() {
     var f = fqcDashFilters();
     console.log("fetching dashboard with f=", f);
@@ -476,12 +820,17 @@
         if (cat) {
           var catRows = [['A', 'Passed', totals.passed || 0],
                          ['GY', 'Rejected', totals.gy || 0],
-                         ['BGY', 'Rejected', totals.bgy || 0]];
+                         ['BGY', 'Rejected', totals.bgy || 0],
+                         ['Pending', 'Quality Pending', totals.awaiting_quality || 0],
+                         ['Anomaly', 'Tester Error', totals.anomalies || 0]];
           var catTot = catRows.reduce(function (a, x) { return a + x[2]; }, 0);
           cat.innerHTML = catRows.map(function (x) {
             var pct = catTot ? (x[2] / catTot * 100).toFixed(1) : '0.0';
+            var act = (x[0] === 'Anomaly') ?
+                '<button class="btn btn-ghost btn-sm" onclick="renderAnomalies()">View</button>' :
+                '<button class="btn btn-ghost btn-sm" onclick="openModules({title:\'Category '+x[0]+'\',cat:\''+x[0]+'\'})">👁</button>';
             return '<tr><td>' + x[0] + '</td><td>' + x[1] + '</td><td class="num">' +
-              x[2] + '</td><td class="mono">' + pct + '%</td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:\'Category '+x[0]+'\',cat:\''+x[0]+'\'})">⊞</button></td></tr>';
+              x[2] + '</td><td class="mono">' + pct + '%</td><td style="text-align:center">' + act + '</td></tr>';
           }).join('');
         }
 
@@ -3574,7 +3923,11 @@
        the record. */
     var sim = zone.querySelector('[onclick*="invSim()"]');
     if (sim) { sim.parentNode.insertBefore(pick, sim); sim.remove(); }
-    else { zone.appendChild(pick); }
+    else {
+      var dzBtns = document.querySelector('#invDz .dz-btns');
+      if (dzBtns) dzBtns.appendChild(pick);
+      else zone.appendChild(pick);
+    }
     var bad = zone.querySelector('[onclick*="invSimBad"]');
     if (bad) bad.remove();
 

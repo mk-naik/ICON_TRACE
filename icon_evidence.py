@@ -516,3 +516,33 @@ def gather(cfg, serial, wattage, sandbox=False, line=None):
         if k not in out:
             out[k] = ss.get(k)
     return out
+
+
+def find_anomaly(cfg, serial):
+    """Find if a specific serial has any failed test attempts in the SS log."""
+    serial = serial.strip().upper()
+    for s in sources(cfg):
+        path = s["ss_path"]
+        if not path or not os.path.exists(path):
+            continue
+        scol, pcol = s["serial_col"], s["pmax_col"]
+        isc_col, voc_col = s["isc_col"], s["voc_col"]
+        
+        # Read backwards to find the latest
+        rows = _read_rows(path)
+        rs = []
+        for r in reversed(rows):
+            if len(r) <= max(scol, pcol, isc_col, voc_col):
+                continue
+            sid = r[scol].strip().upper()
+            if sid == serial:
+                rs.append(r)
+        
+        if rs:
+            # We found the serial in the tester file. 
+            # Are all its readings invalid?
+            if not any(reading_is_valid(r, pcol, isc_col, voc_col)[0] for r in rs):
+                return {"serial": serial, "attempts": len(rs),
+                        "at": rs[0][COL_TIME], "line": s["line"],
+                        "why": reading_is_valid(rs[0], pcol, isc_col, voc_col)[1]}
+    return None

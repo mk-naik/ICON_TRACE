@@ -4676,6 +4676,7 @@ function renderInvFields(){
   html += '<div class="card"><div class="card-h"><h3>Consignee</h3><div class="ch-r"><label class="hint" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="f_consignee_same_as_buyer" onchange="INV_STATE.fields[\'consignee_same_as_buyer\']={value:this.checked?1:0,found:true,optional:true};INV_STATE.edited[\'consignee_same_as_buyer\']=true;invCheck()" ' + ((INV_STATE.fields.consignee_same_as_buyer && INV_STATE.fields.consignee_same_as_buyer.value) ? 'checked' : '') + '> same as buyer</label></div></div><div class="card-b"><div class="grid">';
   html += field('consignee_name', 'Name');
   html += field('consignee_gstin', 'GSTIN');
+  html += field('consignee_state', 'State (from GSTIN)');
   html += field('consignee_contact_name', 'Contact person');
   html += field('consignee_contact_phone', 'Contact phone');
   html += field('consignee_address', 'Ship-to address', true);
