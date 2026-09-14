@@ -2186,6 +2186,7 @@ def api_trace_serial(serial):
                                  "(entity='serial' AND entity_id=%s) OR "
                                  "(entity='allocation' AND entity_id=%s) "
                                  "ORDER BY at", (s, str(first["alloc_id"])))
+        cfg = db.get_config(cur)
 
     bno = batch_no(alloc) if alloc else "—"
     cust = customers.get(first["customer"])
@@ -2236,7 +2237,7 @@ def api_trace_serial(serial):
         "tag": (first["date_produced"] or "") + " · shift " + str(first["shift"] or "—"),
         "tone": "t-mute",
     }]
-    cfg = db.get_config(cur)
+    
     anomaly = ev.find_anomaly(cfg, s)
     if anomaly:
         journey.append({"stage": "Anomaly", "value": "Tester Error", "done": True,

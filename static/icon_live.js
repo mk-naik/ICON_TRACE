@@ -350,8 +350,6 @@
   window.wireFqcRecent = wireFqcRecent;
 
   function renderAnomalies() {
-    var vFqc = document.getElementById('v-fqc');
-    if (!vFqc) return;
     var lineMatch = (document.getElementById('fqcStation') || {}).textContent || '';
     var line = 'A';
     if (lineMatch.indexOf('B-Line') >= 0) line = 'B';
@@ -359,16 +357,20 @@
     fetch('/api/fqc/anomalies?line=' + line, {cache: 'no-store'})
       .then(function (r) { return r.json(); })
       .then(function (anomalies) {
-        var existing = document.getElementById('fqcAnomaliesCard');
+        var existing = document.getElementById('fqcAnomaliesModal');
         if (existing) existing.remove();
         
-        if (!anomalies || !anomalies.available) return;
+        if (!anomalies || !anomalies.available) {
+           if (typeof toast === 'function') toast('No tester anomalies available.');
+           return;
+        }
         
-        var html = '<div class="card" id="fqcAnomaliesCard"><div class="card-h"><h3>What the tester wrote that no lookup will find</h3><span class="sp hint">last 200 rows</span></div><div class="card-b">';
+        var html = '<div class="modal on" id="fqcAnomaliesModal" onclick="if(event.target===this)this.remove()">' +
+          '<div class="modal-box"><div class="modal-h"><div><h3>Tester Anomalies</h3><div class="mh-sub">What the tester wrote that no lookup will find (last 200 rows)</div></div><button class="modal-x" onclick="document.getElementById(\'fqcAnomaliesModal\').remove()">A-</button></div><div class="modal-b"><div class="card"><div class="card-b" style="padding:20px">';
         
         if (anomalies.junk && anomalies.junk.length > 0) {
-          html += '<p><b>' + anomalies.junk.length + ' row(s) under a hand-typed ID.</b> The barcode would not scan, so the operator entered something to let the test run. The module exists; its result is filed under nothing.</p>';
-          html += '<div class="scroll" style="max-height:130px"><table><thead><tr><th>Time</th><th>ID as typed</th><th>Pmax</th></tr></thead><tbody>';
+          html += '<p style="margin-bottom:10px"><b>' + anomalies.junk.length + ' row(s) under a hand-typed ID.</b> The barcode would not scan, so the operator entered something to let the test run. The module exists; its result is filed under nothing.</p>';
+          html += '<div class="scroll" style="max-height:180px;margin-bottom:20px"><table><thead><tr><th>Time</th><th>ID as typed</th><th>Pmax</th></tr></thead><tbody>';
           anomalies.junk.forEach(function(j) {
             html += '<tr><td>' + (j.at || '') + '</td><td class="mono"><span class="tag t-fail">' + fqcEsc(j.id) + '</span></td><td class="mono">' + (j.pmax || '') + '</td></tr>';
           });
@@ -376,28 +378,21 @@
         }
         
         if (anomalies.failed && anomalies.failed.length > 0) {
-          html += '<p style="margin-top:10px"><b>' + anomalies.failed.length + ' module(s) tested and never read.</b> Probe or Zig at the JB connector, polarity, or soldering.</p>';
-          html += '<div class="scroll" style="max-height:130px"><table><thead><tr><th>Serial</th><th>Attempts</th><th>Last try</th><th>Why</th></tr></thead><tbody>';
+          html += '<p style="margin-bottom:10px"><b>' + anomalies.failed.length + ' module(s) tested and never read.</b> Probe or Zig at the JB connector, polarity, or soldering.</p>';
+          html += '<div class="scroll" style="max-height:180px"><table><thead><tr><th>Serial</th><th>Attempts</th><th>Last try</th><th>Why</th></tr></thead><tbody>';
           anomalies.failed.forEach(function(f) {
             html += '<tr><td class="mono">' + fqcEsc(f.serial) + '</td><td style="text-align:right">' + f.attempts + '</td><td>' + (f.at || '') + '</td><td class="hint">' + fqcEsc(f.why) + '</td></tr>';
           });
           html += '</tbody></table></div>';
         }
-        
-        if ((!anomalies.junk || anomalies.junk.length === 0) && (!anomalies.failed || anomalies.failed.length === 0)) {
-          html += '<p class="hint">Nothing anomalous in the last 200 rows.</p>';
-        }
-        
-        html += '</div></div>';
-        
-        var recentCard = vFqc.querySelector('.card:last-of-type'); // Assuming the last card in v-fqc is "Recent gradings"
-        if (recentCard && recentCard.querySelector('h3') && recentCard.querySelector('h3').textContent.indexOf('Recent gradings') >= 0) {
-          recentCard.insertAdjacentHTML('beforebegin', html);
-        }
+        html += '</div></div></div></div></div>';
+        var div = document.createElement('div');
+        div.innerHTML = html;
+        document.body.appendChild(div.firstChild);
       })
       .catch(function(e) { console.error('Anomalies fetch failed:', e); });
   }
-
+  window.renderAnomalies = renderAnomalies;
 function wireFqcAnomalies() {
     var vDash = document.getElementById('v-dash');
     if (!vDash) return;
@@ -875,7 +870,9 @@ function wireFqcAnomalies() {
           drawDonut('fqDonut', 'fqLegend', [
             { n: 'A - passed', v: totals.passed || 0, c: C.green },
             { n: 'GY - downgraded', v: totals.gy || 0, c: C.amber },
-            { n: 'BGY - rejected', v: totals.bgy || 0, c: C.red }
+            { n: 'BGY - rejected', v: totals.bgy || 0, c: C.red },
+            { n: 'Pending Quality', v: totals.awaiting_quality || 0, c: C.navy },
+            { n: 'Tester Error', v: totals.anomalies || 0, c: C.grey }
           ], String(totals.inspected || 0), 'inspected');
         }
         var donutNote = document.getElementById('fqDonutNote');
