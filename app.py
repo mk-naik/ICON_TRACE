@@ -1076,6 +1076,426 @@ def api_loading_box():
                     "state": b["state"], "qty": b["qty"], "serials": serials})
 
 
+@app.route("/api/challan/boxes")
+def api_challan_available_boxes():
+    """Closed pallets that may go on a challan: not open, not already on a
+    live document.
+
+    "Live" excludes a cancelled challan, deliberately - cancelling one frees
+    its boxes, the same way discarding a draft does. A box stays excluded
+    for as long as a DRAFT holds it too: a draft is a real reservation, not
+    a preview, so a second operator must not be able to tick the same box
+    into a different challan while it exists.
+    """
+    with store.conn() as (cx, cur):
+        reserved = {r["box_id"] for r in store.rows(cur,
+            "SELECT DISTINCT bs.box_id FROM box_serial bs "
+            "JOIN challan_serial cs ON cs.serial=bs.serial "
+            "JOIN challan c ON c.challan_id=cs.challan_id "
+            "WHERE c.status<>'cancelled'")}
+        closed = [b for b in store.boxes_by_state(cur, "closed", limit=2000)
+                  if b["box_id"] not in reserved]
+    out = []
+    for b in closed:
+        owner = _box_owner(b.get("customer"))
+        cr = customers.get(owner) if owner else None
+        m = models.BY_CODE.get(b.get("model")) or {}
+        out.append({
+            "box_id": b["box_id"], "label": _box_label(b),
+            "pack_date": b.get("pack_date"), "bin_no": b.get("bin_no"),
+            "pack_shift": b.get("pack_shift"),
+            "customer": owner,
+            "customer_name": cr["name"] if cr else None,
+            "model": b.get("model"), "grade": b.get("grade"),
+            "qty": b.get("qty"), "capacity": b.get("capacity"),
+            "wattage": m.get("wattage"),
+            "is_partial": bool(b.get("is_partial")),
+        })
+    return jsonify(out)
+
+
+def _box_owner(raw):
+    """The customer CODE a box's stored `customer` value actually means, or
+    None for no real owner yet.
+
+    The column is meant to hold a code (DATA_LAYER: "the code is what the
+    rest of the system stores"), but a real box has turned up holding
+    "ICON STOCK" - the display name - instead of "STOCK". That is a bug on
+    the writing side (Packing), not one this screen can reach from here,
+    but a challan still has to recognise what it plainly means: resolving a
+    name or a known alias the same way a code would resolve, rather than
+    refusing to move a box because of how its owner happened to be spelt.
+    STOCK itself, however spelt, is not a real owner - it is the same
+    "nobody yet" NULL already means.
+    """
+    if not raw:
+        return None
+    row = customers.get(raw) or customers.resolve(raw)
+    code = row["customer_code"] if row else raw
+    return None if code == "STOCK" else code
+
+
+def _challan_precheck(cur, box_ids, invoice_id, exclude_challan_id=None):
+    """The one gate shared by the verification rail and the write.
+
+    Every rule that can refuse a challan is decided here exactly once, so
+    the rail an operator reads before pressing Create is the same rule that
+    Create itself enforces - never a softer preview of a harder truth.
+    Returns everything the rail needs to draw itself, plus `ok` and
+    `blocking`, which Create refuses on unconditionally.
+    """
+    blocking = []
+    boxes = []
+    seen_ids = set()
+    for bid in box_ids:
+        if bid in seen_ids:
+            blocking.append({"code": "E-DUPBOX", "box_id": bid,
+                             "detail": "Box %s was ticked twice." % bid})
+            continue
+        seen_ids.add(bid)
+        b = store.box_row(cur, bid)
+        if not b:
+            blocking.append({"code": "E-NOBOX", "box_id": bid,
+                             "detail": "Box %s no longer exists." % bid})
+            continue
+        label = _box_label(b)
+        issues = []
+        if b["state"] != "closed":
+            issues.append(("E-STATE", "%s is %s, not a closed pallet."
+                           % (label, b["state"])))
+        if not b.get("grade"):
+            issues.append(("E-NOGRADE", "%s has no grade on record." % label))
+        live = [r for r in store.rows(cur,
+            "SELECT DISTINCT c.challan_id, c.fy, c.seq, c.suffix, "
+            "c.challan_date FROM box_serial bs "
+            "JOIN challan_serial cs ON cs.serial=bs.serial "
+            "JOIN challan c ON c.challan_id=cs.challan_id "
+            "WHERE bs.box_id=%s AND c.status<>'cancelled'", (bid,))
+            if r["challan_id"] != exclude_challan_id]
+        boxes.append({"box_id": bid, "label": label,
+                      "customer": _box_owner(b.get("customer")),
+                      "model": b.get("model"),
+                      "grade": b.get("grade"), "qty": b.get("qty") or 0,
+                      "capacity": b.get("capacity"),
+                      "is_partial": bool(b.get("is_partial")),
+                      "pack_date": b.get("pack_date"),
+                      "bin_no": b.get("bin_no"),
+                      "pack_shift": b.get("pack_shift"),
+                      "issues": [{"code": c, "detail": d} for c, d in issues]})
+        for code, detail in issues:
+            blocking.append({"code": code, "box_id": bid, "detail": detail})
+        if live:
+            c0 = live[0]
+            no = db.render_challan_no(
+                datetime.date.fromisoformat(c0["challan_date"]),
+                c0["seq"], c0["suffix"])
+            blocking.append({"code": "E-ONCHALLAN", "box_id": bid,
+                             "detail": "%s is already on challan %s."
+                             % (label, no)})
+
+    if not box_ids:
+        blocking.append({"code": "E-NOBOX", "detail":
+                         "Tick at least one box going on this vehicle."})
+
+    qty = sum(b["qty"] for b in boxes)
+    kw = 0.0
+    models_seen = []
+    for b in boxes:
+        m = models.BY_CODE.get(b["model"]) or {}
+        kw += b["qty"] * (m.get("wattage") or 0) / 1000.0
+        if b["model"] and b["model"] not in models_seen:
+            models_seen.append(b["model"])
+
+    invoice = None
+    buyer_code = None
+    if not invoice_id:
+        blocking.append({"code": "E-NOINVOICE", "detail":
+            "No invoice is selected, so there is nothing to reconcile the "
+            "quantity against. A challan needs one."})
+    else:
+        invoice = db.get_invoice_by_id(cur, invoice_id)
+        if not invoice:
+            blocking.append({"code": "E-NOINVOICE", "detail":
+                             "That invoice no longer exists."})
+        else:
+            if invoice.get("superseded_by"):
+                newer = db.get_invoice_by_id(cur, invoice["superseded_by"])
+                blocking.append({"code": "E-SUPERSEDED", "detail":
+                    "This invoice has been superseded by %s - a later "
+                    "document under a different IRN. Select that one."
+                    % (newer["invoice_no"] if newer else
+                       "invoice #%s" % invoice["superseded_by"])})
+            evu = invoice.get("ewb_valid_upto")
+            if evu:
+                try:
+                    if datetime.date.fromisoformat(str(evu)[:10]) < \
+                            datetime.date.today():
+                        blocking.append({"code": "E-EWB", "detail":
+                            "The e-Way Bill expired on %s. The vehicle must "
+                            "not move against it." % evu})
+                except ValueError:
+                    pass
+            declared = invoice.get("declared_qty")
+            if declared is None:
+                blocking.append({"code": "E-QTY", "detail":
+                    "The invoice has no declared quantity to reconcile "
+                    "against."})
+            elif declared != qty:
+                blocking.append({"code": "E-QTY", "detail":
+                    "Invoice declares %d, boxes ticked total %d."
+                    % (declared, qty)})
+            buyer = customers.resolve(invoice.get("buyer_name"),
+                                      invoice.get("buyer_gstin"))
+            buyer_code = buyer["customer_code"] if buyer else None
+
+    # One customer across every ticked box. A General Stock box (customer
+    # NULL) is not a conflict - it is the case #4 covers, and becomes the
+    # buyer's the moment the challan is written.
+    general_stock = [b["box_id"] for b in boxes if not b["customer"]]
+    owned = [b for b in boxes if b["customer"]]
+    if buyer_code:
+        for b in owned:
+            if b["customer"] != buyer_code:
+                cr = customers.get(b["customer"])
+                buyer_name = (customers.get(buyer_code) or {}).get("name",
+                                                                    buyer_code)
+                blocking.append({"code": "E-OWNER", "box_id": b["box_id"],
+                    "detail": "%s is allocated to %s, not %s."
+                    % (b["label"], cr["name"] if cr else b["customer"],
+                       buyer_name)})
+    else:
+        distinct = sorted(set(b["customer"] for b in owned))
+        if len(distinct) > 1:
+            names = ", ".join((customers.get(c) or {}).get("name", c)
+                              for c in distinct)
+            blocking.append({"code": "E-OWNER", "detail":
+                "The ticked boxes belong to more than one customer: %s."
+                % names})
+
+    return {"ok": not blocking, "blocking": blocking, "boxes": boxes,
+            "qty": qty, "kw": round(kw, 2), "models": models_seen,
+            "invoice": invoice, "buyer_code": buyer_code,
+            "general_stock": general_stock}
+
+
+@app.route("/api/challan/checks", methods=["POST"])
+def api_challan_checks():
+    """The rail, live: the same refusal Create would give, before the click."""
+    d = request.get_json(force=True) or {}
+    try:
+        box_ids = [int(x) for x in (d.get("boxes") or [])]
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "why": "Bad box id."}), 400
+    invoice_id = d.get("invoice_id")
+    try:
+        invoice_id = int(invoice_id) if invoice_id else None
+    except (TypeError, ValueError):
+        invoice_id = None
+    exclude = d.get("exclude_challan_id")
+    try:
+        exclude = int(exclude) if exclude else None
+    except (TypeError, ValueError):
+        exclude = None
+    with store.conn() as (cx, cur):
+        chk = _challan_precheck(cur, box_ids, invoice_id,
+                                exclude_challan_id=exclude)
+    return jsonify(chk)
+
+
+def _write_challan(cur, d, status):
+    """Shared by a fresh draft and a fresh create - the only difference
+    between them is whether the serials move to dispatched. Raises
+    `_ChallanRefused` with the reason on any blocking check.
+    """
+    try:
+        box_ids = [int(x) for x in (d.get("boxes") or [])]
+    except (TypeError, ValueError):
+        raise _ChallanRefused("Bad box id.")
+    invoice_id = d.get("invoice_id")
+    try:
+        invoice_id = int(invoice_id) if invoice_id else None
+    except (TypeError, ValueError):
+        invoice_id = None
+
+    chk = _challan_precheck(cur, box_ids, invoice_id)
+    if not chk["ok"]:
+        raise _ChallanRefused(chk["blocking"][0]["detail"], chk["blocking"])
+
+    invoice = chk["invoice"]
+    for bid in chk["general_stock"]:
+        db.assign_customer_on_challan(cur, bid, chk["buyer_code"], actor())
+
+    fy = db.fin_year()
+    seq = db.draw_challan_seq(cur, fy)
+    challan_date = (d.get("challan_date") or "").strip() or \
+        datetime.date.today().isoformat()
+
+    consignee_same = bool(d.get("consignee_same_as_buyer"))
+    model_label = (" + ".join(chk["models"]) if len(chk["models"]) > 1
+                  else (chk["models"][0] if chk["models"] else None))
+    # A single wattage column has to serve mixed-model challans too. Storing
+    # the QTY-WEIGHTED AVERAGE means wattage * qty on the print and Excel
+    # copies - which is not being touched here - still comes out to the true
+    # total watts, exactly, for one model or ten. Computed from the boxes
+    # directly, never from chk["kw"] - that figure is already rounded to 2dp
+    # for the rail, and dividing back through a rounded total drifts off the
+    # true watts by a few grams' worth of wattage times a full pallet.
+    total_watts = sum(b["qty"] * (models.BY_CODE.get(b["model"]) or {}
+                                  ).get("wattage", 0) for b in chk["boxes"])
+    avg_watt = round(total_watts / chk["qty"], 3) if chk["qty"] else None
+
+    chid = store.insert(cur, "challan", {
+        "fy": fy, "seq": seq, "challan_date": challan_date,
+        "invoice_id": invoice_id,
+        "invoice_no": invoice.get("invoice_no") if invoice else None,
+        "irn": invoice.get("irn") if invoice else None,
+        "buyer_name": (d.get("buyer_name") or "").strip() or
+                      (invoice.get("buyer_name") if invoice else None),
+        "buyer_gstin": (d.get("buyer_gstin") or "").strip() or
+                       (invoice.get("buyer_gstin") if invoice else None),
+        "consignee_name": None if consignee_same else
+                          ((d.get("consignee_name") or "").strip() or None),
+        "consignee_address": None if consignee_same else
+                             ((d.get("consignee_address") or "").strip() or None),
+        "transporter": (d.get("transporter") or "").strip() or None,
+        "vehicle_no": (d.get("vehicle_no") or "").strip() or None,
+        "lr_no": (d.get("lr_no") or "").strip() or None,
+        "driver_name": (d.get("driver_name") or "").strip() or None,
+        "driver_mobile": (d.get("driver_mobile") or "").strip() or None,
+        "model": model_label, "wattage": avg_watt,
+        "qty": chk["qty"],
+        "declared_qty": invoice.get("declared_qty") if invoice else None,
+        "origin": "system", "status": status, "created_by": actor()})
+
+    for i, b in enumerate(chk["boxes"]):
+        cb_id = store.insert(cur, "challan_box", {
+            "challan_id": chid, "box_no": b["label"],
+            "pack_date": b["pack_date"], "bin_no": b["bin_no"],
+            "pack_shift": b["pack_shift"], "qty": b["qty"],
+            "is_partial": 1 if b["is_partial"] else 0,
+            "load_order": i + 1})
+        for s in store.box_serials(cur, b["box_id"]):
+            srow = db.find_serial(cur, s) or {}
+            store.insert(cur, "challan_serial", {
+                "challan_id": chid, "challan_box_id": cb_id, "serial": s,
+                "build_instance": 1,
+                "format_version": srow.get("format_version") or 2,
+                "date_produced": srow.get("date_produced") or challan_date,
+                "shift": srow.get("shift") or 0,
+                "sequence": srow.get("sequence") or 0,
+                "wattage": srow.get("wattage") or 0})
+            if status == "issued":
+                db.set_serial(cur, s, state="dispatched")
+
+    db.audit(cur, actor(), "challan.%s" % status, "challan", chid,
+             {"fy": fy, "seq": seq, "boxes": box_ids, "qty": chk["qty"],
+              "invoice_id": invoice_id})
+    no = db.render_challan_no(datetime.date.fromisoformat(challan_date), seq)
+    return {"ok": True, "challan_id": chid, "fy": fy, "seq": seq, "no": no,
+            "status": status, "qty": chk["qty"], "kw": chk["kw"]}
+
+
+class _ChallanRefused(Exception):
+    def __init__(self, why, blocking=None):
+        Exception.__init__(self, why)
+        self.why = why
+        self.blocking = blocking or [{"code": "E-REFUSED", "detail": why}]
+
+
+@app.route("/api/challan", methods=["POST"])
+@_sync_guard
+def api_challan_create():
+    """Save as draft, or Create outright.
+
+    A draft draws the real sequence and writes challan_box / challan_serial
+    immediately, which is what reserves the ticked boxes - nothing else can
+    select them while this row exists and is not cancelled. It does not move
+    a single serial to 'dispatched'; that only happens once the vehicle is
+    actually confirmed, via Create or /submit on the draft.
+    """
+    d = request.get_json(force=True) or {}
+    action = (d.get("action") or "create").strip()
+    if action not in ("draft", "create"):
+        return jsonify({"ok": False, "why": "Unknown action %r." % action}), 400
+    status = "draft" if action == "draft" else "issued"
+    try:
+        with store.conn() as (cx, cur):
+            out = _write_challan(cur, d, status)
+    except _ChallanRefused as e:
+        return jsonify({"ok": False, "why": e.why, "blocking": e.blocking}), 400
+    return jsonify(out)
+
+
+@app.route("/api/challan/<int:challan_id>/submit", methods=["POST"])
+@_sync_guard
+def api_challan_submit(challan_id):
+    """Turn an existing draft into the real thing.
+
+    The sequence was already drawn at draft - reused here, never redrawn, so
+    a challan started at 23:50 and submitted at 00:05 keeps the date and the
+    number it was given, even though the financial-year counter belongs to a
+    day that has since turned over.
+    """
+    with store.conn() as (cx, cur):
+        ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
+                       (challan_id,))
+        if not ch:
+            return jsonify({"ok": False, "why": "No such challan."}), 404
+        if ch["status"] != "draft":
+            return jsonify({"ok": False, "why":
+                            "That challan is %s, not a draft." % ch["status"]}), 400
+        # Repack deliberately keeps the retired parent's box_serial rows, so
+        # a plain join off one of its serials matches BOTH boxes - only the
+        # live one is what this draft was actually reserved against.
+        box_ids = [r["box_id"] for r in store.rows(cur,
+            "SELECT DISTINCT bs.box_id FROM challan_serial cs "
+            "JOIN box_serial bs ON bs.serial=cs.serial "
+            "JOIN box b ON b.box_id=bs.box_id AND b.state<>'retired' "
+            "WHERE cs.challan_id=%s", (challan_id,))]
+        chk = _challan_precheck(cur, box_ids, ch["invoice_id"],
+                                exclude_challan_id=challan_id)
+        if not chk["ok"]:
+            return jsonify({"ok": False, "why": chk["blocking"][0]["detail"],
+                            "blocking": chk["blocking"]}), 400
+        for bid in chk["general_stock"]:
+            db.assign_customer_on_challan(cur, bid, chk["buyer_code"], actor())
+        cur.execute("UPDATE challan SET status='issued' WHERE challan_id=%s",
+                    (challan_id,))
+        for s in store.rows(cur, "SELECT serial FROM challan_serial "
+                                 "WHERE challan_id=%s", (challan_id,)):
+            db.set_serial(cur, s["serial"], state="dispatched")
+        db.audit(cur, actor(), "challan.submit", "challan", challan_id,
+                 {"fy": ch["fy"], "seq": ch["seq"]})
+    no = db.render_challan_no(datetime.date.fromisoformat(ch["challan_date"]),
+                              ch["seq"], ch["suffix"])
+    return jsonify({"ok": True, "challan_id": challan_id, "fy": ch["fy"],
+                    "seq": ch["seq"], "no": no, "status": "issued"})
+
+
+@app.route("/api/challan/<int:challan_id>/discard", methods=["POST"])
+@_sync_guard
+def api_challan_discard(challan_id):
+    """Abandon a draft. Cancelled, never deleted - same rule as every other
+    document here - which is also what frees the boxes and serials it had
+    reserved: every check that excludes a "live" challan reads status<>
+    'cancelled', so this one stops counting the instant it is written."""
+    with store.conn() as (cx, cur):
+        ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
+                       (challan_id,))
+        if not ch:
+            return jsonify({"ok": False, "why": "No such challan."}), 404
+        if ch["status"] != "draft":
+            return jsonify({"ok": False, "why":
+                            "Only a draft can be discarded."}), 400
+        cur.execute(
+            "UPDATE challan SET status='cancelled', cancelled_reason=%s, "
+            "cancelled_by=%s, cancelled_at=%s WHERE challan_id=%s",
+            ("draft discarded", actor(),
+             datetime.datetime.now().isoformat(timespec="seconds"), challan_id))
+        db.audit(cur, actor(), "challan.discard", "challan", challan_id, {})
+    return jsonify({"ok": True})
+
+
 def _challan_bundle(cur, fy, seq, suffix=None):
     """Header, boxes and serials for one challan."""
     ch = store.one(cur, "SELECT * FROM challan WHERE fy=%s AND seq=%s "
@@ -2584,7 +3004,7 @@ def api_invoice_confirm():
         for key, meta in result[group].items():
             posted = payload.get(key)
             if posted is not None:
-                posted = posted.strip() or None
+                posted = str(posted).strip() or None
                 orig = meta["value"]
                 if str(posted) != str(orig) if orig is not None else bool(posted):
                     edited[key] = {"from": orig, "to": posted}
@@ -2598,7 +3018,7 @@ def api_invoice_confirm():
     data["declared_hsn"] = data.pop("hsn", None)
     if data.get("declared_qty"):
         try:
-            data["declared_qty"] = int(str(data["declared_qty"]).replace(",", ""))
+            data["declared_qty"] = int(float(str(data["declared_qty"]).replace(",", "")))
         except ValueError:
             data["declared_qty"] = None
     
@@ -2802,7 +3222,7 @@ def invoice_confirm():
     data["declared_hsn"] = data.pop("hsn", None)
     if data.get("declared_qty"):
         try:
-            data["declared_qty"] = int(str(data["declared_qty"]).replace(",", ""))
+            data["declared_qty"] = int(float(str(data["declared_qty"]).replace(",", "")))
         except ValueError:
             data["declared_qty"] = None
     data["consignee_same_as_buyer"] = 1 if request.form.get(

@@ -311,6 +311,39 @@ def serials_already_dispatched(cur, serials):
     return [r["serial"] for r in cur.fetchall()]
 
 
+def assign_customer_on_challan(cur, box_id, customer_code, actor):
+    """A box packed to General Stock (customer NULL) becomes real the moment
+    it is put on a challan - Challan is the first point the buyer is certain,
+    not Packing, where a run may still be destined for stock or for whoever
+    asks first.
+
+    Kept as its own function, named for what it does, so the decision is
+    easy to move earlier (to Packing) if Mukesh says the box should already
+    carry a customer by the time it is closed.
+
+    A box column meant to hold "STOCK" has, in real data, turned up holding
+    "ICON STOCK" - the display name - instead. That is a bug on the writing
+    side, not this one, but the guard below still has to recognise it as the
+    same "nobody yet" NULL means, or a box stuck with the wrong spelling of
+    nobody could never be assigned to anybody. It never touches a box that
+    already names a real, different customer.
+    """
+    if not customer_code:
+        return
+    if cur is None:
+        for b in _demo["box"]:
+            if b.get("box_id") == box_id and \
+                    (b.get("customer") or "").upper() in ("", "STOCK",
+                                                           "ICON STOCK"):
+                b["customer"] = customer_code
+        return
+    cur.execute("UPDATE box SET customer=%s WHERE box_id=%s AND "
+                "(customer IS NULL OR UPPER(customer) IN ('STOCK', "
+                "'ICON STOCK'))", (customer_code, box_id))
+    audit(cur, actor, "box.customer_assigned", "box", box_id,
+          {"customer": customer_code})
+
+
 def load_challan(cur, r, actor):
     """Write one parsed challan workbook: challan, its boxes, its serials.
 

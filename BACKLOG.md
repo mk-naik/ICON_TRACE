@@ -499,14 +499,96 @@ A new screen gets both for free.
       GSTIN fix, QR best-effort, e-Way Bill validity.
 - [ ] Wire v4's invoice screen to it in place of the simulated parse.
 
-## 15. Challan
+## 15. Challan  *(built)*
 
-- [ ] Select Boxes: search, filter, scroll.
-- [ ] Choose an invoice and fill every detail from it.
-- [ ] Create challan and Save as draft both working.
-- [x] Print version 1 — **one page**, no serial list.
-- [x] Export version 2 — Excel, **Sheet 1** challan without packing list,
-      **Sheet 2** FTR. Not the Lighthouse packing-list layout.
+**What was wrong.** v4's Create Challan screen ticked boxes from a fixed
+`CH_BOXES` array, invented refusals from a `SERIAL_FAULTS` map keyed to a
+handful of planted serials, had no way to pick an invoice at all, and its
+Create button only raised a toast — nothing was ever written. `runChecks()`'s
+KW arithmetic (`sum(qty × wattage) / 1000`, per box, so mixed models sum
+correctly) was already right and is kept unchanged.
+
+**What changed — server (`app.py`, `db.py`).**
+- [x] `GET /api/challan/boxes` — closed pallets not already on a live
+      (non-cancelled) challan, including a draft's reservation.
+- [x] `_challan_precheck()` — the one gate the rail previews and Create
+      enforces, never a softer version of the other. Decides, per ticked
+      box: closed and graded; not already on another challan; belongs to
+      the invoice's buyer, or is General Stock. Decides, per invoice: not
+      superseded (names the newer one); e-Way Bill not expired; declared
+      quantity equal to **the sum of the boxes ticked** — never read from,
+      or bent to fit, the invoice, and there is no override parameter
+      anywhere in the request this function reads.
+- [x] `POST /api/challan/checks` — the same function, as a live preview.
+- [x] `POST /api/challan` (`action: draft|create`) — draws the real
+      financial-year sequence and writes `challan_box` / `challan_serial`
+      immediately on a draft, which **is** the reservation: nothing else
+      can select those boxes while it exists and is not cancelled. A draft
+      does not move a single serial to `dispatched`; Create does, at once.
+      Boxes are written in **ticked order** (`load_order`), never resorted.
+- [x] `POST /api/challan/<id>/submit` — turns an existing draft into the
+      real thing. Re-validates everything against current state (an
+      e-Way Bill can lapse while a draft sits open) but **never redraws the
+      sequence** — a challan drafted at 23:50 keeps its number even if
+      confirmed after midnight, when the FY counter belongs to a new day.
+- [x] `POST /api/challan/<id>/discard` — cancels a draft, freeing the boxes
+      and serials it reserved (same "cancelled, never deleted" rule as
+      everywhere else).
+- [x] `db.assign_customer_on_challan()` — a General Stock box (customer
+      `NULL`) becomes the invoice's buyer's the moment it is written to a
+      challan; Packing is not touched. Also recognises a box whose
+      `customer` column holds the STOCK pseudo-customer's **display name**
+      ("ICON STOCK") instead of its code — a real, pre-existing Packing-side
+      data bug, found by testing against a copy of the live database, not
+      fixed at its source but no longer able to strand a box permanently.
+      Never overwrites a box that already names a different real customer.
+      Kept as its own function so the decision is easy to move earlier.
+- [x] A repacked box's serials sit in `box_serial` under **both** the
+      retired parent and the live child (by design, so "what did this
+      pallet hold?" stays answerable) — `submit`'s box recovery was
+      matching both and re-checking the retired parent. Fixed to join only
+      the live box, the same way `serial_in_live_box()` already does.
+
+**What changed — client (`icon_live.js`).**
+- [x] Real box list, ticked order preserved and shown in the "List status"
+      column (issue badges, or "General Stock").
+- [x] An invoice selector, injected — v4 had none. Selecting one fills
+      buyer, GSTIN, address, contact, consignee, transporter, vehicle no.,
+      LR no. and e-Way Bill no., all editable afterward; declared quantity
+      and model are shown as the reconciliation target, explicitly **not**
+      editable there.
+- [x] `chParty` converted from v4's four-option `<select>` to free text —
+      a real buyer is whatever the invoice PDF said, not one of four names.
+- [x] The rail reads the server's own refusal list — no client-side rule
+      is a softer copy of the server's. Create is disabled the instant any
+      check fails and only that.
+- [x] A saved draft locks the box table and every detail field; **Discard
+      draft** releases them. Create, pressed against an existing draft,
+      submits it rather than creating a second challan.
+- [x] Outputs card says plainly there is nothing to print before something
+      is created; afterward, direct links to the *exact* challan's existing
+      `/print` and `/excel` routes — neither route was touched.
+- [x] The challan number is **not** drawn merely by opening the screen (v4
+      did this) — only at Save as draft or Create, the real counter.
+- [x] Tests: `test_challan.py` (28) and `test_challan.js` (20), each naming
+      the rule it defends. Every rule mutation-tested — broken one at a
+      time and confirmed the matching test catches it.
+
+**Open, out of scope for this pass:**
+- Search / filter / scroll on the box-select table (`data-itable` pattern)
+      — the table is a selection UI, not a report; can be added the same
+      way every other screen's table already works.
+- Driver licence no., From/To place, Destination site, Freight rate,
+      Delivery order no./date, Sales order ref., Contractor, Remarks — v4's
+      fields exist but the `challan` schema has no column for them and
+      nothing downstream reads them; left as display-only pending a
+      decision on whether they are wanted at all.
+- The root cause of boxes holding `customer='ICON STOCK'` instead of the
+      code `STOCK` is at Packing, not here — worked around, not fixed.
+- A box ticked, then taken by someone else's draft before this one submits,
+      is caught by the server (the same `_challan_precheck`) but the
+      screen does not yet remove it from the ticked list on its own —
+      the create/draft is simply refused and named.
 
 ## 16. Loading Verification — NEW SCREEN (Team 3)
 

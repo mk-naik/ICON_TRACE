@@ -3121,6 +3121,7 @@ function wireFqcAnomalies() {
       try { wirePlanChecks(); renderAllocations(); } catch (e) {}
     }
     if (id === 'repack') { try { wireRepack(); } catch (e) {} }
+    if (id === 'challan') { try { wireChallan(); } catch (e) {} }
   };
 
   /* ---- Planning: the serial must agree with the indent line -----------
@@ -5093,6 +5094,613 @@ function wireFqcAnomalies() {
   }
   /* END repack — test_repack.js reads to here */
 
+  /* ---- Create Challan: real boxes, real invoice, no override -----------
+   *
+   * v4's demo ticked boxes from a fixed CH_BOXES array, invented refusals
+   * from a SERIAL_FAULTS map keyed by a few planted serials, and its Create
+   * button only toasted - nothing was ever written. The shape it draws is
+   * right and is kept: tick boxes, watch a live rail, read a pull list with
+   * the exact serial and reason. Every number under it now comes from the
+   * database, and the one rule that matters most - the quantity is always
+   * the sum of the boxes ticked, checked against the invoice with no
+   * override - is decided exactly once, on the server, in
+   * app.py's _challan_precheck(). This layer only ever shows what that
+   * function already refused; it never softens it.
+   */
+  var chBoxes = [], chPicked = {}, chOrder = [], chInvoices = [],
+      chInvoiceId = null, chChecks = null, chChallan = null, chBusy = false,
+      chChecksTimer = null;
+
+  function chEl(id) { return document.getElementById(id); }
+
+  /* v4 gives ids to only six fields on this card (chParty, chGst, chPan,
+     chState, chStateCode, chSupply). Every other field - Buyer address,
+     Challan date, Vehicle no., Transporter, LR/GR no., Driver name and
+     mobile, the Consignee block - has none, and this layer may not add one
+     to the template. Found by its own label instead. */
+  function chField(label) {
+    var view = chEl('v-challan');
+    if (!view) return null;
+    var flds = view.querySelectorAll('.bomgrid .fld');
+    for (var i = 0; i < flds.length; i++) {
+      var lab = flds[i].querySelector('label');
+      var text = lab && lab.textContent.replace(/\s+/g, ' ').trim();
+      if (text && text.indexOf(label) === 0) {
+        return flds[i].querySelector('input,select,textarea');
+      }
+    }
+    return null;
+  }
+
+  function chVal(label) {
+    var f = chField(label);
+    if (!f) return null;
+    return f.type === 'checkbox' ? f.checked : f.value;
+  }
+
+  var CH_FIELD_LABELS = ['Buyer address', 'Contact person',
+    'Consignee is the same', 'Consignee name', 'Challan date', 'Vehicle no.',
+    'Transporter', 'LR / GR no.', 'Driver name', 'Driver mobile'];
+
+  function chSetFieldsDisabled(on) {
+    CH_FIELD_LABELS.forEach(function (label) {
+      var f = chField(label);
+      if (f) f.disabled = on;
+    });
+    var party = chEl('chParty'), gst = chEl('chGst'), inv = chEl('chInvoiceSel');
+    if (party) party.disabled = on;
+    if (gst) gst.disabled = on;
+    if (inv) inv.disabled = on;
+  }
+
+  /* chParty is a <select> of four names hardcoded into the demo. A real
+     buyer is whatever the invoice's PDF said, so the field has to accept
+     any string - the same surgery New Pallet's box-size field and Repack's
+     new-box-size field already needed for the same reason: a fixed enum
+     standing in for what should be free text. */
+  function chPartyField() {
+    var sel = chEl('chParty');
+    if (!sel || sel.tagName !== 'SELECT') return;
+    var input = document.createElement('input');
+    input.id = 'chParty';
+    input.className = sel.className || '';
+    input.placeholder = 'Buyer name';
+    sel.parentNode.replaceChild(input, sel);
+  }
+
+  /* v4 never drew a way to pick an invoice at all - Create Challan had a
+     quantity check with nothing to check it against. Inserted as the first
+     section of the same card, in the same markup v4 uses everywhere else
+     (bom-sec + fld), so it reads as part of the form rather than a bolt-on. */
+  function chInvoiceSelector() {
+    var grid = document.querySelector('#v-challan .bomgrid');
+    if (!grid || chEl('chInvoiceSel')) return;
+    var sec = document.createElement('div');
+    sec.className = 'bom-sec';
+    sec.textContent = 'Invoice';
+    var fld = document.createElement('div');
+    fld.className = 'fld req';
+    fld.style.gridColumn = '1/-1';
+    fld.innerHTML =
+      '<label>Reconcile against</label>' +
+      '<select id="chInvoiceSel" aria-label="Invoice to reconcile against">' +
+      '<option value="">— choose an invoice —</option></select>' +
+      '<div class="hint" id="chInvoiceHint">No invoice selected — there is ' +
+      'nothing to reconcile the quantity against, so Create stays off.</div>';
+    grid.insertBefore(fld, grid.firstChild);
+    grid.insertBefore(sec, fld);
+    chEl('chInvoiceSel').addEventListener('change', chInvoiceChange);
+  }
+
+  function chLoadInvoices() {
+    return fetch('/api/invoices', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        chInvoices = d.invoices || [];
+        var sel = chEl('chInvoiceSel');
+        if (!sel) return;
+        var keep = sel.value;
+        sel.innerHTML = '<option value="">— choose an invoice —</option>' +
+          chInvoices.map(function (inv) {
+            var flag = inv.superseded_by ? ' — superseded' : '';
+            return '<option value="' + inv.id + '">' +
+              fqcEsc(inv.invoice_no || ('#' + inv.id)) + ' · ' +
+              fqcEsc(inv.buyer_name || '—') +
+              (inv.declared_qty != null ? ' · ' + inv.declared_qty + ' nos' : '') +
+              flag + '</option>';
+          }).join('');
+        if (keep) sel.value = keep;
+      })
+      .catch(function () {});
+  }
+
+  function chInvoiceChange() {
+    var sel = chEl('chInvoiceSel');
+    var id = sel && sel.value;
+    chInvoiceId = id ? parseInt(id, 10) : null;
+    if (!chInvoiceId) {
+      chRenderInvoiceHint(null);
+      chRunChecks();
+      return;
+    }
+    fetch('/api/invoice/' + chInvoiceId, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.error) {
+          if (typeof toast === 'function') toast(d.error);
+          return;
+        }
+        chFillFromInvoice(d);
+        chRenderInvoiceHint(d);
+        chRunChecks();
+      });
+  }
+
+  /* Fills the party / consignee / transport block, exactly as the invoice
+     screen itself fills its own fields - editable afterward, never locked,
+     because the driver, the LR number and even the buyer address as typed
+     may reasonably differ from what the PDF said. */
+  function chFillFromInvoice(d) {
+    var f = d.fields || {};
+    var set = function (label, key) {
+      var el = chField(label);
+      if (el && f[key] && f[key].value != null) el.value = f[key].value;
+    };
+    var party = chEl('chParty');
+    if (party && f.buyer_name) party.value = f.buyer_name.value || '';
+    var gst = chEl('chGst');
+    if (gst && f.buyer_gstin) {
+      gst.value = String(f.buyer_gstin.value || '').toUpperCase();
+      if (typeof window.gstCheck === 'function') window.gstCheck();
+    }
+    set('Buyer address', 'buyer_address');
+    set('Contact person', 'buyer_contact_name');
+
+    var same = f.consignee_same_as_buyer && f.consignee_same_as_buyer.value;
+    var sameBox = chField('Consignee is the same');
+    if (sameBox) {
+      sameBox.checked = !!same;
+      if (typeof window.sameCons === 'function') window.sameCons(sameBox);
+    }
+    if (!same) {
+      var consEl = chField('Consignee name');
+      if (consEl) {
+        consEl.value = [f.consignee_name && f.consignee_name.value,
+                        f.consignee_address && f.consignee_address.value]
+          .filter(function (x) { return x; }).join('\n');
+      }
+    }
+    set('Transporter', 'transporter');
+    set('Vehicle no.', 'vehicle_no');
+    set('LR / GR no.', 'lr_no');
+    set('E-way bill no.', 'ewb_no');
+  }
+
+  function chRenderInvoiceHint(d) {
+    var hint = chEl('chInvoiceHint');
+    if (!hint) return;
+    if (!d) {
+      hint.textContent = 'No invoice selected — there is nothing to ' +
+        'reconcile the quantity against, so Create stays off.';
+      return;
+    }
+    var f = d.fields || {};
+    var qty = f.quantity && f.quantity.value;
+    var model = f.model && f.model.value;
+    hint.innerHTML = 'Declared: <b>' + (qty != null ? qty : '—') +
+      ' nos</b>' + (model ? ' · <b>' + fqcEsc(model) + '</b>' : '') +
+      ' — the reconciliation target. Not editable here: it is what the ' +
+      'invoice says, not what this screen says.';
+  }
+
+  /* ---- boxes: only what is real, ticked ONLY in the order ticked ------ */
+
+  function chLoadBoxes() {
+    return fetch('/api/challan/boxes', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (rows) {
+        chBoxes = rows || [];
+        chRenderBoxTable();
+      })
+      .catch(function () {});
+  }
+
+  function chBoxIssues(boxId) {
+    if (!chChecks) return [];
+    var row = (chChecks.boxes || []).filter(function (b) {
+      return b.box_id === boxId; })[0];
+    return row ? row.issues || [] : [];
+  }
+
+  function chRenderBoxTable() {
+    var host = chEl('chBoxRows');
+    if (!host) return;
+    var locked = !!chChallan;
+    host.innerHTML = chBoxes.length ? chBoxes.map(function (b) {
+      var checked = !!chPicked[b.box_id];
+      var issues = chBoxIssues(b.box_id);
+      var status = issues.length
+        ? '<span class="tag t-fail" title="' +
+          fqcEsc(issues.map(function (i) { return i.detail; }).join(' · ')) +
+          '">' + issues.length + ' issue' + (issues.length > 1 ? 's' : '') +
+          '</span>'
+        : (!b.customer
+            ? '<span class="tag t-mute">General Stock</span>'
+            : '<span class="tag t-mute">—</span>');
+      return '<tr' + (checked ? ' class="pick"' : '') + '>' +
+        '<td><input type="checkbox" ' + (checked ? 'checked' : '') +
+          (locked ? ' disabled' : '') +
+          ' aria-label="Select ' + fqcEsc(b.label) + '"' +
+          ' onchange="chToggleBox(' + b.box_id + ',this.checked)"' +
+          ' style="accent-color:var(--brand)"></td>' +
+        '<td class="mono" style="font-weight:700">' + fqcEsc(b.label) + '</td>' +
+        '<td class="mono">' + fqcEsc(b.pack_date || '—') + '</td>' +
+        '<td class="mono">' + (b.bin_no ? 'BIN-' + b.bin_no : '—') + '</td>' +
+        '<td>' + fqcEsc(b.pack_shift || '—') + '</td>' +
+        '<td style="font-size:11.5px">' +
+          fqcEsc(b.customer_name || 'ICON STOCK') + '</td>' +
+        '<td class="mono">' + fqcEsc(b.model || '—') + '</td>' +
+        '<td><span class="tag ' +
+          (b.grade === 'A' ? 't-pass' : (b.grade ? 't-rev' : 't-fail')) +
+          '">' + fqcEsc(b.grade || 'none') + '</span></td>' +
+        '<td class="num">' + b.qty +
+          (b.is_partial ? ' <span class="tag t-mute">part</span>' : '') +
+          '</td>' +
+        '<td>' + status + '</td></tr>';
+    }).join('') : '<tr><td colspan="10"><div class="empty-state"><p>No closed ' +
+      'pallet is available — everything is either still open or already ' +
+      'on a live challan.</p></div></td></tr>';
+  }
+
+  window.chToggleBox = function (id, on) {
+    if (chChallan) return;           // locked while a draft/challan exists
+    if (on) {
+      if (!chPicked[id]) chOrder.push(id);
+      chPicked[id] = true;
+    } else {
+      delete chPicked[id];
+      chOrder = chOrder.filter(function (x) { return x !== id; });
+    }
+    chRenderSummary();
+    chRunChecks();
+  };
+
+  function chRenderSummary() {
+    var el = chEl('chSel');
+    if (!el) return;
+    var boxes = chOrder.map(function (id) {
+      return chBoxes.filter(function (b) { return b.box_id === id; })[0];
+    }).filter(Boolean);
+    var qty = boxes.reduce(function (a, b) { return a + (b.qty || 0); }, 0);
+    var kw = boxes.reduce(function (a, b) {
+      return a + (b.qty || 0) * (b.wattage || 0); }, 0) / 1000;
+    el.textContent = boxes.length + ' box' + (boxes.length === 1 ? '' : 'es') +
+      ' · ' + qty + ' modules · ' + kw.toFixed(2) + ' KW';
+  }
+
+  /* ---- the rail: one gate, read from the server that enforces it ------ */
+
+  var CH_RULE_DEFS = [
+    { code: 'E-NOBOX', t: 'Boxes explicitly ticked' },
+    { code: 'E-NOINVOICE', t: 'An invoice is selected to reconcile against' },
+    { code: 'E-SUPERSEDED', t: 'The invoice has not been superseded' },
+    { code: 'E-EWB', t: 'The e-Way Bill has not expired' },
+    { code: 'E-QTY', t: 'Boxes ticked equal what the invoice declares' },
+    { code: 'E-STATE', t: 'Every ticked box is a closed pallet' },
+    { code: 'E-NOGRADE', t: 'Every ticked box has a grade on record' },
+    { code: 'E-ONCHALLAN', t: 'No box is already on another challan' },
+    { code: 'E-OWNER', t: 'Every box belongs to the buyer, or is General Stock' },
+    { code: 'E-DUPBOX', t: 'No box ticked twice' }
+  ];
+
+  function chRunChecks() {
+    clearTimeout(chChecksTimer);
+    chChecksTimer = setTimeout(chRunChecksNow, 120);
+  }
+
+  function chRunChecksNow() {
+    if (chChallan) return;          // nothing left to check once written
+    fetch('/api/challan/checks', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ boxes: chOrder, invoice_id: chInvoiceId }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        chChecks = d;
+        chRenderBoxTable();
+        chRenderRail();
+      })
+      .catch(function () {});
+  }
+
+  function chRenderRail() {
+    var list = chEl('vList'), badge = chEl('vBadge');
+    if (!list || !chChecks) return;
+    var blocking = chChecks.blocking || [];
+    var rows = CH_RULE_DEFS.map(function (def) {
+      var hits = blocking.filter(function (b) { return b.code === def.code; });
+      return { k: hits.length === 0, t: def.t,
+               d: hits.length
+                 ? hits.map(function (h) { return h.detail; }).join(' · ')
+                 : 'checked against every ticked box',
+               c: String(hits.length) };
+    });
+    // Structural, not a live query: a serial sits in exactly one live box,
+    // so two ticked boxes sharing one is not a case that can occur here -
+    // shown for the same reason v4 listed it, not faked as something that
+    // was actually checked.
+    rows.push({ k: true, t: 'No duplicate serial across the ticked boxes',
+               d: 'A module belongs to one live box; this cannot happen here',
+               c: '0' });
+
+    list.innerHTML = rows.map(function (c) {
+      return '<div class="vrow ' + (c.k ? 'pass' : 'fail') + '"><div class="vi">' +
+        (c.k ? '✓' : '✕') + '</div><div><div class="vt">' +
+        fqcEsc(c.t) + '</div><div class="vd">' + fqcEsc(c.d) + '</div></div>' +
+        '<div class="vc">' + fqcEsc(c.c) + '</div></div>';
+    }).join('');
+
+    var hard = rows.filter(function (c) { return !c.k; }).length;
+    if (badge) {
+      badge.className = 'tag ' + (hard ? 't-fail' : 't-pass');
+      badge.textContent = hard ? hard + ' blocking' : 'all clear';
+    }
+
+    chRenderFails(blocking);
+    chRenderStatus(hard);
+    chUpdateButtons(hard === 0);
+  }
+
+  function chRenderFails(blocking) {
+    var host = chEl('chFails');
+    if (!host) return;
+    if (!blocking.length) { host.innerHTML = ''; return; }
+    host.innerHTML =
+      '<div class="card"><div class="card-h"><h3>Refused — fix these ' +
+      'before Create</h3><div class="ch-r"><span class="tag t-fail">' +
+      blocking.length + ' item(s)</span></div></div>' +
+      '<div class="card-b flush"><table><thead><tr><th>Box</th><th>Code</th>' +
+      '<th>Reason</th></tr></thead><tbody>' +
+      blocking.map(function (b) {
+        var box = b.box_id != null ? chBoxes.filter(function (x) {
+          return x.box_id === b.box_id; })[0] : null;
+        var label = box ? box.label : (b.box_id != null ? '#' + b.box_id : '—');
+        return '<tr><td class="mono"' +
+          (b.box_id != null ? '' : ' style="color:var(--ink3)"') + '>' +
+          fqcEsc(label) + '</td><td><span class="code">' + fqcEsc(b.code) +
+          '</span></td><td style="font-size:11.5px">' + fqcEsc(b.detail) +
+          '</td></tr>';
+      }).join('') + '</tbody></table></div></div>';
+  }
+
+  function chRenderStatus(hard) {
+    var host = chEl('chStatus');
+    if (!host || chChallan) return;
+    if (hard) {
+      host.innerHTML = '<div class="note n-bad" style="font-size:11.5px">' +
+        '<span>⚑</span><span>' + hard + ' blocking issue(s). There is no ' +
+        'override — the listed items have to be fixed first.</span></div>';
+    } else if (chOrder.length) {
+      host.innerHTML = '<div class="note n-ok" style="font-size:11.5px">' +
+        '<span>✓</span><span>Every check passes. Save as draft to reserve ' +
+        'the number, or Create to dispatch outright.</span></div>';
+    } else {
+      host.innerHTML = '';
+    }
+  }
+
+  function chUpdateButtons(ok) {
+    var create = chEl('chCreate');
+    if (create) {
+      create.disabled = !!(chBusy || (!ok && !chChallan) ||
+        (chChallan && chChallan.status !== 'draft'));
+    }
+    var draftBtn = chEl('chDraftBtn');
+    if (draftBtn) draftBtn.disabled = !!(!ok || chBusy || chChallan);
+  }
+
+  /* ---- write: draft reserves, create dispatches, submit finalises ----- */
+
+  function chPayload() {
+    var same = chField('Consignee is the same');
+    var consEl = chField('Consignee name');
+    var lines = consEl ? String(consEl.value || '').split('\n') : [];
+    return {
+      boxes: chOrder.slice(), invoice_id: chInvoiceId,
+      buyer_name: (chEl('chParty') || {}).value || '',
+      buyer_gstin: (chEl('chGst') || {}).value || '',
+      consignee_same_as_buyer: same ? !!same.checked : true,
+      consignee_name: lines[0] || '',
+      consignee_address: lines.slice(1).join('\n'),
+      challan_date: chVal('Challan date') || '',
+      vehicle_no: chVal('Vehicle no.') || '',
+      transporter: chVal('Transporter') || '',
+      lr_no: chVal('LR / GR no.') || '',
+      driver_name: chVal('Driver name') || '',
+      driver_mobile: chVal('Driver mobile') || ''
+    };
+  }
+
+  function chHandleResult(d) {
+    if (!d || !d.ok) {
+      if (typeof toast === 'function') toast((d && d.why) || 'Refused.');
+      return;
+    }
+    chChallan = d;
+    chInitNo();
+    chRenderBoxTable();
+    chSetFieldsDisabled(true);
+    chUpdateButtons(true);
+    if (d.status === 'draft') {
+      chShowDraftBar();
+      chRenderDocsPlaceholder();
+      if (typeof toast === 'function') {
+        toast(d.no + ' saved as a draft. ' + chOrder.length + ' box(es) and ' +
+              d.qty + ' serial(s) are reserved to it — nothing else can ' +
+              'select them until it is created or discarded.');
+      }
+    } else {
+      var host = chEl('chStatus');
+      if (host) {
+        host.innerHTML = '<div class="note n-ok" style="font-size:11.5px">' +
+          '<span>✓</span><span><b>' + fqcEsc(d.no) + '</b> created — ' +
+          d.qty + ' serial(s) now dispatched.</span></div>';
+      }
+      chRenderDocs(d);
+      if (typeof toast === 'function') {
+        toast(d.no + ' created — ' + d.qty + ' serial(s) now dispatched.');
+      }
+      setTimeout(function () {
+        if (typeof go === 'function') {
+          go('gp', typeof navBtn === 'function' ? navBtn('gp') : null);
+        }
+      }, 900);
+    }
+  }
+
+  function chCreateOrSubmit(action) {
+    if (chBusy) return;
+    if (chChallan && chChallan.status === 'draft') {
+      if (action === 'draft') {
+        if (typeof toast === 'function') {
+          toast(chChallan.no + ' is already a draft. Create dispatches it; ' +
+                'Discard draft releases it.');
+        }
+        return;
+      }
+      chBusy = true;
+      fetch('/api/challan/' + chChallan.challan_id + '/submit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: '{}' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { chBusy = false; chHandleResult(d); })
+        .catch(function () { chBusy = false; });
+      return;
+    }
+    chBusy = true;
+    var body = chPayload();
+    body.action = action;
+    fetch('/api/challan', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { chBusy = false; chHandleResult(d); })
+      .catch(function () { chBusy = false; });
+  }
+
+  window.createChallan = function () { chCreateOrSubmit('create'); };
+  function chSaveDraft() { chCreateOrSubmit('draft'); }
+
+  function chShowDraftBar() {
+    var host = chEl('chStatus');
+    if (!host) return;
+    host.innerHTML = '<div class="note n-warn" style="font-size:11.5px">' +
+      '<span>⚑</span><span><b>' + fqcEsc(chChallan.no) + '</b> is a draft ' +
+      '— the selection is locked while it exists.' +
+      '<button class="btn btn-ghost btn-sm" onclick="chDiscardDraft()" ' +
+      'style="margin-left:10px">Discard draft</button></span></div>';
+  }
+
+  window.chDiscardDraft = function () {
+    if (!chChallan) return;
+    if (!confirm('Discard ' + chChallan.no + '? Its boxes and serials go ' +
+        'back to being available. The number is not reused.')) return;
+    fetch('/api/challan/' + chChallan.challan_id + '/discard', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: '{}' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { if (typeof toast === 'function') toast(d.why); return; }
+        chChallan = null;
+        chSetFieldsDisabled(false);
+        chInitNo();
+        chRenderDocsPlaceholder();
+        chEl('chStatus').innerHTML = '';
+        chLoadBoxes().then(chRunChecksNow);
+        if (typeof toast === 'function') toast('Draft discarded.');
+      });
+  };
+
+  /* ---- outputs: nothing to print until something exists to print ------ */
+
+  function chRenderDocsPlaceholder() {
+    var host = chEl('chDocRows');
+    if (!host) return;
+    host.innerHTML = '<tr><td colspan="2" style="padding:12px;' +
+      'color:var(--ink3);font-size:11.5px">Nothing to print yet — Save ' +
+      'as draft or Create first.</td></tr>';
+  }
+
+  function chRenderDocs(d) {
+    var host = chEl('chDocRows');
+    if (!host) return;
+    var base = '/challan/' + d.fy + '/' + d.seq;
+    var docs = [
+      { n: 'Challan — print (driver’s copy)', href: base + '/print' },
+      { n: 'Challan — Excel + Flash Test Report', href: base + '/excel' },
+      { n: 'Flash Test Report', href: base + '/ftr' }
+    ];
+    host.innerHTML = docs.map(function (x) {
+      return '<tr><td><div style="font-weight:600;font-size:12px">' +
+        fqcEsc(x.n) + '</div></td><td style="text-align:right;white-space:nowrap">' +
+        '<a class="btn btn-ghost btn-sm" href="' + x.href + '" target="_blank" ' +
+        'rel="noopener">Open</a></td></tr>';
+    }).join('');
+  }
+
+  /* ---- number: not drawn merely by opening the screen ------------------
+   * v4's initChallanNo() drew a demo sequence the instant the screen
+   * loaded. A real financial-year counter must not move just because
+   * someone opened a tab - it is drawn once, at Save as draft or Create. */
+  function chInitNo() {
+    var no = chEl('chNo'), fy = chEl('chFy');
+    if (no) no.textContent = chChallan ? chChallan.no : '—';
+    if (fy) {
+      fy.textContent = chChallan
+        ? ('FY ' + (typeof fyLabel === 'function' ? fyLabel(chChallan.fy)
+                                                   : chChallan.fy) +
+           ' · seq ' + chChallan.seq +
+           (chChallan.status === 'draft' ? ' · draft' : ''))
+        : 'not yet drawn — Save as draft or Create to take a number';
+    }
+  }
+
+  function wireChallan() {
+    var view = chEl('v-challan');
+    if (!view) return;
+    if (!view.__live) {
+      view.__live = true;
+      chPartyField();
+      chInvoiceSelector();
+      var draftBtn = view.querySelector('.rail-acts .btn-ghost');
+      if (draftBtn) {
+        draftBtn.id = 'chDraftBtn';
+        draftBtn.removeAttribute('onclick');
+        draftBtn.addEventListener('click', function () { chSaveDraft(); });
+      }
+      // v4's own bootstrap (initAll(), on login) calls renderChBoxes(),
+      // initChallanNo(), renderChDocs() and runChecks() by name - patched
+      // here so those calls reach the real implementations instead of the
+      // demo ones, the same idiom used everywhere else in this file.
+      window.renderChBoxes = chRenderBoxTable;
+      window.initChallanNo = chInitNo;
+      window.renderChDocs = function () {
+        if (chChallan && chChallan.status !== 'draft') chRenderDocs(chChallan);
+        else chRenderDocsPlaceholder();
+      };
+      window.runChecks = chRunChecksNow;
+      chRenderDocsPlaceholder();
+      chInitNo();
+    }
+    chLoadInvoices();
+    if (chChallan) {
+      chRenderBoxTable();
+    } else {
+      chLoadBoxes().then(chRunChecksNow);
+    }
+  }
+  /* END challan — test_challan.js reads to here */
+
+
   /* delegated, so a screen rendered later gets it too */
   wireExports();
   pruneDemoControls();
@@ -5101,6 +5709,9 @@ function wireFqcAnomalies() {
      this file runs. Wiring it here replaces them at once, so the screen is
      never briefly showing pallets that do not exist. */
   try { wireRepack(); } catch (e) {}
+  /* same reasoning: the Challan screen's real boxes and invoice list replace
+     v4's demo arrays the instant this file runs, not on first navigation. */
+  try { wireChallan(); } catch (e) {}
 
   window.renderInvoiceList = function() {
     var tbody = document.getElementById('invoiceListBody');
@@ -5209,7 +5820,6 @@ function wireFqcAnomalies() {
             var origDate = window.INV_STATE.fields.ewb_valid_upto.value;
             var p = String(origDate).split('-');
             if (p.length === 3 && p[0].length === 4) { 
-                // Convert YYYY-MM-DD to DD-MM-YYYY so the original v4 logic parses it correctly
                 window.INV_STATE.fields.ewb_valid_upto.value = p[2] + '-' + p[1] + '-' + p[0];
             }
             originalInvCheck.apply(this, arguments);
@@ -5220,7 +5830,40 @@ function wireFqcAnomalies() {
     };
     window.__invCheckPatched = true;
   }
+  
+  // Invoice payload stringification monkey-patch
+  if (typeof window.invSubmit === 'function' && !window.__invSubmitPatched) {
+    var originalInvSubmit = window.invSubmit;
+    window.invSubmit = function() {
+        var originalFetch = window.fetch;
+        window.fetch = function(url, options) {
+            if (url === '/api/invoice/confirm' && options && options.body) {
+                try {
+                    var stringifyNumbers = function(obj) {
+                        if (obj === null || typeof obj !== 'object') return obj;
+                        for (var k in obj) {
+                            if (typeof obj[k] === 'number') {
+                                obj[k] = String(obj[k]);
+                            } else if (typeof obj[k] === 'object') {
+                                stringifyNumbers(obj[k]);
+                            }
+                        }
+                        return obj;
+                    };
+                    var payload = JSON.parse(options.body);
+                    stringifyNumbers(payload);
+                    options.body = JSON.stringify(payload);
+                } catch(e) {}
+            }
+            return originalFetch.apply(this, arguments);
+        };
+        var res = originalInvSubmit.apply(this, arguments);
+        window.fetch = originalFetch;
+        return res;
+    };
+    window.__invSubmitPatched = true;
+  }
 
-  console.log('[ICON TRACE] live layer active · build', B.build,
-              '·', B.live ? 'SQLite ' + B.db_file : 'no database');
+  console.log('[ICON TRACE] live layer active \u00B7 build', B.build,
+              '\u00B7', B.live ? 'SQLite ' + B.db_file : 'no database');
 })();
