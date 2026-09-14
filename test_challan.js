@@ -178,7 +178,8 @@ function makeChallanView() {
 
 var toasts = [], confirms = [];
 function toast(t) { toasts.push(t); }
-function confirm(msg) { confirms.push(msg); return true; }
+var CONFIRM_RETURNS = true;
+function confirm(msg) { confirms.push(msg); return CONFIRM_RETURNS; }
 function fqcEsc(v) {
   return String(v === null || v === undefined ? '' : v)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -265,12 +266,15 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed
 
 function reset() {
   DOM = {};
-  ['chParty', 'chGst', 'chBoxRows', 'chSel', 'vList', 'vBadge', 'chStatus',
+  ['chParty', 'chGst', 'chGstMsg', 'chPan', 'chState', 'chStateCode',
+   'chSupply', 'chBoxRows', 'chSel', 'vList', 'vBadge', 'chStatus',
    'chFails', 'chDocRows', 'chCreate', 'chNo', 'chFy', 'chInvoiceSel',
-   'chInvoiceHint', 'consBlock'].forEach(function (id) { el(id); });
+   'chInvoiceHint', 'chContactPhone', 'chClearBtn',
+   'consBlock'].forEach(function (id) { el(id); });
   el('chParty').tag = 'select';         // starts life as v4's <select>
   CHVIEW = makeChallanView();
   toasts = []; confirms = []; SENT = []; GO_CALLS = []; _timers = {};
+  CONFIRM_RETURNS = true;
   REPLY = { ok: false, why: 'stub: no reply configured' };
   chBoxes = []; chPicked = {}; chOrder = []; chInvoices = [];
   chInvoiceId = null; chChecks = null; chChallan = null; chBusy = false;
@@ -365,6 +369,104 @@ test('filled fields remain editable - filling is not locking', function () {
   assert(CHVIEW.fieldByLabel['Transporter'].disabled === false,
         'transporter was locked by a fill');
 });
+
+/* ---- contact: buyer or consignee, both if both present --------------- */
+
+test('chCombineContact prefers the buyer, falls back to the consignee',
+function () {
+  assert(chCombineContact('Horilal ji', '') === 'Horilal ji');
+  assert(chCombineContact('', 'R. Sharma') === 'R. Sharma');
+  assert(chCombineContact('', '') === '');
+});
+
+test('chCombineContact shows both when both are present and differ',
+function () {
+  var out = chCombineContact('Horilal ji', 'R. Sharma');
+  assert(out.indexOf('Horilal ji') !== -1 && out.indexOf('R. Sharma') !== -1, out);
+  assert(out.indexOf('Buyer') !== -1 && out.indexOf('Consignee') !== -1, out);
+});
+
+test('chCombineContact does not repeat itself when both sides agree',
+function () {
+  var out = chCombineContact('Horilal ji', 'Horilal ji');
+  assert(out === 'Horilal ji', out);
+});
+
+test('an invoice with contact info only under Consignee still fills the field',
+function () {
+  reset();
+  chFillFromInvoice({ fields: {
+    buyer_contact_name: { value: '' },
+    consignee_contact_name: { value: 'R. Sharma' },
+    consignee_contact_phone: { value: '9876543210' } } });
+  assert(CHVIEW.fieldByLabel['Contact person'].value === 'R. Sharma',
+        CHVIEW.fieldByLabel['Contact person'].value);
+  assert(el('chContactPhone').value === '9876543210', el('chContactPhone').value);
+});
+
+test('an invoice with BOTH a buyer and a consignee contact fills both, named',
+function () {
+  reset();
+  chFillFromInvoice({ fields: {
+    buyer_contact_name: { value: 'Horilal ji' },
+    buyer_contact_phone: { value: '7697162443' },
+    consignee_contact_name: { value: 'R. Sharma' },
+    consignee_contact_phone: { value: '9876543210' } } });
+  var name = CHVIEW.fieldByLabel['Contact person'].value;
+  var phone = el('chContactPhone').value;
+  assert(name.indexOf('Horilal ji') !== -1 && name.indexOf('R. Sharma') !== -1, name);
+  assert(phone.indexOf('7697162443') !== -1 && phone.indexOf('9876543210') !== -1, phone);
+});
+
+
+/* ---- clear form -------------------------------------------------------- */
+
+test('Clear form empties the ticked boxes, the invoice and every field',
+function () {
+  reset();
+  chBoxes = [box(1)];
+  chToggleBox(1, true);
+  chInvoiceId = 7;
+  el('chParty').value = 'AGNI GREEN POWER LIMITED (MZ)';
+  el('chGst').value = '15AACCA2122Q1ZT';
+  CHVIEW.fieldByLabel['Vehicle no.'].value = 'CG04MM1521';
+  CHVIEW.fieldByLabel['Driver name'].value = 'Suresh';
+  chClearForm();
+  assert(chOrder.length === 0, chOrder);
+  assert(chInvoiceId === null, chInvoiceId);
+  assert(el('chParty').value === '', el('chParty').value);
+  assert(el('chGst').value === '', el('chGst').value);
+  assert(CHVIEW.fieldByLabel['Vehicle no.'].value === '', 'vehicle no. was not cleared');
+  assert(CHVIEW.fieldByLabel['Driver name'].value === '', 'driver name was not cleared');
+});
+
+test('Clear form asks for confirmation before wiping a filled form',
+function () {
+  reset();
+  chInvoiceId = 7;
+  CONFIRM_RETURNS = false;
+  chClearForm();
+  assert(chInvoiceId === 7, 'the form was cleared without being confirmed');
+  CONFIRM_RETURNS = true;
+});
+
+test('Clear form does nothing, and asks nothing, on an already-empty form',
+function () {
+  reset();
+  chClearForm();
+  assert(confirms.length === 0, 'a confirmation was asked for nothing to clear');
+});
+
+test('Clear form refuses once a draft exists - discard first', function () {
+  reset();
+  chChallan = { challan_id: 9, no: 'IS-14.09.2026/0006', status: 'draft' };
+  chInvoiceId = 7;         // pretend state, to prove it survives
+  chClearForm();
+  assert(chInvoiceId === 7, 'a locked form was cleared anyway');
+  assert(confirms.length === 0, 'a locked form asked to confirm a clear it then refused');
+  assert(toasts.length === 1, toasts);
+});
+
 
 test('same-as-buyer leaves the consignee textarea untouched, not blanked',
 function () {

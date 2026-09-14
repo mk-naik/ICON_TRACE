@@ -1159,20 +1159,32 @@ def _challan_precheck(cur, box_ids, invoice_id, exclude_challan_id=None):
                              "detail": "Box %s no longer exists." % bid})
             continue
         label = _box_label(b)
+        serials = store.box_serials(cur, bid)
         issues = []
         if b["state"] != "closed":
             issues.append(("E-STATE", "%s is %s, not a closed pallet."
                            % (label, b["state"])))
         if not b.get("grade"):
             issues.append(("E-NOGRADE", "%s has no grade on record." % label))
-        live = [r for r in store.rows(cur,
-            "SELECT DISTINCT c.challan_id, c.fy, c.seq, c.suffix, "
-            "c.challan_date FROM box_serial bs "
-            "JOIN challan_serial cs ON cs.serial=bs.serial "
-            "JOIN challan c ON c.challan_id=cs.challan_id "
-            "WHERE bs.box_id=%s AND c.status<>'cancelled'", (bid,))
-            if r["challan_id"] != exclude_challan_id]
-        boxes.append({"box_id": bid, "label": label,
+        # Every serial this box holds, checked against the WHOLE challan
+        # table - every challan that has ever existed, imported history
+        # included, never scoped to a financial year or "today". Not
+        # inferred from "a serial lives in one live box": repack has
+        # already shown that invariant can go stale (a retired parent keeps
+        # its box_serial rows alongside its live child), so this is a real
+        # query naming the exact serial, not a comment asserting it cannot
+        # happen.
+        for s in db.serials_already_dispatched(cur, serials,
+                                               exclude_challan_id=exclude_challan_id):
+            prev = db.serial_last_challan(cur, s,
+                                          exclude_challan_id=exclude_challan_id)
+            no = (db.render_challan_no(
+                      datetime.date.fromisoformat(prev["challan_date"]),
+                      prev["seq"], prev["suffix"])
+                  if prev else "another challan")
+            issues.append(("E-DUPSERIAL", "%s (in %s) is already on %s."
+                           % (s, label, no)))
+        boxes.append({"box_id": bid, "label": label, "serials": serials,
                       "customer": _box_owner(b.get("customer")),
                       "model": b.get("model"),
                       "grade": b.get("grade"), "qty": b.get("qty") or 0,
@@ -1184,18 +1196,25 @@ def _challan_precheck(cur, box_ids, invoice_id, exclude_challan_id=None):
                       "issues": [{"code": c, "detail": d} for c, d in issues]})
         for code, detail in issues:
             blocking.append({"code": code, "box_id": bid, "detail": detail})
-        if live:
-            c0 = live[0]
-            no = db.render_challan_no(
-                datetime.date.fromisoformat(c0["challan_date"]),
-                c0["seq"], c0["suffix"])
-            blocking.append({"code": "E-ONCHALLAN", "box_id": bid,
-                             "detail": "%s is already on challan %s."
-                             % (label, no)})
 
     if not box_ids:
         blocking.append({"code": "E-NOBOX", "detail":
                          "Tick at least one box going on this vehicle."})
+
+    # The SAME serial ticked via two DIFFERENT boxes in this one request -
+    # not "already on a challan" (neither box need be), a data anomaly in
+    # its own right, and not caught by the check above since it compares
+    # each box against challan history, never against the other boxes
+    # sitting beside it on this very screen.
+    seen_serials, cross_dup = set(), []
+    for b in boxes:
+        for s in b["serials"]:
+            if s in seen_serials and s not in cross_dup:
+                cross_dup.append(s)
+            seen_serials.add(s)
+    for s in cross_dup:
+        blocking.insert(0, {"code": "E-DUPSERIAL", "detail":
+                            "%s is ticked in more than one box." % s})
 
     qty = sum(b["qty"] for b in boxes)
     kw = 0.0
@@ -1374,7 +1393,7 @@ def _write_challan(cur, d, status):
             "pack_shift": b["pack_shift"], "qty": b["qty"],
             "is_partial": 1 if b["is_partial"] else 0,
             "load_order": i + 1})
-        for s in store.box_serials(cur, b["box_id"]):
+        for s in b["serials"]:
             srow = db.find_serial(cur, s) or {}
             store.insert(cur, "challan_serial", {
                 "challan_id": chid, "challan_box_id": cb_id, "serial": s,

@@ -235,7 +235,7 @@ def t_box_not_reselectable():
     r2 = c.post("/api/challan", json={"action": "create", "boxes": [b],
                                       "invoice_id": inv2})
     assert r2.status_code == 400, "the same box rode on two challans"
-    assert "already on challan" in r2.get_json()["why"], r2.get_json()
+    assert "already on" in r2.get_json()["why"], r2.get_json()
 
 
 @test("a box on a live challan is excluded from the available list")
@@ -249,6 +249,65 @@ def t_box_excluded_from_list():
                                  "invoice_id": inv})
     after = {r["box_id"] for r in c.get("/api/challan/boxes").get_json()}
     assert b not in after, "a taken box still offered itself for selection"
+
+
+@test("a serial already on a historical challan (last February, say) "
+     "blocks a new one - checked against the whole database, not assumed")
+def t_dup_serial_against_history():
+    # Simulates an old document loaded straight into challan_serial - the
+    # historical importer's own path - where the serial's own state was
+    # never advanced. This is real data, not a live "on_challan" box flag:
+    # the point of the rule is that it checks the master table itself.
+    c = setup()
+    b = packed_box(c, [0, 1])
+    with store.conn() as (cx, cur):
+        old_chid = store.insert(cur, "challan", {
+            "fy": 2024, "seq": 88, "challan_date": "2025-02-14", "qty": 1,
+            "status": "issued", "created_by": "historical-import"})
+        store.insert(cur, "challan_serial", {
+            "challan_id": old_chid, "serial": serial(0), "build_instance": 1,
+            "format_version": 2, "date_produced": "2026-09-09", "shift": 1,
+            "sequence": 0, "wattage": WATT})
+    inv = make_invoice(qty=2)
+    r = c.post("/api/challan", json={"action": "create", "boxes": [b],
+                                     "invoice_id": inv})
+    assert r.status_code == 400, "a serial dispatched last February shipped again"
+    why = r.get_json()["why"]
+    assert serial(0) in why, why
+    assert "14.02.2025" in why or "2025" in why, why
+
+
+@test("the same serial ticked via two different boxes at once is refused, "
+     "not assumed impossible")
+def t_dup_serial_within_ticket():
+    # serial_in_live_box() should make this impossible through the normal
+    # API - but repack has already shown box_serial can end up holding a
+    # serial under more than one box_id, so this is checked directly rather
+    # than trusted as a structural given.
+    c = setup()
+    b1 = packed_box(c, [0])
+    b2 = packed_box(c, [1])
+    with store.conn() as (cx, cur):
+        # simulate the anomaly directly: b2 also claims b1's serial
+        store.insert(cur, "box_serial", {"box_id": b2, "serial": serial(0),
+                                         "build_instance": 1,
+                                         "added_by": "anomaly"})
+    inv = make_invoice(qty=3)
+    r = c.post("/api/challan", json={"action": "create", "boxes": [b1, b2],
+                                     "invoice_id": inv})
+    assert r.status_code == 400, "one serial rode on two boxes in one challan"
+    assert serial(0) in r.get_json()["why"], r.get_json()
+
+
+@test("clean boxes are never falsely flagged for a duplicate serial")
+def t_dup_serial_clean_case():
+    c = setup()
+    b = packed_box(c, [0, 1])
+    inv = make_invoice(qty=2)
+    r = c.post("/api/challan/checks", json={"boxes": [b], "invoice_id": inv})
+    d = r.get_json()
+    assert not any(x["code"] == "E-DUPSERIAL" for x in d["blocking"]), d
+    assert d["ok"], d
 
 
 @test("boxes stay in the order they were ticked, not box-number order")
@@ -344,7 +403,7 @@ def t_draft_reserves():
     r2 = c.post("/api/challan", json={"action": "draft", "boxes": [b],
                                       "invoice_id": inv2})
     assert r2.status_code == 400, "a drafted box was drafted again elsewhere"
-    assert "already on challan" in r2.get_json()["why"], r2.get_json()
+    assert "already on" in r2.get_json()["why"], r2.get_json()
 
 
 @test("submitting a draft on a REPACKED box does not also re-check its "

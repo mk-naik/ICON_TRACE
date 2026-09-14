@@ -5118,18 +5118,21 @@ function wireFqcAnomalies() {
      Challan date, Vehicle no., Transporter, LR/GR no., Driver name and
      mobile, the Consignee block - has none, and this layer may not add one
      to the template. Found by its own label instead. */
-  function chField(label) {
+  function chFldFor(label) {
     var view = chEl('v-challan');
     if (!view) return null;
     var flds = view.querySelectorAll('.bomgrid .fld');
     for (var i = 0; i < flds.length; i++) {
       var lab = flds[i].querySelector('label');
       var text = lab && lab.textContent.replace(/\s+/g, ' ').trim();
-      if (text && text.indexOf(label) === 0) {
-        return flds[i].querySelector('input,select,textarea');
-      }
+      if (text && text.indexOf(label) === 0) return flds[i];
     }
     return null;
+  }
+
+  function chField(label) {
+    var f = chFldFor(label);
+    return f ? f.querySelector('input,select,textarea') : null;
   }
 
   function chVal(label) {
@@ -5140,17 +5143,91 @@ function wireFqcAnomalies() {
 
   var CH_FIELD_LABELS = ['Buyer address', 'Contact person',
     'Consignee is the same', 'Consignee name', 'Challan date', 'Vehicle no.',
-    'Transporter', 'LR / GR no.', 'Driver name', 'Driver mobile'];
+    'Transporter', 'LR / GR no.', 'Driver name', 'Driver mobile',
+    'Driver licence no.'];
 
   function chSetFieldsDisabled(on) {
     CH_FIELD_LABELS.forEach(function (label) {
       var f = chField(label);
       if (f) f.disabled = on;
     });
-    var party = chEl('chParty'), gst = chEl('chGst'), inv = chEl('chInvoiceSel');
+    var party = chEl('chParty'), gst = chEl('chGst'), inv = chEl('chInvoiceSel'),
+        cphone = chEl('chContactPhone'), clearBtn = chEl('chClearBtn');
     if (party) party.disabled = on;
     if (gst) gst.disabled = on;
     if (inv) inv.disabled = on;
+    if (cphone) cphone.disabled = on;
+    if (clearBtn) clearBtn.disabled = on;
+  }
+
+  /* ---- trimmed to what the invoice does NOT already manage --------------
+   * Party, GSTIN, buyer address, consignee, vehicle no., transporter, LR
+   * no. and the e-Way Bill no. are the invoice's own fields, filled from it
+   * above and never re-typed here - a second place to edit the same fact
+   * is a second place for it to drift from the truth. Order reference has
+   * no backing column and nothing downstream reads it. What is left is
+   * what only exists at dispatch time: the date, the driver, and contact.
+   */
+  var CH_HIDE_FIELDS = ['Buyer GSTIN', 'Buyer PAN', 'State', 'State code',
+    'Supply type', 'Buyer address', 'Vehicle no.', 'Transporter',
+    'LR / GR no.', 'From place', 'To place', 'Destination site',
+    'Freight rate', 'E-way bill no.', 'Delivery order no.',
+    'Delivery order date', 'Sales order ref.', 'Invoice no.', 'Contractor',
+    'Remarks'];
+  var CH_HIDE_SECTIONS = ['Consignee', 'Order reference'];
+
+  function chTrimDetailsCard() {
+    var buyerFld = chFldFor('Buyer');
+    if (buyerFld) buyerFld.style.display = 'none';
+    CH_HIDE_FIELDS.forEach(function (label) {
+      var f = chFldFor(label);
+      if (f) f.style.display = 'none';
+    });
+    var grid = document.querySelector('#v-challan .bomgrid');
+    if (grid && grid.children) {
+      var hide = false;
+      for (var i = 0; i < grid.children.length; i++) {
+        var node = grid.children[i];
+        if (node.className && (' ' + node.className + ' ').indexOf(' bom-sec ') !== -1) {
+          var text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+          // "Party" itself is not hidden - the invoice selector is inserted
+          // as its OWN section ahead of it, so "Party" is no longer
+          // necessarily the first bom-sec in the grid. What remains under
+          // it after the fields above are hidden is contact info only, not
+          // the party itself, so it is relabelled to say that.
+          if (text.indexOf('Party') === 0) { node.textContent = 'Contact'; hide = false; continue; }
+          hide = CH_HIDE_SECTIONS.some(function (l) { return text.indexOf(l) === 0; });
+        }
+        if (hide) node.style.display = 'none';
+      }
+    }
+  }
+
+  /* v4 never had a phone field beside "Contact person" - only a name. */
+  function chContactPhoneField() {
+    if (chEl('chContactPhone')) return;
+    var cpFld = chFldFor('Contact person');
+    if (!cpFld || !cpFld.parentNode) return;
+    var fld = document.createElement('div');
+    fld.className = 'fld';
+    fld.innerHTML = '<label>Contact no.</label><input id="chContactPhone" ' +
+      'class="mono" placeholder="10-digit mobile">';
+    if (cpFld.nextSibling) cpFld.parentNode.insertBefore(fld, cpFld.nextSibling);
+    else cpFld.parentNode.appendChild(fld);
+  }
+
+  /* The invoice keeps the buyer's and the consignee's contact separately -
+     often only one side actually has one filled in, and occasionally both
+     do, with different people. Prefer the buyer's; fall back to the
+     consignee's; if both exist and differ, show both rather than silently
+     dropping one. */
+  function chCombineContact(buyerVal, consVal) {
+    var b = String(buyerVal || '').trim(), c = String(consVal || '').trim();
+    if (b && c) {
+      return b.toUpperCase() === c.toUpperCase() ? b
+        : (b + ' (Buyer) · ' + c + ' (Consignee)');
+    }
+    return b || c;
   }
 
   /* chParty is a <select> of four names hardcoded into the demo. A real
@@ -5254,7 +5331,23 @@ function wireFqcAnomalies() {
       if (typeof window.gstCheck === 'function') window.gstCheck();
     }
     set('Buyer address', 'buyer_address');
-    set('Contact person', 'buyer_contact_name');
+
+    // Contact person / no.: the invoice keeps the buyer's and the
+    // consignee's separately, and either or both may be blank on a real
+    // PDF. Prefer the buyer's, fall back to the consignee's, and if both
+    // are present and differ, show both rather than silently keeping one.
+    var cpName = chField('Contact person');
+    if (cpName) {
+      cpName.value = chCombineContact(
+        f.buyer_contact_name && f.buyer_contact_name.value,
+        f.consignee_contact_name && f.consignee_contact_name.value);
+    }
+    var cpPhone = chEl('chContactPhone');
+    if (cpPhone) {
+      cpPhone.value = chCombineContact(
+        f.buyer_contact_phone && f.buyer_contact_phone.value,
+        f.consignee_contact_phone && f.consignee_contact_phone.value);
+    }
 
     var same = f.consignee_same_as_buyer && f.consignee_same_as_buyer.value;
     var sameBox = chField('Consignee is the same');
@@ -5388,9 +5481,10 @@ function wireFqcAnomalies() {
     { code: 'E-QTY', t: 'Boxes ticked equal what the invoice declares' },
     { code: 'E-STATE', t: 'Every ticked box is a closed pallet' },
     { code: 'E-NOGRADE', t: 'Every ticked box has a grade on record' },
-    { code: 'E-ONCHALLAN', t: 'No box is already on another challan' },
     { code: 'E-OWNER', t: 'Every box belongs to the buyer, or is General Stock' },
-    { code: 'E-DUPBOX', t: 'No box ticked twice' }
+    { code: 'E-DUPBOX', t: 'No box ticked twice' },
+    { code: 'E-DUPSERIAL', t: 'No serial duplicated or already dispatched',
+      ok: 'checked against every challan in the system, not assumed' }
   ];
 
   function chRunChecks() {
@@ -5421,16 +5515,9 @@ function wireFqcAnomalies() {
       return { k: hits.length === 0, t: def.t,
                d: hits.length
                  ? hits.map(function (h) { return h.detail; }).join(' · ')
-                 : 'checked against every ticked box',
+                 : (def.ok || 'checked against every ticked box'),
                c: String(hits.length) };
     });
-    // Structural, not a live query: a serial sits in exactly one live box,
-    // so two ticked boxes sharing one is not a case that can occur here -
-    // shown for the same reason v4 listed it, not faked as something that
-    // was actually checked.
-    rows.push({ k: true, t: 'No duplicate serial across the ticked boxes',
-               d: 'A module belongs to one live box; this cannot happen here',
-               c: '0' });
 
     list.innerHTML = rows.map(function (c) {
       return '<div class="vrow ' + (c.k ? 'pass' : 'fail') + '"><div class="vi">' +
@@ -5664,6 +5751,67 @@ function wireFqcAnomalies() {
     }
   }
 
+  /* v4 had no way to abandon a filled-in form short of reloading the page.
+     Placed in the same card the fields live in, next to what it clears. */
+  function chClearFormButton() {
+    if (chEl('chClearBtn')) return;
+    var host = document.querySelector('#v-challan .wmain.o3 .card-h .ch-r');
+    if (!host) return;
+    var btn = document.createElement('button');
+    btn.id = 'chClearBtn';
+    btn.className = 'btn btn-ghost btn-sm';
+    btn.textContent = 'Clear form';
+    btn.addEventListener('click', function () { chClearForm(); });
+    host.insertBefore(btn, host.firstChild);
+  }
+
+  window.chClearForm = function () {
+    if (chChallan) {
+      if (typeof toast === 'function') {
+        toast(chChallan.status === 'draft'
+          ? chChallan.no + ' is a draft — discard it first. A reservation ' +
+            'is not something a form reset can quietly undo.'
+          : chChallan.no + ' is already created. Leave and return to this ' +
+            'screen to start another.');
+      }
+      return;
+    }
+    var partyVal = chEl('chParty') && chEl('chParty').value;
+    if (!chOrder.length && !chInvoiceId && !partyVal) return;  // nothing to clear
+    if (!confirm('Clear the invoice, every filled field and every ticked box?')) {
+      return;
+    }
+
+    chPicked = {}; chOrder = []; chInvoiceId = null; chChecks = null;
+    var invSel = chEl('chInvoiceSel'); if (invSel) invSel.value = '';
+    chRenderInvoiceHint(null);
+
+    var party = chEl('chParty'); if (party) party.value = '';
+    var gst = chEl('chGst'); if (gst) gst.value = '';
+    ['chPan', 'chState', 'chStateCode', 'chSupply'].forEach(function (id) {
+      var e = chEl(id); if (e) e.value = '';
+    });
+    var gmsg = chEl('chGstMsg'); if (gmsg) gmsg.innerHTML = '';
+
+    var same = chField('Consignee is the same');
+    if (same) {
+      same.checked = true;
+      if (typeof window.sameCons === 'function') window.sameCons(same);
+    }
+    ['Buyer address', 'Contact person', 'Consignee name', 'Challan date',
+     'Vehicle no.', 'Transporter', 'LR / GR no.', 'Driver name',
+     'Driver mobile', 'Driver licence no.'].forEach(function (label) {
+      var f = chField(label);
+      if (f) f.value = '';
+    });
+    var cphone = chEl('chContactPhone'); if (cphone) cphone.value = '';
+
+    chRenderBoxTable();
+    chRenderSummary();
+    chRunChecksNow();
+    if (typeof toast === 'function') toast('Form cleared.');
+  };
+
   function wireChallan() {
     var view = chEl('v-challan');
     if (!view) return;
@@ -5671,6 +5819,9 @@ function wireFqcAnomalies() {
       view.__live = true;
       chPartyField();
       chInvoiceSelector();
+      chContactPhoneField();
+      chTrimDetailsCard();
+      chClearFormButton();
       var draftBtn = view.querySelector('.rail-acts .btn-ghost');
       if (draftBtn) {
         draftBtn.id = 'chDraftBtn';

@@ -574,21 +574,73 @@ correctly) was already right and is kept unchanged.
       the rule it defends. Every rule mutation-tested — broken one at a
       time and confirmed the matching test catches it.
 
+**Round 2 — feedback from real use.**
+
+- [x] **No duplicate serial was a comment, not a check.** The rail said "a
+      serial sits in exactly one live box, so this cannot happen here" —
+      assumed from an invariant, not verified, and repack had already shown
+      that invariant can go stale (a retired parent keeps its `box_serial`
+      rows alongside its live child). Replaced with a real query: every
+      serial in every ticked box is checked against `challan_serial` for
+      **every challan that has ever existed** — no financial-year scoping,
+      no date cutoff, imported history included — via
+      `db.serials_already_dispatched()` and `db.serial_last_challan()`,
+      naming the exact serial and the exact document. A second, independent
+      check catches the same serial ticked via two *different* boxes in one
+      request, which the history check alone would not (neither box need
+      already be on any challan). `db.serials_already_dispatched()` gained
+      an `exclude_challan_id` so a draft can re-check itself without
+      colliding with its own reservation.
+- [x] **Challan details trimmed to what the invoice does not already
+      manage.** Party, GSTIN, PAN, state, buyer address, the Consignee
+      block, vehicle no., transporter, LR no., e-Way Bill no. and the whole
+      Order Reference section are the invoice's own fields — filled from
+      it, never re-typed here, and now hidden rather than shown a second
+      time for no reason. What is left: Challan date, Contact person,
+      Contact no., Driver name, Driver mobile, Driver licence no. — decided
+      at dispatch, not on the invoice. The hidden fields are still filled
+      from the invoice and still written to the challan row for printing;
+      only the display changed.
+- [x] **Clear form.** v4 had no way to abandon a filled-in screen short of
+      reloading the page. A **Clear form** button empties the invoice
+      selection, every field and every ticked box in one confirmed action —
+      refused (with a reason) once a draft or a created challan exists,
+      since that is a real reservation a form reset must not quietly undo.
+- [x] **Contact person / Contact no. often came back blank.** The invoice
+      keeps the buyer's and the consignee's contact separately, and on a
+      real PDF only one side, or neither, may have it filled in. Now
+      prefers the buyer's, falls back to the consignee's, and — the part
+      that was actually being asked for — **shows both** when both are
+      present and differ, rather than silently keeping one and dropping
+      the other. A "Contact no." field was added; v4 only had a name.
+- [x] Tests: 4 new `test_challan.py` cases for the duplicate-serial rule,
+      9 new `test_challan.js` cases for contact fallback and Clear form.
+      Every new rule mutation-tested. (`test_challan.py` 31, `test_challan.js`
+      29.)
+
 **Open, out of scope for this pass:**
 - Search / filter / scroll on the box-select table (`data-itable` pattern)
       — the table is a selection UI, not a report; can be added the same
       way every other screen's table already works.
 - Driver licence no., From/To place, Destination site, Freight rate,
       Delivery order no./date, Sales order ref., Contractor, Remarks — v4's
-      fields exist but the `challan` schema has no column for them and
-      nothing downstream reads them; left as display-only pending a
-      decision on whether they are wanted at all.
+      fields exist (the driver ones now shown; the rest hidden this round)
+      but the `challan` schema has no column for any of them and nothing
+      downstream reads them; left unpersisted pending a decision on
+      whether they are wanted at all. Contact person / Contact no. are the
+      same: shown and filled, not currently saved with the challan row.
 - The root cause of boxes holding `customer='ICON STOCK'` instead of the
       code `STOCK` is at Packing, not here — worked around, not fixed.
 - A box ticked, then taken by someone else's draft before this one submits,
       is caught by the server (the same `_challan_precheck`) but the
       screen does not yet remove it from the ticked list on its own —
       the create/draft is simply refused and named.
+- The Party/Consignee/Order-reference hide-and-relabel logic is DOM-tree
+      traversal (`.bomgrid`'s children, in document order) that this
+      machine's test harness cannot exercise without a real browser — no
+      Node, no browser available here. Traced by hand and correct as far
+      as that goes, but not run against a live DOM; worth a once-over in
+      the browser before relying on it.
 
 ## 16. Loading Verification — NEW SCREEN (Team 3)
 
