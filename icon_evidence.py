@@ -304,7 +304,23 @@ def is_calibration(sid):
             or (s.isdigit() and len(s) <= 4))
 
 
-def scan_anomalies(cfg, limit=200, line=None):
+def _parse_tester_date(s):
+    if not s: return None
+    s = s.split()[0]
+    if "-" in s:
+        parts = s.split("-")
+    elif "/" in s:
+        parts = s.split("/")
+    else:
+        return None
+    if len(parts) == 3:
+        if len(parts[0]) == 4:
+            return "%s-%02d-%02d" % (parts[0], int(parts[1]), int(parts[2]))
+        else:
+            return "%s-%02d-%02d" % (parts[2], int(parts[1]), int(parts[0]))
+    return None
+
+def scan_anomalies(cfg, limit=200, line=None, frm=None, to=None):
     """Rows the testers wrote that no serial lookup will ever find.
 
     Calibration and reference rows are counted, never flagged. What is left
@@ -320,7 +336,19 @@ def scan_anomalies(cfg, limit=200, line=None):
         scol, pcol = s["serial_col"], s["pmax_col"]
         isc_col, voc_col = s["isc_col"], s["voc_col"]
         by = {}
-        for r in _read_rows(path)[-limit:]:
+        rows_to_scan = _read_rows(path)
+        if frm or to:
+            filtered = []
+            for r in rows_to_scan:
+                if len(r) > COL_TIME:
+                    d = _parse_tester_date(r[COL_TIME])
+                    if d:
+                        if frm and d < frm: continue
+                        if to and d > to: continue
+                    filtered.append(r)
+            rows_to_scan = filtered
+        
+        for r in rows_to_scan[-limit:]:
             if len(r) <= max(scol, pcol, isc_col, voc_col):
                 continue
             sid = r[scol].strip()

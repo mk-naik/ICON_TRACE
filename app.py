@@ -114,7 +114,7 @@ def build_id():
 # a live build_id(), it is the difference between "your page is old" and
 # "the running server is old" - which are fixed by different people.
 BOOT_BUILD = build_id()
-STARTED_AT = datetime.datetime.now().isoformat(timespec="seconds")
+STARTED_AT = datetime.datetime.now().strftime("%d-%m-%Y %I:%M:%S %p")
 
 
 @app.after_request
@@ -211,7 +211,7 @@ def globals_():
         "fy_label": db.fy_label(db.fin_year()),
         "user": actor(),
         "parser_version": invparse.__version__,
-        "now": datetime.datetime.now().strftime("%d-%m-%Y  ·  %H:%M"),
+        "now": datetime.datetime.now().strftime("%d-%m-%Y %I:%M:%S %p"),
         "cfg_unit": "2",
         "build": build_id(),
     }
@@ -3428,9 +3428,11 @@ def api_fqc_recent():
 def api_fqc_anomalies():
     """Anomalous unmappable reads from the sun simulator/tester."""
     line = (request.args.get("line") or "").strip().upper()
+    frm = (request.args.get("from") or "").strip()
+    to = (request.args.get("to") or "").strip()
     with store.conn() as (cx, cur):
         cfg = db.get_config(cur)
-    anomalies = ev.scan_anomalies(cfg, line=line)
+    anomalies = ev.scan_anomalies(cfg, line=line, frm=frm, to=to)
     
     # scan_anomalies returns {"available": True/False, "junk": [...], "failed": [...]}
     return jsonify(anomalies)
@@ -3510,7 +3512,7 @@ def api_fqc_dashboard():
         t[k] = t.get(k) or 0
         
     try:
-        anomalies_data = ev.scan_anomalies(cfg)
+        anomalies_data = ev.scan_anomalies(cfg, frm=frm, to=to)
         t["anomalies"] = len(anomalies_data.get("junk") or []) + len(anomalies_data.get("failed") or [])
     except Exception:
         t["anomalies"] = 0
@@ -3915,7 +3917,7 @@ def healthz():
                     "server_stale": live != BOOT_BUILD,
                     "started": STARTED_AT,
                     "store": os.path.basename(store.DB_PATH),
-                    "time": datetime.datetime.now().isoformat(timespec="seconds")})
+                    "time": datetime.datetime.now().strftime("%d-%m-%Y %I:%M:%S %p")})
 
 
 @app.errorhandler(413)

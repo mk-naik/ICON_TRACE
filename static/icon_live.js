@@ -354,7 +354,12 @@
     var line = 'A';
     if (lineMatch.indexOf('B-Line') >= 0) line = 'B';
     
-    fetch('/api/fqc/anomalies?line=' + line, {cache: 'no-store'})
+    var f = fqcDashFilters();
+    var q = '?line=' + line;
+    if (f.from) q += '&from=' + encodeURIComponent(f.from);
+    if (f.to) q += '&to=' + encodeURIComponent(f.to);
+
+    fetch('/api/fqc/anomalies' + q, {cache: 'no-store'})
       .then(function (r) { return r.json(); })
       .then(function (anomalies) {
         var existing = document.getElementById('fqcAnomaliesModal');
@@ -366,7 +371,7 @@
         }
         
         var html = '<div class="modal on" id="fqcAnomaliesModal" onclick="if(event.target===this)this.remove()">' +
-          '<div class="modal-box"><div class="modal-h"><div><h3>Tester Anomalies</h3><div class="mh-sub">What the tester wrote that no lookup will find (last 200 rows)</div></div><button class="modal-x" onclick="document.getElementById(\'fqcAnomaliesModal\').remove()">A-</button></div><div class="modal-b"><div class="card"><div class="card-b" style="padding:20px">';
+          '<div class="modal-box"><div class="modal-h"><div><h3>Tester Anomalies</h3><div class="mh-sub">What the tester wrote that no lookup will find (last 200 rows)</div></div><button class="modal-x" onclick="document.getElementById(\'fqcAnomaliesModal\').remove()">&times;</button></div><div class="modal-b"><div class="card"><div class="card-b" style="padding:20px">';
         
         if (anomalies.junk && anomalies.junk.length > 0) {
           html += '<p style="margin-bottom:10px"><b>' + anomalies.junk.length + ' row(s) under a hand-typed ID.</b> The barcode would not scan, so the operator entered something to let the test run. The module exists; its result is filed under nothing.</p>';
@@ -822,8 +827,8 @@ function wireFqcAnomalies() {
           cat.innerHTML = catRows.map(function (x) {
             var pct = catTot ? (x[2] / catTot * 100).toFixed(1) : '0.0';
             var act = (x[0] === 'Anomaly') ?
-                '<button class="btn btn-ghost btn-sm" onclick="renderAnomalies()">View</button>' :
-                '<button class="btn btn-ghost btn-sm" onclick="openModules({title:\'Category '+x[0]+'\',cat:\''+x[0]+'\'})">👁</button>';
+                '<button class="btn btn-ghost btn-sm" onclick="renderAnomalies()">View ' + x[2] + '</button>' :
+                '<button class="btn btn-ghost btn-sm" onclick="openModules({title:\'Category '+x[0]+'\',cat:\''+x[0]+'\'})">View ' + x[2] + '</button>';
             return '<tr><td>' + x[0] + '</td><td>' + x[1] + '</td><td class="num">' +
               x[2] + '</td><td class="mono">' + pct + '%</td><td style="text-align:center">' + act + '</td></tr>';
           }).join('');
@@ -841,7 +846,7 @@ function wireFqcAnomalies() {
             var pct = maxQ ? Math.round(x.qty / maxQ * 100) : 0;
             return '<tr><td>' + fqcEsc(x.defect) + '</td><td class="num">' + x.qty +
               '</td><td><div class="bar-wrap"><div class="bar"><i style="width:' + pct +
-              '%"></i></div><span class="mono">' + pct + '%</span></div></td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:\'Rejection — '+fqcEsc(x.defect)+'\',result:\'Rejected only\',remark:\''+fqcEsc(x.defect)+'\'})">⊞</button></td></tr>';
+              '%"></i></div><span class="mono">' + pct + '%</span></div></td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:\'Rejection — '+fqcEsc(x.defect)+'\',result:\'Rejected only\',remark:\''+fqcEsc(x.defect)+'\'})">View ' + x.qty + '</button></td></tr>';
           }).join('') : '<tr data-empty><td colspan="4"><div class="empty-state">' +
             'No rejections in this range.</div></td></tr>';
         }
@@ -861,7 +866,7 @@ function wireFqcAnomalies() {
             var pct = x.inspected ? (x.rejected / x.inspected * 100).toFixed(2) + '%' : '—';
             return '<tr><td class="mono">' + day + '</td><td>—</td><td class="num">' +
               x.inspected + '</td><td class="num">' + x.passed + '</td><td class="num">' +
-              x.rejected + '</td><td class="mono">' + pct + '</td><td>—</td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:\''+day+'\',date:\''+day+'\'})">⊞</button></td></tr>';
+              x.rejected + '</td><td class="mono">' + pct + '</td><td>—</td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:\''+day+'\',date:\''+day+'\'})">View ' + x.inspected + '</button></td></tr>';
           }).join('') : '<tr data-empty><td colspan="8"><div class="empty-state">' +
             'No FQC decisions in this range.</div></td></tr>';
         }
@@ -957,6 +962,13 @@ function wireFqcAnomalies() {
     
     var fFrom = document.getElementById('fFrom');
     var fTo = document.getElementById('fTo');
+    
+    // Inject 'Pending' category option if missing (patching v4 HTML)
+    var mdlCat = document.getElementById('mdlCat');
+    if (mdlCat && mdlCat.innerHTML.indexOf('Pending') === -1) {
+        mdlCat.innerHTML += '<option>Pending</option>';
+    }
+
     var today = new Date().toISOString().slice(0, 10);
     if (fFrom && (fFrom.value === '2026-08-19' || !fFrom.value)) fFrom.value = today;
     if (fTo && (fTo.value === '2026-08-19' || !fTo.value)) fTo.value = today;
@@ -5187,6 +5199,27 @@ function wireFqcAnomalies() {
   window.addEventListener('online', function () { fails = 2; ping(); });
   setInterval(ping, POLL);
   ping();
+
+
+  // e-Way Bill Date fix monkey-patch
+  if (typeof window.invCheck === 'function' && !window.__invCheckPatched) {
+    var originalInvCheck = window.invCheck;
+    window.invCheck = function() {
+        if (window.INV_STATE && window.INV_STATE.fields && window.INV_STATE.fields.ewb_valid_upto && window.INV_STATE.fields.ewb_valid_upto.value) {
+            var origDate = window.INV_STATE.fields.ewb_valid_upto.value;
+            var p = String(origDate).split('-');
+            if (p.length === 3 && p[0].length === 4) { 
+                // Convert YYYY-MM-DD to DD-MM-YYYY so the original v4 logic parses it correctly
+                window.INV_STATE.fields.ewb_valid_upto.value = p[2] + '-' + p[1] + '-' + p[0];
+            }
+            originalInvCheck.apply(this, arguments);
+            window.INV_STATE.fields.ewb_valid_upto.value = origDate;
+        } else {
+            originalInvCheck.apply(this, arguments);
+        }
+    };
+    window.__invCheckPatched = true;
+  }
 
   console.log('[ICON TRACE] live layer active · build', B.build,
               '·', B.live ? 'SQLite ' + B.db_file : 'no database');
