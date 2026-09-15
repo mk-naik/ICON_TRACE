@@ -4558,9 +4558,6 @@ def too_big(e):
     return redirect(url_for("invoice_upload")), 413
 
 
-if __name__ == "__main__":
-    app.run(debug=True, port=5000)
-
 @app.route("/api/gatepasses", methods=["GET"])
 def api_gatepasses():
     with store.conn() as (cx, cur):
@@ -4607,3 +4604,9 @@ def api_gatepass():
         db.audit(cur, actor(), "gatepass.issue", "gatepass", no, rec)
         
     return jsonify({"ok": True, "gatepass_id": gid, "gp_no": no})
+
+
+if __name__ == "__main__":
+    raise SystemExit(
+        "Run this through serve.py, not directly - see the comment at the "
+        "top of serve.py for why (waitress, not Werkzeug's dev server).")

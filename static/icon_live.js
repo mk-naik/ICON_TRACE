@@ -5965,11 +5965,11 @@ function wireFqcAnomalies() {
     sec.innerHTML =
       '<div class="pg"><h2>Challan List</h2><p>All drafted, issued, and cancelled challans</p>' +
         '<div class="pg-act">' +
-          '<button class="btn btn-primary" onclick="if(typeof go===\\'function\\')go(\\'challan\\',document.querySelector(\\'[data-view=challan]\\'))">Create challan</button>' +
+          '<button class="btn btn-primary" id="clNewChallanBtn">Create challan</button>' +
         '</div>' +
       '</div>' +
       '<div class="filters">' +
-        '<div class="fld"><label>Search</label><input id="clSearch" placeholder="Search buyer / invoice…" oninput="clLoad()"></div>' +
+        '<div class="fld"><label>Search</label><input id="clSearch" placeholder="Search buyer / invoice\u2026" oninput="clLoad()"></div>' +
         '<div class="fld"><label>Status</label><select id="clStatusFilter" onchange="clLoad()">' +
           '<option value="">All statuses</option>' +
           '<option value="draft">Draft</option>' +
@@ -5988,7 +5988,7 @@ function wireFqcAnomalies() {
                 '<th>Status</th><th></th>' +
               '</tr></thead>' +
               '<tbody id="clTableBody">' +
-                '<tr><td colspan="8" style="padding:20px;color:var(--ink3);text-align:center">Loading…</td></tr>' +
+                '<tr><td colspan="8" style="padding:20px;color:var(--ink3);text-align:center">Loading\u2026</td></tr>' +
               '</tbody>' +
             '</table>' +
           '</div>' +
@@ -6001,6 +6001,20 @@ function wireFqcAnomalies() {
           'box-shadow:0 10px 30px rgba(0,0,0,.2);margin:0 auto;padding:0;overflow:hidden;position:relative"></div>' +
       '</div>';
     main.appendChild(sec);
+    // Attached as a real function reference rather than an inline onclick
+    // string - the inline version needed three levels of nested quoting
+    // (the outer JS string, the HTML attribute, the JS call inside it) and
+    // a prior edit over-escaped it, which is a hard SyntaxError: the whole
+    // file fails to parse, and NOTHING in the live layer runs in a real
+    // browser, no matter how correct everything else in it is.
+    var newBtn = document.getElementById('clNewChallanBtn');
+    if (newBtn) {
+      newBtn.onclick = function () {
+        if (typeof go === 'function') {
+          go('challan', document.querySelector('[data-view=challan]'));
+        }
+      };
+    }
   }
 
   /* ---- Challan Detail panel ----------------------------------------------- */
@@ -6757,42 +6771,51 @@ function wireFqcAnomalies() {
   }
 
 
-  /* ---- GATE PASS -------------------------------------------------------- */
+  /* Gate Pass, as v4 originally built it, has no path for a gate pass that
+     is not tied to a challan - "Against challan" is required, the preview
+     is one specific challan's contents, and the only free-text fields are
+     Delivery order no. and Container no. But a gate pass covers modules AND
+     every other material leaving the plant - a laptop sent for repair, cell
+     stock moved to Unit-1 - neither of which has a challan at all. Real
+     party/vehicle/description fields are injected below (wireGp), always
+     usable; a challan pre-fills them as a convenience, never locks them. */
   window.issueGP = function() {
       var btn = document.getElementById('gpBtn');
       var sel = document.getElementById('gpChallanSelV4');
       var typeNRGP = document.getElementById('gpNRGP') && document.getElementById('gpNRGP').classList.contains('on') ? 'NRGP' : 'RGP';
-      
+
       var chId = sel && sel.value ? parseInt(sel.value, 10) : null;
-      var inputs = document.querySelectorAll('#v-gp .card:nth-child(1) input:not(#gpBy)');
-      var delOrder = inputs.length > 1 ? inputs[1].value : '';
-      var container = inputs.length > 2 ? inputs[2].value : '';
+      var party = (document.getElementById('gpParty') || {}).value || '';
+      var vehicle = (document.getElementById('gpVehicle') || {}).value || '';
+      var addr = (document.getElementById('gpAddr') || {}).value || '';
+      var desc = (document.getElementById('gpDesc') || {}).value || '';
+      var qtyRaw = (document.getElementById('gpQty') || {}).value || '';
       var expectedRet = document.getElementById('gpExpectedRet') ? document.getElementById('gpExpectedRet').value : '';
 
       var payload = {
           kind: typeNRGP,
-          party: '',
-          delivery_address: '',
-          vehicle_no: '',
-          description: (delOrder ? 'DO ' + delOrder + ' ' : '') + (container ? 'Container ' + container : ''),
-          qty: null,
+          party: party.trim(),
+          delivery_address: addr.trim(),
+          vehicle_no: vehicle.trim(),
+          description: desc.trim(),
+          qty: qtyRaw ? parseInt(qtyRaw, 10) : null,
           challan_id: chId,
           expected_return: typeNRGP === 'RGP' ? expectedRet : null
       };
 
-      if (chId && window._gpLiveChallans) {
-          var ch = window._gpLiveChallans.find(function(c) { return c.challan_id === chId; });
-          if (ch) {
-              payload.party = ch.buyer_name;
-              payload.vehicle_no = ch.vehicle_no;
-              payload.qty = ch.box_count; // or modules
-          }
+      if (!payload.party) {
+          toast('Party / destination is required.');
+          return;
+      }
+      if (!payload.description) {
+          toast('Say what material is going out.');
+          return;
       }
 
       btn.disabled = true;
       btn.textContent = 'Issuing...';
 
-      api('/api/gatepass', { method: 'POST', body: JSON.stringify(payload) })
+      api('gatepass', { method: 'POST', body: JSON.stringify(payload) })
         .then(function(r) {
             toast('Gate pass ' + r.gp_no + ' issued.');
             go('dash');
@@ -6822,39 +6845,76 @@ function wireFqcAnomalies() {
   function wireGp() {
       var vGp = document.getElementById('v-gp');
       if (!vGp) return;
-      
+
       // Inject UI if not present
       if (!document.getElementById('gpKindSeg')) {
           var detailsCard = vGp.querySelector('.rail .card-b');
           if (detailsCard) {
-              // Inject Type toggle and Expected Return
-              var injectHtml = 
+              // Type toggle, real Party/Vehicle/Description/Qty fields, and
+              // Expected Return. Party and Description are the two things
+              // v4's original markup never had a field for at all - without
+              // them a non-challan gate pass (equipment, materials, cell
+              // stock between units) could not be issued through this
+              // screen no matter what the challan dropdown was set to.
+              var injectHtml =
                 '<div class="fld"><label>Type</label>' +
                 '<div class="seg" id="gpKindSeg">' +
                 '<button class="on" id="gpNRGP" onclick="gpSetKind(\'NRGP\')">NRGP</button>' +
                 '<button id="gpRGP" onclick="gpSetKind(\'RGP\')">RGP</button></div></div>' +
+                '<div class="fld req"><label>Party / destination</label>' +
+                '<input id="gpParty" placeholder="Who this is going to"></div>' +
+                '<div class="fld"><label>Delivery address</label>' +
+                '<input id="gpAddr"></div>' +
+                '<div class="fld"><label>Vehicle / by hand</label>' +
+                '<input id="gpVehicle" placeholder="e.g. BY HAND, or a vehicle no."></div>' +
+                '<div class="fld req"><label>Material going out</label>' +
+                '<input id="gpDesc" placeholder="e.g. CORE I5-14400 PROCESSOR SET"></div>' +
+                '<div class="fld"><label>Quantity</label>' +
+                '<input id="gpQty" type="number" min="1"></div>' +
                 '<div class="fld" id="gpRetWrap" style="display:none"><label>Expected return</label>' +
                 '<input type="date" id="gpExpectedRet"></div>';
               detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
-              
-              // Replace placeholder select
+
+              // Replace placeholder select - a CONVENIENCE, never a
+              // requirement. Choosing a challan pre-fills party/vehicle/qty
+              // if the operator has not already typed their own; it never
+              // locks the fields and never gates the Issue button.
               var selFld = detailsCard.querySelector('select');
               if (selFld) {
                   selFld.id = 'gpChallanSelV4';
+                  var reqLabel = selFld.closest('.fld');
+                  if (reqLabel) reqLabel.classList.remove('req');
                   selFld.onchange = function() {
-                      document.getElementById('gpBtn').disabled = !this.value;
+                      var chId = this.value ? parseInt(this.value, 10) : null;
+                      var ch = chId && window._gpLiveChallans &&
+                        window._gpLiveChallans.find(function(c) { return c.challan_id === chId; });
+                      if (!ch) return;
+                      var partyEl = document.getElementById('gpParty');
+                      var vehEl = document.getElementById('gpVehicle');
+                      var qtyEl = document.getElementById('gpQty');
+                      var descEl = document.getElementById('gpDesc');
+                      if (partyEl && !partyEl.value) partyEl.value = ch.customer_name || ch.buyer_name || '';
+                      if (vehEl && !vehEl.value) vehEl.value = ch.vehicle_no || '';
+                      if (qtyEl && !qtyEl.value) qtyEl.value = ch.box_count || '';
+                      if (descEl && !descEl.value) descEl.value = ch.model ?
+                        (ch.model + ' modules') : 'Modules against ' + (ch.challan_no || 'challan');
                   };
               }
           }
       }
 
-      document.getElementById('gpBtn').disabled = true;
+      document.getElementById('gpBtn').disabled = false;
       document.getElementById('gpBtn').textContent = 'Issue gate pass';
       if (document.getElementById('gpBy')) document.getElementById('gpBy').value = USER ? USER.name : '';
 
       fetch('/api/challans?status=issued', { cache: 'no-store' })
         .then(function(r) { return r.json(); })
-        .then(function(rows) {
+        .then(function(body) {
+            // api_challans_list() returns {"challans": [...]}, not a bare
+            // array - this was treating the wrapper object itself as the
+            // array and calling .forEach on it, which throws and (since
+            // nothing downstream catches it) leaves _gpLiveChallans unset.
+            var rows = (body && body.challans) || [];
             window._gpLiveChallans = rows;
             var sel = document.getElementById('gpChallanSelV4');
             if (!sel) return;
@@ -6864,11 +6924,11 @@ function wireFqcAnomalies() {
                 html += '<option value="' + r.challan_id + '">' + fqcEsc(r.challan_no) + ' · ' + fqcEsc(cname) + ' · ' + (r.box_count||0) + ' boxes</option>';
             });
             sel.innerHTML = html;
-            
+
             // Handle cross-link preselection
             if (window._gpPreselectChallanId) {
                 sel.value = window._gpPreselectChallanId;
-                sel.onchange(); // trigger enable
+                sel.onchange(); // trigger pre-fill
                 window._gpPreselectChallanId = null;
             }
         });

@@ -6,9 +6,15 @@ __pycache__/
 # data in it is test data, and DATA_LAYER.md says to delete the file to reset.
 # Committed, it grew to 2.2 MB, dirtied the tree on every local run and
 # blocked a pull. The schema rebuilds empty on the next request.
-icontrace.db
-icontrace.db-wal
-icontrace.db-shm
+#
+# A pattern, not a filename: icontrace.db was excluded by name twice before
+# and a differently-named throwaway (icon_trace.db, trace.db) slipped past
+# it and got committed anyway each time. Any *.db, wherever it turns up, is
+# a database this project can rebuild from schema_sqlite.sql - never one to
+# commit.
+*.db
+*.db-wal
+*.db-shm
 
 # Runtime logs
 *.log
