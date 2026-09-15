@@ -12,6 +12,14 @@
 (function () {
   var B = window.ICON_BOOT || {};
 
+  if (typeof ROLES !== 'undefined') {
+    Object.keys(ROLES).forEach(function(k) {
+       if (ROLES[k].views && ROLES[k].views.indexOf('challan') !== -1 && ROLES[k].views.indexOf('challan-list') === -1) {
+           ROLES[k].views.push('challan-list');
+       }
+    });
+  }
+
   /* v4's page carries its stylesheet INLINE and links nothing, so every rule
      this layer relies on was missing: the sidebar collapse toggled a class
      no rule matched, and each table wrapped in .scroll simply grew down the
@@ -493,6 +501,39 @@ function wireFqcAnomalies() {
       });
   };
   window.packApply = window.renderPackLog;
+  
+  // Default dates for Stock & Dispatch and Packing Log and DOM patches
+  setTimeout(function() {
+    var today = new Date().toISOString().split('T')[0];
+    
+    // Patch v-disp (Stock & Dispatch)
+    var dpDate = document.querySelector('#v-disp input[type="date"]');
+    if (dpDate && (dpDate.value === '2026-08-19' || !dpDate.value)) { 
+        dpDate.value = today; 
+        if (typeof window.dispApply === 'function') window.dispApply(); 
+    }
+    
+    // Patch v-packdash (Packing Log)
+    var pkDate = document.querySelector('#v-packdash input[type="date"]');
+    if (pkDate && (pkDate.value === '2026-08-19' || !pkDate.value)) { 
+        pkDate.value = today; 
+        if (typeof window.packApply === 'function') window.packApply(); 
+    }
+    
+    // Inject Close button into Create Challan view
+    var chAct = document.querySelector('#v-challan .pg-act');
+    if (chAct && !document.getElementById('chCloseBtn')) {
+        var btn = document.createElement('button');
+        btn.id = 'chCloseBtn';
+        btn.className = 'btn btn-ghost';
+        btn.style.marginRight = '8px';
+        btn.textContent = 'Close';
+        btn.onclick = function() { 
+            if (typeof go === 'function') go('challan-list', document.querySelector('[data-view="challan-list"]')); 
+        };
+        chAct.insertBefore(btn, chAct.firstChild);
+    }
+  }, 500);
 
   /* ---- FQC Dashboard: one real, filtered picture, everywhere on the page
    *
@@ -5851,6 +5892,573 @@ function wireFqcAnomalies() {
   }
   /* END challan — test_challan.js reads to here */
 
+  /* ---- Challan List screen -----------------------------------------------
+   *
+   * A new landing screen for all challans.  Same data-itable pattern used
+   * by Invoice and Indent.  "New Challan" navigates to the existing create
+   * screen (#v-challan).  Each row has a "View" action that opens the detail
+   * panel below.
+   */
+  var clRows = [], clBusy = false;
+
+  function clEl(id) { return document.getElementById(id); }
+
+  function clRenderRow(ch) {
+    var statusClass = ch.status === 'issued' ? 't-pass'
+      : ch.status === 'cancelled' ? 't-mute' : 't-info';
+    var locked = ch.gp_count > 0;
+    return '<tr>' +
+      '<td class="mono">' + fqcEsc(ch.challan_no || ('IS-' + ch.seq)) + '</td>' +
+      '<td>' + fqcEsc(ch.challan_date || '—') + '</td>' +
+      '<td style="font-size:11.5px">' + fqcEsc(ch.buyer_name || '—') + '</td>' +
+      '<td class="mono">' + fqcEsc(ch.invoice_no || '—') + '</td>' +
+      '<td class="num">' + (ch.box_count || 0) + '</td>' +
+      '<td class="num">' + (ch.qty || 0) + '</td>' +
+      '<td><span class="tag ' + statusClass + '">' + fqcEsc(ch.status) + '</span>' +
+        (locked ? ' <span class="tag t-mute" title="Gate pass exists — editing locked">&#x1F512;</span>' : '') +
+      '</td>' +
+      '<td style="text-align:right;white-space:nowrap">' +
+        '<button class="btn btn-ghost btn-sm" onclick="clOpenDetail(' + ch.challan_id + ')" ' +
+          'id="clViewBtn' + ch.challan_id + '">View</button>' +
+      '</td></tr>';
+  }
+
+  function clLoad() {
+    if (clBusy) return;
+    var host = clEl('clTableBody');
+    if (!host) return;
+    clBusy = true;
+    var q = (clEl('clSearch') || {}).value || '';
+    var st = (clEl('clStatusFilter') || {}).value || '';
+    var qs = '?q=' + encodeURIComponent(q) + '&status=' + encodeURIComponent(st);
+    host.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--ink3)">Loading…</td></tr>';
+    fetch('/api/challans' + qs, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        clBusy = false;
+        clRows = d.challans || [];
+        if (!clRows.length) {
+          host.innerHTML = '<tr><td colspan="8"><div class="empty-state">' +
+            '<p>No challans yet. Click <b>New Challan</b> to create one.</p>' +
+            '</div></td></tr>';
+          return;
+        }
+        host.innerHTML = clRows.map(clRenderRow).join('');
+      })
+      .catch(function () {
+        clBusy = false;
+        var host2 = clEl('clTableBody');
+        if (host2) host2.innerHTML = '<tr><td colspan="8" style="color:var(--fail);padding:20px">Could not load challans.</td></tr>';
+      });
+  }
+
+  /* Inject the Challan List view if the DOM has the section already (patched in
+     once).  v4 uses <section class="view" id="..."> — we need a new id so go()
+     can navigate to it.  The section is injected only if not already present. */
+  function clInjectView() {
+    if (document.getElementById('v-challan-list')) return;
+    var main = document.querySelector('.main');
+    if (!main) return;
+    var sec = document.createElement('section');
+    sec.className = 'view';
+    sec.id = 'v-challan-list';
+    sec.innerHTML =
+      '<div class="pg"><h2>Challan List</h2><p>All drafted, issued, and cancelled challans</p>' +
+        '<div class="pg-act">' +
+          '<button class="btn btn-primary" onclick="if(typeof go===\\'function\\')go(\\'challan\\',document.querySelector(\\'[data-view=challan]\\'))">Create challan</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="filters">' +
+        '<div class="fld"><label>Search</label><input id="clSearch" placeholder="Search buyer / invoice…" oninput="clLoad()"></div>' +
+        '<div class="fld"><label>Status</label><select id="clStatusFilter" onchange="clLoad()">' +
+          '<option value="">All statuses</option>' +
+          '<option value="draft">Draft</option>' +
+          '<option value="issued">Issued</option>' +
+          '<option value="cancelled">Cancelled</option>' +
+        '</select></div>' +
+        '<div class="sp"><button class="btn btn-primary" onclick="clLoad()">Refresh</button></div>' +
+      '</div>' +
+      '<div class="wmain o3">' +
+        '<div class="card">' +
+          '<div class="card-b flush">' +
+            '<table style="width:100%">' +
+              '<thead><tr>' +
+                '<th>Challan No.</th><th>Date</th><th>Buyer</th>' +
+                '<th>Invoice</th><th>Boxes</th><th>Qty</th>' +
+                '<th>Status</th><th></th>' +
+              '</tr></thead>' +
+              '<tbody id="clTableBody">' +
+                '<tr><td colspan="8" style="padding:20px;color:var(--ink3);text-align:center">Loading…</td></tr>' +
+              '</tbody>' +
+            '</table>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      /* Detail overlay rendered inside the same section */
+      '<div id="clDetailOverlay" style="display:none;position:fixed;inset:0;z-index:300;' +
+        'background:rgba(14,26,43,.55);align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px">' +
+        '<div id="clDetailCard" style="background:var(--surface);border-radius:var(--r);width:100%;max-width:900px;' +
+          'box-shadow:0 10px 30px rgba(0,0,0,.2);margin:0 auto;padding:0;overflow:hidden;position:relative"></div>' +
+      '</div>';
+    main.appendChild(sec);
+  }
+
+  /* ---- Challan Detail panel ----------------------------------------------- */
+
+  window.clOpenDetail = function (id) {
+    var overlay = document.getElementById('clDetailOverlay');
+    var card = document.getElementById('clDetailCard');
+    if (!overlay || !card) {
+      /* inject if not yet there (navigating from a different screen) */
+      clInjectView();
+      overlay = document.getElementById('clDetailOverlay');
+      card = document.getElementById('clDetailCard');
+      if (!overlay || !card) return;
+    }
+    card.innerHTML = '<div style="padding:24px;color:var(--ink3)">Loading…</div>';
+    overlay.style.display = 'block';
+    fetch('/api/challan/' + id, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.error) { card.innerHTML = '<div style="padding:24px;color:var(--fail)">' + fqcEsc(d.error) + '</div>'; return; }
+        clRenderDetail(d);
+      })
+      .catch(function () {
+        card.innerHTML = '<div style="padding:24px;color:var(--fail)">Could not load detail.</div>';
+      });
+  };
+
+  window.clCloseDetail = function () {
+    var overlay = document.getElementById('clDetailOverlay');
+    if (overlay) overlay.style.display = 'none';
+  };
+
+  function clRenderDetail(d) {
+    var card = document.getElementById('clDetailCard');
+    if (!card) return;
+    var ch = d.challan || {};
+    var locked = ch.locked || false;
+    var isIssued = ch.status === 'issued';
+
+    var actions = '';
+    if (isIssued) {
+      if (!locked) {
+        /* Edit = cancel this challan then pre-fill a new draft */
+        actions += '<button class="btn btn-ghost btn-sm" ' +
+          'onclick="clEditChallan(' + ch.challan_id + ')" ' +
+          'title="Cancel this challan and open a new draft pre-filled with the same invoice and party">Edit</button> ';
+        actions += '<button class="btn btn-ghost btn-sm" ' +
+          'style="color:var(--fail)" ' +
+          'onclick="clCancelChallan(' + ch.challan_id + ')" ' +
+          'title="Cancel this issued challan — serials revert to packed">Cancel</button> ';
+      }
+      /* Gate pass and loading are always available on issued challans,
+         even after the first gate pass locks editing (split loads). */
+      actions += '<button class="btn btn-ghost btn-sm" ' +
+        'onclick="clVerifyLoading(' + ch.challan_id + ')" ' +
+        'title="Open Loading Verification with these boxes">Verify loading</button> ';
+      actions += '<button class="btn btn-ghost btn-sm" ' +
+        'onclick="clCreateGatePass(' + ch.challan_id + ')" ' +
+        'title="Create a gate pass for this challan">Create gate pass</button> ';
+    }
+
+    var boxRows = (d.boxes || []).map(function (b) {
+      return '<tr>' +
+        '<td class="mono">' + fqcEsc(b.box_no || '—') + '</td>' +
+        '<td>' + fqcEsc(b.pack_date || '—') + '</td>' +
+        '<td>' + (b.bin_no ? 'BIN-' + b.bin_no : '—') + '</td>' +
+        '<td>' + fqcEsc(b.pack_shift || '—') + '</td>' +
+        '<td class="num">' + (b.qty || 0) + (b.is_partial ? ' <span class="tag t-mute">part</span>' : '') + '</td>' +
+      '</tr>';
+    }).join('');
+
+    var printBase = '/challan/' + ch.fy + '/' + ch.seq;
+    var docs = (ch.status !== 'cancelled') ? (
+      '<a class="btn btn-ghost btn-sm" href="' + printBase + '/print" target="_blank">Print</a> ' +
+      '<a class="btn btn-ghost btn-sm" href="' + printBase + '/excel" target="_blank">Excel + FTR</a> '
+    ) : '';
+
+    var statusClass = ch.status === 'issued' ? 't-pass'
+      : ch.status === 'cancelled' ? 't-mute' : 't-info';
+
+    card.innerHTML =
+      '<div style="padding:16px 20px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center">' +
+        '<div>' +
+          '<span class="mono" style="font-size:16px;font-weight:700">' + fqcEsc(ch.challan_no || '—') + '</span>' +
+          ' <span class="tag ' + statusClass + '">' + fqcEsc(ch.status || '—') + '</span>' +
+          (locked ? ' <span class="tag t-mute" title="Locked by gate pass(es)">&#x1F512; locked</span>' : '') +
+        '</div>' +
+        '<button class="btn btn-ghost btn-sm" onclick="clCloseDetail()">&times; Close</button>' +
+      '</div>' +
+      '<div style="padding:16px 20px;display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;font-size:12px">' +
+        '<div><span style="color:var(--ink3)">Date</span><br><b>' + fqcEsc(ch.challan_date || '—') + '</b></div>' +
+        '<div><span style="color:var(--ink3)">Invoice</span><br><b>' + fqcEsc(ch.invoice_no || '—') + '</b></div>' +
+        '<div style="grid-column:1/-1"><span style="color:var(--ink3)">Buyer</span><br><b>' + fqcEsc(ch.buyer_name || '—') + '</b></div>' +
+        '<div><span style="color:var(--ink3)">Vehicle</span><br><b>' + fqcEsc(ch.vehicle_no || '—') + '</b></div>' +
+        '<div><span style="color:var(--ink3)">Transporter</span><br><b>' + fqcEsc(ch.transporter || '—') + '</b></div>' +
+        '<div><span style="color:var(--ink3)">Driver</span><br><b>' + fqcEsc(ch.driver_name || '—') + '</b></div>' +
+        '<div><span style="color:var(--ink3)">LR / GR</span><br><b>' + fqcEsc(ch.lr_no || '—') + '</b></div>' +
+        '<div><span style="color:var(--ink3)">Qty (modules)</span><br><b>' + (d.serial_count || ch.qty || 0) + '</b></div>' +
+        '<div><span style="color:var(--ink3)">Gate passes</span><br><b>' + (d.gp_count || 0) + '</b></div>' +
+      '</div>' +
+      (d.boxes && d.boxes.length ? (
+        '<div style="padding:0 20px 8px;font-size:11px;font-weight:700;color:var(--ink3)">BOXES</div>' +
+        '<div style="padding:0 20px 12px;overflow-x:auto">' +
+          '<table style="width:100%;font-size:12px">' +
+            '<thead><tr><th>Box</th><th>Date</th><th>Bin</th><th>Shift</th><th>Qty</th></tr></thead>' +
+            '<tbody>' + boxRows + '</tbody>' +
+          '</table>' +
+        '</div>'
+      ) : '') +
+      (ch.cancelled_reason ? (
+        '<div style="padding:12px 20px;background:var(--bg2);font-size:11.5px;color:var(--ink3)">' +
+          '&#x26A0; Cancelled: ' + fqcEsc(ch.cancelled_reason) +
+          (ch.cancelled_at ? ' · ' + fqcEsc(ch.cancelled_at) : '') + '</div>'
+      ) : '') +
+      '<div style="padding:12px 20px;border-top:1px solid var(--bd);display:flex;gap:8px;flex-wrap:wrap">' +
+        docs + actions +
+      '</div>';
+  }
+
+  window.clCancelChallan = function (id) {
+    var ch = clRows.filter(function (r) { return r.challan_id === id; })[0] || {};
+    var no = ch.challan_no || ('challan #' + id);
+    var reason = prompt('Cancel ' + no + '? Every serial on it will revert to packed. Reason:');
+    if (!reason) return;
+    fetch('/api/challan/' + id + '/discard', {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason })
+    })
+      .then(api)
+      .then(function (d) {
+        if (typeof toast === 'function') toast(no + ' cancelled — serials reverted to packed.');
+        clCloseDetail();
+        clLoad();
+      })
+      .catch(function (e) { if (typeof toast === 'function') toast('Failed: ' + (e.why || e.message)); });
+  };
+
+  window.clCreateGatePass = function (id) {
+      window._gpPreselectChallanId = id;
+      go('gp', document.querySelector('[data-v="gp"]'));
+      clCloseDetail();
+  };
+
+  window.clVerifyLoading = function(id) {
+      // Stub for loading verification
+      toast('Verify loading for ' + id);
+  };
+
+  window.clEditChallan = function (id) {
+    /* Cancel the issued challan, then navigate to Create Challan pre-filled
+       with the original's party and invoice.  The original row is untouched
+       except for its cancelled status — the document is never rewritten. */
+    var ch = clRows.filter(function (r) { return r.challan_id === id; })[0] || {};
+    var no = ch.challan_no || ('challan #' + id);
+    if (!confirm('Edit ' + no + '? This will cancel the issued challan and ' +
+        'open a new draft pre-filled with the same invoice and party. ' +
+        'The original record stays visible, tagged cancelled.')) return;
+    /* Step 1: fetch detail so we have invoice_id before cancelling */
+    fetch('/api/challan/' + id, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var origInvId = (d.challan || {}).invoice_id;
+        return fetch('/api/challan/' + id + '/discard', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: 'cancelled for edit by operator' })
+        }).then(function (r2) { return r2.json(); })
+          .then(function (d2) {
+            if (!d2.ok) { if (typeof toast === 'function') toast(d2.why || 'Could not cancel.'); return; }
+            /* Step 2: navigate to create screen and pre-fill */
+            clCloseDetail();
+            chChallan = null;        /* reset create screen state */
+            chPicked = {}; chOrder = []; chInvoiceId = origInvId; chChecks = null;
+            if (d.boxes) {
+              for (var i = 0; i < d.boxes.length; i++) {
+                chPicked[d.boxes[i].box_serial] = true;
+                chOrder.push(d.boxes[i].box_serial);
+              }
+            }
+            if (typeof go === 'function') {
+              var navEl = document.querySelector('[data-view="challan"]');
+              go('challan', navEl);
+            }
+            /* Pre-select the invoice so the screen loads it */
+            if (origInvId) {
+              setTimeout(function () {
+                var sel = document.getElementById('chInvoiceSel');
+                if (sel) {
+                  sel.value = String(origInvId);
+                  if (typeof chInvoiceChange === 'function') chInvoiceChange();
+                  else chInvoiceId = origInvId;
+                }
+              }, 400);
+            }
+            if (typeof toast === 'function') {
+              toast(no + ' cancelled — fill in the new challan and Create to replace it.');
+            }
+          });
+      })
+      .catch(function () { if (typeof toast === 'function') toast('Request failed.'); });
+  };
+
+  window.clVerifyLoading = function (id) {
+    /* Navigate to Loading Verification.  The existing screen uses /loading
+       which lists boxes by scanning; this just navigates there and leaves
+       the scanning to the operator.  A future pass can pre-populate. */
+    clCloseDetail();
+    if (typeof go === 'function') {
+      var navEl = document.querySelector('[data-view="loading"]') ||
+                  document.querySelector('[href="#loading"]');
+      go('loading', navEl);
+    }
+    if (typeof toast === 'function') {
+      toast('Challan #' + id + ' — find its boxes on this screen by box number.');
+    }
+  };
+
+  window.clCreateGatePass = function (id) {
+    /* Navigate to the Gate Pass view.  gpPreFill() below is called once the
+       screen is visible, to select the challan in the selector. */
+    clCloseDetail();
+    gpPendingChallanId = id;
+    if (typeof go === 'function') {
+      var navEl = document.querySelector('[data-view="gp"]');
+      go('gp', navEl);
+    }
+  };
+
+  /* Load wiring for the challan list screen when navigated to */
+  function wireChList() {
+    var view = document.getElementById('v-challan-list');
+    if (!view) return;
+    if (!view.__live) {
+      view.__live = true;
+      clLoad();
+    } else {
+      clLoad();
+    }
+  }
+
+  /* ---- Gate Pass: challan selector ---------------------------------------
+   *
+   * Replace the free-text challan_no field with a live selector of issued
+   * challans.  Gate pass creation should be reachable regardless of whether
+   * the challan is locked for editing (split loads).
+   */
+  var gpPendingChallanId = null;
+
+  function gpChallansLoaded(challans) {
+    var sel = document.getElementById('gpChallanSel');
+    if (!sel) return;
+    var keep = sel.value;
+    sel.innerHTML = '<option value="">— no challan —</option>' +
+      challans.map(function (ch) {
+        return '<option value="' + ch.challan_id + '">' +
+          fqcEsc(ch.challan_no || ('IS-' + ch.seq)) + ' · ' +
+          fqcEsc(ch.buyer_name || '—') + ' · ' + (ch.qty || 0) + ' nos' +
+          '</option>';
+      }).join('');
+    /* Restore selection or apply pending pre-fill from clCreateGatePass */
+    if (gpPendingChallanId) {
+      sel.value = String(gpPendingChallanId);
+      gpPendingChallanId = null;
+    } else if (keep) {
+      sel.value = keep;
+    }
+  }
+
+  function gpLoadChallans() {
+    fetch('/api/challans/issued', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { gpChallansLoaded(d.challans || []); })
+      .catch(function () {});
+  }
+
+  /* Inject a challan selector into the Gate Pass form if not already there.
+     The existing form has a plain-text "challan_no" input; we insert a
+     <select> above it (keyed to challan_id) and keep the text field hidden
+     so the legacy template's POST path still works. */
+  function gpInjectChallanSelector() {
+    if (document.getElementById('gpChallanSel')) return;
+    /* Find the legacy challan_no text field.  Gate Pass is a legacy Jinja
+       template (not a v4 view), so we look inside <form> elements. */
+    var forms = document.querySelectorAll('form');
+    var targetInput = null;
+    for (var fi = 0; fi < forms.length; fi++) {
+      var inp = forms[fi].querySelector('[name="challan_no"]');
+      if (inp) { targetInput = inp; break; }
+    }
+    if (!targetInput) return;
+    /* Hide the text field; insert a select above it */
+    targetInput.style.display = 'none';
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-bottom:6px';
+    wrap.innerHTML =
+      '<label style="font-size:11px;color:var(--ink3);display:block;margin-bottom:2px">Challan (optional)</label>' +
+      '<select id="gpChallanSel" style="width:100%;height:32px;border:1px solid var(--bd);border-radius:4px;font-size:12px">' +
+        '<option value="">— no challan —</option>' +
+      '</select>';
+    targetInput.parentNode.insertBefore(wrap, targetInput);
+    /* On submit: write the selected challan_id into a hidden field and
+       the rendered number into the legacy text field */
+    targetInput.parentNode.querySelector('form') &&
+    (function (form) {
+      form.addEventListener('submit', function () {
+        var sel = document.getElementById('gpChallanSel');
+        if (!sel || !sel.value) return;
+        /* Write the challan_no rendered label into the hidden legacy field */
+        var opt = sel.options[sel.selectedIndex];
+        if (opt && opt.value) {
+          targetInput.value = opt.text.split(' · ')[0];   /* the rendered no */
+          /* Also set challan_id via a hidden input */
+          var hid = document.createElement('input');
+          hid.type = 'hidden';
+          hid.name = 'challan_id';
+          hid.value = opt.value;
+          form.appendChild(hid);
+        }
+      });
+    })(targetInput.closest('form'));
+    gpLoadChallans();
+  }
+
+  /* ---- Invoice selector: exclude live-challan invoices -------------------
+   *
+   * chLoadInvoices() already calls /api/invoices.  Pass ?for_challan=1 so
+   * the server only returns invoices that are not already attached to a live
+   * (draft or issued) challan.  When editing (chChallan exists and has an
+   * invoice_id), pass ?exclude_challan_id=<id> so the current challan's own
+   * invoice stays in the list.
+   */
+  var _origChLoadInvoices = chLoadInvoices;
+  chLoadInvoices = function () {
+    /* Build the URL with exclusion flags */
+    var qs = '?for_challan=1';
+    if (chChallan && chChallan.challan_id) {
+      qs += '&exclude_challan_id=' + chChallan.challan_id;
+    }
+    return fetch('/api/invoices' + qs, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        chInvoices = d.invoices || [];
+        var sel = chEl('chInvoiceSel');
+        if (!sel) return;
+        var keep = sel.value;
+        sel.innerHTML = '<option value="">— choose an invoice —</option>' +
+          chInvoices.map(function (inv) {
+            var flag = inv.superseded_by ? ' — superseded' : '';
+            return '<option value="' + inv.id + '">' +
+              fqcEsc(inv.invoice_no || ('#' + inv.id)) + ' · ' +
+              fqcEsc(inv.buyer_name || '—') +
+              (inv.declared_qty != null ? ' · ' + inv.declared_qty + ' nos' : '') +
+              flag + '</option>';
+          }).join('');
+        if (keep) sel.value = keep;
+      })
+      .catch(function () {});
+  };
+
+  /* ---- Repack: exclude boxes on live challans entirely -------------------
+   *
+   * rpLoad() fetches /api/boxes?state=closed.  Patch it to add
+   * ?exclude_live_challan=1 so the server omits boxes on live challans
+   * from the response entirely — not grayed out, genuinely absent.
+   */
+  var _origRpLoad = rpLoad;
+  rpLoad = function (force) {
+    if (rpLoaded && !force) { rpRenderSrc(); return; }
+    fetch('/api/boxes?state=closed&exclude_live_challan=1', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (rows) {
+        rpLoaded = true;
+        rpSrc = (rows || []).map(function (b) {
+          return { id: b.box_id, no: b.label || ('box ' + b.seq),
+                   cust: b.customer_name || 'ICON STOCK', model: b.model,
+                   g: b.grade, q: b.qty, cap: b.capacity,
+                   date: b.pack_date,
+                   lock: false,   /* live-challan boxes are absent, not locked */
+                   lockWhy: '' };
+        });
+        rpRenderSrc();
+      })
+      .catch(function () {
+        var host = rpEl('srcList');
+        if (host) host.innerHTML = '<div class="empty-state"><p>The server ' +
+          'did not answer. Closed pallets could not be listed.</p></div>';
+      });
+  };
+
+  /* ---- Hook view changes so Challan List and Gate Pass wire correctly ---- */
+  if (typeof window.go === 'function' && !window.go.__chListPatched) {
+    var _origGoCh = window.go;
+    window.go = function (view, btn) {
+      if (view === 'challan' && btn && btn.classList && btn.classList.contains('nav-i')) {
+        view = 'challan-list';
+        arguments[0] = view;
+      }
+      var result = _origGoCh.apply(this, arguments);
+      try {
+        if (view === 'challan-list') {
+          clInjectView();
+          wireChList();
+        }
+        if (view === 'gp') { wireGp(); }
+        if (view === 'disp') {
+          wireDisp();
+        }
+      } catch (e) {}
+      return result;
+    };
+    window.go.__chListPatched = true;
+  }
+
+  /* Pre-wire on load if either screen is already active */
+  try { clInjectView(); } catch (e) {}
+  try { gpInjectChallanSelector(); } catch (e) {}
+
+  /* ---- Stock & Dispatch dashboard KPIs ----------------------------------- */
+  function clAddDashKpis() {
+    /* Find the existing Stock/Dispatch dashboard cards, append three KPI
+       tiles following the exact same pattern used elsewhere in the file. */
+    var mgmtView = document.getElementById('v-mgmt') ||
+                   document.getElementById('v-stock') ||
+                   document.querySelector('.view .wkpis');
+    if (!mgmtView) return;
+    var kpiRow = mgmtView.querySelector('.wkpis');
+    if (!kpiRow) return;
+    if (kpiRow.querySelector('#clKpiDrafts')) return;   /* already injected */
+    ['clKpiDrafts', 'clKpiIssuedToday', 'clKpiAwaitingGP'].forEach(function (kid, idx) {
+      var tile = document.createElement('div');
+      tile.className = 'kpi';
+      tile.innerHTML = '<div class="kpi-n" id="' + kid + '">—</div>' +
+        '<div class="kpi-l">' + ['Open drafts', 'Issued today', 'Awaiting gate pass'][idx] + '</div>';
+      kpiRow.appendChild(tile);
+    });
+    /* Fetch and populate */
+    fetch('/api/challans', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var today = new Date().toISOString().slice(0, 10);
+        var chs = d.challans || [];
+        var drafts = chs.filter(function (c) { return c.status === 'draft'; }).length;
+        var issuedToday = chs.filter(function (c) {
+          return c.status === 'issued' && (c.challan_date || '').slice(0, 10) === today;
+        }).length;
+        var awaitingGP = chs.filter(function (c) {
+          return c.status === 'issued' && !(c.gp_count > 0);
+        }).length;
+        var d0 = document.getElementById('clKpiDrafts');
+        var d1 = document.getElementById('clKpiIssuedToday');
+        var d2 = document.getElementById('clKpiAwaitingGP');
+        if (d0) d0.textContent = drafts;
+        if (d1) d1.textContent = issuedToday;
+        if (d2) d2.textContent = awaitingGP;
+      })
+      .catch(function () {});
+  }
+  try { clAddDashKpis(); } catch (e) {}
 
   /* delegated, so a screen rendered later gets it too */
   wireExports();
@@ -6013,6 +6621,257 @@ function wireFqcAnomalies() {
         return res;
     };
     window.__invSubmitPatched = true;
+  }
+
+  /* ---- Stock & Dispatch Dashboard --------------------------------------- */
+  window.dispApply = function() { wireDisp(); };
+
+  function wireDisp() {
+    var vDisp = document.getElementById('v-disp');
+    if (!vDisp) return;
+    
+    var fDate = '';
+    var dateInput = vDisp.querySelector('input[type="date"]');
+    if (dateInput) fDate = dateInput.value || '';
+    
+    var fCust = 'All customers';
+    var cInput = document.getElementById('dpCust');
+    if (cInput) fCust = cInput.value || 'All customers';
+    
+    var fModel = 'All';
+    var mInput = document.getElementById('dpModel');
+    if (mInput) fModel = mInput.value || 'All';
+    
+    var fGrade = 'All';
+    var gInput = document.getElementById('dpGrade');
+    if (gInput) fGrade = gInput.value || 'All';
+    
+    var qs = '?date=' + encodeURIComponent(fDate) + 
+             '&customer=' + encodeURIComponent(fCust) + 
+             '&model=' + encodeURIComponent(fModel) + 
+             '&grade=' + encodeURIComponent(fGrade);
+             
+    fetch('/api/stock_dispatch' + qs, { cache: 'no-store' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+         var kpis = vDisp.querySelectorAll('.kpi');
+         if (kpis.length >= 5) {
+            kpis[0].querySelector('.v').textContent = (d.fg_ready.modules || 0).toLocaleString();
+            kpis[0].querySelector('.d').textContent = (d.fg_ready.box_count || 0) + ' boxes ready';
+            
+            kpis[1].querySelector('.v').textContent = (d.fg_ready.kw || 0).toFixed(1);
+            kpis[1].querySelector('.d').textContent = 'ready to ship';
+            
+            kpis[2].querySelector('.v').textContent = (d.disp_today.modules || 0).toLocaleString();
+            kpis[2].querySelector('.d').textContent = (d.disp_today.box_count || 0) + ' boxes · ' + (d.disp_today.ch_count || 0) + ' challans';
+            
+            kpis[3].querySelector('.v').textContent = (d.rev_stock.modules || 0).toLocaleString();
+            kpis[3].querySelector('.d').textContent = (d.rev_stock.box_count || 0) + ' box(es)';
+            
+            kpis[4].querySelector('.v').textContent = (d.open_ch.modules || 0).toLocaleString();
+            kpis[4].querySelector('.d').textContent = (d.open_ch.box_count || 0) + ' boxes · ' + (d.open_ch.ch_count || 0) + ' challan(s)';
+         }
+         
+         var tbody1 = vDisp.querySelector('.grid.g2 .card:nth-child(1) tbody');
+         var tfoot1 = vDisp.querySelector('.grid.g2 .card:nth-child(1) tfoot');
+         if (tbody1 && tfoot1) {
+             if (!d.table_fg || !d.table_fg.length) {
+                 tbody1.innerHTML = '<tr><td colspan="6" class="mute" style="text-align:center;padding:20px">No finished goods matching criteria</td></tr>';
+                 tfoot1.innerHTML = '';
+             } else {
+                 var html = '';
+                 var tbox = 0, tmod = 0, tkw = 0;
+                 d.table_fg.forEach(function(r) {
+                     tbox += r.box_count;
+                     tmod += r.modules;
+                     tkw += r.kw;
+                     html += '<tr>' +
+                        '<td>' + fqcEsc(r.customer_name || 'ICON STOCK') + '</td>' +
+                        '<td class="mono">' + fqcEsc(r.model || '—') + '</td>' +
+                        '<td><span class="tag ' + (r.grade==='A' ? 't-pass' : (r.grade==='B' ? 't-info' : 't-rev')) + '">' + fqcEsc(r.grade || '—') + '</span></td>' +
+                        '<td class="num">' + (r.box_count || 0) + '</td>' +
+                        '<td class="num">' + (r.modules || 0) + '</td>' +
+                        '<td class="num">' + (r.kw || 0).toFixed(1) + '</td>' +
+                     '</tr>';
+                 });
+                 tbody1.innerHTML = html;
+                 tfoot1.innerHTML = '<tr><td colspan="3">Total</td><td class="num">' + tbox + '</td><td class="num">' + tmod + '</td><td class="num">' + tkw.toFixed(1) + '</td></tr>';
+             }
+         }
+         
+         var tbody2 = vDisp.querySelector('.grid.g2 .card:nth-child(2) tbody');
+         if (tbody2) {
+             if (!d.recent || !d.recent.length) {
+                 tbody2.innerHTML = '<tr><td colspan="8" class="mute" style="text-align:center;padding:20px">No recent dispatches</td></tr>';
+             } else {
+                 var html2 = '';
+                 d.recent.forEach(function(r) {
+                     var st = r.status === 'issued' ? 't-pass' : (r.status === 'cancelled' ? 't-mute' : 't-info');
+                     var gp = r.gp_no ? ('<span class="mono">' + r.gp_no + '</span>') : '<span class="mono" style="color:var(--ink3)">—</span>';
+                     var stName = r.status === 'issued' ? (r.gp_no ? 'Dispatched' : 'Issued') : (r.status === 'cancelled' ? 'Cancelled' : 'Draft');
+                     if (r.status === 'issued' && r.gp_no) st = 't-solar';
+                     var chLnk = r.status === 'cancelled' ? ('<span class="mono" style="color:var(--ink3)">' + r.challan_no + '</span>') :
+                                 ('<button class="lnk mono" onclick="qTry(\'' + fqcEsc(r.challan_no) + '\')">' + fqcEsc(r.challan_no) + '</button>');
+                     
+                     html2 += '<tr>' +
+                        '<td>' + chLnk + '</td>' +
+                        '<td class="mono">' + fqcEsc(r.challan_date || '—') + '</td>' +
+                        '<td>' + fqcEsc(r.customer_name || '—') + '</td>' +
+                        '<td class="mono">' + fqcEsc(r.vehicle_no || '—') + '</td>' +
+                        '<td class="num">' + (r.box_count || 0) + '</td>' +
+                        '<td class="num">' + (r.modules || 0) + '</td>' +
+                        '<td>' + gp + '</td>' +
+                        '<td><span class="tag ' + st + '">' + stName + '</span></td>' +
+                     '</tr>';
+                 });
+                 tbody2.innerHTML = html2;
+             }
+         }
+         
+         var legend = document.getElementById('dpLegend');
+         var donut = document.getElementById('dpDonut');
+         if (legend && donut && d.table_fg) {
+             var grades = {};
+             var total = 0;
+             d.table_fg.forEach(function(r) {
+                 grades[r.grade] = (grades[r.grade] || 0) + r.modules;
+                 total += r.modules;
+             });
+             var pA = total ? ((grades['A']||0)/total)*100 : 0;
+             var pGY = total ? ((grades['GY']||0)/total)*100 : 0;
+             var pBGY = total ? ((grades['BGY']||0)/total)*100 : 0;
+             
+             donut.style.background = total > 0 ? 
+                'conic-gradient(var(--p2) 0% ' + pA + '%, var(--c2) ' + pA + '% ' + (pA+pGY) + '%, var(--n2) ' + (pA+pGY) + '% 100%)' :
+                'var(--bd)';
+                
+             legend.innerHTML = 
+                '<div class="donut-l"><div class="donut-sq" style="background:var(--p2)"></div><div class="l">A-Grade</div><div class="v">' + (grades['A']||0) + '</div></div>' +
+                '<div class="donut-l"><div class="donut-sq" style="background:var(--c2)"></div><div class="l">GY-Grade</div><div class="v">' + (grades['GY']||0) + '</div></div>' +
+                '<div class="donut-l"><div class="donut-sq" style="background:var(--n2)"></div><div class="l">BGY-Grade</div><div class="v">' + (grades['BGY']||0) + '</div></div>';
+         }
+      })
+      .catch(function(err) {
+         console.error("Failed to load Stock & Dispatch data: ", err);
+      });
+  }
+
+
+  /* ---- GATE PASS -------------------------------------------------------- */
+  window.issueGP = function() {
+      var btn = document.getElementById('gpBtn');
+      var sel = document.getElementById('gpChallanSelV4');
+      var typeNRGP = document.getElementById('gpNRGP') && document.getElementById('gpNRGP').classList.contains('on') ? 'NRGP' : 'RGP';
+      
+      var chId = sel && sel.value ? parseInt(sel.value, 10) : null;
+      var inputs = document.querySelectorAll('#v-gp .card:nth-child(1) input:not(#gpBy)');
+      var delOrder = inputs.length > 1 ? inputs[1].value : '';
+      var container = inputs.length > 2 ? inputs[2].value : '';
+      var expectedRet = document.getElementById('gpExpectedRet') ? document.getElementById('gpExpectedRet').value : '';
+
+      var payload = {
+          kind: typeNRGP,
+          party: '',
+          delivery_address: '',
+          vehicle_no: '',
+          description: (delOrder ? 'DO ' + delOrder + ' ' : '') + (container ? 'Container ' + container : ''),
+          qty: null,
+          challan_id: chId,
+          expected_return: typeNRGP === 'RGP' ? expectedRet : null
+      };
+
+      if (chId && window._gpLiveChallans) {
+          var ch = window._gpLiveChallans.find(function(c) { return c.challan_id === chId; });
+          if (ch) {
+              payload.party = ch.buyer_name;
+              payload.vehicle_no = ch.vehicle_no;
+              payload.qty = ch.box_count; // or modules
+          }
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Issuing...';
+
+      api('/api/gatepass', { method: 'POST', body: JSON.stringify(payload) })
+        .then(function(r) {
+            toast('Gate pass ' + r.gp_no + ' issued.');
+            go('dash');
+        })
+        .catch(function(err) {
+            btn.disabled = false;
+            btn.textContent = 'Issue gate pass';
+            toast(err.why || err.message);
+        });
+  };
+
+  window.gpSetKind = function(k) {
+      var nr = document.getElementById('gpNRGP');
+      var r = document.getElementById('gpRGP');
+      var retWrap = document.getElementById('gpRetWrap');
+      if (k === 'NRGP') {
+          if (nr) nr.classList.add('on');
+          if (r) r.classList.remove('on');
+          if (retWrap) retWrap.style.display = 'none';
+      } else {
+          if (nr) nr.classList.remove('on');
+          if (r) r.classList.add('on');
+          if (retWrap) retWrap.style.display = 'block';
+      }
+  };
+
+  function wireGp() {
+      var vGp = document.getElementById('v-gp');
+      if (!vGp) return;
+      
+      // Inject UI if not present
+      if (!document.getElementById('gpKindSeg')) {
+          var detailsCard = vGp.querySelector('.rail .card-b');
+          if (detailsCard) {
+              // Inject Type toggle and Expected Return
+              var injectHtml = 
+                '<div class="fld"><label>Type</label>' +
+                '<div class="seg" id="gpKindSeg">' +
+                '<button class="on" id="gpNRGP" onclick="gpSetKind(\'NRGP\')">NRGP</button>' +
+                '<button id="gpRGP" onclick="gpSetKind(\'RGP\')">RGP</button></div></div>' +
+                '<div class="fld" id="gpRetWrap" style="display:none"><label>Expected return</label>' +
+                '<input type="date" id="gpExpectedRet"></div>';
+              detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
+              
+              // Replace placeholder select
+              var selFld = detailsCard.querySelector('select');
+              if (selFld) {
+                  selFld.id = 'gpChallanSelV4';
+                  selFld.onchange = function() {
+                      document.getElementById('gpBtn').disabled = !this.value;
+                  };
+              }
+          }
+      }
+
+      document.getElementById('gpBtn').disabled = true;
+      document.getElementById('gpBtn').textContent = 'Issue gate pass';
+      if (document.getElementById('gpBy')) document.getElementById('gpBy').value = USER ? USER.name : '';
+
+      fetch('/api/challans?status=issued', { cache: 'no-store' })
+        .then(function(r) { return r.json(); })
+        .then(function(rows) {
+            window._gpLiveChallans = rows;
+            var sel = document.getElementById('gpChallanSelV4');
+            if (!sel) return;
+            var html = '<option value="">— select challan —</option>';
+            rows.forEach(function(r) {
+                var cname = r.customer_name || r.buyer_name || '';
+                html += '<option value="' + r.challan_id + '">' + fqcEsc(r.challan_no) + ' · ' + fqcEsc(cname) + ' · ' + (r.box_count||0) + ' boxes</option>';
+            });
+            sel.innerHTML = html;
+            
+            // Handle cross-link preselection
+            if (window._gpPreselectChallanId) {
+                sel.value = window._gpPreselectChallanId;
+                sel.onchange(); // trigger enable
+                window._gpPreselectChallanId = null;
+            }
+        });
   }
 
   console.log('[ICON TRACE] live layer active \u00B7 build', B.build,

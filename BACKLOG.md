@@ -925,3 +925,159 @@ not know any of the following, and each is a change to make on top of it.
 | The material master is in the database, not in the page | Materials, Planning |
 | Two lines, each with its own SS and EL and its own column map | Evidence, FQC, FTR |
 | A source that is down is NC, never NA — even with the other readable | FQC |
+
+
+---
+
+## Challan Lifecycle  *(built)*
+
+### What was wrong
+- There was no way to list created challans - no landing screen existed for challan history.
+- An issued challan could not be cancelled (only drafts could be discarded).
+- No "Edit" path existed for issued challans.
+- Gate pass used a free-text challan_no field - no real FK, no validation, and a
+  selector could not be shown because nothing knew which challans were issued.
+- An invoice already on a live challan still appeared in the Create Challan invoice
+  selector, allowing a second challan to attempt the same invoice.
+- Boxes on a live (draft OR issued) challan appeared in the Repack source list,
+  locked but present - the rule is "absent, not merely locked".
+
+### What changed
+
+**schema_sqlite.sql / store.py**
+- Added gatepass.challan_id INTEGER NULL REFERENCES challan(challan_id).
+  Migration guard added to _migrate() so existing DBs pick up the column on
+  first restart without manual SQL.
+
+**db.py**
+- challans_list() - challan list query with status/fy/q filters and gp_count.
+- challan_detail() - full record + boxes + gp_count + serial_count.
+- gp_count_for_challan() - counts gate passes via the real FK.
+- challans_issued() - issued, non-cancelled challans for the GP selector.
+
+**app.py**
+- GET /api/challans - challan list for the new landing screen.
+- GET /api/challan/<id> - challan detail for the detail panel.
+- POST /api/challan/<id>/cancel - cancel an issued challan (same audit fields
+  as discard; blocked if any gate pass references it via FK; reverts all serials
+  dispatched -> packed).
+- GET /api/challans/issued - issued challans for the Gate Pass selector.
+- GET /api/invoices?for_challan=1 - excludes invoices on live challans;
+  ?exclude_challan_id=<n> exempts one challan so its own invoice stays visible
+  while editing.
+- GET /api/boxes?exclude_live_challan=1 - omits boxes on live challans from
+  the list entirely (not locked - absent).
+- POST /gatepass - now accepts challan_id FK in addition to the legacy
+  challan_no text field; renders the number from the record if only the id is given.
+
+**icon_live.js**
+- Challan List screen (#v-challan-list) injected into .main, with search,
+  status filter, Refresh and New Challan buttons.
+- Challan Detail overlay: full header, box list, serial/gp counts, print/Excel links,
+  Cancel / Edit / Verify loading / Create gate pass actions (gated correctly).
+  Cancel and Edit are hidden when any gate pass references the challan (locked).
+  Create gate pass and Verify loading are always available on issued challans
+  (split loads: second GP can be added after the first locks editing).
+- Edit path: fetches detail, cancels via /cancel, navigates to Create Challan with
+  the original invoice pre-selected. Original row untouched except status=cancelled.
+- Gate Pass form: free-text challan_no replaced by a live select populated
+  from /api/challans/issued; challan_id written as a hidden field on submit.
+- chLoadInvoices() patched to pass ?for_challan=1 so the Create Challan invoice
+  selector only shows available invoices.
+- rpLoad() patched to pass ?exclude_live_challan=1 so boxes on live challans
+  are absent from Repack, not locked.
+- Stock & Dispatch dashboard KPIs: three new tiles - Open drafts, Issued today,
+  Awaiting gate pass.
+
+### Tests that prove it (test_challan.py, now 41 tests)
+
+| Test | Rule defended |
+|---|---|
+| a challan already referenced by a gate pass cannot be cancelled | GP lock blocks cancel |
+| a challan already referenced by a gate pass cannot be edited | GP lock blocks edit |
+| cancelling an issued challan reverts every serial to packed, not dispatched | state revert |
+| a cancelled challan's boxes reappear in the repack list after cancel | repack freed |
+| a cancelled challan's invoice reappears in the for-challan invoice selector | invoice freed |
+| an invoice on a live challan does not appear in the for-challan invoice selector | invoice hidden |
+| a box on a live DRAFT challan is absent from the repack list, not merely locked | absent not locked |
+| a box on a live ISSUED challan is absent from the repack list, not merely locked | absent not locked |
+| a second gate pass can be created against a challan that already has one | N gate passes per challan |
+| Edit produces a new draft; the original row is unchanged except for its cancelled status | document never rewritten |
+
+
+---
+
+## Challan Lifecycle  *(built)*
+
+### What was wrong
+- There was no way to list created challans - no landing screen existed for challan history.
+- An issued challan could not be cancelled (only drafts could be discarded).
+- No "Edit" path existed for issued challans.
+- Gate pass used a free-text challan_no field - no real FK, no validation, and a
+  selector could not be shown because nothing knew which challans were issued.
+- An invoice already on a live challan still appeared in the Create Challan invoice
+  selector, allowing a second challan to attempt the same invoice.
+- Boxes on a live (draft OR issued) challan appeared in the Repack source list,
+  locked but present - the rule is "absent, not merely locked".
+
+### What changed
+
+**schema_sqlite.sql / store.py**
+- Added gatepass.challan_id INTEGER NULL REFERENCES challan(challan_id).
+  Migration guard added to _migrate() so existing DBs pick up the column on
+  first restart without manual SQL.
+
+**db.py**
+- challans_list() - challan list query with status/fy/q filters and gp_count.
+- challan_detail() - full record + boxes + gp_count + serial_count.
+- gp_count_for_challan() - counts gate passes via the real FK.
+- challans_issued() - issued, non-cancelled challans for the GP selector.
+
+**app.py**
+- GET /api/challans - challan list for the new landing screen.
+- GET /api/challan/<id> - challan detail for the detail panel.
+- POST /api/challan/<id>/cancel - cancel an issued challan (same audit fields
+  as discard; blocked if any gate pass references it via FK; reverts all serials
+  dispatched -> packed).
+- GET /api/challans/issued - issued challans for the Gate Pass selector.
+- GET /api/invoices?for_challan=1 - excludes invoices on live challans;
+  ?exclude_challan_id=<n> exempts one challan so its own invoice stays visible
+  while editing.
+- GET /api/boxes?exclude_live_challan=1 - omits boxes on live challans from
+  the list entirely (not locked - absent).
+- POST /gatepass - now accepts challan_id FK in addition to the legacy
+  challan_no text field; renders the number from the record if only the id is given.
+
+**icon_live.js**
+- Challan List screen (#v-challan-list) injected into .main, with search,
+  status filter, Refresh and New Challan buttons.
+- Challan Detail overlay: full header, box list, serial/gp counts, print/Excel links,
+  Cancel / Edit / Verify loading / Create gate pass actions (gated correctly).
+  Cancel and Edit are hidden when any gate pass references the challan (locked).
+  Create gate pass and Verify loading are always available on issued challans
+  (split loads: second GP can be added after the first locks editing).
+- Edit path: fetches detail, cancels via /cancel, navigates to Create Challan with
+  the original invoice pre-selected. Original row untouched except status=cancelled.
+- Gate Pass form: free-text challan_no replaced by a live select populated
+  from /api/challans/issued; challan_id written as a hidden field on submit.
+- chLoadInvoices() patched to pass ?for_challan=1 so the Create Challan invoice
+  selector only shows available invoices.
+- rpLoad() patched to pass ?exclude_live_challan=1 so boxes on live challans
+  are absent from Repack, not locked.
+- Stock & Dispatch dashboard KPIs: three new tiles - Open drafts, Issued today,
+  Awaiting gate pass.
+
+### Tests that prove it (test_challan.py, now 41 tests)
+
+| Test | Rule defended |
+|---|---|
+| a challan already referenced by a gate pass cannot be cancelled | GP lock blocks cancel |
+| a challan already referenced by a gate pass cannot be edited | GP lock blocks edit |
+| cancelling an issued challan reverts every serial to packed, not dispatched | state revert |
+| a cancelled challan's boxes reappear in the repack list after cancel | repack freed |
+| a cancelled challan's invoice reappears in the for-challan invoice selector | invoice freed |
+| an invoice on a live challan does not appear in the for-challan invoice selector | invoice hidden |
+| a box on a live DRAFT challan is absent from the repack list, not merely locked | absent not locked |
+| a box on a live ISSUED challan is absent from the repack list, not merely locked | absent not locked |
+| a second gate pass can be created against a challan that already has one | N gate passes per challan |
+| Edit produces a new draft; the original row is unchanged except for its cancelled status | document never rewritten |

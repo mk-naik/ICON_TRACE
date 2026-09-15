@@ -694,6 +694,205 @@ def t_challan_serial_wattage_exact():
     assert got[serial(0, OTHER_WATT)] == OTHER_WATT, got
 
 
+
+# --------------------------------------------------------------------------
+# lifecycle: cancel issued, gate pass lock, edit, invoice/box exclusion
+# --------------------------------------------------------------------------
+
+def make_issued_challan(c, box_ids, invoice_id):
+    """Create + immediately submit a challan so it is in status='issued'."""
+    # Save as draft, then submit so we test the full flow
+    r = c.post("/api/challan", json={"action": "create",
+                                     "boxes": box_ids,
+                                     "invoice_id": invoice_id})
+    assert r.status_code == 200, r.get_json()
+    return r.get_json()["challan_id"]
+
+
+def add_gatepass(c, challan_id):
+    """Create a gate pass referencing the given challan_id."""
+    with store.conn() as (cx, cur):
+        import datetime as _dt
+        d = _dt.date.today()
+        seq = db.draw_gp_seq(cur, d)
+        no = db.render_gp_no(d, seq)
+        rec = {"gp_no": no, "gp_date": d.isoformat(), "kind": "NRGP",
+               "party": "Test", "challan_no": "IS-TEST/0001",
+               "challan_id": challan_id}
+        db.create_gatepass(cur, rec, "test")
+        return no
+
+
+@test("a challan already referenced by a gate pass cannot be cancelled")
+def t_gp_blocks_cancel():
+    c = setup()
+    b = packed_box(c, [20, 21])
+    inv = make_invoice(qty=2, invoice_no="INV-GPCAN")
+    chid = make_issued_challan(c, [b], inv)
+    add_gatepass(c, chid)
+    r = c.post("/api/challan/%d/cancel" % chid, json={})
+    assert r.status_code == 400, "cancelled despite gate pass reference"
+    assert "gate pass" in r.get_json()["why"].lower(), r.get_json()
+    # Challan must still be issued
+    assert challan_row(chid)["status"] == "issued"
+
+
+@test("a challan already referenced by a gate pass cannot be edited "
+      "(cancel step is blocked, so no new draft is created)")
+def t_gp_blocks_edit():
+    c = setup()
+    b = packed_box(c, [22, 23])
+    inv = make_invoice(qty=2, invoice_no="INV-GPEDIT")
+    chid = make_issued_challan(c, [b], inv)
+    add_gatepass(c, chid)
+    # The edit path would first call /cancel - that must be blocked
+    r = c.post("/api/challan/%d/cancel" % chid,
+               json={"reason": "cancelled for edit by operator"})
+    assert r.status_code == 400, "edit-cancel succeeded despite gate pass"
+    assert challan_row(chid)["status"] == "issued"
+
+
+@test("cancelling an issued challan reverts every serial to packed, not dispatched")
+def t_cancel_reverts_serials():
+    c = setup()
+    idx = [30, 31, 32]
+    b = packed_box(c, idx)
+    inv = make_invoice(qty=3, invoice_no="INV-CANCEL")
+    chid = make_issued_challan(c, [b], inv)
+    # Serials are dispatched after create
+    for i in idx:
+        assert state_of(serial(i)) == "dispatched", \
+            "serial %s not dispatched" % serial(i)
+    r = c.post("/api/challan/%d/cancel" % chid, json={})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["ok"]
+    # Must revert to packed, never stuck at dispatched
+    for i in idx:
+        assert state_of(serial(i)) == "packed", \
+            "serial %s still dispatched after cancel" % serial(i)
+
+
+@test("a cancelled challan's boxes reappear in the repack list after cancel")
+def t_cancel_frees_boxes():
+    c = setup()
+    b = packed_box(c, [40, 41])
+    inv = make_invoice(qty=2, invoice_no="INV-REPK")
+    chid = make_issued_challan(c, [b], inv)
+    # Before cancel — box is on a live challan, excluded from repack
+    r = c.get("/api/boxes?state=closed&exclude_live_challan=1")
+    ids_before = [x["box_id"] for x in r.get_json()]
+    assert b not in ids_before, "box still in repack list while challan live"
+    # Cancel
+    c.post("/api/challan/%d/cancel" % chid, json={})
+    # After cancel — box should reappear
+    r2 = c.get("/api/boxes?state=closed&exclude_live_challan=1")
+    ids_after = [x["box_id"] for x in r2.get_json()]
+    assert b in ids_after, "box still absent from repack list after challan cancelled"
+
+
+@test("a cancelled challan's invoice reappears in the for-challan invoice selector")
+def t_cancel_frees_invoice():
+    c = setup()
+    b = packed_box(c, [50, 51])
+    inv = make_invoice(qty=2, invoice_no="INV-FREEINV")
+    chid = make_issued_challan(c, [b], inv)
+    # Before cancel — invoice should be excluded from for_challan list
+    r = c.get("/api/invoices?for_challan=1")
+    ids_before = [x["id"] for x in r.get_json()["invoices"]]
+    assert inv not in ids_before, "invoice visible in selector while challan live"
+    # Cancel
+    c.post("/api/challan/%d/cancel" % chid, json={})
+    # After cancel — invoice must reappear
+    r2 = c.get("/api/invoices?for_challan=1")
+    ids_after = [x["id"] for x in r2.get_json()["invoices"]]
+    assert inv in ids_after, "invoice still hidden from selector after challan cancelled"
+
+
+@test("an invoice on a live challan does not appear in the for-challan invoice selector")
+def t_live_invoice_hidden():
+    c = setup()
+    b = packed_box(c, [60, 61])
+    inv = make_invoice(qty=2, invoice_no="INV-HIDEME")
+    make_issued_challan(c, [b], inv)
+    r = c.get("/api/invoices?for_challan=1")
+    ids = [x["id"] for x in r.get_json()["invoices"]]
+    assert inv not in ids, "invoice on live challan visible in create-challan selector"
+
+
+@test("a box on a live DRAFT challan is absent from the repack list, not merely locked")
+def t_draft_box_absent_from_repack():
+    c = setup()
+    b = packed_box(c, [70, 71])
+    inv = make_invoice(qty=2, invoice_no="INV-DRAFTREPACK")
+    # Save as draft (not issued)
+    r = c.post("/api/challan", json={"action": "draft", "boxes": [b],
+                                     "invoice_id": inv})
+    assert r.status_code == 200, r.get_json()
+    r2 = c.get("/api/boxes?state=closed&exclude_live_challan=1")
+    ids = [x["box_id"] for x in r2.get_json()]
+    assert b not in ids, \
+        "box on live draft challan still appears in repack list (should be absent)"
+
+
+@test("a box on a live ISSUED challan is absent from the repack list, not merely locked")
+def t_issued_box_absent_from_repack():
+    c = setup()
+    b = packed_box(c, [80, 81])
+    inv = make_invoice(qty=2, invoice_no="INV-ISSUEDREPACK")
+    make_issued_challan(c, [b], inv)
+    r = c.get("/api/boxes?state=closed&exclude_live_challan=1")
+    ids = [x["box_id"] for x in r.get_json()]
+    assert b not in ids, \
+        "box on issued challan still appears in repack list (should be absent)"
+
+
+@test("a second gate pass can be created against a challan that already has one "
+      "(split load — no 1:1 enforcement)")
+def t_split_load_second_gp():
+    c = setup()
+    b = packed_box(c, [90, 91])
+    inv = make_invoice(qty=2, invoice_no="INV-SPLIT")
+    chid = make_issued_challan(c, [b], inv)
+    gp1 = add_gatepass(c, chid)
+    # First gate pass must lock editing via the cancel endpoint
+    r_cancel = c.post("/api/challan/%d/cancel" % chid, json={})
+    assert r_cancel.status_code == 400, "first gp did not lock the challan"
+    assert "gate pass" in r_cancel.get_json()["why"].lower(), r_cancel.get_json()
+    # But a SECOND gate pass must be allowed — no 1:1 constraint
+    gp2 = add_gatepass(c, chid)
+    assert gp2 != gp1, "second gate pass not issued"
+    with store.conn() as (cx, cur):
+        cnt = db.gp_count_for_challan(cur, chid)
+    assert cnt == 2, "expected 2 gate passes, got %d" % cnt
+
+
+@test("Edit produces a new draft pre-filled; the original row is unchanged "
+      "except for its cancelled status and the original contents are intact")
+def t_edit_original_row_intact():
+    c = setup()
+    b = packed_box(c, [95, 96])
+    inv = make_invoice(qty=2, invoice_no="INV-EDITORIG")
+    chid = make_issued_challan(c, [b], inv)
+    orig = dict(challan_row(chid))
+    # Simulate edit: cancel the issued challan
+    r = c.post("/api/challan/%d/cancel" % chid,
+               json={"reason": "cancelled for edit by operator"})
+    assert r.status_code == 200, r.get_json()
+    after = dict(challan_row(chid))
+    # Status changed
+    assert after["status"] == "cancelled"
+    # Every other data field must be untouched
+    for key in ("buyer_name", "invoice_no", "qty", "fy", "seq"):
+        assert after[key] == orig[key], \
+            "field %r changed after cancel (was %r, now %r)" % (key, orig[key], after[key])
+    # The original box list is still in challan_box — nothing deleted
+    with store.conn() as (cx, cur):
+        cnt = cur.execute(
+            "SELECT COUNT(*) AS n FROM challan_box WHERE challan_id=?",
+            (chid,)).fetchone()["n"]
+    assert cnt > 0, "challan_box rows were deleted — original contents wiped"
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0

@@ -542,8 +542,15 @@ def _box_label(b):
 def api_boxes():
     """Boxes, newest first. Packing asks for the open one on load: a box is
     a row from its first scan, so a refresh mid-pallet finds it again
-    instead of losing eighteen modules."""
+    instead of losing eighteen modules.
+
+    ?exclude_live_challan=1 — used by Repack.  A box on a live (draft or
+    issued, non-cancelled) challan is ABSENT from the list entirely, not
+    merely locked: the operator should only see boxes they can actually
+    select.  Cancel the challan to make them reappear.
+    """
     state = (request.args.get("state") or "").strip() or None
+    exclude_live = request.args.get("exclude_live_challan", "").strip() == "1"
     with store.conn() as (cx, cur):
         rows = [dict(r) for r in store.boxes_by_state(cur, state)]
         # A pallet named on a challan cannot be opened, and Repack has to
@@ -554,10 +561,16 @@ def api_boxes():
                  "JOIN challan_serial cs ON cs.serial=bs.serial "
                  "JOIN challan c ON c.challan_id=cs.challan_id "
                  "WHERE c.status<>'cancelled' GROUP BY bs.box_id")}
+    if exclude_live:
+        rows = [b for b in rows if b["box_id"] not in locked]
+    
+    _shifts = {1: 'A', 2: 'B', 3: 'C', "1": "A", "2": "B", "3": "C"}
     for b in rows:
-        b["label"] = _box_label(b)
+        b["label"] = _box_label(b) or f"BOX-{b.get('seq', 0):04d}"
         cr = customers.get(b.get("customer"))
         b["customer_name"] = cr["name"] if cr else b.get("customer")
+        if b.get("pack_shift") in _shifts:
+            b["pack_shift"] = _shifts[b["pack_shift"]]
         b["on_challan"] = locked.get(b["box_id"])
     return jsonify(rows)
 
@@ -1494,25 +1507,147 @@ def api_challan_submit(challan_id):
 @app.route("/api/challan/<int:challan_id>/discard", methods=["POST"])
 @_sync_guard
 def api_challan_discard(challan_id):
-    """Abandon a draft. Cancelled, never deleted - same rule as every other
-    document here - which is also what frees the boxes and serials it had
-    reserved: every check that excludes a "live" challan reads status<>
-    'cancelled', so this one stops counting the instant it is written."""
+    body = request.get_json(silent=True) or {}
+    reason_msg = (body.get("reason") or "draft discarded").strip()
+
+    with store.conn() as (cx, cur):
+        ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s", (challan_id,))
+        if not ch:
+            return jsonify({"ok": False, "why": "No such challan."}), 404
+        
+        if ch["status"] == "cancelled":
+            return jsonify({"ok": False, "why": "Challan is already cancelled."}), 400
+
+        if ch["status"] == "issued":
+            # Check for gate passes
+            cur.execute("SELECT COUNT(*) as c FROM gatepass WHERE challan_id=%s", (challan_id,))
+            gp_cnt = cur.fetchone()["c"]
+            if gp_cnt > 0:
+                return jsonify({"ok": False, "why": "Cannot cancel: a gate pass already references this challan."}), 400
+            
+            if not body.get("reason"):
+                return jsonify({"ok": False, "why": "Reason is required to cancel an issued challan."}), 400
+
+            # Revert serial states from 'dispatched' to 'packed'
+            cur.execute(
+                "UPDATE serial SET state='packed' WHERE serial IN ("
+                "  SELECT serial FROM challan_serial WHERE challan_id=%s"
+                ")", (challan_id,)
+            )
+
+        cur.execute(
+            "UPDATE challan SET status='cancelled', cancelled_reason=%s, "
+            "cancelled_by=%s, cancelled_at=%s WHERE challan_id=%s",
+            (reason_msg, actor(),
+             datetime.datetime.now().isoformat(timespec="seconds"), challan_id))
+        db.audit(cur, actor(), "challan.cancel" if ch["status"] == "issued" else "challan.discard", "challan", challan_id, {"reason": reason_msg})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/challans")
+def api_challans_list():
+    """Challan list for the landing screen. Supports ?q=, ?status=, ?fy=."""
+    q = (request.args.get("q") or "").strip() or None
+    status = (request.args.get("status") or "").strip() or None
+    fy = (request.args.get("fy") or "").strip() or None
+    with store.conn() as (cx, cur):
+        rows = db.challans_list(cur, q=q, status=status, fy=fy)
+    out = []
+    for ch in rows:
+        ch = dict(ch)
+        try:
+            d = datetime.date.fromisoformat(ch["challan_date"])
+            ch["challan_no"] = db.render_challan_no(d, ch["seq"], ch.get("suffix"))
+        except (TypeError, ValueError):
+            ch["challan_no"] = None
+        out.append(ch)
+    return jsonify({"challans": out})
+
+
+@app.route("/api/challan/<int:challan_id>")
+def api_challan_get(challan_id):
+    """Full challan detail for the detail panel."""
+    with store.conn() as (cx, cur):
+        bundle = db.challan_detail(cur, challan_id)
+    if not bundle:
+        return jsonify({"error": "Not found"}), 404
+    ch = bundle["challan"]
+    try:
+        d = datetime.date.fromisoformat(ch["challan_date"])
+        ch["challan_no"] = db.render_challan_no(d, ch["seq"], ch.get("suffix"))
+    except (TypeError, ValueError):
+        ch["challan_no"] = None
+    ch["locked"] = bundle["gp_count"] > 0
+    
+    _shifts = {1: 'A', 2: 'B', 3: 'C', "1": "A", "2": "B", "3": "C"}
+    for b in bundle.get("boxes", []):
+        if b.get("pack_shift") in _shifts:
+            b["pack_shift"] = _shifts[b["pack_shift"]]
+            
+    bundle["challan"] = ch
+    return jsonify(bundle)
+
+
+@app.route("/api/challan/<int:challan_id>/cancel", methods=["POST"])
+@_sync_guard
+def api_challan_cancel(challan_id):
+    """Cancel an ISSUED challan.
+
+    Mirrors api_challan_discard exactly - same audit fields, same cancel
+    convention - but allowed only when status='issued' and no gate pass
+    references it via the real FK.
+
+    On success every serial reverts dispatched -> packed and its boxes
+    become repackable again (their serials are no longer dispatched, so
+    the challan's E-DUPSERIAL check will reject them if you try to add
+    them to a new challan - you must repack or reopen them normally first).
+    """
+    d = request.get_json(force=True) or {}
+    reason = (d.get("reason") or "").strip() or "issued challan cancelled by operator"
     with store.conn() as (cx, cur):
         ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
                        (challan_id,))
         if not ch:
             return jsonify({"ok": False, "why": "No such challan."}), 404
-        if ch["status"] != "draft":
+        if ch["status"] != "issued":
             return jsonify({"ok": False, "why":
-                            "Only a draft can be discarded."}), 400
+                            "Only an issued challan can be cancelled this way. "
+                            "Use /discard to abandon a draft."}), 400
+        # Guard: any gate pass references this challan via the real FK
+        gpc = db.gp_count_for_challan(cur, challan_id)
+        if gpc:
+            return jsonify({"ok": False, "why":
+                            "%d gate pass(es) reference this challan. It is "
+                            "locked and cannot be cancelled." % gpc}), 400
+        # Revert serials dispatched -> packed
+        for s in store.rows(cur, "SELECT serial FROM challan_serial "
+                                 "WHERE challan_id=%s", (challan_id,)):
+            db.set_serial(cur, s["serial"], state="packed")
         cur.execute(
             "UPDATE challan SET status='cancelled', cancelled_reason=%s, "
             "cancelled_by=%s, cancelled_at=%s WHERE challan_id=%s",
-            ("draft discarded", actor(),
+            (reason, actor(),
              datetime.datetime.now().isoformat(timespec="seconds"), challan_id))
-        db.audit(cur, actor(), "challan.discard", "challan", challan_id, {})
+        db.audit(cur, actor(), "challan.cancel", "challan", challan_id,
+                 {"fy": ch["fy"], "seq": ch["seq"], "reason": reason})
     return jsonify({"ok": True})
+
+
+@app.route("/api/challans/issued")
+def api_challans_issued():
+    """Issued non-cancelled challans, for the Gate Pass 'against' selector."""
+    with store.conn() as (cx, cur):
+        rows = db.challans_issued(cur)
+    out = []
+    for ch in rows:
+        ch = dict(ch)
+        try:
+            d = datetime.date.fromisoformat(ch["challan_date"])
+            ch["challan_no"] = db.render_challan_no(d, ch["seq"], ch.get("suffix"))
+        except (TypeError, ValueError):
+            ch["challan_no"] = str(ch.get("seq"))
+        out.append(ch)
+    return jsonify({"challans": out})
 
 
 def _challan_bundle(cur, fy, seq, suffix=None):
@@ -3093,8 +3228,30 @@ def api_invoices_list():
     q = request.args.get('q', '').strip()
     from_d = request.args.get('from', '').strip()
     to_d = request.args.get('to', '').strip()
+    # ?for_challan=1 — exclude invoices already on a live (draft/issued)
+    # challan.  The invoice list screen passes nothing and sees everything;
+    # Create Challan passes this flag so the selector only shows available ones.
+    for_challan = request.args.get('for_challan', '').strip() == '1'
+    exclude_id = request.args.get('exclude_challan_id', '').strip()
+    try:
+        exclude_id = int(exclude_id) if exclude_id else None
+    except ValueError:
+        exclude_id = None
     with store.conn() as (cx, cur):
         invoices = db.search_invoices(cur, q=q, date_from=from_d, date_to=to_d)
+        if for_challan:
+            # Build set of invoice_ids already claimed by a live challan,
+            # excluding any challan we are explicitly editing (so it can
+            # keep its own invoice selected while the drop-down reloads).
+            sql = ("SELECT DISTINCT invoice_id FROM challan "
+                   "WHERE status != 'cancelled' AND invoice_id IS NOT NULL")
+            params = []
+            if exclude_id:
+                sql += " AND challan_id != %s"
+                params.append(exclude_id)
+            cur.execute(sql, params)
+            claimed = {r["invoice_id"] for r in cur.fetchall()}
+            invoices = [i for i in invoices if i["id"] not in claimed]
     return jsonify({"invoices": invoices})
 
 @app.route("/api/invoice/<int:invoice_id>")
@@ -4207,18 +4364,40 @@ def gatepass():
         rows = db.gatepasses(cur)
     if request.method == "POST":
         d = datetime.date.today()
+        # Accept challan_id (real FK) from both form and JSON body so the
+        # JS layer can post either way without a second endpoint.
+        body = request.get_json(silent=True) or {}
+        ch_id_raw = (request.form.get("challan_id") or body.get("challan_id") or "").strip()
+        try:
+            ch_id = int(ch_id_raw) if ch_id_raw else None
+        except ValueError:
+            ch_id = None
         with db.conn() as (cx, cur):
             seq = db.draw_gp_seq(cur, d)
             no = db.render_gp_no(d, seq)
+            ch_no = (request.form.get("challan_no") or body.get("challan_no") or "").strip()
+            # If a real challan_id was supplied and challan_no is blank,
+            # render the number from the record so legacy fields stay consistent.
+            if ch_id and not ch_no:
+                ch_row = store.one(cur,
+                    "SELECT * FROM challan WHERE challan_id=%s", (ch_id,))
+                if ch_row:
+                    try:
+                        cdate = datetime.date.fromisoformat(ch_row["challan_date"])
+                        ch_no = db.render_challan_no(cdate, ch_row["seq"],
+                                                     ch_row.get("suffix"))
+                    except (TypeError, ValueError):
+                        pass
             rec = {"gp_no": no, "gp_date": d.isoformat(),
-                   "kind": request.form.get("kind") or "NRGP",
-                   "party": (request.form.get("party") or "").strip(),
-                   "delivery_address": (request.form.get("address") or "").strip(),
-                   "vehicle_no": (request.form.get("vehicle") or "").strip(),
-                   "description": (request.form.get("description") or "").strip(),
-                   "qty": request.form.get("qty") or None,
-                   "expected_return": request.form.get("expected_return") or None,
-                   "challan_no": (request.form.get("challan_no") or "").strip() or None}
+                   "kind": request.form.get("kind") or body.get("kind") or "NRGP",
+                   "party": (request.form.get("party") or body.get("party") or "").strip(),
+                   "delivery_address": (request.form.get("address") or body.get("delivery_address") or "").strip(),
+                   "vehicle_no": (request.form.get("vehicle") or body.get("vehicle_no") or "").strip(),
+                   "description": (request.form.get("description") or body.get("description") or "").strip(),
+                   "qty": request.form.get("qty") or body.get("qty") or None,
+                   "expected_return": request.form.get("expected_return") or body.get("expected_return") or None,
+                   "challan_no": ch_no or None,
+                   "challan_id": ch_id}
             gid = db.create_gatepass(cur, rec, actor())
             db.audit(cur, actor(), "gatepass.issue", "gatepass", no, rec)
         flash("Gate pass %s issued (%s)." % (no, rec["kind"]), "pass")
@@ -4359,6 +4538,20 @@ def healthz():
                     "time": datetime.datetime.now().strftime("%d-%m-%Y %I:%M:%S %p")})
 
 
+@app.route("/api/stock_dispatch")
+def api_stock_dispatch():
+    d_date = request.args.get("date", "").strip() or None
+    customer = request.args.get("customer", "").strip() or None
+    if customer == "All customers": customer = None
+    model = request.args.get("model", "").strip() or None
+    if model == "All": model = None
+    grade = request.args.get("grade", "").strip() or None
+    if grade == "All": grade = None
+    
+    with store.conn() as (cx, cur):
+        data = db.stock_dispatch(cur, d_date, customer, model, grade)
+    return jsonify(data)
+
 @app.errorhandler(413)
 def too_big(e):
     flash("That file is larger than 25 MB.", "fail")
@@ -4367,3 +4560,50 @@ def too_big(e):
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
+
+@app.route("/api/gatepasses", methods=["GET"])
+def api_gatepasses():
+    with store.conn() as (cx, cur):
+        rows = [dict(r) for r in db.gatepasses(cur)]
+    return jsonify(rows)
+
+@app.route("/api/gatepass", methods=["POST"])
+@_sync_guard
+def api_gatepass():
+    body = request.get_json(force=True)
+    d = datetime.date.today()
+    ch_id_raw = str(body.get("challan_id") or "").strip()
+    try:
+        ch_id = int(ch_id_raw) if ch_id_raw else None
+    except ValueError:
+        ch_id = None
+
+    with store.conn() as (cx, cur):
+        seq = db.draw_gp_seq(cur, d)
+        no = db.render_gp_no(d, seq)
+        ch_no = str(body.get("challan_no") or "").strip()
+        if ch_id and not ch_no:
+            ch_row = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s", (ch_id,))
+            if ch_row:
+                try:
+                    cdate = datetime.date.fromisoformat(ch_row["challan_date"])
+                    ch_no = db.render_challan_no(cdate, ch_row["seq"], ch_row.get("suffix"))
+                except:
+                    pass
+        
+        rec = {
+            "gp_no": no, "gp_date": d.isoformat(),
+            "kind": str(body.get("kind") or "NRGP").strip(),
+            "party": str(body.get("party") or "").strip(),
+            "delivery_address": str(body.get("delivery_address") or "").strip(),
+            "vehicle_no": str(body.get("vehicle_no") or "").strip(),
+            "description": str(body.get("description") or "").strip(),
+            "qty": body.get("qty") or None,
+            "expected_return": body.get("expected_return") or None,
+            "challan_no": ch_no or None,
+            "challan_id": ch_id
+        }
+        gid = db.create_gatepass(cur, rec, actor())
+        db.audit(cur, actor(), "gatepass.issue", "gatepass", no, rec)
+        
+    return jsonify({"ok": True, "gatepass_id": gid, "gp_no": no})

@@ -630,6 +630,7 @@ CREATE TABLE IF NOT EXISTS gatepass (
   expected_return TEXT    NULL,
   return_date TEXT        NULL,
   challan_no  TEXT NULL,
+  challan_id  INTEGER NULL,
   created_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_by  TEXT NOT NULL,
   UNIQUE (gp_no)

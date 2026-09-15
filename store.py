@@ -125,6 +125,9 @@ def _migrate(cx, text):
             cx.execute("DROP TABLE fqc_record_old")
             print("[store] fqc_record rebuilt: grade is nullable until Quality "
                   "decides")
+    # gate pass linked to a real challan row (not just a typed string)
+    if cols("gatepass") and "challan_id" not in cols("gatepass"):
+        cx.execute("ALTER TABLE gatepass ADD COLUMN challan_id INTEGER REFERENCES challan(challan_id)")
     cx.commit()
 
 

@@ -914,6 +914,93 @@ def gatepasses(cur, n=25):
     return cur.fetchall()
 
 
+def challans_list(cur, q=None, status=None, fy=None, n=200):
+    """Challan list for the landing screen.
+
+    Returns one row per challan, newest first, with a box count and gp_count
+    so the screen can show the lock state without a separate fetch.
+    """
+    if cur is None:
+        return []
+    sql = """
+        SELECT c.challan_id, c.fy, c.seq, c.suffix, c.challan_date,
+               c.status, c.buyer_name, c.invoice_no, c.qty,
+               c.cancelled_at, c.cancelled_reason,
+               COUNT(DISTINCT cb.challan_box_id) AS box_count,
+               COUNT(DISTINCT gp.gp_id)          AS gp_count
+        FROM challan c
+        LEFT JOIN challan_box cb ON cb.challan_id = c.challan_id
+        LEFT JOIN gatepass gp   ON gp.challan_id  = c.challan_id
+        WHERE 1=1
+    """
+    params = []
+    if status:
+        sql += " AND c.status = %s"
+        params.append(status)
+    if fy:
+        try:
+            sql += " AND c.fy = %s"
+            params.append(int(fy))
+        except (TypeError, ValueError):
+            pass
+    if q:
+        lq = "%" + q + "%"
+        sql += (" AND (c.buyer_name LIKE %s OR c.invoice_no LIKE %s"
+                " OR c.vehicle_no LIKE %s)")
+        params.extend([lq, lq, lq])
+    sql += " GROUP BY c.challan_id ORDER BY c.challan_id DESC LIMIT %s"
+    params.append(n)
+    cur.execute(sql, params)
+    return cur.fetchall()
+
+
+def challan_detail(cur, challan_id):
+    """Full challan record + boxes (load order) + gp_count."""
+    if cur is None:
+        return None
+    cur.execute("SELECT * FROM challan WHERE challan_id = %s", (challan_id,))
+    ch = cur.fetchone()
+    if not ch:
+        return None
+    cur.execute("SELECT * FROM challan_box WHERE challan_id = %s "
+                "ORDER BY load_order", (challan_id,))
+    boxes = cur.fetchall()
+    cur.execute("SELECT COUNT(*) AS n FROM gatepass WHERE challan_id = %s",
+                (challan_id,))
+    row = cur.fetchone()
+    gp_count = row["n"] if row else 0
+    cur.execute("SELECT COUNT(*) AS n FROM challan_serial WHERE challan_id = %s",
+                (challan_id,))
+    row = cur.fetchone()
+    serial_count = row["n"] if row else 0
+    return {"challan": dict(ch), "boxes": [dict(b) for b in boxes],
+            "gp_count": gp_count, "serial_count": serial_count}
+
+
+def gp_count_for_challan(cur, challan_id):
+    """How many gate passes reference this challan via the real FK."""
+    if cur is None:
+        return 0
+    cur.execute("SELECT COUNT(*) AS n FROM gatepass WHERE challan_id = %s",
+                (challan_id,))
+    row = cur.fetchone()
+    return row["n"] if row else 0
+
+
+def challans_issued(cur):
+    """Issued, non-cancelled challans — for the Gate Pass 'against' selector."""
+    if cur is None:
+        return []
+    cur.execute("""
+        SELECT c.challan_id, c.fy, c.seq, c.suffix, c.challan_date,
+               c.buyer_name, c.invoice_no, c.qty
+        FROM challan c
+        WHERE c.status = 'issued'
+        ORDER BY c.challan_id DESC
+    """)
+    return cur.fetchall()
+
+
 # ==========================================================================
 # Config  -  where the Sun Simulator and EL actually live
 # ==========================================================================
@@ -1193,3 +1280,163 @@ def trace_serial(cur, serial):
                 "ON cs.challan_id=c.challan_id WHERE cs.serial=%s", (serial,))
     out["challan"] = cur.fetchone()
     return out
+
+def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None):
+    if not cur: return {}
+    import icon_customers as customers
+    
+    bx_conds = []
+    bx_params = []
+    if customer:
+        bx_conds.append('b.customer = %s')
+        bx_params.append(customer)
+    if model:
+        bx_conds.append('b.model = %s')
+        bx_params.append(model)
+    if grade:
+        bx_conds.append('b.grade = %s')
+        bx_params.append(grade)
+    
+    bx_where = ' AND '.join(bx_conds) if bx_conds else '1=1'
+    
+    # 1. Finished goods
+    sql_ready = f"""
+        SELECT COUNT(b.box_id) as box_count, COALESCE(SUM(b.qty), 0) as modules,
+               COALESCE(SUM(b.capacity * b.qty) / 1000.0, 0) as kw
+        FROM box b 
+        WHERE b.state = 'closed' AND {bx_where}
+          AND b.box_id NOT IN (
+              SELECT bs.box_id FROM box_serial bs
+              JOIN challan_serial cs ON cs.serial = bs.serial
+              JOIN challan c ON c.challan_id = cs.challan_id
+              WHERE c.status != 'cancelled'
+          )
+    """
+    cur.execute(sql_ready, tuple(bx_params))
+    fg_ready = dict(cur.fetchone() or {})
+    
+    # 2. GY / BGY in stock
+    sql_rev = f"""
+        SELECT COUNT(b.box_id) as box_count, COALESCE(SUM(b.qty), 0) as modules
+        FROM box b 
+        WHERE b.state = 'closed' AND b.grade IN ('GY', 'BGY') AND {bx_where}
+          AND b.box_id NOT IN (
+              SELECT bs.box_id FROM box_serial bs
+              JOIN challan_serial cs ON cs.serial = bs.serial
+              JOIN challan c ON c.challan_id = cs.challan_id
+              WHERE c.status != 'cancelled'
+          )
+    """
+    cur.execute(sql_rev, tuple(bx_params))
+    rev_stock = dict(cur.fetchone() or {})
+    
+    # 3. On open challan
+    sql_open_ch = f"""
+        SELECT COUNT(DISTINCT b.box_id) as box_count, COALESCE(SUM(b.qty), 0) as modules
+        FROM box b
+        JOIN box_serial bs ON bs.box_id = b.box_id
+        JOIN challan_serial cs ON cs.serial = bs.serial
+        JOIN challan c ON c.challan_id = cs.challan_id
+        WHERE c.status != 'cancelled' AND c.status != 'dispatched' AND b.state = 'closed' AND {bx_where}
+    """
+    cur.execute(sql_open_ch, tuple(bx_params))
+    open_ch = dict(cur.fetchone() or {})
+    
+    sql_open_ch_cnt = f"""
+        SELECT COUNT(DISTINCT c.challan_id) as ch_count
+        FROM challan c
+        JOIN challan_serial cs ON cs.challan_id = c.challan_id
+        JOIN box_serial bs ON bs.serial = cs.serial
+        JOIN box b ON b.box_id = bs.box_id
+        WHERE c.status != 'cancelled' AND c.status != 'dispatched' AND {bx_where}
+    """
+    cur.execute(sql_open_ch_cnt, tuple(bx_params))
+    row = cur.fetchone()
+    open_ch["ch_count"] = row["ch_count"] if row else 0
+
+    # 4. Dispatched today
+    sql_disp = f"""
+        SELECT COUNT(DISTINCT b.box_id) as box_count, COALESCE(SUM(b.qty), 0) as modules
+        FROM box b
+        JOIN box_serial bs ON bs.box_id = b.box_id
+        JOIN challan_serial cs ON cs.serial = bs.serial
+        JOIN challan c ON c.challan_id = cs.challan_id
+        WHERE c.status = 'issued' AND {bx_where}
+    """
+    if d_date:
+        sql_disp += " AND c.challan_date = %s"
+        params_disp = bx_params + [d_date]
+    else:
+        params_disp = bx_params
+    cur.execute(sql_disp, tuple(params_disp))
+    disp_today = dict(cur.fetchone() or {})
+    
+    sql_disp_cnt = f"""
+        SELECT COUNT(DISTINCT c.challan_id) as ch_count
+        FROM challan c
+        JOIN challan_serial cs ON cs.challan_id = c.challan_id
+        JOIN box_serial bs ON bs.serial = cs.serial
+        JOIN box b ON b.box_id = bs.box_id
+        WHERE c.status = 'issued' AND {bx_where}
+    """
+    if d_date:
+        sql_disp_cnt += " AND c.challan_date = %s"
+    cur.execute(sql_disp_cnt, tuple(params_disp))
+    row = cur.fetchone()
+    disp_today["ch_count"] = row["ch_count"] if row else 0
+    
+    # 5. Table: FG by customer
+    sql_table = f"""
+        SELECT b.customer, b.model, b.grade, 
+               COUNT(b.box_id) as box_count, COALESCE(SUM(b.qty), 0) as modules,
+               COALESCE(SUM(b.capacity * b.qty) / 1000.0, 0) as kw
+        FROM box b
+        WHERE b.state = 'closed' AND {bx_where}
+          AND b.box_id NOT IN (
+              SELECT bs.box_id FROM box_serial bs
+              JOIN challan_serial cs ON cs.serial = bs.serial
+              JOIN challan c ON c.challan_id = cs.challan_id
+              WHERE c.status != 'cancelled'
+          )
+        GROUP BY b.customer, b.model, b.grade
+        ORDER BY b.customer, b.model, b.grade
+    """
+    cur.execute(sql_table, tuple(bx_params))
+    table_data = [dict(r) for r in cur.fetchall()]
+    
+    for r in table_data:
+        cr = customers.get(r.get("customer"))
+        r["customer_name"] = cr["name"] if cr else r.get("customer")
+        
+    # 6. Recent dispatches
+    cur.execute("""
+        SELECT c.challan_id, c.fy, c.seq, c.suffix, c.challan_date, c.buyer_name, c.vehicle_no, c.status,
+               COUNT(DISTINCT cb.box_no) as box_count,
+               COALESCE(SUM(cb.qty), 0) as modules,
+               (SELECT gp.gp_no FROM gatepass gp WHERE gp.challan_id = c.challan_id LIMIT 1) as gp_no
+        FROM challan c
+        LEFT JOIN challan_box cb ON cb.challan_id = c.challan_id
+        GROUP BY c.challan_id
+        ORDER BY c.challan_id DESC LIMIT 10
+    """)
+    recent = []
+    import datetime
+    for r in cur.fetchall():
+        d = dict(r)
+        try:
+            dt = datetime.date.fromisoformat(d["challan_date"])
+            d["challan_no"] = render_challan_no(dt, d["seq"], d.get("suffix"))
+        except:
+            d["challan_no"] = f"CHN-{d['seq']}"
+        cr = customers.get(d.get("buyer_name"))
+        d["customer_name"] = cr["name"] if cr else d.get("buyer_name")
+        recent.append(d)
+        
+    return {
+        "fg_ready": fg_ready,
+        "rev_stock": rev_stock,
+        "open_ch": open_ch,
+        "disp_today": disp_today,
+        "table_fg": table_data,
+        "recent": recent
+    }
