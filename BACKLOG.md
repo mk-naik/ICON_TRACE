@@ -1205,3 +1205,25 @@ not know any of the following, and each is a change to make on top of it.
 - Built a complete `wireMgmt()` and `renderMgmt()` in `icon_live.js` that fetch `/api/prod/dashboard`, `/api/fqc/dashboard`, and `/api/stock_dispatch` simultaneously using `Promise.all` to compose the Management Overview dashboard components, making it fully dynamic and database-driven.
 
 **Which test proves it.** Tested via Playwright UI screenshot validation (`test_ui2.py` locally) showing the dynamic rendering, correct close button placement, and real data integration in the Mgmt dashboard without requiring a new backend endpoint.
+
+
+**Round 6 — Dashboard UI fixes, missing data, and invalid donuts**
+
+**What was wrong.** FQC Day-wise inspection lacked shift count and kW totals. Management donuts (`mgDonut` and `mgQDonut`) were blank/unformed due to an invalid CSS variable reference, and its Shift-wise footer totals were blank. Production Dashboard was completely blank except for static donuts because its rendering function (`renderLiveProdDash`) was never bound to `window.renderProd`. Packing Log customer dropdown and column showed customer codes (`C0005`) instead of names, causing the filter to return no data. Stock & Dispatch donut (`dpDonut`) was unformed due to manual inline gradient styles missing variables.
+
+**Root cause.** 
+- `renderLiveFqcDash` day rows hardcoded `<td>—</td>` for shifts and kw.
+- `drawDonut` calls in `icon_live.js` used `C.solar` and `C.info` which didn't exist in `window.C`, breaking the `conic-gradient` CSS rendering.
+- `renderLiveProdDash` was never exported to `window.renderProd`, causing the "Apply" button and initial `rerender()` to silently skip updating `v-proddash` KPIs and shift table.
+- `/api/packing/log` returned the `box.customer` foreign key (e.g. `C0005`) and filtered on it literally, so the UI dropdown (which sends names) mismatched. 
+- `dpDonut` used a custom `conic-gradient` string with `var(--p2)` which was invalid CSS for the current environment.
+
+**What changed.**
+- Updated `renderLiveFqcDash` to sum `r.wattage` into `kw` and count distinct `r.shift` for day-wise inspection.
+- Replaced `C.solar` and `C.info` with `C.amber` and `C.blue` in `renderMgmt` `drawDonut` calls.
+- Added footer aggregation logic (`mgsT`, `mgsOK`, `mgsRej`, `mgsPc`) for Shift-wise production & quality in `renderMgmt`.
+- Aliased `window.renderProd = renderLiveProdDash` in `wireProdDash`.
+- Patched `app.py` `api_packing_log` to `LEFT JOIN indent i ON i.indent_no = b.customer` to return `i.customer_name`, and modified the `WHERE` clause to filter by `i.customer_name` as well.
+- Refactored `dpDonut` drawing in `renderStock` to use the standard `drawDonut()` function.
+
+**Which test proves it.** Playwright local tests (`test_ui3.py`) rendering screenshots of all dashboards, validating that donut wheels form, data populates the Production dashboard, shift aggregations total correctly, and KW appears on day-wise inspection.

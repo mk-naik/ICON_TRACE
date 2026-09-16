@@ -2413,12 +2413,11 @@ def api_prod_dashboard():
         where.append("s.shift = ?")
         args.append(shift.replace("Shift ", ""))
     if customer and customer.lower() != "all customers":
-        # Handle the special stock option from frontend
-        if customer == "G2G (M10R) — General stock":
-            where.append("(s.customer IS NULL OR s.customer='ICON STOCK')")
+        if "G2G (M10R)" in customer:
+            where.append("(b.customer IS NULL OR b.customer='ICON STOCK')")
         else:
-            where.append("s.customer = ?")
-            args.append(customer)
+            where.append("(b.customer = ? OR i.customer_name = ?)")
+            args.extend([customer, customer])
     if model and model.lower() != "all" and model.lower() != "all models":
         where.append("s.model = ?")
         args.append(model)

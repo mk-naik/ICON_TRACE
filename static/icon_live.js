@@ -278,9 +278,9 @@
       
       if (typeof drawDonut === 'function') {
          drawDonut('mgDonut', 'mgLegend', [
-           {n:'Produced', v:pk.prod||0, c:C.solar},
+           {n:'Produced', v:pk.prod||0, c:C.amber},
            {n:'Passed FQC', v:pk.fqc||0, c:C.navy},
-           {n:'Packed', v:pk.packed||0, c:C.info},
+           {n:'Packed', v:pk.packed||0, c:C.blue},
            {n:'Dispatched', v:pk.disp||0, c:C.green}
          ], ((pk.alloc || 0)/1000).toFixed(1)+'k', 'allocated');
          
@@ -295,15 +295,21 @@
       
       var sr = document.getElementById('mgShiftRows');
       if (sr && fqc.rows) {
+         var mgsT = 0, mgsOK = 0, mgsRej = 0;
          sr.innerHTML = fqc.rows.map(function(r) {
             var pct = r.inspected ? (r.rejected / r.inspected * 100).toFixed(2) : '0.00';
             var sMap = {1: 'A', 2: 'B', 3: 'C'};
             var sName = sMap[r.shift] || r.shift;
-            return '<tr><td>'+sName+'</td><td>'+(r.wattage||'—')+'</td><td>'+fqcEsc(r.model)+'</td>'+
+            mgsT += r.inspected||0; mgsOK += r.passed||0; mgsRej += r.rejected||0;
+            return '<tr><td>'+sName+'</td><td>'+(r.wattage||'')+'</td><td>'+fqcEsc(r.model)+'</td>'+
                    '<td class="num">'+r.inspected+'</td><td class="num">'+r.passed+'</td><td class="num">'+r.rejected+'</td>'+
                    '<td><div class="bar-wrap"><div class="bar"><i style="width:'+Math.min(pct*12, 100)+'%"></i></div><span class="mono">'+pct+'%</span></div></td>'+
                    '<td class="num">'+r.inspected+'</td></tr>';
          }).join('');
+         el('mgsT', mgsT.toLocaleString());
+         el('mgsOK', mgsOK.toLocaleString());
+         el('mgsRej', mgsRej.toLocaleString());
+         el('mgsPc', mgsT ? (mgsRej/mgsT*100).toFixed(2)+'%' : '0.00%');
       } else if (sr) {
          sr.innerHTML = '<tr><td colspan="8"><div class="empty-state">No shift data found</div></td></tr>';
       }
@@ -950,7 +956,7 @@ function wireFqcAnomalies() {
               });
               
               drawDonut('pkDonut', 'pkLegend', [
-                {n:'Packed', v:pMap.packed, c:C.solar},
+                {n:'Packed', v:pMap.packed, c:C.amber},
                 {n:'Challaned', v:pMap.challaned, c:C.amber},
                 {n:'Dispatched', v:pMap.dispatched, c:C.green},
                 {n:'Repacked', v:pMap.repacked, c:C.mute}
@@ -7688,15 +7694,19 @@ function wireFqcAnomalies() {
              }
          }
          
-         var legend = document.getElementById('dpLegend');
-         var donut = document.getElementById('dpDonut');
-         if (legend && donut && d.table_fg) {
+         if (typeof drawDonut === 'function' && d.table_fg) {
              var grades = {};
              var total = 0;
              d.table_fg.forEach(function(r) {
                  grades[r.grade] = (grades[r.grade] || 0) + r.modules;
                  total += r.modules;
              });
+             drawDonut('dpDonut', 'dpLegend', [
+               {n:'A grade', v:grades['A']||0, c:C.green},
+               {n:'GY', v:grades['GY']||0, c:C.amber},
+               {n:'BGY', v:grades['BGY']||0, c:C.red}
+             ], total.toLocaleString(), 'modules packed');
+         });
              var pA = total ? ((grades['A']||0)/total)*100 : 0;
              var pGY = total ? ((grades['GY']||0)/total)*100 : 0;
              var pBGY = total ? ((grades['BGY']||0)/total)*100 : 0;
