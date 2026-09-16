@@ -165,7 +165,7 @@ function reset(boxes) {
   DOM = {};
   mainEl = new El('div');
   ['ldSessionCard', 'ldTableBody', 'ldFrom', 'ldTo', 'ldStatusFilter',
-   'ldSessionOverlay', 'ldMsg', 'ldScan', 'ldCount'].forEach(function (id) { el(id); });
+   'ldSessionOverlay', 'ldSessionMsg', 'ldSessionScan', 'ldCount'].forEach(function (id) { el(id); });
   toasts = []; SENT = [];
   REPLY = { ok: false, why: 'stub: no reply configured' };
   ldRows = []; ldBusy = false; ldHold = null;
@@ -191,17 +191,17 @@ var width = 0;
 test('a pallet not in this session is rejected by lookup, not sent to '
     + 'the server', function () {
   reset([pallet('ISPL260916/K001')]);
-  el('ldScan').value = 'ISPL260916/K999';
+  el('ldSessionScan').value = 'ISPL260916/K999';
   ldLookup();
   assert(ldHold === null, 'a foreign pallet armed a confirm');
-  assert(el('ldMsg').innerHTML.toLowerCase().indexOf('not on this challan') !== -1,
-        el('ldMsg').innerHTML);
+  assert(el('ldSessionMsg').innerHTML.toLowerCase().indexOf('not on this challan') !== -1,
+        el('ldSessionMsg').innerHTML);
   assert(SENT.length === 0, 'a rejected lookup still hit the server');
 });
 
 test('a pallet found in this session arms the confirm', function () {
   reset([pallet('ISPL260916/K001')]);
-  el('ldScan').value = 'ispl260916/k001';    // scanners send whatever case
+  el('ldSessionScan').value = 'ispl260916/k001';    // scanners send whatever case
   ldLookup();
   assert(ldHold && ldHold.ok && ldHold.box_no === 'ISPL260916/K001', ldHold);
 });
@@ -273,7 +273,7 @@ function () {
   reset([pallet('ISPL260916/K001', 'saved')]);
   ldRenderSession();
   var html = el('ldSessionCard').innerHTML;
-  assert(html.indexOf('id="ldScan"') !== -1, 'no scan field for an incomplete session');
+  assert(html.indexOf('id="ldSessionScan"') !== -1, 'no scan field for an incomplete session');
   assert(html.indexOf('Save &amp; Submit') !== -1 || html.indexOf('Save & Submit') !== -1,
         html);
 });
@@ -283,11 +283,30 @@ test('once every pallet is loaded, the session renders read-only - no '
   reset([pallet('ISPL260916/K001', 'loaded'), pallet('ISPL260916/W002', 'loaded')]);
   ldRenderSession();
   var html = el('ldSessionCard').innerHTML;
-  assert(html.indexOf('id="ldScan"') === -1,
+  assert(html.indexOf('id="ldSessionScan"') === -1,
         'a completed session still offered a scan field');
   assert(html.indexOf('Save &amp; Submit') === -1 && html.indexOf('Save & Submit') === -1,
         'a completed session still offered Save & Submit');
   assert(html.toLowerCase().indexOf('read-only') !== -1, html);
+});
+
+test('the session\'s own scan field and message div use ids distinct from '
+    + 'Gate Pass\'s legacy widget - a real bug once found live: v4\'s own '
+    + '"Loading verification" card inside Gate Pass (never removed, only '
+    + 'hidden) already carries id="ldScan" and id="ldMsg". Reusing either '
+    + 'here means getElementById silently resolves to whichever one comes '
+    + 'first in the DOM - keystrokes and paste into the visible session '
+    + "field can land nowhere, exactly as \"paste, nothing happens\" looks",
+function () {
+  reset([pallet('ISPL260916/K001', 'saved')]);
+  ldRenderSession();
+  var html = el('ldSessionCard').innerHTML;
+  assert(html.indexOf('id="ldScan"') === -1,
+        'the session reintroduced the bare id="ldScan" - collides with ' +
+        'Gate Pass\'s own hidden widget of the same id');
+  assert(html.indexOf('id="ldMsg"') === -1,
+        'the session reintroduced the bare id="ldMsg" - collides with ' +
+        'Gate Pass\'s own hidden widget of the same id');
 });
 
 

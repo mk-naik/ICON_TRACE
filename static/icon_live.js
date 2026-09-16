@@ -3218,6 +3218,41 @@ function wireFqcAnomalies() {
         el.parentNode.replaceChild(note, el);
       }
     });
+    // The card above has no button matching that text at all - it never
+    // needed one. v4's own renderLoad() (called unconditionally at sign-in,
+    // and again from a keydown handler this screen no longer wires) fills
+    // #ldList straight from a hardcoded LOAD_EXPECT=['A044','A045'] demo
+    // array with no relation to whatever challan is actually selected here.
+    // #ldList/#ldTag/#ldScan/#ldMsg are HIDDEN, not removed - v4's own
+    // renderLoad() has no null check on getElementById('ldList') and would
+    // throw if it ran again against a removed element; left in place but
+    // invisible, it keeps writing safely into nothing anyone sees.
+    var cards = view.querySelectorAll('.rail .card');
+    cards.forEach(function (c) {
+      var h = c.querySelector('.card-h h3');
+      if (!h || h.textContent.indexOf('Loading verification') === -1) return;
+      if (c.__ldPruned) return;
+      c.__ldPruned = true;
+      var body = c.querySelector('.card-b');
+      if (body) body.style.display = 'none';
+      // Hiding the container is not enough - #ldList's fake box numbers are
+      // still sitting in its innerHTML regardless of visibility (the exact
+      // mistake already made once on this same screen's Gate pass no.
+      // field). Blanked directly; renderLoad() only ever writes text back
+      // into it, so an empty starting point is all a later, harmless call
+      // needs to stay harmless.
+      var ldList = c.querySelector('#ldList');
+      if (ldList) ldList.innerHTML = '';
+      var ldMsg = c.querySelector('#ldMsg');
+      if (ldMsg) ldMsg.innerHTML = '';
+      var note = document.createElement('div');
+      note.className = 'card-b';
+      note.innerHTML = '<div class="note n-info">Pallet scanning and serial ' +
+        'verification moved to <b>Loading Verification</b> — Team ' +
+        '3’s screen, reached from the sidebar. This gate pass is no ' +
+        'longer gated on scans made here.</div>';
+      c.appendChild(note);
+    });
   }
 
   /* Search & Trace opened with a demo query already run, so the first thing
@@ -6952,10 +6987,10 @@ function wireFqcAnomalies() {
         : '<div style="padding:14px 20px 0"><label style="font-size:11px;' +
           'font-weight:700;color:var(--ink3);text-transform:uppercase;' +
           'letter-spacing:.5px">Scan or type a pallet number</label>' +
-          '<input id="ldScan" class="mono" style="width:100%;padding:8px 10px;' +
+          '<input id="ldSessionScan" class="mono" style="width:100%;padding:8px 10px;' +
           'margin-top:5px;border:1px solid var(--line);border-radius:var(--r)" ' +
           'placeholder="ISPL260901/K001 — Enter to find, Space to confirm">' +
-          '<div id="ldMsg" style="margin-top:8px"></div></div>') +
+          '<div id="ldSessionMsg" style="margin-top:8px"></div></div>') +
       '<div class="scroll" style="max-height:340px;margin-top:12px">' +
         '<table style="width:100%"><thead><tr><th style="width:36px">#</th>' +
           '<th>Pallet</th><th>Model</th><th>Grade</th><th class="num">Qty</th>' +
@@ -6971,7 +7006,7 @@ function wireFqcAnomalies() {
           '<button class="btn btn-primary" onclick="ldSubmit()">Save &amp; Submit</button>') +
       '</div>';
 
-    var input = ldEl('ldScan');
+    var input = ldEl('ldSessionScan');
     if (input) {
       input.focus();
       input.addEventListener('keydown', function (e) {
@@ -6984,14 +7019,14 @@ function wireFqcAnomalies() {
   }
 
   function ldMsg(cls, txt) {
-    var host = ldEl('ldMsg');
+    var host = ldEl('ldSessionMsg');
     if (!host) return;
     host.innerHTML = '<div class="scan-msg ' + cls + '">' +
       (cls === 'ok' ? '✓' : '✕') + '<span>' + fqcEsc(txt) + '</span></div>';
   }
 
   window.ldLookup = function () {
-    var input = ldEl('ldScan');
+    var input = ldEl('ldSessionScan');
     var no = (input && input.value || '').trim().toUpperCase();
     if (input) input.value = '';
     if (!no || !ldSession) return;
@@ -7579,6 +7614,153 @@ function wireFqcAnomalies() {
     });
   }
 
+  // The "Gate pass preview" card (the left-hand mock document) was never
+  // wired at all - v4's own SAI BABUJI / CHN-455 / A044-A045 sample data
+  // sat there permanently regardless of which real challan the operator
+  // picked in "Against challan". Rebuilt once, with real ids, so it can
+  // be filled from the selected challan's actual detail bundle instead.
+  function gpRebuildPreviewCard(vGp) {
+    var card = vGp.querySelector('.work > .card');
+    var body = card && card.querySelector('.card-b > div');
+    if (!body || document.getElementById('gpPrevParty')) return;
+    var header = body.querySelector('div');   // the letterhead block, kept as-is
+    var note = body.querySelector('.note.n-warn');
+    body.innerHTML =
+      (header ? header.outerHTML : '') +
+      '<div class="grid g2" style="gap:9px;font-size:11.5px">' +
+        '<div><b>Party</b><br><span id="gpPrevParty">Select a challan to preview</span><br>' +
+          '<span id="gpPrevGstinPan" style="color:var(--ink3)"></span></div>' +
+        '<div><b>Challan no.</b> <span class="mono" id="gpPrevChallanNo">—</span><br>' +
+          '<b>Date</b> <span class="mono" id="gpPrevDate">—</span><br>' +
+          '<b>Vehicle</b> <span class="mono" id="gpPrevVehicle">—</span></div></div>' +
+      '<table style="margin-top:12px;border:1px solid var(--line)">' +
+        '<thead><tr><th>Sl</th><th>Item</th><th>Box no.</th><th>Unit</th>' +
+          '<th style="text-align:right">Qty</th></tr></thead>' +
+        '<tbody id="gpPrevBoxRows"></tbody>' +
+        '<tfoot><tr><td colspan="3">Total boxes <span id="gpPrevTotalBoxes">0</span></td>' +
+          '<td>Nos</td><td class="num" id="gpPrevTotalQty">0</td></tr></tfoot></table>' +
+      // Rebuilt explicitly rather than regex-edited from the original's
+      // outerHTML - a text-pattern match against v4's exact demo wording
+      // ("Suresh Patel" ... "Performed") is exactly the kind of thing
+      // that silently stops matching (and silently keeps showing the old
+      // fake content) the moment that wording drifts even slightly.
+      '<div class="grid g4" style="margin-top:18px;font-size:10px">' +
+        '<div style="border:1px solid var(--line);border-radius:2px;padding:8px">' +
+          '<div style="font-size:8.5px;font-weight:700;color:var(--ink3);' +
+            'text-transform:uppercase;letter-spacing:.6px">Packed by · Team 1</div>' +
+          '<div style="font-weight:700;font-size:11px;margin-top:3px;color:var(--ink3)">not recorded here</div>' +
+          '<div class="mono" style="color:var(--ink3);font-size:9px">see the box’s own record</div>' +
+          '<div style="margin-top:4px"><span class="tag t-mute" style="font-size:8px">—</span></div></div>' +
+        '<div style="border:1px solid var(--line);border-radius:2px;padding:8px">' +
+          '<div style="font-size:8.5px;font-weight:700;color:var(--ink3);' +
+            'text-transform:uppercase;letter-spacing:.6px">Prepared by · Team 2</div>' +
+          '<div style="font-weight:700;font-size:11px;margin-top:3px;color:var(--ink3)">not recorded here</div>' +
+          '<div class="mono" style="color:var(--ink3);font-size:9px">see the box’s own record</div>' +
+          '<div style="margin-top:4px"><span class="tag t-mute" style="font-size:8px">—</span></div></div>' +
+        '<div style="border:1px solid var(--solar);border-radius:2px;padding:8px;background:var(--solar-lt)">' +
+          '<div style="font-size:8.5px;font-weight:700;color:var(--solar);' +
+            'text-transform:uppercase;letter-spacing:.6px">Loaded by · Team 3</div>' +
+          '<div style="font-weight:700;font-size:11px;margin-top:3px;color:var(--ink3)" ' +
+            'id="gpPrevLoadedBy">awaiting scan</div>' +
+          '<div class="mono" style="color:var(--ink3);font-size:9px">verify boxes on vehicle</div>' +
+          '<div style="margin-top:4px"><span class="tag t-rev" id="gpPrevLoadedTag" ' +
+            'style="font-size:8px">Pending</span></div></div>' +
+        '<div style="border:1px solid var(--line);border-radius:2px;padding:8px">' +
+          '<div style="font-size:8.5px;font-weight:700;color:var(--ink3);' +
+            'text-transform:uppercase;letter-spacing:.6px">Security &amp; driver</div>' +
+          '<div style="height:22px;border-bottom:1px solid var(--line);margin-top:4px"></div>' +
+          '<div style="color:var(--ink3);font-size:9px;margin-top:3px">signed at gate</div></div>' +
+      '</div>' +
+      (note ? note.outerHTML : '');
+  }
+
+  function gpFmtDate(iso) {
+    if (!iso) return '—';
+    var m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? (m[3] + '-' + m[2] + '-' + m[1]) : iso;
+  }
+
+  // Real box_id-level loading status, not v4's frozen "awaiting scan" -
+  // the same three-state aggregate Loading Verification's own landing
+  // list already computes, so this card agrees with that screen instead
+  // of contradicting it.
+  function gpLoadedAgg(boxes) {
+    if (!boxes || !boxes.length) return null;
+    var loaded = boxes.filter(function (b) { return b.loading_status === 'loaded'; }).length;
+    var started = boxes.filter(function (b) { return b.loading_status !== 'pending'; }).length;
+    if (loaded === boxes.length) return 'loaded';
+    if (started > 0) return 'in_progress';
+    return 'pending';
+  }
+
+  function gpRenderPreview(bundle) {
+    var party = document.getElementById('gpPrevParty');
+    if (!party) return;   // the card was never built (view not on screen)
+    var gstinPan = document.getElementById('gpPrevGstinPan');
+    var chNo = document.getElementById('gpPrevChallanNo');
+    var date = document.getElementById('gpPrevDate');
+    var veh = document.getElementById('gpPrevVehicle');
+    var rows = document.getElementById('gpPrevBoxRows');
+    var totalBoxes = document.getElementById('gpPrevTotalBoxes');
+    var totalQty = document.getElementById('gpPrevTotalQty');
+    var loadedBy = document.getElementById('gpPrevLoadedBy');
+    var loadedTag = document.getElementById('gpPrevLoadedTag');
+
+    if (!bundle) {
+      party.textContent = 'Select a challan to preview';
+      if (gstinPan) gstinPan.textContent = '';
+      if (chNo) chNo.textContent = '—';
+      if (date) date.textContent = '—';
+      if (veh) veh.textContent = '—';
+      if (rows) rows.innerHTML = '<tr><td colspan="5" style="text-align:center;' +
+        'color:var(--ink3);padding:10px">No challan selected yet</td></tr>';
+      if (totalBoxes) totalBoxes.textContent = '0';
+      if (totalQty) totalQty.textContent = '0';
+      return;
+    }
+
+    var ch = bundle.challan || {};
+    var boxes = bundle.boxes || [];
+    party.textContent = ch.buyer_name || 'General Stock';
+    if (gstinPan) {
+      var gstin = ch.buyer_gstin || '';
+      var pan = gstin.length >= 12 ? gstin.slice(2, 12) : '';
+      gstinPan.textContent = gstin ? ('GSTIN ' + gstin + (pan ? ' · PAN ' + pan : '')) : '';
+    }
+    if (chNo) chNo.textContent = ch.challan_no || '—';
+    if (date) date.textContent = gpFmtDate(ch.challan_date);
+    if (veh) veh.textContent = ch.vehicle_no || '—';
+    if (rows) {
+      rows.innerHTML = boxes.length ? boxes.map(function (b, i) {
+        return '<tr><td>' + (i + 1) + '</td><td class="mono">' + fqcEsc(ch.model || '—') +
+          '</td><td class="mono">' + fqcEsc(b.box_no || '—') + '</td><td>Nos</td>' +
+          '<td class="num">' + (b.qty || 0) + '</td></tr>';
+      }).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--ink3);' +
+        'padding:10px">No boxes on this challan</td></tr>';
+    }
+    if (totalBoxes) totalBoxes.textContent = String(boxes.length);
+    if (totalQty) totalQty.textContent = String(boxes.reduce(function (s, b) {
+      return s + (b.qty || 0);
+    }, 0));
+
+    if (loadedBy && loadedTag) {
+      var agg = gpLoadedAgg(boxes);
+      if (agg === 'loaded') {
+        loadedBy.textContent = 'Loaded';
+        loadedTag.className = 'tag t-pass'; loadedTag.style.fontSize = '8px';
+        loadedTag.textContent = 'Confirmed';
+      } else if (agg === 'in_progress') {
+        loadedBy.textContent = 'In progress';
+        loadedTag.className = 'tag t-rev'; loadedTag.style.fontSize = '8px';
+        loadedTag.textContent = 'Partial';
+      } else {
+        loadedBy.textContent = 'awaiting scan';
+        loadedTag.className = 'tag t-rev'; loadedTag.style.fontSize = '8px';
+        loadedTag.textContent = 'Pending';
+      }
+    }
+  }
+
   function wireGp() {
       var vGp = document.getElementById('v-gp');
       if (!vGp) return;
@@ -7616,6 +7798,8 @@ function wireFqcAnomalies() {
               // requirement. Choosing a challan pre-fills party/vehicle/qty
               // if the operator has not already typed their own; it never
               // locks the fields and never gates the Issue button.
+              gpRebuildPreviewCard(vGp);
+
               var selFld = detailsCard.querySelector('select');
               if (selFld) {
                   selFld.id = 'gpChallanSelV4';
@@ -7623,22 +7807,33 @@ function wireFqcAnomalies() {
                   if (reqLabel) reqLabel.classList.remove('req');
                   selFld.onchange = function() {
                       var chId = this.value ? parseInt(this.value, 10) : null;
-                      var ch = chId && window._gpLiveChallans &&
-                        window._gpLiveChallans.find(function(c) { return c.challan_id === chId; });
-                      if (!ch) return;
-                      var partyEl = document.getElementById('gpParty');
-                      var vehEl = document.getElementById('gpVehicle');
-                      var qtyEl = document.getElementById('gpQty');
-                      var descEl = document.getElementById('gpDesc');
-                      if (partyEl && !partyEl.value) partyEl.value = ch.customer_name || ch.buyer_name || '';
-                      if (vehEl && !vehEl.value) vehEl.value = ch.vehicle_no || '';
-                      if (qtyEl && !qtyEl.value) qtyEl.value = ch.box_count || '';
-                      if (descEl && !descEl.value) descEl.value = ch.model ?
-                        (ch.model + ' modules') : 'Modules against ' + (ch.challan_no || 'challan');
+                      if (!chId) { gpRenderPreview(null); return; }
+                      // The list this selector is built from (/api/challans)
+                      // carries no vehicle_no, no GSTIN, no box breakdown -
+                      // the preview needs the full detail bundle regardless,
+                      // so it is what this fetches, once, per selection.
+                      fetch('/api/challan/' + chId, { cache: 'no-store' })
+                        .then(function(r) { return r.json(); })
+                        .then(function(bundle) {
+                            if (!bundle || bundle.error) return;
+                            var ch = bundle.challan || {};
+                            var partyEl = document.getElementById('gpParty');
+                            var vehEl = document.getElementById('gpVehicle');
+                            var qtyEl = document.getElementById('gpQty');
+                            var descEl = document.getElementById('gpDesc');
+                            if (partyEl && !partyEl.value) partyEl.value = ch.buyer_name || '';
+                            if (vehEl && !vehEl.value) vehEl.value = ch.vehicle_no || '';
+                            if (qtyEl && !qtyEl.value) qtyEl.value = ch.qty || '';
+                            if (descEl && !descEl.value) descEl.value = ch.model ?
+                              (ch.model + ' modules') : 'Modules against ' + (ch.challan_no || 'challan');
+                            gpRenderPreview(bundle);
+                        })
+                        .catch(function() {});
                   };
               }
           }
       }
+      gpRenderPreview(null);
 
       gpHideUnwiredFields();
 
