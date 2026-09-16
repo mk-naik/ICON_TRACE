@@ -18,9 +18,14 @@
            ROLES[k].views.push('challan-list');
        }
        // Loading Verification's landing list rides the same nav slot the
-       // existing 'loadver' entry (NEW_VIEWS below) already reserved -
-       // whoever can see that button can see this.
-       if (ROLES[k].views && ROLES[k].views.indexOf('loadver') !== -1 && ROLES[k].views.indexOf('loading-list') === -1) {
+       // existing 'loadver' entry (NEW_VIEWS, further down this file)
+       // reserves for the same roles - matched by name here rather than
+       // by checking ROLES[k].views for 'loadver' already being present,
+       // because it never is yet at this point: addScreens() is what adds
+       // it, and that only runs later, at sign-in. Checking for it here
+       // silently registered 'loading-list' for nobody at all.
+       if (ROLES[k].views && ['Admin', 'Dispatch Operator', 'Packing Operator']
+           .indexOf(k) !== -1 && ROLES[k].views.indexOf('loading-list') === -1) {
            ROLES[k].views.push('loading-list');
        }
     });
