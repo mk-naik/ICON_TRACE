@@ -17,6 +17,12 @@
        if (ROLES[k].views && ROLES[k].views.indexOf('challan') !== -1 && ROLES[k].views.indexOf('challan-list') === -1) {
            ROLES[k].views.push('challan-list');
        }
+       // Loading Verification's landing list rides the same nav slot the
+       // existing 'loadver' entry (NEW_VIEWS below) already reserved -
+       // whoever can see that button can see this.
+       if (ROLES[k].views && ROLES[k].views.indexOf('loadver') !== -1 && ROLES[k].views.indexOf('loading-list') === -1) {
+           ROLES[k].views.push('loading-list');
+       }
     });
   }
 
@@ -438,7 +444,6 @@ function wireFqcAnomalies() {
 
         // Ensure Date filter matches reality
         if (!fDateEl.__wired) {
-          if (B.range && B.range.from && fDateEl) fDateEl.value = B.range.from;
           fDate = fDateEl ? fDateEl.value : '';
           fDateEl.__wired = true;
         }
@@ -503,21 +508,19 @@ function wireFqcAnomalies() {
   window.packApply = window.renderPackLog;
   
   // Default dates for Stock & Dispatch and Packing Log and DOM patches
-  setTimeout(function() {
+  (function initUI() {
     var today = new Date().toISOString().split('T')[0];
     
     // Patch v-disp (Stock & Dispatch)
     var dpDate = document.querySelector('#v-disp input[type="date"]');
     if (dpDate && (dpDate.value === '2026-08-19' || !dpDate.value)) { 
         dpDate.value = today; 
-        if (typeof window.dispApply === 'function') window.dispApply(); 
     }
     
     // Patch v-packdash (Packing Log)
     var pkDate = document.querySelector('#v-packdash input[type="date"]');
     if (pkDate && (pkDate.value === '2026-08-19' || !pkDate.value)) { 
         pkDate.value = today; 
-        if (typeof window.packApply === 'function') window.packApply(); 
     }
     
     // Inject Close button into Create Challan view
@@ -526,14 +529,17 @@ function wireFqcAnomalies() {
         var btn = document.createElement('button');
         btn.id = 'chCloseBtn';
         btn.className = 'btn btn-ghost';
-        btn.style.marginRight = '8px';
         btn.textContent = 'Close';
         btn.onclick = function() { 
             if (typeof go === 'function') go('challan-list', document.querySelector('[data-view="challan-list"]')); 
         };
-        chAct.insertBefore(btn, chAct.firstChild);
+        // Append instead of prepend so it goes to the right of the tags
+        chAct.appendChild(btn);
     }
-  }, 500);
+
+    if (typeof window.dispApply === 'function') window.dispApply(); 
+    if (typeof window.packApply === 'function') window.packApply(); 
+  })();
 
   /* ---- FQC Dashboard: one real, filtered picture, everywhere on the page
    *
@@ -2920,6 +2926,58 @@ function wireFqcAnomalies() {
     mdl.classList.add('on');
   };
 
+  function traceBoxHtml(d) {
+    var n = d.qty || 0;
+    
+    var html = '<div class="crumb">Box <b>'+fqcEsc(d.label)+'</b></div>'+
+    '<div class="grid g5" style="margin-bottom:14px">'+
+      '<div class="kpi"><label>Modules in box</label><div class="v">'+n+'</div><div class="d">capacity '+(d.capacity||36)+'</div></div>'+
+      '<div class="kpi"><label>Model</label><div class="v" style="font-size:14px">'+fqcEsc(d.model||'—')+'</div>'+
+        '<div class="d"></div></div>'+
+      '<div class="kpi k-pass"><label>Grade</label><div class="v" style="font-size:15px">'+fqcEsc(d.grade||'—')+'</div>'+
+        '<div class="d"></div></div>'+
+      '<div class="kpi k-solar"><label>Status</label><div class="v" style="font-size:15px">'+(d.open ? 'Open' : (d.dispatch && d.dispatch.challan ? 'Challaned' : 'Closed'))+'</div>'+
+        '<div class="d">'+(d.dispatch && d.dispatch.challan ? fqcEsc(d.dispatch.challan) : '')+'</div></div>'+
+      '<div class="kpi"><label>Bin</label><div class="v" style="font-size:15px">BIN-'+(d.bin_no||'?')+'</div>'+
+        '<div class="d">packed '+fqcEsc(d.pack_date||'—')+'</div></div></div>';
+        
+    html += '<div class="card"><div class="card-h"><h3>Box journey</h3></div><div class="card-b"><div class="chain">';
+    
+    html += '<div class="node '+(d.open ? 'cur' : 'done')+'"><label>Packed</label><div class="nv">'+fqcEsc(d.label)+'</div>'+
+        '<div class="nd">'+n+' modules</div>'+
+        '<div class="ns"><span class="tag t-info">'+(d.open ? 'Open' : 'Closed')+'</span></div></div>';
+        
+    if (d.dispatch && d.dispatch.challan) {
+        html += '<div class="node '+(d.dispatch.gp ? 'done' : 'cur')+'"><label>Challan</label><div class="nv">'+fqcEsc(d.dispatch.challan)+'</div>'+
+          '<div class="nd">'+fqcEsc(d.dispatch.customer||'')+'<br>'+fqcEsc(d.dispatch.ch_date||'')+'</div>'+
+          '<div class="ns"><span class="tag t-info">Issued</span></div></div>';
+          
+        if (d.dispatch.gp) {
+            html += '<div class="node cur"><label>Gate pass</label><div class="nv">'+fqcEsc(d.dispatch.gp)+'</div>'+
+              '<div class="nd">'+fqcEsc(d.dispatch.vehicle||'')+'</div>'+
+              '<div class="ns"><span class="tag t-solar">Dispatched</span></div></div>';
+        }
+    }
+    
+    html += '</div></div></div>';
+    
+    html += '<div class="card"><div class="card-h"><h3>Modules in this box</h3>'+
+      '<div class="ch-r"><span class="tag t-mute">'+n+' serials</span></div></div>'+
+      '<div class="card-b flush"><div class="tbl-wrap"><table>'+
+      '<thead><tr><th>Slot</th><th>Serial</th></tr></thead><tbody>';
+      
+    if (d.serials && d.serials.length) {
+        d.serials.forEach(function(s, i) {
+            html += '<tr><td>'+(i+1)+'</td><td class="mono">'+fqcEsc(s)+'</td></tr>';
+        });
+    } else {
+        html += '<tr><td colspan="2" style="padding:18px;color:var(--ink3)">No modules packed yet.</td></tr>';
+    }
+    
+    html += '</tbody></table></div></div>';
+    return html;
+  }
+
   function traceSerialHtml(d) {
     var journey = d.journey.map(function (j) {
       return '<div class="node' + (j.done ? ' done' : '') + '">' +
@@ -3046,6 +3104,26 @@ function wireFqcAnomalies() {
           });
         return;
       }
+      else if (out && q.indexOf('ISPL') === 0) {
+        out.innerHTML = '<div class="note n-info"><span>ⓘ</span><span>' +
+          'Looking up box ' + fqcEsc(q) + '…</span></div>';
+        fetch('/api/loading/box?no=' + encodeURIComponent(q), { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d.error) {
+              out.innerHTML = '<div class="note n-bad"><span>⚑</span><span>' +
+                fqcEsc(d.error) + '</span></div>';
+            } else {
+              out.innerHTML = traceBoxHtml(d);
+            }
+          })
+          .catch(function (e) {
+            out.innerHTML = '<div class="note n-bad"><span>⚑</span><span>' +
+              'Could not reach the server to trace ' + fqcEsc(q) + ' (' +
+              fqcEsc(e.message) + ').</span></div>';
+          });
+        return;
+      }
       orig.apply(this, arguments);
       try { searchPanelOrder(); } catch (e) {}
     };
@@ -3156,6 +3234,15 @@ function wireFqcAnomalies() {
 
   var _origGo = window.go;
   window.go = function (id, el) {
+    // An edit that never saves must not survive navigating away - it
+    // wrote nothing, so leaving is the abandon mechanism, not a separate
+    // action the operator has to remember to take. Checked before the
+    // screen switches, so a return trip to Create Challan does not still
+    // read as mid-edit.
+    if (id !== 'challan' && typeof chAbandonEdit === 'function' &&
+        typeof chEditingId !== 'undefined' && chEditingId) {
+      try { chAbandonEdit(); } catch (e) {}
+    }
     if (_origGo) _origGo.apply(this, arguments);
     if (id === 'search') clearSearch();
     if (id === 'plan') {
@@ -5150,7 +5237,12 @@ function wireFqcAnomalies() {
    */
   var chBoxes = [], chPicked = {}, chOrder = [], chInvoices = [],
       chInvoiceId = null, chChecks = null, chChallan = null, chBusy = false,
-      chChecksTimer = null;
+      chChecksTimer = null,
+      /* Set only while editing an issued challan (clEditChallan). Nothing
+         is written to reach this state - edit-draft only READS - so
+         leaving it unset (navigating away, or chAbandonEdit) is the whole
+         abandon mechanism: there is nothing on the server to undo. */
+      chEditingId = null, chEditingNo = null;
 
   function chEl(id) { return document.getElementById(id); }
 
@@ -5430,7 +5522,8 @@ function wireFqcAnomalies() {
   /* ---- boxes: only what is real, ticked ONLY in the order ticked ------ */
 
   function chLoadBoxes() {
-    return fetch('/api/challan/boxes', { cache: 'no-store' })
+    var qs = chEditingId ? ('?exclude_challan_id=' + chEditingId) : '';
+    return fetch('/api/challan/boxes' + qs, { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (rows) {
         chBoxes = rows || [];
@@ -5685,8 +5778,48 @@ function wireFqcAnomalies() {
     }
   }
 
+  function chHandleEditResult(d) {
+    if (!d || !d.ok) {
+      if (typeof toast === 'function') toast((d && d.why) || 'Refused.');
+      return;
+    }
+    var was = chEditingNo || 'the original';
+    if (typeof toast === 'function') {
+      toast(d.no + ' saved, replacing ' + was + ' — ' + d.qty +
+            ' serial(s) dispatched. ' + was + ' is kept, marked superseded.');
+    }
+    chEditingId = null; chEditingNo = null;
+    chResetFields();
+    var createBtn = chEl('chCreate');
+    if (createBtn) createBtn.textContent = 'Create challan';
+    var draftBtn = chEl('chDraftBtn');
+    if (draftBtn) draftBtn.style.display = '';
+    var sel = chEl('chInvoiceSel'); if (sel) sel.disabled = false;
+    var host = chEl('chStatus'); if (host) host.innerHTML = '';
+    chRenderDocsPlaceholder();
+    if (typeof go === 'function') {
+      go('challan-list', document.querySelector('[data-view="challan-list"]'));
+    }
+  }
+
   function chCreateOrSubmit(action) {
     if (chBusy) return;
+    if (chEditingId) {
+      if (action === 'draft') {
+        if (typeof toast === 'function') {
+          toast('An edit is saved directly — there is no draft step.');
+        }
+        return;
+      }
+      chBusy = true;
+      fetch('/api/challan/' + chEditingId + '/edit-save', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(chPayload()) })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { chBusy = false; chHandleEditResult(d); })
+        .catch(function () { chBusy = false; });
+      return;
+    }
     if (chChallan && chChallan.status === 'draft') {
       if (action === 'draft') {
         if (typeof toast === 'function') {
@@ -5717,6 +5850,93 @@ function wireFqcAnomalies() {
 
   window.createChallan = function () { chCreateOrSubmit('create'); };
   function chSaveDraft() { chCreateOrSubmit('draft'); }
+
+  /* ---- edit: reserves nothing, writes nothing, until Save is pressed --- */
+
+  function chShowEditBar() {
+    var host = chEl('chStatus');
+    if (!host) return;
+    host.innerHTML = '<div class="note n-info" style="font-size:11.5px">' +
+      '<span>✎</span><span>Editing <b>' +
+      fqcEsc(chEditingNo || ('challan ' + chEditingId)) + '</b> — nothing ' +
+      'changes until you save. The invoice is locked; everything else may ' +
+      'be changed, including which boxes are on it.' +
+      '<button class="btn btn-ghost btn-sm" onclick="chAbandonEdit()" ' +
+      'style="margin-left:10px">Cancel edit</button></span></div>';
+  }
+
+  /* Called by clEditChallan once /edit-draft has resolved the original's
+     real box_ids server-side. Writes nothing itself either - this only
+     fills the same screen an ordinary Create uses. */
+  function chBeginEdit(prefill) {
+    chEditingId = prefill.editing_challan_id;
+    chEditingNo = prefill.no;
+    chChallan = null;
+    chPicked = {}; chOrder = [];
+    (prefill.boxes || []).forEach(function (id) {
+      chPicked[id] = true; chOrder.push(id);
+    });
+    chInvoiceId = prefill.invoice_id;
+
+    var sel = chEl('chInvoiceSel');
+    if (sel) {
+      sel.value = chInvoiceId ? String(chInvoiceId) : '';
+      sel.disabled = true;
+    }
+    var createBtn = chEl('chCreate');
+    if (createBtn) createBtn.textContent = 'Save changes';
+    var draftBtn = chEl('chDraftBtn');
+    if (draftBtn) draftBtn.style.display = 'none';
+
+    var afterFill = function () {
+      // The document's OWN values win over whatever the invoice says for
+      // the fields an edit may change - they may already have been typed
+      // differently from the invoice when this challan was first made.
+      var set = function (label, val) {
+        var f = chField(label);
+        if (f && val != null) f.value = val;
+      };
+      set('Vehicle no.', prefill.vehicle_no);
+      set('Transporter', prefill.transporter);
+      set('LR / GR no.', prefill.lr_no);
+      set('Driver name', prefill.driver_name);
+      set('Driver mobile', prefill.driver_mobile);
+      chShowEditBar();
+      chRenderDocsPlaceholder();
+      chLoadBoxes().then(chRunChecksNow);
+    };
+    if (chInvoiceId) {
+      fetch('/api/invoice/' + chInvoiceId, { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d.error) { chFillFromInvoice(d); chRenderInvoiceHint(d); }
+          afterFill();
+        })
+        .catch(afterFill);
+    } else {
+      afterFill();
+    }
+  }
+
+  /* The abandon mechanism itself: since edit-draft never wrote anything,
+     abandoning is purely local state - no request, nothing to release.
+     Reached from the explicit Cancel edit button AND from navigating away
+     (the go() patch below calls this too), so either path leaves the
+     original exactly as it was. */
+  window.chAbandonEdit = function () {
+    if (!chEditingId) return;
+    chEditingId = null; chEditingNo = null;
+    chResetFields();
+    var sel = chEl('chInvoiceSel'); if (sel) sel.disabled = false;
+    var createBtn = chEl('chCreate');
+    if (createBtn) createBtn.textContent = 'Create challan';
+    var draftBtn = chEl('chDraftBtn');
+    if (draftBtn) draftBtn.style.display = '';
+    var host = chEl('chStatus'); if (host) host.innerHTML = '';
+    chRenderDocsPlaceholder();
+    chLoadBoxes().then(chRunChecksNow);
+    if (typeof toast === 'function') toast('Edit abandoned — nothing changed.');
+  };
 
   function chShowDraftBar() {
     var host = chEl('chStatus');
@@ -5806,23 +6026,10 @@ function wireFqcAnomalies() {
     host.insertBefore(btn, host.firstChild);
   }
 
-  window.chClearForm = function () {
-    if (chChallan) {
-      if (typeof toast === 'function') {
-        toast(chChallan.status === 'draft'
-          ? chChallan.no + ' is a draft — discard it first. A reservation ' +
-            'is not something a form reset can quietly undo.'
-          : chChallan.no + ' is already created. Leave and return to this ' +
-            'screen to start another.');
-      }
-      return;
-    }
-    var partyVal = chEl('chParty') && chEl('chParty').value;
-    if (!chOrder.length && !chInvoiceId && !partyVal) return;  // nothing to clear
-    if (!confirm('Clear the invoice, every filled field and every ticked box?')) {
-      return;
-    }
-
+  /* Blanks every field this screen owns, shared by Clear form and by
+     abandoning an edit - the same reset either way, since an abandoned
+     edit leaves this screen exactly as empty as Clear form would. */
+  function chResetFields() {
     chPicked = {}; chOrder = []; chInvoiceId = null; chChecks = null;
     var invSel = chEl('chInvoiceSel'); if (invSel) invSel.value = '';
     chRenderInvoiceHint(null);
@@ -5846,7 +6053,32 @@ function wireFqcAnomalies() {
       if (f) f.value = '';
     });
     var cphone = chEl('chContactPhone'); if (cphone) cphone.value = '';
+  }
 
+  window.chClearForm = function () {
+    if (chEditingId) {
+      if (typeof toast === 'function') {
+        toast('Editing ' + (chEditingNo || 'this challan') + ' — Cancel ' +
+              'edit leaves it untouched; Clear form is for a new challan.');
+      }
+      return;
+    }
+    if (chChallan) {
+      if (typeof toast === 'function') {
+        toast(chChallan.status === 'draft'
+          ? chChallan.no + ' is a draft — discard it first. A reservation ' +
+            'is not something a form reset can quietly undo.'
+          : chChallan.no + ' is already created. Leave and return to this ' +
+            'screen to start another.');
+      }
+      return;
+    }
+    var partyVal = chEl('chParty') && chEl('chParty').value;
+    if (!chOrder.length && !chInvoiceId && !partyVal) return;  // nothing to clear
+    if (!confirm('Clear the invoice, every filled field and every ticked box?')) {
+      return;
+    }
+    chResetFields();
     chRenderBoxTable();
     chRenderSummary();
     chRunChecksNow();
@@ -5884,7 +6116,11 @@ function wireFqcAnomalies() {
       chInitNo();
     }
     chLoadInvoices();
-    if (chChallan) {
+    if (chChallan || chEditingId) {
+      // an in-progress draft or edit already has its own boxes loaded -
+      // chBeginEdit() runs before this and loads with the right query,
+      // so loading again here (without exclude_challan_id) would race it
+      // and could show the wrong list if it resolved second.
       chRenderBoxTable();
     } else {
       chLoadBoxes().then(chRunChecksNow);
@@ -5905,7 +6141,8 @@ function wireFqcAnomalies() {
 
   function clRenderRow(ch) {
     var statusClass = ch.status === 'issued' ? 't-pass'
-      : ch.status === 'cancelled' ? 't-mute' : 't-info';
+      : ch.status === 'cancelled' ? 't-mute'
+      : ch.status === 'superseded' ? 't-rev' : 't-info';
     var locked = ch.gp_count > 0;
     return '<tr>' +
       '<td class="mono">' + fqcEsc(ch.challan_no || ('IS-' + ch.seq)) + '</td>' +
@@ -6057,10 +6294,12 @@ function wireFqcAnomalies() {
     var actions = '';
     if (isIssued) {
       if (!locked) {
-        /* Edit = cancel this challan then pre-fill a new draft */
+        /* Edit reserves this challan's boxes without touching it. Saving
+           creates a new (fy, seq, suffix) row and marks this one
+           superseded; leaving without saving changes nothing at all. */
         actions += '<button class="btn btn-ghost btn-sm" ' +
           'onclick="clEditChallan(' + ch.challan_id + ')" ' +
-          'title="Cancel this challan and open a new draft pre-filled with the same invoice and party">Edit</button> ';
+          'title="Open this challan for editing — nothing changes until you save">Edit</button> ';
         actions += '<button class="btn btn-ghost btn-sm" ' +
           'style="color:var(--fail)" ' +
           'onclick="clCancelChallan(' + ch.challan_id + ')" ' +
@@ -6093,7 +6332,8 @@ function wireFqcAnomalies() {
     ) : '';
 
     var statusClass = ch.status === 'issued' ? 't-pass'
-      : ch.status === 'cancelled' ? 't-mute' : 't-info';
+      : ch.status === 'cancelled' ? 't-mute'
+      : ch.status === 'superseded' ? 't-rev' : 't-info';
 
     card.innerHTML =
       '<div style="padding:16px 20px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center">' +
@@ -6128,6 +6368,14 @@ function wireFqcAnomalies() {
         '<div style="padding:12px 20px;background:var(--bg2);font-size:11.5px;color:var(--ink3)">' +
           '&#x26A0; Cancelled: ' + fqcEsc(ch.cancelled_reason) +
           (ch.cancelled_at ? ' · ' + fqcEsc(ch.cancelled_at) : '') + '</div>'
+      ) : '') +
+      (ch.status === 'superseded' && ch.superseded_by ? (
+        '<div style="padding:12px 20px;background:var(--bg2);font-size:11.5px;color:var(--ink3)">' +
+          '&#x21BB; Superseded by an edit' +
+          (ch.superseded_at ? ' · ' + fqcEsc(ch.superseded_at) : '') +
+          (ch.superseded_by_user ? ' · ' + fqcEsc(ch.superseded_by_user) : '') +
+          ' &nbsp; <button class="btn btn-ghost btn-sm" onclick="clOpenDetail(' +
+          ch.superseded_by + ')">View the replacement</button></div>'
       ) : '') +
       '<div style="padding:12px 20px;border-top:1px solid var(--bd);display:flex;gap:8px;flex-wrap:wrap">' +
         docs + actions +
@@ -6164,55 +6412,30 @@ function wireFqcAnomalies() {
   };
 
   window.clEditChallan = function (id) {
-    /* Cancel the issued challan, then navigate to Create Challan pre-filled
-       with the original's party and invoice.  The original row is untouched
-       except for its cancelled status — the document is never rewritten. */
-    var ch = clRows.filter(function (r) { return r.challan_id === id; })[0] || {};
-    var no = ch.challan_no || ('challan #' + id);
-    if (!confirm('Edit ' + no + '? This will cancel the issued challan and ' +
-        'open a new draft pre-filled with the same invoice and party. ' +
-        'The original record stays visible, tagged cancelled.')) return;
-    /* Step 1: fetch detail so we have invoice_id before cancelling */
-    fetch('/api/challan/' + id, { cache: 'no-store' })
+    /* Reserves nothing and touches nothing - /edit-draft only reads. The
+       original stays exactly as it is unless Save is actually pressed on
+       the pre-filled screen; leaving without saving needs no cleanup at
+       all, here or on the server, because nothing was written to reach
+       this state in the first place. */
+    fetch('/api/challan/' + id + '/edit-draft', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: '{}' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        var origInvId = (d.challan || {}).invoice_id;
-        return fetch('/api/challan/' + id + '/discard', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reason: 'cancelled for edit by operator' })
-        }).then(function (r2) { return r2.json(); })
-          .then(function (d2) {
-            if (!d2.ok) { if (typeof toast === 'function') toast(d2.why || 'Could not cancel.'); return; }
-            /* Step 2: navigate to create screen and pre-fill */
-            clCloseDetail();
-            chChallan = null;        /* reset create screen state */
-            chPicked = {}; chOrder = []; chInvoiceId = origInvId; chChecks = null;
-            if (d.boxes) {
-              for (var i = 0; i < d.boxes.length; i++) {
-                chPicked[d.boxes[i].box_serial] = true;
-                chOrder.push(d.boxes[i].box_serial);
-              }
-            }
-            if (typeof go === 'function') {
-              var navEl = document.querySelector('[data-view="challan"]');
-              go('challan', navEl);
-            }
-            /* Pre-select the invoice so the screen loads it */
-            if (origInvId) {
-              setTimeout(function () {
-                var sel = document.getElementById('chInvoiceSel');
-                if (sel) {
-                  sel.value = String(origInvId);
-                  if (typeof chInvoiceChange === 'function') chInvoiceChange();
-                  else chInvoiceId = origInvId;
-                }
-              }, 400);
-            }
-            if (typeof toast === 'function') {
-              toast(no + ' cancelled — fill in the new challan and Create to replace it.');
-            }
-          });
+        if (!d.ok) {
+          if (typeof toast === 'function') toast(d.why || 'Could not open for editing.');
+          return;
+        }
+        clCloseDetail();
+        // begin the edit BEFORE switching views: it loads the box list
+        // itself (with the right exclude_challan_id), so wireChallan()'s
+        // own bootstrap - triggered by go() below - must see chEditingId
+        // already set or it would fire a second, unguarded load racing it.
+        if (typeof chBeginEdit === 'function') chBeginEdit(d);
+        if (typeof go === 'function') go('challan');
+        if (typeof toast === 'function') {
+          toast('Editing ' + d.no + '. Nothing changes until you save.');
+        }
       })
       .catch(function () { if (typeof toast === 'function') toast('Request failed.'); });
   };
@@ -6404,6 +6627,318 @@ function wireFqcAnomalies() {
       });
   };
 
+  /* ---- Loading Verification: the challan-level landing list + session --
+   *
+   * The NEW_VIEWS entry 'loadver' already reserves the nav slot, icon and
+   * label "Loading Verification" and points at the OLD serial-contents
+   * check (frag_loading.html, via /view/loading) - untouched, and still
+   * reachable exactly as it always was at its own standalone /loading URL.
+   * That check answers "is this ONE pallet's contents what packing said";
+   * this screen answers "has every pallet on THIS CHALLAN actually been
+   * put on the vehicle", and what it writes is what gates the challan's
+   * own print/excel documents.
+   *
+   * Swap is deliberately out of scope. If a pallet is wrong or missing,
+   * the resolution is: leave without submitting, edit the challan (the
+   * existing (MA)/(MB) mechanism), and start a fresh session against the
+   * new challan_id - editing already mints fresh challan_box rows at
+   * 'pending', so nothing here needs to know a swap happened.
+   */
+  var ldRows = [], ldBusy = false, ldSession = null, ldHold = null;
+
+  function ldEl(id) { return document.getElementById(id); }
+
+  function ldInjectView() {
+    if (document.getElementById('v-loading-list')) return;
+    var main = document.querySelector('.main');
+    if (!main) return;
+    var sec = document.createElement('section');
+    sec.className = 'view';
+    sec.id = 'v-loading-list';
+    sec.innerHTML =
+      '<div class="pg"><h2>Loading Verification</h2>' +
+        '<p>Confirm every pallet on a challan is actually on the vehicle ' +
+        'before its documents can be produced</p>' +
+        '<div class="pg-act">' +
+          '<a class="btn btn-ghost" href="/loading" target="_blank" rel="noopener" ' +
+            'title="The original pallet-contents check, unchanged">' +
+            'Verify one pallet’s contents →</a>' +
+        '</div>' +
+      '</div>' +
+      '<div class="filters">' +
+        '<div class="fld"><label>From</label><input type="date" id="ldFrom" onchange="ldLoad()"></div>' +
+        '<div class="fld"><label>To</label><input type="date" id="ldTo" onchange="ldLoad()"></div>' +
+        '<div class="fld"><label>Status</label><select id="ldStatusFilter" onchange="ldLoad()">' +
+          '<option value="">All</option>' +
+          '<option value="pending">Pending</option>' +
+          '<option value="in_progress">In progress</option>' +
+          '<option value="loaded">Loaded</option>' +
+        '</select></div>' +
+        '<div class="sp"><button class="btn btn-primary" onclick="ldLoad()">Refresh</button></div>' +
+      '</div>' +
+      '<div class="wmain o3">' +
+        '<div class="card" data-itable="loading" data-export="loading">' +
+          '<div class="card-h"><h3>Challans</h3><div class="ch-r">' +
+            '<input data-role="search" placeholder="Search buyer / invoice…" ' +
+              'style="width:200px">' +
+            '<button class="btn btn-ghost btn-sm" data-role="reset">Reset</button>' +
+            '<button class="btn btn-ghost btn-sm" data-role="export">Export</button>' +
+            '<span data-role="count" class="tag t-mute"></span>' +
+          '</div></div>' +
+          '<div class="card-b flush scroll"><table style="width:100%">' +
+            '<thead><tr><th>Challan No.</th><th>Date</th><th>Buyer</th>' +
+              '<th>Invoice</th><th class="num">Pallets</th><th>Status</th>' +
+              '<th></th></tr></thead>' +
+            '<tbody id="ldTableBody">' +
+              '<tr><td colspan="7" style="padding:20px;color:var(--ink3);' +
+                'text-align:center">Loading…</td></tr>' +
+            '</tbody>' +
+          '</table></div>' +
+        '</div>' +
+      '</div>' +
+      '<div id="ldSessionOverlay" style="display:none;position:fixed;inset:0;z-index:300;' +
+        'background:rgba(14,26,43,.55);align-items:flex-start;justify-content:center;' +
+        'overflow-y:auto;padding:40px 16px">' +
+        '<div id="ldSessionCard" style="background:var(--surface);border-radius:var(--r);' +
+          'width:100%;max-width:760px;box-shadow:0 10px 30px rgba(0,0,0,.2);' +
+          'margin:0 auto;padding:0;overflow:hidden;position:relative"></div>' +
+      '</div>';
+    main.appendChild(sec);
+    var today = new Date().toISOString().slice(0, 10);
+    ldEl('ldFrom').value = today;
+    ldEl('ldTo').value = today;
+  }
+
+  function ldStatusTag(agg, n_loaded, n_total) {
+    if (agg === 'loaded') {
+      return '<span class="tag t-pass">✔ Loaded</span>';
+    }
+    if (agg === 'in_progress') {
+      return '<span class="tag t-rev">In progress · ' + n_loaded + '/' +
+        n_total + '</span>';
+    }
+    return '<span class="tag t-mute">Pending</span>';
+  }
+
+  function ldRenderRow(r) {
+    return '<tr>' +
+      '<td class="mono">' + fqcEsc(r.challan_no || ('#' + r.challan_id)) + '</td>' +
+      '<td>' + fqcEsc(r.challan_date || '—') + '</td>' +
+      '<td style="font-size:11.5px">' + fqcEsc(r.buyer_name || '—') + '</td>' +
+      '<td class="mono">' + fqcEsc(r.invoice_no || '—') + '</td>' +
+      '<td class="num">' + (r.n_loaded || 0) + ' / ' + (r.n_total || 0) + '</td>' +
+      '<td>' + ldStatusTag(r.agg_status, r.n_loaded, r.n_total) + '</td>' +
+      '<td style="text-align:right"><button class="btn btn-ghost btn-sm" ' +
+        'onclick="ldOpenSession(' + r.challan_id + ')">Open</button></td>' +
+      '</tr>';
+  }
+
+  window.ldLoad = function () {
+    if (ldBusy) return;
+    var host = ldEl('ldTableBody');
+    if (!host) return;
+    ldBusy = true;
+    var from = (ldEl('ldFrom') || {}).value || '';
+    var to = (ldEl('ldTo') || {}).value || '';
+    var status = (ldEl('ldStatusFilter') || {}).value || '';
+    var qs = '?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) +
+             '&status=' + encodeURIComponent(status);
+    host.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;' +
+      'color:var(--ink3)">Loading…</td></tr>';
+    fetch('/api/loading/challans' + qs, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        ldBusy = false;
+        ldRows = d.challans || [];
+        host.innerHTML = ldRows.length ? ldRows.map(ldRenderRow).join('') :
+          '<tr><td colspan="7"><div class="empty-state"><p>No challan in this ' +
+          'range.</p></div></td></tr>';
+        if (window.iconTable) window.iconTable.wireAll();
+      })
+      .catch(function () {
+        ldBusy = false;
+        var h2 = ldEl('ldTableBody');
+        if (h2) h2.innerHTML = '<tr><td colspan="7" style="color:var(--fail);' +
+          'padding:20px">Could not load challans.</td></tr>';
+      });
+  };
+
+  /* ---- the session: one challan, scan or type, Enter finds, Space confirms */
+
+  window.ldOpenSession = function (challanId) {
+    var overlay = ldEl('ldSessionOverlay');
+    var card = ldEl('ldSessionCard');
+    if (!overlay || !card) { ldInjectView(); overlay = ldEl('ldSessionOverlay');
+      card = ldEl('ldSessionCard'); if (!overlay || !card) return; }
+    card.innerHTML = '<div style="padding:24px;color:var(--ink3)">Loading…</div>';
+    overlay.style.display = 'block';
+    fetch('/api/loading/' + challanId, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.error) {
+          card.innerHTML = '<div style="padding:24px;color:var(--fail)">' +
+            fqcEsc(d.error) + '</div>';
+          return;
+        }
+        ldSession = d; ldHold = null;
+        ldRenderSession();
+      })
+      .catch(function () {
+        card.innerHTML = '<div style="padding:24px;color:var(--fail)">Could not ' +
+          'load this challan.</div>';
+      });
+  };
+
+  window.ldCloseSession = function () {
+    // "Save" is just navigation back to the list - every confirm already
+    // persisted itself, so there is nothing left to write here.
+    var overlay = ldEl('ldSessionOverlay');
+    if (overlay) overlay.style.display = 'none';
+    ldSession = null; ldHold = null;
+    ldLoad();
+  };
+
+  function ldPalletRow(b, i) {
+    var tone = b.loading_status === 'loaded' ? 'pass'
+      : b.loading_status === 'saved' ? 'rev' : 'mute';
+    var label = b.loading_status === 'loaded' ? 'Loaded'
+      : b.loading_status === 'saved' ? 'Saved' : 'Pending';
+    return '<tr><td class="mono">' + (i + 1) + '</td>' +
+      '<td class="mono">' + fqcEsc(b.box_no) + '</td>' +
+      '<td class="mono">' + fqcEsc(b.model || '—') + '</td>' +
+      '<td>' + fqcEsc(b.grade || '—') + '</td>' +
+      '<td class="num">' + b.qty + '</td>' +
+      '<td><span class="tag t-' + tone + '">' + label + '</span></td></tr>';
+  }
+
+  function ldRenderSession() {
+    var card = ldEl('ldSessionCard');
+    if (!card || !ldSession) return;
+    var boxes = ldSession.boxes || [];
+    var total = boxes.length;
+    var saved = boxes.filter(function (b) {
+      return b.loading_status === 'saved' || b.loading_status === 'loaded'; }).length;
+    var loaded = boxes.filter(function (b) { return b.loading_status === 'loaded'; }).length;
+    var allLoaded = total > 0 && loaded === total;
+
+    card.innerHTML =
+      '<div style="padding:16px 20px;border-bottom:1px solid var(--bd);' +
+        'display:flex;justify-content:space-between;align-items:center">' +
+        '<div><span class="mono" style="font-size:15px;font-weight:700">' +
+          fqcEsc(ldSession.no || '—') + '</span> · ' +
+          '<span style="font-size:11.5px;color:var(--ink3)">' +
+          fqcEsc(ldSession.buyer_name || '—') + ' · ' +
+          fqcEsc(ldSession.invoice_no || '—') + '</span></div>' +
+        '<button class="btn btn-ghost btn-sm" onclick="ldCloseSession()">&times; Close</button>' +
+      '</div>' +
+      (allLoaded ?
+        '<div class="note n-ok" style="margin:12px 20px;font-size:11.5px">' +
+          '<span>✓</span><span>Every pallet already confirmed loaded. ' +
+          'This session is read-only - scanning is disabled.</span></div>'
+        : '<div style="padding:14px 20px 0"><label style="font-size:11px;' +
+          'font-weight:700;color:var(--ink3);text-transform:uppercase;' +
+          'letter-spacing:.5px">Scan or type a pallet number</label>' +
+          '<input id="ldScan" class="mono" style="width:100%;padding:8px 10px;' +
+          'margin-top:5px;border:1px solid var(--line);border-radius:var(--r)" ' +
+          'placeholder="ISPL260901/K001 — Enter to find, Space to confirm">' +
+          '<div id="ldMsg" style="margin-top:8px"></div></div>') +
+      '<div class="scroll" style="max-height:340px;margin-top:12px">' +
+        '<table style="width:100%"><thead><tr><th style="width:36px">#</th>' +
+          '<th>Pallet</th><th>Model</th><th>Grade</th><th class="num">Qty</th>' +
+          '<th>Status</th></tr></thead><tbody>' +
+          boxes.map(ldPalletRow).join('') +
+        '</tbody></table></div>' +
+      '<div style="padding:12px 20px;border-top:1px solid var(--bd);' +
+        'display:flex;gap:8px;align-items:center">' +
+        '<span class="tag t-mute">' + saved + ' of ' + total + ' confirmed</span>' +
+        '<span style="flex:1"></span>' +
+        '<button class="btn btn-ghost" onclick="ldCloseSession()">Save</button>' +
+        (allLoaded ? '' :
+          '<button class="btn btn-primary" onclick="ldSubmit()">Save &amp; Submit</button>') +
+      '</div>';
+
+    var input = ldEl('ldScan');
+    if (input) {
+      input.focus();
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); ldLookup(); }
+        else if (e.code === 'Space' && ldHold && ldHold.ok) {
+          e.preventDefault(); ldConfirm();
+        }
+      });
+    }
+  }
+
+  function ldMsg(cls, txt) {
+    var host = ldEl('ldMsg');
+    if (!host) return;
+    host.innerHTML = '<div class="scan-msg ' + cls + '">' +
+      (cls === 'ok' ? '✓' : '✕') + '<span>' + fqcEsc(txt) + '</span></div>';
+  }
+
+  window.ldLookup = function () {
+    var input = ldEl('ldScan');
+    var no = (input && input.value || '').trim().toUpperCase();
+    if (input) input.value = '';
+    if (!no || !ldSession) return;
+    var row = (ldSession.boxes || []).filter(function (b) {
+      return b.box_no === no; })[0];
+    if (!row) {
+      ldHold = null;
+      ldMsg('bad', no + ' is not on this challan.');
+      return;
+    }
+    ldHold = { box_no: no, ok: true };
+    if (row.loading_status !== 'pending') {
+      ldMsg('ok', no + ' — already ' + row.loading_status +
+            '. Space confirms it again if you need to.');
+    } else {
+      ldMsg('ok', no + ' found — ' + row.model + ' · grade ' +
+            (row.grade || '—') + ' · ' + row.qty + ' modules. ' +
+            'Space to confirm.');
+    }
+  };
+
+  window.ldConfirm = function () {
+    if (!ldHold || !ldHold.ok || !ldSession) return;
+    var boxNo = ldHold.box_no;
+    fetch('/api/loading/' + ldSession.challan_id + '/confirm', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ box_no: boxNo }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { ldMsg('bad', d.why || 'Could not confirm.'); return; }
+        ldHold = null;
+        var row = (ldSession.boxes || []).filter(function (b) {
+          return b.box_no === boxNo; })[0];
+        if (row) row.loading_status = 'saved';
+        ldMsg('ok', boxNo + ' confirmed.');
+        ldRenderSession();
+      })
+      .catch(function () { ldMsg('bad', 'The server did not answer.'); });
+  };
+
+  window.ldSubmit = function () {
+    if (!ldSession) return;
+    fetch('/api/loading/' + ldSession.challan_id + '/submit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: '{}' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { if (typeof toast === 'function') toast(d.why); return; }
+        if (typeof toast === 'function') {
+          toast('Loading verified — ' + d.loaded + ' pallet(s) confirmed. ' +
+                'Print and Excel are now available on this challan.');
+        }
+        ldCloseSession();
+      })
+      .catch(function () {
+        if (typeof toast === 'function') toast('The server did not answer.');
+      });
+  };
+
+  /* END loading — test_loading.js reads to here */
+
   /* ---- Hook view changes so Challan List and Gate Pass wire correctly ---- */
   if (typeof window.go === 'function' && !window.go.__chListPatched) {
     var _origGoCh = window.go;
@@ -6412,11 +6947,25 @@ function wireFqcAnomalies() {
         view = 'challan-list';
         arguments[0] = view;
       }
+      // The NEW_VIEWS 'loadver' entry already reserves the nav slot,
+      // icon and label "Loading Verification" and fetches /view/loading
+      // into v-loadver - a fragment this layer must not touch. The
+      // challan-level landing list is now what that button opens; the
+      // old serial-contents screen becomes a link FROM the landing list
+      // instead (see ldInjectView), reachable exactly as before at its
+      // own standalone /loading URL.
+      if (view === 'loadver' && btn && btn.classList && btn.classList.contains('nav-i')) {
+        view = 'loading-list';
+        arguments[0] = view;
+      }
       var result = _origGoCh.apply(this, arguments);
       try {
         if (view === 'challan-list') {
           clInjectView();
           wireChList();
+        }
+        if (view === 'loading-list') {
+          try { ldInjectView(); ldLoad(); } catch (e) {}
         }
         if (view === 'gp') { wireGp(); }
         if (view === 'disp') {

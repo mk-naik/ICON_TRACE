@@ -642,6 +642,73 @@ correctly) was already right and is kept unchanged.
       as that goes, but not run against a live DOM; worth a once-over in
       the browser before relying on it.
 
+**Round 3 — real Edit, replacing what `clEditChallan()` did before.**
+
+**What was wrong.** `clEditChallan()` called `/discard` the instant Edit
+was clicked — before the operator had changed anything — which for an
+issued challan *is* a cancellation: every serial reverted to `packed` and
+the document was marked `cancelled`, as a side effect of opening a form.
+Cancel and Edit had become the same action. It also read
+`d.boxes[i].box_serial`, a column `challan_box` has never had (the real
+ones are `box_no`, a printed label, and `challan_box_id`) — always
+`undefined`, which is the exact "BAD box id" symptom.
+
+**The model, built to match.** Edit reserves nothing and writes nothing —
+`POST /api/challan/<id>/edit-draft` only *reads*, resolving each
+`challan_box.box_no` back to its live `box_id` server-side (never a
+client guess). Because nothing is written, abandoning an edit — the
+explicit **Cancel edit** button, or simply navigating away, both wired —
+needs no cleanup: there is nothing on the server to release. Saving
+(`POST /api/challan/<id>/edit-save`) writes a **new** challan row at the
+same `(fy, seq)` with the next `M` suffix (`MA`, then `MB`, …) — the same
+mechanism already used for a historical hand-patched collision
+(`742` / `742 (A)`) — and marks the original **`superseded`**, a new
+status distinct from `cancelled`, kept fully intact and visible with a
+link to its replacement. Only the current live version of a lineage is
+ever editable; a superseded row, however many generations back, is
+refused with the reason. Only the invoice is locked — the server decides
+its value from the original record, never the client, and rejects any
+attempt to submit a different one; everything else (vehicle, driver,
+transporter, LR no., and the box selection itself) may change. A box
+dropped during an edit reverts to `packed`, same as Cancel already leaves
+a serial in.
+
+**A real bug found by testing, not assumed away.** A superseded
+ancestor's `challan_serial` rows are never deleted (by design — "what did
+this shipment hold?" must stay answerable), so editing `MA` to produce
+`MB` initially failed: the duplicate-serial check saw the original's rows
+and refused a challan attempting to re-select its own boxes. Fixed by
+widening every duplicate-serial and box-availability check to exclude the
+whole `(fy, seq)` lineage, not just the one row being edited —
+`db.serials_already_dispatched()` / `serial_last_challan()` now accept a
+set of ids, and a new `_lineage_ids()` computes it.
+
+- [x] Schema: `challan.superseded_by` / `superseded_at` /
+      `superseded_by_user` (mirrors `invoice.superseded_by`'s existing
+      shape), migrated for a database that already exists.
+- [x] `POST /api/challan/<id>/edit-draft` — read-only, resolves real
+      `box_id`s, refuses on anything but the current issued version or a
+      gate-pass lock (same lock Cancel already shares).
+- [x] `POST /api/challan/<id>/edit-save` — writes the `MA`/`MB`/… row,
+      supersedes the original, releases dropped boxes, re-checked against
+      the shared `_challan_precheck` gate exactly like a fresh Create.
+- [x] `GET /api/challan/boxes?exclude_challan_id=` — lets Edit see its own
+      (lineage-wide) boxes as available without writing a reservation.
+- [x] `clEditChallan()` rewritten around the two new endpoints;
+      `chBeginEdit()` / `chAbandonEdit()` added; the invoice selector
+      locks, everything else stays editable; `go()` calls
+      `chAbandonEdit()` on navigating to any other screen.
+- [x] Challan List / Detail: a `superseded` badge, distinct from
+      `cancelled`, with a link to the replacement.
+- [x] Tests: 18 new cases in `test_challan.py` (49 total), each naming
+      the rule it defends. Every rule mutation-tested, including the
+      lineage bug above once fixed.
+
+**Open:** `api_challan_cancel` is unchanged, exactly as asked — Cancel
+stays a separate, unreachable-from-Edit action. Whether it is actually
+gated to admins in the UI was not touched or verified either way; the
+instruction described it as already true and out of scope for this pass.
+
 ## 16. Loading Verification — NEW SCREEN (Team 3)
 
 - [x] Two modes: **Scan boxes** (for gate pass) and **Verify serials**.
@@ -668,6 +735,92 @@ correctly) was already right and is kept unchanged.
       can honestly make.
 - [x] `/api/print/resolve` turns v4's `(kind, ref)` into the real document URL,
       and says plainly when the document does not exist yet.
+
+## 16b. Loading Verification — challan-level session  *(built)*
+
+**What it is.** Section 16 above checks one PALLET's contents against what
+Packing recorded — unchanged, still exactly that. This is a different
+question: has every pallet on a CHALLAN actually been found and put on the
+vehicle, confirmed by Team 3, before that challan's own print and Excel
+documents may be produced. The two are complementary, not duplicates, and
+the existing screen is one click away from the new one rather than folded
+into it.
+
+- [x] Schema: `challan_box.loading_status` (`pending` / `saved` / `loaded`,
+      default `pending`) plus `loading_scanned_at` / `loading_scanned_by`.
+      A fourth value for a swapped-but-not-yet-rechallaned pallet is
+      deliberately deferred, pending a separate design pass — nothing
+      produces it yet and its meaning is not settled, so it is not added.
+      Swap itself is explicitly out of scope this round: if a pallet is
+      wrong or missing, the resolution is to leave without submitting,
+      **Edit** the challan (the `(MA)`/`(MB)` mechanism above), and start a
+      fresh session against the new `challan_id`.
+- [x] `GET /api/loading/challans` — one row per **live** challan (issued,
+      not cancelled, not a superseded original — the same filter Challan's
+      own issued-list already applies), aggregated pending / in-progress /
+      loaded, with a date range (default today), search and status filter.
+- [x] `GET /api/loading/<id>` — the challan's own pallets in load order;
+      model and grade are resolved from the **live** box each time (Quality
+      may have moved a grade since packing), never a stale copy on
+      `challan_box`.
+- [x] `POST /api/loading/<id>/confirm` — the only write. Sets one pallet
+      `saved` with who and when; this **is** the save, there is no separate
+      step.
+- [x] `POST /api/loading/<id>/submit` — refuses unless every pallet is
+      `saved` (or already `loaded`, so re-submitting a complete session is
+      a safe no-op), naming exactly which are not; promotes every pallet to
+      `loaded` together, in one statement.
+- [x] `/challan/<fy>/<seq>/print` and `.../excel` refuse until every pallet
+      on that challan is `loaded` — the same no-override principle as
+      quantity reconciliation, not a UI convenience. Historical
+      (`origin='historical'`) challans predate this screen entirely and are
+      not gated; there is no session to hold them to.
+- [x] Landing list (`data-itable` + a server-side date/search/status
+      round-trip, same convention `clInjectView` already established) and
+      a per-challan session overlay: type or scan a pallet number, Enter
+      looks it up **against this challan's own list** (rejected clearly if
+      it is not on it), Space confirms. A fully loaded session renders
+      **read-only** — no scan field, no Save & Submit, just the record.
+      A **Verify one pallet's contents →** button opens the existing,
+      untouched `/loading` screen in a new tab.
+- [x] The existing `NEW_VIEWS` nav entry `loadver` ("Loading Verification",
+      positioned before Gate Pass) already reserved the icon, label and
+      slot but pointed at a `/view/loading` route that was never
+      registered — clicking it did nothing. Repointed, the same way the
+      existing `challan` → `challan-list` nav redirect already works, to
+      this new landing list; the old fragment it used to fetch is
+      untouched and still reachable at its own standalone `/loading` URL.
+
+**A real bug found by testing, not assumed away.** `_challan_bundle` (used
+by print, excel and FTR) resolves a bare `(fy, seq)` with no `?suffix=` to
+the row where `suffix IS NULL` — which, once a challan has been edited, is
+the **original**, now-superseded row, not whichever generation is
+currently live. A test that simply printed the plain number right after an
+edit got back the stale document, with a 200. Fixed with
+`_refuse_if_superseded()`: any superseded row, however it was reached,
+refuses print/excel by name, pointing at its replacement. Covered in both
+`test_challan.py` (this is a Challan-level fact, not a Loading one) and
+exercised again end-to-end in `test_loading.py`.
+
+- [x] Tests: `test_loading.py` (10 cases) and `test_loading.js` (11 cases),
+      plus one new regression case in `test_challan.py` for the
+      superseded-print bug above (50 total there). Every rule mutation-
+      tested; two mutations were later judged non-issues (redundant
+      defense-in-depth already covered by a more direct test) rather than
+      real gaps, and are noted as such rather than chased further.
+
+**Open, out of scope for this pass:**
+- The Flash Test Report route (`/challan/<fy>/<seq>/ftr`) was not given the
+      same superseded-row refusal the print/excel routes got — not asked
+      for, and left alone rather than expanding scope unprompted.
+- The landing list's date-range and status filters round-trip the server
+      (like Challan List's own search already does) rather than running
+      through `icon_table.js`'s client-side text filter, since a date range
+      is not something that convention expresses; the search box, reset,
+      export and row count are still the shared `data-itable` behaviour.
+- Whether the `loadver` nav button is correctly role-gated to the roles
+      `NEW_VIEWS` already lists for it was not re-verified as part of this
+      change — only its destination changed.
 
 ## 17. Gate Pass
 

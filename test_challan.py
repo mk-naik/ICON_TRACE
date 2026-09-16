@@ -866,31 +866,300 @@ def t_split_load_second_gp():
     assert cnt == 2, "expected 2 gate passes, got %d" % cnt
 
 
-@test("Edit produces a new draft pre-filled; the original row is unchanged "
-      "except for its cancelled status and the original contents are intact")
-def t_edit_original_row_intact():
+
+# --------------------------------------------------------------------------
+# Edit: reserve without touching, save creates a new (fy, seq) generation
+# --------------------------------------------------------------------------
+
+@test("edit-draft writes nothing - the original is unaffected and its "
+     "boxes are selectable elsewhere the instant nothing is saved")
+def t_edit_draft_touches_nothing():
     c = setup()
-    b = packed_box(c, [95, 96])
-    inv = make_invoice(qty=2, invoice_no="INV-EDITORIG")
+    b = packed_box(c, [100, 101])
+    inv = make_invoice(qty=2, invoice_no="INV-EDITDRAFT")
     chid = make_issued_challan(c, [b], inv)
-    orig = dict(challan_row(chid))
-    # Simulate edit: cancel the issued challan
-    r = c.post("/api/challan/%d/cancel" % chid,
-               json={"reason": "cancelled for edit by operator"})
+    before = dict(challan_row(chid))
+
+    r = c.post("/api/challan/%d/edit-draft" % chid, json={})
     assert r.status_code == 200, r.get_json()
+    d = r.get_json()
+    assert d["boxes"] == [b], d["boxes"]
+    assert d["invoice_id"] == inv
+
+    # nothing changed - not even a timestamp
     after = dict(challan_row(chid))
-    # Status changed
-    assert after["status"] == "cancelled"
-    # Every other data field must be untouched
-    for key in ("buyer_name", "invoice_no", "qty", "fy", "seq"):
-        assert after[key] == orig[key], \
-            "field %r changed after cancel (was %r, now %r)" % (key, orig[key], after[key])
-    # The original box list is still in challan_box — nothing deleted
+    assert after == before, "edit-draft wrote something to the original"
+
+    # "navigating away without saving" - simulated by simply never calling
+    # edit-save. The box must be selectable on a brand new challan.
+    inv2 = make_invoice(qty=2, invoice_no="INV-EDITDRAFT-2")
+    r2 = c.post("/api/challan", json={"action": "create", "boxes": [b],
+                                      "invoice_id": inv2})
+    assert r2.status_code == 400, \
+        "an abandoned edit-draft left the box reserved to nobody real"
+    assert "already on" in r2.get_json()["why"], r2.get_json()
+    # it is still exactly on the ORIGINAL, untouched challan
+    assert dict(challan_row(chid))["status"] == "issued"
+
+
+@test("saving a real change produces suffix MA at the same (fy, seq); the "
+     "original is 'superseded', never 'cancelled'")
+def t_edit_save_creates_ma():
+    c = setup()
+    b1 = packed_box(c, [102, 103])
+    b2 = packed_box(c, [104, 105])            # same size - swap, not add
+    inv = make_invoice(qty=2, invoice_no="INV-EDITMA")
+    chid = make_issued_challan(c, [b1], inv)
+    orig = dict(challan_row(chid))
+
+    r = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": [b2], "invoice_id": inv,
+                     "vehicle_no": "CG04ZZ9999"})
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()
+    assert d["suffix"] == "MA", d
+    assert d["fy"] == orig["fy"] and d["seq"] == orig["seq"], d
+    assert d["status"] == "issued"
+
+    row = dict(challan_row(chid))
+    assert row["status"] == "superseded", row["status"]
+    assert row["superseded_by"] == d["challan_id"]
+    assert row["superseded_at"], "no timestamp recorded"
+    assert row["superseded_by_user"], "no actor recorded"
+
+    new_row = dict(challan_row(d["challan_id"]))
+    assert new_row["vehicle_no"] == "CG04ZZ9999"
+    assert new_row["fy"] == orig["fy"] and new_row["seq"] == orig["seq"]
+    assert new_row["suffix"] == "MA"
+
+
+@test("printing a superseded challan by its BARE number (no suffix) is "
+     "refused, not silently served as the stale original")
+def t_edit_print_refuses_superseded_bare_number():
+    # _challan_bundle's "no suffix given" match is `suffix IS NULL`, which
+    # is exactly the ORIGINAL row once it has been superseded - a caller
+    # with the old number (no suffix) must not silently get back the
+    # document Edit corrected away from.
+    c = setup()
+    b1 = packed_box(c, [130, 131])
+    b2 = packed_box(c, [132, 133])
+    inv = make_invoice(qty=2, invoice_no="INV-PRINTSTALE")
+    chid = make_issued_challan(c, [b1], inv)
     with store.conn() as (cx, cur):
-        cnt = cur.execute(
-            "SELECT COUNT(*) AS n FROM challan_box WHERE challan_id=?",
-            (chid,)).fetchone()["n"]
-    assert cnt > 0, "challan_box rows were deleted — original contents wiped"
+        row = store.one(cur, "SELECT fy, seq FROM challan WHERE challan_id=%s",
+                        (chid,))
+    fy, seq = row["fy"], row["seq"]
+
+    r = c.post("/api/challan/%d/edit-save" % chid,
+              json={"boxes": [b2], "invoice_id": inv})
+    assert r.status_code == 200, r.get_json()
+
+    pr = c.get("/challan/%d/%d/print" % (fy, seq))
+    assert pr.status_code == 400, \
+        "the superseded original printed under its bare number"
+    assert "superseded" in pr.get_data(as_text=True).lower(), \
+        pr.get_data(as_text=True)
+    assert "MA" in pr.get_data(as_text=True), \
+        "the refusal did not name the replacement"
+
+    ex = c.get("/challan/%d/%d/excel" % (fy, seq))
+    assert ex.status_code == 400, "the superseded original exported anyway"
+
+    # explicitly asking for the live one, by its own suffix, is not turned
+    # away for being superseded - test_loading.py covers the separate
+    # loading-verification gate that still applies to it
+    pr2 = c.get("/challan/%d/%d/print?suffix=MA" % (fy, seq))
+    assert "superseded" not in pr2.get_data(as_text=True).lower(), \
+        pr2.get_data(as_text=True)
+
+
+@test("a second edit on MA produces MB; the original two generations back "
+     "cannot be edited at all")
+def t_edit_second_generation_mb():
+    c = setup()
+    b = packed_box(c, [105, 106])
+    inv = make_invoice(qty=2, invoice_no="INV-EDITMB")
+    chid = make_issued_challan(c, [b], inv)
+
+    r1 = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": [b], "invoice_id": inv,
+                     "vehicle_no": "CG04MA0001"})
+    ma_id = r1.get_json()["challan_id"]
+    assert r1.get_json()["suffix"] == "MA"
+
+    r2 = c.post("/api/challan/%d/edit-save" % ma_id,
+               json={"boxes": [b], "invoice_id": inv,
+                     "vehicle_no": "CG04MB0002"})
+    assert r2.status_code == 200, r2.get_json()
+    assert r2.get_json()["suffix"] == "MB", r2.get_json()
+    mb_id = r2.get_json()["challan_id"]
+
+    assert dict(challan_row(chid))["status"] == "superseded"
+    assert dict(challan_row(ma_id))["status"] == "superseded"
+    assert dict(challan_row(mb_id))["status"] == "issued"
+
+    # the original, two generations back, cannot be edited - not even a draft
+    r3 = c.post("/api/challan/%d/edit-draft" % chid, json={})
+    assert r3.status_code == 400, "a two-generations-back challan was editable"
+    assert "superseded" in r3.get_json()["why"].lower(), r3.get_json()
+    # nor can the intermediate MA generation
+    r4 = c.post("/api/challan/%d/edit-draft" % ma_id, json={})
+    assert r4.status_code == 400, "the intermediate generation was editable"
+
+
+@test("the invoice cannot be changed through an edit, submitted or not")
+def t_edit_invoice_locked():
+    c = setup()
+    b = packed_box(c, [107, 108])
+    inv1 = make_invoice(qty=2, invoice_no="INV-LOCK1")
+    inv2 = make_invoice(qty=2, invoice_no="INV-LOCK2")
+    chid = make_issued_challan(c, [b], inv1)
+
+    r = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": [b], "invoice_id": inv2})
+    assert r.status_code == 400
+    assert "invoice" in r.get_json()["why"].lower(), r.get_json()
+    assert dict(challan_row(chid))["status"] == "issued", \
+        "the original was superseded despite the invoice-change refusal"
+
+    # omitting invoice_id entirely does not let it drift either - the
+    # server decides the value, never the client
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE invoice SET declared_qty=2 WHERE invoice_id=%s",
+                    (inv2,))
+    r2 = c.post("/api/challan/%d/edit-save" % chid, json={"boxes": [b]})
+    assert r2.status_code == 200, r2.get_json()
+    assert dict(challan_row(r2.get_json()["challan_id"]))["invoice_id"] == inv1
+
+
+@test("vehicle, driver, transporter, LR number and the box selection can "
+     "all be changed through an edit")
+def t_edit_everything_else_changeable():
+    c = setup()
+    b1 = packed_box(c, [109, 110])
+    b2 = packed_box(c, [111, 112])            # same size - swap, not add
+    inv = make_invoice(qty=2, invoice_no="INV-EDITALL")
+    chid = make_issued_challan(c, [b1], inv)
+
+    r = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": [b2], "invoice_id": inv,
+                     "vehicle_no": "CG04NEW001", "transporter": "New Transport Co",
+                     "lr_no": "LR-9999", "driver_name": "Ramesh",
+                     "driver_mobile": "9998887776"})
+    assert r.status_code == 200, r.get_json()
+    new_row = dict(challan_row(r.get_json()["challan_id"]))
+    assert new_row["vehicle_no"] == "CG04NEW001"
+    assert new_row["transporter"] == "New Transport Co"
+    assert new_row["lr_no"] == "LR-9999"
+    assert new_row["driver_name"] == "Ramesh"
+    assert new_row["driver_mobile"] == "9998887776"
+    # the box selection really did change: b1's modules go back to packed,
+    # b2's are now dispatched under the new challan
+    assert state_of(serial(109)) == "packed", \
+        "a box dropped from the edit was not released"
+    assert state_of(serial(111)) == "dispatched"
+    with store.conn() as (cx, cur):
+        serials2 = {r2["serial"] for r2 in store.rows(
+            cur, "SELECT serial FROM challan_serial WHERE challan_id=%s",
+            (r.get_json()["challan_id"],))}
+    assert serial(111) in serials2 and serial(109) not in serials2
+
+
+@test("a challan already locked by a gate pass cannot be edited, exactly "
+     "as it already cannot be cancelled")
+def t_edit_locked_by_gatepass():
+    c = setup()
+    b = packed_box(c, [112, 113])
+    inv = make_invoice(qty=2, invoice_no="INV-EDITGP")
+    chid = make_issued_challan(c, [b], inv)
+    add_gatepass(c, chid)
+
+    r1 = c.post("/api/challan/%d/edit-draft" % chid, json={})
+    assert r1.status_code == 400
+    assert "locked" in r1.get_json()["why"].lower(), r1.get_json()
+
+    r2 = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": [b], "invoice_id": inv})
+    assert r2.status_code == 400
+    assert "locked" in r2.get_json()["why"].lower(), r2.get_json()
+    assert dict(challan_row(chid))["status"] == "issued"
+
+
+@test("editing a challan whose boxes have real box_no values resolves "
+     "them to the correct box_id server-side, and save succeeds")
+def t_edit_resolves_box_no_to_box_id():
+    # This is the exact case that broke before: challan_box has no
+    # box_serial column at all (box_no + challan_box_id are the real
+    # ones), so reading d.boxes[i].box_serial was always undefined and
+    # every pre-filled tick was "BAD box id". edit-draft must resolve the
+    # PRINTED LABEL back to a real box_id itself.
+    c = setup()
+    b = packed_box(c, [114, 115, 116])
+    inv = make_invoice(qty=3, invoice_no="INV-BOXNO")
+    chid = make_issued_challan(c, [b], inv)
+
+    with store.conn() as (cx, cur):
+        cb = store.one(cur, "SELECT box_no, challan_box_id FROM challan_box "
+                            "WHERE challan_id=%s", (chid,))
+    assert cb["box_no"], "fixture assumption broke: no box_no recorded"
+    assert not hasattr(cb, "box_serial"), \
+        "challan_box unexpectedly has a box_serial column"
+
+    r = c.post("/api/challan/%d/edit-draft" % chid, json={})
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()
+    assert d["boxes"] == [b], \
+        "box_no %r did not resolve to the real box_id %r: got %r" % \
+        (cb["box_no"], b, d["boxes"])
+
+    r2 = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": d["boxes"], "invoice_id": inv})
+    assert r2.status_code == 200, r2.get_json()
+    assert r2.get_json()["qty"] == 3
+
+
+@test("editing a draft or a cancelled challan is refused, not just a "
+     "superseded one")
+def t_edit_refused_for_non_issued():
+    c = setup()
+    b = packed_box(c, [117, 118])
+    inv = make_invoice(qty=2, invoice_no="INV-EDITDRAFTSTATE")
+    r0 = c.post("/api/challan", json={"action": "draft", "boxes": [b],
+                                      "invoice_id": inv})
+    draft_id = r0.get_json()["challan_id"]
+    r1 = c.post("/api/challan/%d/edit-draft" % draft_id, json={})
+    assert r1.status_code == 400
+    assert "issued" in r1.get_json()["why"].lower(), r1.get_json()
+
+    c.post("/api/challan/%d/discard" % draft_id, json={})
+    r2 = c.post("/api/challan/%d/edit-draft" % draft_id, json={})
+    assert r2.status_code == 400
+
+
+@test("edit-save itself refuses on a non-issued challan, not just edit-draft")
+def t_edit_save_refuses_non_issued():
+    c = setup()
+    b = packed_box(c, [119, 120])
+    inv = make_invoice(qty=2, invoice_no="INV-EDITSAVESTATE")
+    chid = make_issued_challan(c, [b], inv)
+
+    r1 = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": [b], "invoice_id": inv})
+    assert r1.status_code == 200, r1.get_json()
+    ma_id = r1.get_json()["challan_id"]
+
+    # chid is now 'superseded' - saving against it again must be refused,
+    # by edit-save itself, independent of whatever edit-draft would say
+    r2 = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": [b], "invoice_id": inv,
+                     "vehicle_no": "SHOULD-NOT-LAND"})
+    assert r2.status_code == 400, \
+        "edit-save wrote a second edit against an already-superseded row"
+    assert "issued" in r2.get_json()["why"].lower(), r2.get_json()
+    # and nothing was written: no third generation, MA is still the live one
+    assert dict(challan_row(chid))["superseded_by"] == ma_id
+    assert dict(challan_row(ma_id))["status"] == "issued"
+    assert dict(challan_row(ma_id))["vehicle_no"] != "SHOULD-NOT-LAND"
 
 
 if __name__ == "__main__":

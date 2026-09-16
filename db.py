@@ -294,26 +294,37 @@ def challan_exists(cur, fy, seq, suffix):
     return cur.fetchone() is not None
 
 
+def _id_set(exclude_challan_id):
+    """`exclude_challan_id` accepts one id (a draft checking itself back
+    in) or a collection of them (an edit's whole (fy, seq) lineage - a
+    superseded ancestor's challan_serial rows are never deleted, so
+    editing its descendant has more than one row to excuse)."""
+    if not exclude_challan_id:
+        return set()
+    if isinstance(exclude_challan_id, int):
+        return {exclude_challan_id}
+    return set(exclude_challan_id)
+
+
 def serials_already_dispatched(cur, serials, exclude_challan_id=None):
     """A serial must never sit on two live challans. Checked before writing,
     not after - and against every challan that has ever existed, imported
     history included, never scoped to a financial year or a date, and never
-    assumed true from some other invariant. `exclude_challan_id` lets a
-    draft check itself back in without being told it collides with its own
-    reservation."""
+    assumed true from some other invariant."""
     if not serials:
         return []
     if cur is None:
         seen = {s["serial"] for s in _demo["box_serial"]}
         return [s for s in serials if s in seen]
+    excl = _id_set(exclude_challan_id)
     marks = ",".join(["%s"] * len(serials))
     sql = ("SELECT DISTINCT cs.serial FROM challan_serial cs "
            "JOIN challan c ON c.challan_id = cs.challan_id "
            "WHERE c.status <> 'cancelled' AND cs.serial IN (%s)" % marks)
     params = list(serials)
-    if exclude_challan_id:
-        sql += " AND c.challan_id <> %s"
-        params.append(exclude_challan_id)
+    if excl:
+        sql += " AND c.challan_id NOT IN (%s)" % ",".join(["%s"] * len(excl))
+        params.extend(excl)
     cur.execute(sql, params)
     return [r["serial"] for r in cur.fetchall()]
 
@@ -324,13 +335,14 @@ def serial_last_challan(cur, serial, exclude_challan_id=None):
     go look at."""
     if cur is None:
         return None
+    excl = _id_set(exclude_challan_id)
     sql = ("SELECT c.fy, c.seq, c.suffix, c.challan_date FROM challan_serial cs "
            "JOIN challan c ON c.challan_id = cs.challan_id "
            "WHERE c.status <> 'cancelled' AND cs.serial = %s")
     params = [serial]
-    if exclude_challan_id:
-        sql += " AND c.challan_id <> %s"
-        params.append(exclude_challan_id)
+    if excl:
+        sql += " AND c.challan_id NOT IN (%s)" % ",".join(["%s"] * len(excl))
+        params.extend(excl)
     sql += " ORDER BY c.challan_id DESC LIMIT 1"
     cur.execute(sql, params)
     return cur.fetchone()

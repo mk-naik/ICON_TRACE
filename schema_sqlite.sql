@@ -132,11 +132,23 @@ CREATE TABLE IF NOT EXISTS challan (
   cancelled_by  TEXT   NULL,
   cancelled_at  TEXT      NULL,
 
+  -- Edit: never rewritten. A real change creates a NEW row, same (fy, seq),
+  -- next 'M' suffix (MA, then MB, ...) - the same mechanism already used
+  -- for a historical collision (742 / 742 (A)). This row is marked
+  -- superseded and kept exactly as it was; superseded_by names the row
+  -- that replaced it. Distinct from 'cancelled' - a cancelled challan was
+  -- withdrawn, a superseded one was corrected and replaced.
+  superseded_by      INTEGER NULL,
+  superseded_at      TEXT    NULL,
+  superseded_by_user TEXT    NULL,
+
   created_at    TEXT      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_by    TEXT   NOT NULL,
   UNIQUE (fy, seq, suffix),
   CONSTRAINT fk_ch_invoice FOREIGN KEY (invoice_id)
-    REFERENCES invoice (invoice_id)
+    REFERENCES invoice (invoice_id),
+  CONSTRAINT fk_ch_superseded FOREIGN KEY (superseded_by)
+    REFERENCES challan (challan_id)
 ) ;
 
 -- ------------------------------------------------------------
@@ -162,6 +174,17 @@ CREATE TABLE IF NOT EXISTS challan_box (
   is_partial     INTEGER(1)   NOT NULL DEFAULT 0,
   load_order     INT          NOT NULL,   -- challans list boxes in loading
                                           -- order, not box-number order
+
+  -- Team 3's own confirmation that the pallet was physically found and
+  -- put on the vehicle - separate from load_order, which is only the
+  -- order it was PLANNED in. 'pending' until scanned, 'saved' once
+  -- confirmed, 'loaded' once the whole challan is submitted together.
+  -- A fourth value for a swapped-but-not-yet-rechallaned pallet is
+  -- deferred pending a separate design pass - nothing produces it yet
+  -- and its exact meaning is not settled, so it is not added here.
+  loading_status     TEXT NOT NULL DEFAULT 'pending',
+  loading_scanned_at TEXT NULL,
+  loading_scanned_by TEXT NULL,
 
   CONSTRAINT fk_cbox_challan FOREIGN KEY (challan_id)
     REFERENCES challan (challan_id)

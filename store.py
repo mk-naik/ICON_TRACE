@@ -98,6 +98,21 @@ def _migrate(cx, text):
     if cols("allocation") and "alloc_type" not in cols("allocation"):
         cx.execute("ALTER TABLE allocation ADD COLUMN alloc_type TEXT")
 
+    # Edit: a real change replaces a challan row rather than rewriting it -
+    # the original is marked superseded and kept intact.
+    for name, decl in (("superseded_by", "INTEGER"), ("superseded_at", "TEXT"),
+                       ("superseded_by_user", "TEXT")):
+        if cols("challan") and name not in cols("challan"):
+            cx.execute("ALTER TABLE challan ADD COLUMN %s %s" % (name, decl))
+
+    # Loading Verification: Team 3's own confirmation a pallet was found
+    # and put on the vehicle, separate from load_order (only the plan).
+    for name, decl in (("loading_status", "TEXT NOT NULL DEFAULT 'pending'"),
+                       ("loading_scanned_at", "TEXT"),
+                       ("loading_scanned_by", "TEXT")):
+        if cols("challan_box") and name not in cols("challan_box"):
+            cx.execute("ALTER TABLE challan_box ADD COLUMN %s %s" % (name, decl))
+
     if not cols("fqc_record"):
         return
 

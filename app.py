@@ -1089,6 +1089,172 @@ def api_loading_box():
                     "state": b["state"], "qty": b["qty"], "serials": serials})
 
 
+# --------------------------------------------------------------------------
+# Loading Verification - Team 3 confirms every pallet is actually on the
+# vehicle before the challan's own print/excel documents may be produced.
+#
+# Deliberately separate from /loading above (serial-contents verification,
+# unchanged) - this is pallet-by-pallet, one challan at a time, and what it
+# writes is what gates print/excel. A wrong or missing pallet has one
+# resolution: leave without submitting, edit the challan (the existing
+# (MA)/(MB) mechanism), and start a fresh session against the new
+# challan_id - swap is deliberately out of scope here, pending a separate
+# design pass.
+# --------------------------------------------------------------------------
+
+def _loading_agg_status(n_total, n_saved, n_loaded):
+    if n_total and n_loaded == n_total:
+        return "loaded"
+    if n_saved == 0 and n_loaded == 0:
+        return "pending"
+    return "in_progress"
+
+
+@app.route("/api/loading/challans")
+def api_loading_challans():
+    """One row per LIVE challan - issued, not cancelled, not a superseded
+    original, the same filter Challan's own issued-list already applies.
+    Defaults to today; a date range, search and aggregate-status filter are
+    all supported, same as every other list screen.
+    """
+    from_d = (request.args.get("from") or "").strip()
+    to_d = (request.args.get("to") or "").strip()
+    if not from_d and not to_d:
+        from_d = to_d = datetime.date.today().isoformat()
+    q = (request.args.get("q") or "").strip()
+    status = (request.args.get("status") or "").strip()
+
+    with store.conn() as (cx, cur):
+        sql = ("SELECT c.challan_id, c.fy, c.seq, c.suffix, c.challan_date, "
+               "c.invoice_no, c.buyer_name, "
+               "SUM(CASE WHEN cb.loading_status='pending' THEN 1 ELSE 0 END) AS n_pending, "
+               "SUM(CASE WHEN cb.loading_status='saved' THEN 1 ELSE 0 END) AS n_saved, "
+               "SUM(CASE WHEN cb.loading_status='loaded' THEN 1 ELSE 0 END) AS n_loaded, "
+               "COUNT(cb.challan_box_id) AS n_total "
+               "FROM challan c JOIN challan_box cb ON cb.challan_id=c.challan_id "
+               "WHERE c.status='issued'")
+        params = []
+        if from_d:
+            sql += " AND c.challan_date>=%s"
+            params.append(from_d)
+        if to_d:
+            sql += " AND c.challan_date<=%s"
+            params.append(to_d)
+        if q:
+            lq = "%" + q + "%"
+            sql += " AND (c.buyer_name LIKE %s OR c.invoice_no LIKE %s)"
+            params.extend([lq, lq])
+        sql += " GROUP BY c.challan_id ORDER BY c.challan_id DESC"
+        rows = store.rows(cur, sql, params)
+
+    out = []
+    for r in rows:
+        r = dict(r)
+        agg = _loading_agg_status(r["n_total"], r["n_saved"], r["n_loaded"])
+        if status and status != agg:
+            continue
+        try:
+            d = datetime.date.fromisoformat(r["challan_date"])
+            r["challan_no"] = db.render_challan_no(d, r["seq"], r.get("suffix"))
+        except (TypeError, ValueError):
+            r["challan_no"] = None
+        r["agg_status"] = agg
+        out.append(r)
+    return jsonify({"challans": out})
+
+
+@app.route("/api/loading/<int:challan_id>")
+def api_loading_get(challan_id):
+    """One challan's own pallets, in the same load order Challan itself
+    uses. model/grade are resolved from the LIVE box each time, not stored
+    on challan_box - Quality may have moved a grade since packing, and
+    what prints on the label is not a value this screen should be able to
+    drift out of step with by holding a stale copy."""
+    with store.conn() as (cx, cur):
+        ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
+                       (challan_id,))
+        if not ch:
+            return jsonify({"error": "No such challan."}), 404
+        boxes = store.rows(cur, "SELECT * FROM challan_box WHERE "
+                                "challan_id=%s ORDER BY load_order",
+                           (challan_id,))
+        out_boxes = []
+        for b in boxes:
+            live = _resolve_box_no(cur, b["box_no"]) or {}
+            out_boxes.append({
+                "box_no": b["box_no"], "challan_box_id": b["challan_box_id"],
+                "model": live.get("model") or ch["model"],
+                "grade": live.get("grade"), "qty": b["qty"],
+                "is_partial": bool(b["is_partial"]),
+                "loading_status": b["loading_status"],
+                "loading_scanned_at": b["loading_scanned_at"],
+                "loading_scanned_by": b["loading_scanned_by"]})
+    no = db.render_challan_no(datetime.date.fromisoformat(ch["challan_date"]),
+                              ch["seq"], ch["suffix"])
+    return jsonify({"challan_id": challan_id, "no": no,
+                    "invoice_no": ch["invoice_no"], "buyer_name": ch["buyer_name"],
+                    "challan_date": ch["challan_date"], "boxes": out_boxes})
+
+
+@app.route("/api/loading/<int:challan_id>/confirm", methods=["POST"])
+@_sync_guard
+def api_loading_confirm(challan_id):
+    """Space, in the session screen, on a pallet the lookup already found.
+    This IS the save - there is no separate save step, because every
+    confirm already persists immediately."""
+    d = request.get_json(force=True) or {}
+    box_no = (d.get("box_no") or "").strip().upper()
+    if not box_no:
+        return jsonify({"ok": False, "why": "Scan or type a pallet number."}), 400
+    with store.conn() as (cx, cur):
+        ch = store.one(cur, "SELECT challan_id FROM challan WHERE challan_id=%s",
+                       (challan_id,))
+        if not ch:
+            return jsonify({"ok": False, "why": "No such challan."}), 404
+        row = store.one(cur, "SELECT * FROM challan_box WHERE challan_id=%s "
+                             "AND box_no=%s", (challan_id, box_no))
+        if not row:
+            return jsonify({"ok": False, "why":
+                "%s is not on this challan." % box_no}), 400
+        at = datetime.datetime.now().isoformat(timespec="seconds")
+        cur.execute("UPDATE challan_box SET loading_status='saved', "
+                    "loading_scanned_at=%s, loading_scanned_by=%s "
+                    "WHERE challan_box_id=%s",
+                    (at, actor(), row["challan_box_id"]))
+        db.audit(cur, actor(), "loading.confirm", "challan_box",
+                 row["challan_box_id"], {"challan_id": challan_id,
+                                         "box_no": box_no})
+    return jsonify({"ok": True, "box_no": box_no, "loading_status": "saved",
+                    "loading_scanned_at": at, "loading_scanned_by": actor()})
+
+
+@app.route("/api/loading/<int:challan_id>/submit", methods=["POST"])
+@_sync_guard
+def api_loading_submit(challan_id):
+    """Refuses unless every pallet has been confirmed; promotes every one
+    of them to 'loaded' together, in one transaction - a partial promotion
+    would let some of the shipment print as verified when it was not."""
+    with store.conn() as (cx, cur):
+        ch = store.one(cur, "SELECT challan_id FROM challan WHERE challan_id=%s",
+                       (challan_id,))
+        if not ch:
+            return jsonify({"ok": False, "why": "No such challan."}), 404
+        boxes = store.rows(cur, "SELECT box_no, loading_status FROM "
+                                "challan_box WHERE challan_id=%s "
+                                "ORDER BY load_order", (challan_id,))
+        pending = [b["box_no"] for b in boxes
+                  if b["loading_status"] not in ("saved", "loaded")]
+        if pending:
+            return jsonify({"ok": False, "why":
+                "%d of %d pallet(s) not yet confirmed: %s."
+                % (len(pending), len(boxes), ", ".join(pending))}), 400
+        cur.execute("UPDATE challan_box SET loading_status='loaded' "
+                    "WHERE challan_id=%s", (challan_id,))
+        db.audit(cur, actor(), "loading.submit", "challan", challan_id,
+                 {"boxes": len(boxes)})
+    return jsonify({"ok": True, "loaded": len(boxes)})
+
+
 @app.route("/api/challan/boxes")
 def api_challan_available_boxes():
     """Closed pallets that may go on a challan: not open, not already on a
@@ -1099,13 +1265,32 @@ def api_challan_available_boxes():
     for as long as a DRAFT holds it too: a draft is a real reservation, not
     a preview, so a second operator must not be able to tick the same box
     into a different challan while it exists.
+
+    `exclude_challan_id` is how Edit sees its own challan's boxes as
+    available again without writing anything: they are excluded from
+    "reserved" for THIS request only, so they list as selectable for the
+    edit in progress while still correctly refusing anyone else. Expanded
+    to the whole (fy, seq) lineage, not just the one id named - a
+    superseded ancestor's challan_serial rows are never deleted, so
+    editing MB still has to see boxes reserved by the original and by MA
+    as its own.
     """
+    exclude = request.args.get("exclude_challan_id")
+    try:
+        exclude = int(exclude) if exclude else None
+    except (TypeError, ValueError):
+        exclude = None
     with store.conn() as (cx, cur):
-        reserved = {r["box_id"] for r in store.rows(cur,
-            "SELECT DISTINCT bs.box_id FROM box_serial bs "
-            "JOIN challan_serial cs ON cs.serial=bs.serial "
-            "JOIN challan c ON c.challan_id=cs.challan_id "
-            "WHERE c.status<>'cancelled'")}
+        q = ("SELECT DISTINCT bs.box_id FROM box_serial bs "
+             "JOIN challan_serial cs ON cs.serial=bs.serial "
+             "JOIN challan c ON c.challan_id=cs.challan_id "
+             "WHERE c.status<>'cancelled'")
+        params = ()
+        if exclude:
+            lineage = _lineage_ids(cur, exclude)
+            q += " AND c.challan_id NOT IN (%s)" % ",".join(["%s"] * len(lineage))
+            params = tuple(lineage)
+        reserved = {r["box_id"] for r in store.rows(cur, q, params)}
         closed = [b for b in store.boxes_by_state(cur, "closed", limit=2000)
                   if b["box_id"] not in reserved]
     out = []
@@ -1125,6 +1310,23 @@ def api_challan_available_boxes():
             "is_partial": bool(b.get("is_partial")),
         })
     return jsonify(out)
+
+
+def _lineage_ids(cur, challan_id):
+    """Every challan_id that has ever shared this one's (fy, seq) - the
+    whole edit lineage, not just the single row named.
+
+    A superseded ancestor's challan_serial rows are never deleted (kept
+    fully intact, on purpose), so a serial still sitting in one is not a
+    genuine conflict with editing its own descendant - only a document
+    outside the lineage is."""
+    row = store.one(cur, "SELECT fy, seq FROM challan WHERE challan_id=%s",
+                    (challan_id,))
+    if not row:
+        return {challan_id}
+    return {r["challan_id"] for r in store.rows(
+        cur, "SELECT challan_id FROM challan WHERE fy=%s AND seq=%s",
+        (row["fy"], row["seq"]))}
 
 
 def _box_owner(raw):
@@ -1334,10 +1536,16 @@ def api_challan_checks():
     return jsonify(chk)
 
 
-def _write_challan(cur, d, status):
-    """Shared by a fresh draft and a fresh create - the only difference
-    between them is whether the serials move to dispatched. Raises
-    `_ChallanRefused` with the reason on any blocking check.
+def _write_challan(cur, d, status, exclude_challan_id=None, fy=None, seq=None,
+                   suffix=None):
+    """Shared by a fresh draft, a fresh create, and an edit's save - the
+    differences between them are whether the serials move to dispatched,
+    whether a box may re-select a challan it is already reserved to
+    (`exclude_challan_id`), and whether the number is freshly drawn or
+    reused (`fy`/`seq`/`suffix`, given together by an edit; the sequence
+    an edit reuses was drawn once, at the original's own creation, and is
+    never drawn again). Raises `_ChallanRefused` with the reason on any
+    blocking check.
     """
     try:
         box_ids = [int(x) for x in (d.get("boxes") or [])]
@@ -1349,7 +1557,8 @@ def _write_challan(cur, d, status):
     except (TypeError, ValueError):
         invoice_id = None
 
-    chk = _challan_precheck(cur, box_ids, invoice_id)
+    chk = _challan_precheck(cur, box_ids, invoice_id,
+                            exclude_challan_id=exclude_challan_id)
     if not chk["ok"]:
         raise _ChallanRefused(chk["blocking"][0]["detail"], chk["blocking"])
 
@@ -1357,8 +1566,9 @@ def _write_challan(cur, d, status):
     for bid in chk["general_stock"]:
         db.assign_customer_on_challan(cur, bid, chk["buyer_code"], actor())
 
-    fy = db.fin_year()
-    seq = db.draw_challan_seq(cur, fy)
+    if fy is None:
+        fy = db.fin_year()
+        seq = db.draw_challan_seq(cur, fy)
     challan_date = (d.get("challan_date") or "").strip() or \
         datetime.date.today().isoformat()
 
@@ -1377,7 +1587,7 @@ def _write_challan(cur, d, status):
     avg_watt = round(total_watts / chk["qty"], 3) if chk["qty"] else None
 
     chid = store.insert(cur, "challan", {
-        "fy": fy, "seq": seq, "challan_date": challan_date,
+        "fy": fy, "seq": seq, "suffix": suffix, "challan_date": challan_date,
         "invoice_id": invoice_id,
         "invoice_no": invoice.get("invoice_no") if invoice else None,
         "irn": invoice.get("irn") if invoice else None,
@@ -1420,11 +1630,13 @@ def _write_challan(cur, d, status):
                 db.set_serial(cur, s, state="dispatched")
 
     db.audit(cur, actor(), "challan.%s" % status, "challan", chid,
-             {"fy": fy, "seq": seq, "boxes": box_ids, "qty": chk["qty"],
-              "invoice_id": invoice_id})
-    no = db.render_challan_no(datetime.date.fromisoformat(challan_date), seq)
-    return {"ok": True, "challan_id": chid, "fy": fy, "seq": seq, "no": no,
-            "status": status, "qty": chk["qty"], "kw": chk["kw"]}
+             {"fy": fy, "seq": seq, "suffix": suffix, "boxes": box_ids,
+              "qty": chk["qty"], "invoice_id": invoice_id})
+    no = db.render_challan_no(datetime.date.fromisoformat(challan_date), seq,
+                              suffix)
+    return {"ok": True, "challan_id": chid, "fy": fy, "seq": seq,
+            "suffix": suffix, "no": no, "status": status, "qty": chk["qty"],
+            "kw": chk["kw"]}
 
 
 class _ChallanRefused(Exception):
@@ -1633,6 +1845,185 @@ def api_challan_cancel(challan_id):
     return jsonify({"ok": True})
 
 
+def _resolve_box_no(cur, box_no):
+    """A challan_box row keeps the pallet's PRINTED LABEL, not a row id -
+    the label is what the document says. Turn it back into the live box, so
+    an edit rebuilds from the real box_id and never makes the client guess
+    at one, the way the old clEditChallan() did by reading a column
+    (box_serial) that box detail rows never had."""
+    if not box_no:
+        return None
+    try:
+        p = boxno.parse(box_no)
+    except boxno.BoxNumberError:
+        return store.one(cur, "SELECT * FROM box WHERE legacy_box_no=%s",
+                         (box_no,))
+    return store.one(cur, "SELECT * FROM box WHERE pack_date=%s AND seq=%s",
+                     (p["pack_date"].isoformat(), p["seq"]))
+
+
+def _next_edit_suffix(cur, fy, seq):
+    """MA, then MB, then MC - the same (fy, seq, suffix) mechanism already
+    used for a historical hand-patched collision (742 / 742 (A)), but the
+    'M' marks this one as an edit rather than an old duplicate. Counted
+    from every row this lineage has ever had, so editing MA - which is
+    itself already using the letter A - correctly produces MB next."""
+    existing = {r["suffix"] for r in store.rows(
+        cur, "SELECT suffix FROM challan WHERE fy=%s AND seq=%s", (fy, seq))
+        if r["suffix"]}
+    n = 0
+    while True:
+        cand = "M" + chr(ord("A") + n)
+        if cand not in existing:
+            return cand
+        n += 1
+
+
+@app.route("/api/challan/<int:challan_id>/edit-draft", methods=["POST"])
+def api_challan_edit_draft(challan_id):
+    """What Edit needs to pre-fill the Create screen - resolved here,
+    server-side, never guessed by the client.
+
+    Writes nothing at all. The original stays 'issued' and its own
+    challan_serial rows are the only reservation that exists, exactly as
+    before Edit was clicked - nothing else can select these boxes while it
+    stays issued, which is already true independent of this endpoint.
+    Abandoning an edit therefore needs no cleanup on the server: there is
+    nothing to release, because nothing was ever written.
+    """
+    with store.conn() as (cx, cur):
+        ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
+                       (challan_id,))
+        if not ch:
+            return jsonify({"ok": False, "why": "No such challan."}), 404
+        if ch["status"] != "issued":
+            if ch["status"] == "superseded" and ch.get("superseded_by"):
+                newer = store.one(cur, "SELECT fy, seq, suffix, challan_date "
+                                       "FROM challan WHERE challan_id=%s",
+                                  (ch["superseded_by"],))
+                no = (db.render_challan_no(
+                          datetime.date.fromisoformat(newer["challan_date"]),
+                          newer["seq"], newer["suffix"])
+                      if newer else "a later version")
+                return jsonify({"ok": False, "why":
+                    "This challan has already been superseded by %s. Only "
+                    "the current version can be edited - edit that one "
+                    "instead." % no}), 400
+            return jsonify({"ok": False, "why":
+                "Only an issued challan can be edited (this one is %s)."
+                % ch["status"]}), 400
+        gpc = db.gp_count_for_challan(cur, challan_id)
+        if gpc:
+            return jsonify({"ok": False, "why":
+                "%d gate pass(es) reference this challan. It is locked and "
+                "cannot be edited." % gpc}), 400
+
+        boxes = store.rows(cur, "SELECT * FROM challan_box WHERE "
+                                "challan_id=%s ORDER BY load_order",
+                           (challan_id,))
+        box_ids = []
+        for b in boxes:
+            row = _resolve_box_no(cur, b["box_no"])
+            if not row:
+                return jsonify({"ok": False, "why":
+                    "%s is on this challan but does not resolve to a live "
+                    "box - it cannot be edited from here." % b["box_no"]}), 400
+            box_ids.append(row["box_id"])
+
+        no = db.render_challan_no(
+            datetime.date.fromisoformat(ch["challan_date"]), ch["seq"],
+            ch["suffix"])
+    return jsonify({"ok": True, "editing_challan_id": challan_id, "no": no,
+                    "fy": ch["fy"], "seq": ch["seq"],
+                    "invoice_id": ch["invoice_id"], "boxes": box_ids,
+                    "vehicle_no": ch["vehicle_no"],
+                    "transporter": ch["transporter"], "lr_no": ch["lr_no"],
+                    "driver_name": ch["driver_name"],
+                    "driver_mobile": ch["driver_mobile"]})
+
+
+@app.route("/api/challan/<int:challan_id>/edit-save", methods=["POST"])
+@_sync_guard
+def api_challan_edit_save(challan_id):
+    """Save an edit: a NEW challan row, same (fy, seq), the next 'M' suffix.
+    The original is marked superseded, kept fully intact, never rewritten.
+
+    Only the current live version of a challan can be edited - a
+    superseded one is frozen permanently, however many generations back.
+    Only the invoice is locked; everything else, including the box
+    selection, may change. A box dropped from the shipment during the edit
+    reverts to 'packed', the same state Cancel already leaves a serial in.
+    """
+    d = request.get_json(force=True) or {}
+    with store.conn() as (cx, cur):
+        ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
+                       (challan_id,))
+        if not ch:
+            return jsonify({"ok": False, "why": "No such challan."}), 404
+        if ch["status"] != "issued":
+            return jsonify({"ok": False, "why":
+                "Only the current, issued version of a challan can be "
+                "edited (this one is %s)." % ch["status"]}), 400
+        gpc = db.gp_count_for_challan(cur, challan_id)
+        if gpc:
+            return jsonify({"ok": False, "why":
+                "%d gate pass(es) reference this challan. It is locked and "
+                "cannot be edited." % gpc}), 400
+
+        # The invoice is the one thing an edit may not move. Changing it is
+        # a different shipment against a different document, not an edit
+        # of this one - and the server decides the value that is actually
+        # written, never the client, so an omitted field cannot drift it
+        # either.
+        posted_inv = d.get("invoice_id")
+        try:
+            posted_inv = int(posted_inv) if posted_inv not in (None, "") \
+                else None
+        except (TypeError, ValueError):
+            posted_inv = None
+        if posted_inv is not None and posted_inv != ch["invoice_id"]:
+            return jsonify({"ok": False, "why":
+                "The invoice cannot be changed by an edit. Create a new "
+                "challan if this shipment is genuinely against a "
+                "different invoice."}), 400
+        d = dict(d)
+        d["invoice_id"] = ch["invoice_id"]
+
+        orig_serials = {r["serial"] for r in store.rows(
+            cur, "SELECT serial FROM challan_serial WHERE challan_id=%s",
+            (challan_id,))}
+        suffix = _next_edit_suffix(cur, ch["fy"], ch["seq"])
+        # the whole lineage, not just this one row - a prior generation's
+        # challan_serial rows are still there (never deleted) and are not
+        # a real conflict with the descendant replacing it
+        lineage = _lineage_ids(cur, challan_id)
+
+        try:
+            out = _write_challan(cur, d, "issued",
+                                 exclude_challan_id=lineage,
+                                 fy=ch["fy"], seq=ch["seq"], suffix=suffix)
+        except _ChallanRefused as e:
+            return jsonify({"ok": False, "why": e.why,
+                            "blocking": e.blocking}), 400
+
+        new_serials = {r["serial"] for r in store.rows(
+            cur, "SELECT serial FROM challan_serial WHERE challan_id=%s",
+            (out["challan_id"],))}
+        released = sorted(orig_serials - new_serials)
+        for s in released:
+            db.set_serial(cur, s, state="packed")
+
+        at = datetime.datetime.now().isoformat(timespec="seconds")
+        cur.execute(
+            "UPDATE challan SET status='superseded', superseded_by=%s, "
+            "superseded_at=%s, superseded_by_user=%s WHERE challan_id=%s",
+            (out["challan_id"], at, actor(), challan_id))
+        db.audit(cur, actor(), "challan.edit", "challan", challan_id,
+                 {"new_challan_id": out["challan_id"], "released": released})
+    out["superseded_original"] = challan_id
+    return jsonify(out)
+
+
 @app.route("/api/challans/issued")
 def api_challans_issued():
     """Issued non-cancelled challans, for the Gate Pass 'against' selector."""
@@ -1666,6 +2057,42 @@ def _challan_bundle(cur, fy, seq, suffix=None):
     return {"challan": ch, "boxes": boxes, "serials": sers}
 
 
+def _refuse_if_superseded(cur, ch):
+    """A superseded row is stale by definition - Edit exists because the
+    original was wrong, and printing it after the correction would ship
+    the wrong document. Checked unconditionally, whether the row was
+    reached by a bare (fy, seq) - which, with no suffix, matches the
+    ORIGINAL row, not whichever generation is now live - or by an
+    explicit old ?suffix=. Only the current live version may ever print.
+    Returns the refusal, or None."""
+    if ch["status"] != "superseded":
+        return None
+    newer = store.one(cur, "SELECT fy, seq, suffix, challan_date FROM "
+                           "challan WHERE challan_id=%s",
+                      (ch["superseded_by"],)) if ch.get("superseded_by") else None
+    no = (db.render_challan_no(
+              datetime.date.fromisoformat(newer["challan_date"]),
+              newer["seq"], newer["suffix"]) if newer else "a later version")
+    return ("This challan has been superseded by an edit - print %s "
+            "instead. A superseded document is not produced." % no)
+
+
+def _loading_incomplete(boxes):
+    """None once every pallet on the challan is confirmed loaded; the
+    refusal otherwise - checked before either document renders, never
+    something the UI can route around, the same no-override rule
+    quantity-reconciliation already gets. Historical/imported challans
+    (origin='historical') predate this screen entirely and are not
+    gated - there is no session to hold them to."""
+    total = len(boxes)
+    done = sum(1 for b in boxes if b["loading_status"] == "loaded")
+    if done == total:
+        return None
+    return ("Loading verification is not complete - %d of %d pallet(s) "
+            "confirmed. Complete it before this document can be produced."
+            % (done, total))
+
+
 @app.route("/challan/<int:fy>/<int:seq>/print")
 def challan_print(fy, seq):
     """Version 1 - ONE PAGE, no serial list. This is the copy the driver
@@ -1674,6 +2101,13 @@ def challan_print(fy, seq):
         b = _challan_bundle(cur, fy, seq, request.args.get("suffix"))
         if not b:
             abort(404)
+        why = _refuse_if_superseded(cur, b["challan"])
+        if why:
+            return why, 400
+        if b["challan"]["origin"] != "historical":
+            why = _loading_incomplete(b["boxes"])
+            if why:
+                return why, 400
     ch = b["challan"]
     d = datetime.date.fromisoformat(ch["challan_date"])
     return render_template("challan_print.html", ch=ch, boxes=b["boxes"],
@@ -1696,6 +2130,13 @@ def challan_excel(fy, seq):
         b = _challan_bundle(cur, fy, seq, request.args.get("suffix"))
         if not b:
             abort(404)
+        why = _refuse_if_superseded(cur, b["challan"])
+        if why:
+            return why, 400
+        if b["challan"]["origin"] != "historical":
+            why = _loading_incomplete(b["boxes"])
+            if why:
+                return why, 400
         cfg = db.get_config(cur)
     ch, sers = b["challan"], b["serials"]
     d = datetime.date.fromisoformat(ch["challan_date"])

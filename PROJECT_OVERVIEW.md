@@ -212,7 +212,8 @@ python test_indent.py               7 tests · one number, and an edit that cann
 python test_packing.py             33 tests · the gate that keeps a reject off a truck
 python test_repack.py              29 tests · a printed box number is never edited
 python test_styles.py               9 tests · the stylesheet reaches v4's page
-python test_challan.py             31 tests · quantity is boxes ticked, never the invoice
+python test_challan.py             50 tests · quantity is boxes ticked, never the invoice
+python test_loading.py              10 tests · print/excel refuse until every pallet is confirmed
 ```
 
 The JS tests read their functions out of `icon_live.js`, so they test what
@@ -227,6 +228,7 @@ node test_repack.js                27 tests · what Repack refuses before it ask
 node test_packing.js               26 tests · New Pallet trusts the module, not a click
 node test_fqc_dashboard.js         18 tests · one filtered answer, painted everywhere
 node test_challan.js               29 tests · what Create Challan gets right before it asks
+node test_loading.js               11 tests · lookup, confirm and read-only, before the server is asked
 
 cscript //Nologo //E:JScript test_trace.js      the same, without Node
 ```
