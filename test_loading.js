@@ -19,6 +19,9 @@
 /* ---- ES3 shims -------------------------------------------------------- */
 if (!Array.prototype.forEach) Array.prototype.forEach = function (f) {
   for (var i = 0; i < this.length; i++) f(this[i], i, this); };
+if (!Array.prototype.indexOf) Array.prototype.indexOf = function (v) {
+  for (var i = 0; i < this.length; i++) if (this[i] === v) return i;
+  return -1; };
 if (!Array.prototype.map) Array.prototype.map = function (f) {
   var o = []; for (var i = 0; i < this.length; i++) o.push(f(this[i], i, this));
   return o; };
@@ -118,6 +121,8 @@ var window = (typeof global !== 'undefined') ? global : this;
 
 var toasts = [];
 function toast(t) { toasts.push(t); }
+var GO_CALLS = [];
+function go(view) { GO_CALLS.push(view); }
 function fqcEsc(v) {
   return String(v === null || v === undefined ? '' : v)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -164,9 +169,10 @@ function pallet(box_no, status) {
 function reset(boxes) {
   DOM = {};
   mainEl = new El('div');
-  ['ldSessionCard', 'ldTableBody', 'ldFrom', 'ldTo', 'ldStatusFilter',
-   'ldSessionOverlay', 'ldSessionMsg', 'ldSessionScan', 'ldCount'].forEach(function (id) { el(id); });
-  toasts = []; SENT = [];
+  ['ldTableBody', 'ldFrom', 'ldTo', 'ldStatusFilter', 'ldSessionMsg',
+   'ldSessionScan', 'ldCount', 'lsSubtitle', 'lsProgress', 'lsRows',
+   'lsScanCard', 'lsActs'].forEach(function (id) { el(id); });
+  toasts = []; SENT = []; GO_CALLS = [];
   REPLY = { ok: false, why: 'stub: no reply configured' };
   ldRows = []; ldBusy = false; ldHold = null;
   ldSession = { challan_id: 9, no: 'IS-16.09.2026/0001',
@@ -206,6 +212,45 @@ test('a pallet found in this session arms the confirm', function () {
   assert(ldHold && ldHold.ok && ldHold.box_no === 'ISPL260916/K001', ldHold);
 });
 
+test('a found pallet renders the same .pending/.lookup/.gate card New '
+    + 'Pallet\'s own scan-confirm uses - model, grade and quantity shown, '
+    + 'not a single line of coloured text', function () {
+  reset([pallet('ISPL260916/K001', 'pending')]);
+  el('ldSessionScan').value = 'ISPL260916/K001';
+  ldLookup();
+  var html = el('ldSessionMsg').innerHTML;
+  assert(html.indexOf('class="pending"') !== -1, html);
+  assert(html.indexOf('ISEN630-G12R') !== -1, 'model not shown: ' + html);
+  assert(html.indexOf('>A<') !== -1 || html.indexOf('>A</div>') !== -1,
+        'grade not shown: ' + html);
+  assert(html.indexOf('>36<') !== -1, 'quantity not shown: ' + html);
+  assert(html.indexOf('class="gate ok"') !== -1,
+        'a scannable, not-yet-confirmed pallet should gate green: ' + html);
+});
+
+test('a not-found pallet renders the blocked variant of the same card, '
+    + 'not the found one with an error jammed into it', function () {
+  reset([pallet('ISPL260916/K001')]);
+  el('ldSessionScan').value = 'ISPL260916/K999';
+  ldLookup();
+  var html = el('ldSessionMsg').innerHTML;
+  assert(html.indexOf('class="pending blocked"') !== -1, html);
+  assert(html.indexOf('class="gate no"') !== -1, html);
+  assert(html.indexOf('class="lookup"') === -1,
+        'nothing was found - a lookup grid with no data is worse than none: ' + html);
+});
+
+test('an already-saved pallet, scanned again, gates amber (not green, not '
+    + 'red) - re-confirming is allowed but is not what a fresh scan is',
+function () {
+  reset([pallet('ISPL260916/K001', 'saved')]);
+  el('ldSessionScan').value = 'ISPL260916/K001';
+  ldLookup();
+  var html = el('ldSessionMsg').innerHTML;
+  assert(html.indexOf('class="gate warn"') !== -1, html);
+  assert(html.indexOf('Already saved') !== -1, html);
+});
+
 test('Space does nothing without an armed lookup', function () {
   reset([pallet('ISPL260916/K001')]);
   ldHold = null;
@@ -233,6 +278,20 @@ function () {
   assert(ldSession.boxes[0].loading_status === 'saved',
         ldSession.boxes[0].loading_status);
   assert(ldHold === null, 'the armed confirm was not cleared after use');
+});
+
+test('a successful confirm shows a "Confirmed" card - not wiped out by '
+    + 'ldRenderSession() rebuilding the scan card around it. A real bug '
+    + 'once present: the confirmation message was set BEFORE the re-render '
+    + 'that recreates (and empties) its own container', function () {
+  reset([pallet('ISPL260916/K001', 'pending')]);
+  ldHold = { box_no: 'ISPL260916/K001', ok: true };
+  REPLY = { ok: true, box_no: 'ISPL260916/K001', loading_status: 'saved' };
+  ldConfirm();
+  var html = el('ldSessionMsg').innerHTML;
+  assert(html.indexOf('Confirmed') !== -1,
+        'no confirmation shown after a successful confirm: ' + html);
+  assert(html.indexOf('class="gate ok"') !== -1, html);
 });
 
 test('a refused confirm leaves the pallet exactly as it was', function () {
@@ -272,22 +331,24 @@ test('the session shows a scan field while any pallet is not yet loaded',
 function () {
   reset([pallet('ISPL260916/K001', 'saved')]);
   ldRenderSession();
-  var html = el('ldSessionCard').innerHTML;
-  assert(html.indexOf('id="ldSessionScan"') !== -1, 'no scan field for an incomplete session');
-  assert(html.indexOf('Save &amp; Submit') !== -1 || html.indexOf('Save & Submit') !== -1,
-        html);
+  var scanHtml = el('lsScanCard').innerHTML;
+  var actsHtml = el('lsActs').innerHTML;
+  assert(scanHtml.indexOf('id="ldSessionScan"') !== -1, 'no scan field for an incomplete session');
+  assert(actsHtml.indexOf('Save &amp; Submit') !== -1 || actsHtml.indexOf('Save & Submit') !== -1,
+        actsHtml);
 });
 
 test('once every pallet is loaded, the session renders read-only - no '
     + 'scan field, no Save & Submit', function () {
   reset([pallet('ISPL260916/K001', 'loaded'), pallet('ISPL260916/W002', 'loaded')]);
   ldRenderSession();
-  var html = el('ldSessionCard').innerHTML;
-  assert(html.indexOf('id="ldSessionScan"') === -1,
+  var scanHtml = el('lsScanCard').innerHTML;
+  var actsHtml = el('lsActs').innerHTML;
+  assert(scanHtml.indexOf('id="ldSessionScan"') === -1,
         'a completed session still offered a scan field');
-  assert(html.indexOf('Save &amp; Submit') === -1 && html.indexOf('Save & Submit') === -1,
+  assert(actsHtml.indexOf('Save &amp; Submit') === -1 && actsHtml.indexOf('Save & Submit') === -1,
         'a completed session still offered Save & Submit');
-  assert(html.toLowerCase().indexOf('read-only') !== -1, html);
+  assert(scanHtml.toLowerCase().indexOf('read-only') !== -1, scanHtml);
 });
 
 test('the session\'s own scan field and message div use ids distinct from '
@@ -300,13 +361,32 @@ test('the session\'s own scan field and message div use ids distinct from '
 function () {
   reset([pallet('ISPL260916/K001', 'saved')]);
   ldRenderSession();
-  var html = el('ldSessionCard').innerHTML;
-  assert(html.indexOf('id="ldScan"') === -1,
+  var scanHtml = el('lsScanCard').innerHTML;
+  assert(scanHtml.indexOf('id="ldScan"') === -1,
         'the session reintroduced the bare id="ldScan" - collides with ' +
         'Gate Pass\'s own hidden widget of the same id');
-  assert(html.indexOf('id="ldMsg"') === -1,
+  assert(scanHtml.indexOf('id="ldMsg"') === -1,
         'the session reintroduced the bare id="ldMsg" - collides with ' +
         'Gate Pass\'s own hidden widget of the same id');
+});
+
+test('opening a session navigates to a real view (go(\'loadsession\')), '
+    + 'not a fixed-position popup floating over the landing list', function () {
+  reset([pallet('ISPL260916/K001')]);
+  REPLY = { challan_id: 9, no: 'IS-16.09.2026/0001', buyer_name: 'AGNI',
+           invoice_no: 'INV-1', boxes: [pallet('ISPL260916/K001')] };
+  window.ldOpenSession(9);
+  assert(GO_CALLS.indexOf('loadsession') !== -1,
+        'ldOpenSession did not navigate to a real view: ' + GO_CALLS);
+});
+
+test('closing a session navigates back to the landing list, the same way '
+    + 'leaving any other screen does', function () {
+  reset([pallet('ISPL260916/K001')]);
+  window.ldCloseSession();
+  assert(GO_CALLS.indexOf('loading-list') !== -1,
+        'ldCloseSession did not navigate back: ' + GO_CALLS);
+  assert(ldSession === null, 'the session was not cleared on close');
 });
 
 

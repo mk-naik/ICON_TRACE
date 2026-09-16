@@ -28,6 +28,16 @@
            .indexOf(k) !== -1 && ROLES[k].views.indexOf('loading-list') === -1) {
            ROLES[k].views.push('loading-list');
        }
+       // The per-challan scan session (v-loadsession) is a real, separate
+       // view now too, not a popup floating over the landing list - v4's
+       // own go() refuses ANY id not listed in ROLES[role].views, silently
+       // (a toast, no page change), so without this go('loadsession')
+       // would leave the landing list on screen looking like nothing
+       // happened at all.
+       if (ROLES[k].views && ['Admin', 'Dispatch Operator', 'Packing Operator']
+           .indexOf(k) !== -1 && ROLES[k].views.indexOf('loadsession') === -1) {
+           ROLES[k].views.push('loadsession');
+       }
     });
   }
 
@@ -6815,13 +6825,6 @@ function wireFqcAnomalies() {
             '</tbody>' +
           '</table></div>' +
         '</div>' +
-      '</div>' +
-      '<div id="ldSessionOverlay" style="display:none;position:fixed;inset:0;z-index:300;' +
-        'background:rgba(14,26,43,.55);align-items:flex-start;justify-content:center;' +
-        'overflow-y:auto;padding:40px 16px">' +
-        '<div id="ldSessionCard" style="background:var(--surface);border-radius:var(--r);' +
-          'width:100%;max-width:760px;box-shadow:0 10px 30px rgba(0,0,0,.2);' +
-          'margin:0 auto;padding:0;overflow:hidden;position:relative"></div>' +
       '</div>';
     main.appendChild(sec);
     var today = new Date().toISOString().slice(0, 10);
@@ -6831,6 +6834,54 @@ function wireFqcAnomalies() {
     // this keeps the (separately owned) count text in step with it.
     var search = sec.querySelector('[data-role="search"]');
     if (search) search.addEventListener('input', ldRecount);
+  }
+
+  // A challan's scan session used to be a fixed-position overlay floating
+  // on top of the landing list - opening it never felt like "going
+  // anywhere", it felt like a popup interrupting the screen underneath,
+  // and the result card the pallet scan built (a single coloured line of
+  // text) looked like nothing else in the app. Built as a real, separate
+  // view instead - same .pg/.work/.card shell every other screen uses -
+  // reached with go('loadsession') and left with a real Back action, not
+  // a modal's close button. The pallet lookup itself now renders through
+  // the SAME .pending/.lookup/.gate pattern New Pallet's own scan-confirm
+  // card already uses, instead of a one-off style built just for this.
+  function ldInjectSessionView() {
+    if (document.getElementById('v-loadsession')) return;
+    var main = document.querySelector('.main');
+    if (!main) return;
+    var sec = document.createElement('section');
+    sec.className = 'view';
+    sec.id = 'v-loadsession';
+    sec.innerHTML =
+      '<div class="pg"><h2 id="lsTitle">Loading Verification</h2>' +
+        '<p id="lsSubtitle">Confirm every pallet is physically on the vehicle</p>' +
+        '<div class="pg-act"><button class="btn btn-ghost" ' +
+          'onclick="ldCloseSession()">← Back to Loading Verification</button></div>' +
+      '</div>' +
+      '<div class="work">' +
+        '<div class="wmain o3">' +
+          '<div class="card">' +
+            '<div class="card-h"><h3>Pallets</h3><div class="ch-r">' +
+              '<span class="tag t-mute" id="lsProgress"></span></div></div>' +
+            '<div class="card-b flush scroll" style="max-height:520px">' +
+              '<table style="width:100%"><thead><tr><th style="width:36px">#</th>' +
+                '<th>Pallet</th><th>Model</th><th>Grade</th><th class="num">Qty</th>' +
+                '<th>Status</th></tr></thead>' +
+                '<tbody id="lsRows"></tbody>' +
+              '</table>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="rail">' +
+          '<div class="card">' +
+            '<div class="card-h"><h3>Scan or type a pallet number</h3></div>' +
+            '<div class="card-b" id="lsScanCard"></div>' +
+          '</div>' +
+          '<div class="rail-acts" id="lsActs"></div>' +
+        '</div>' +
+      '</div>';
+    main.appendChild(sec);
   }
 
   function ldStatusTag(agg, n_loaded, n_total) {
@@ -6915,36 +6966,34 @@ function wireFqcAnomalies() {
   /* ---- the session: one challan, scan or type, Enter finds, Space confirms */
 
   window.ldOpenSession = function (challanId) {
-    var overlay = ldEl('ldSessionOverlay');
-    var card = ldEl('ldSessionCard');
-    if (!overlay || !card) { ldInjectView(); overlay = ldEl('ldSessionOverlay');
-      card = ldEl('ldSessionCard'); if (!overlay || !card) return; }
-    card.innerHTML = '<div style="padding:24px;color:var(--ink3)">Loading…</div>';
-    overlay.style.display = 'block';
+    ldInjectSessionView();
+    if (typeof go === 'function') go('loadsession');
+    var rows = ldEl('lsRows');
+    if (rows) rows.innerHTML = '<tr><td colspan="6" style="padding:24px;' +
+      'text-align:center;color:var(--ink3)">Loading…</td></tr>';
     fetch('/api/loading/' + challanId, { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (d.error) {
-          card.innerHTML = '<div style="padding:24px;color:var(--fail)">' +
-            fqcEsc(d.error) + '</div>';
+          if (rows) rows.innerHTML = '<tr><td colspan="6" style="padding:24px;' +
+            'text-align:center;color:var(--fail)">' + fqcEsc(d.error) + '</td></tr>';
           return;
         }
         ldSession = d; ldHold = null;
         ldRenderSession();
       })
       .catch(function () {
-        card.innerHTML = '<div style="padding:24px;color:var(--fail)">Could not ' +
-          'load this challan.</div>';
+        if (rows) rows.innerHTML = '<tr><td colspan="6" style="padding:24px;' +
+          'text-align:center;color:var(--fail)">Could not load this challan.</td></tr>';
       });
   };
 
   window.ldCloseSession = function () {
     // "Save" is just navigation back to the list - every confirm already
     // persisted itself, so there is nothing left to write here.
-    var overlay = ldEl('ldSessionOverlay');
-    if (overlay) overlay.style.display = 'none';
     ldSession = null; ldHold = null;
-    ldLoad();
+    if (typeof go === 'function') go('loading-list');
+    else ldLoad();
   };
 
   function ldPalletRow(b, i) {
@@ -6961,8 +7010,7 @@ function wireFqcAnomalies() {
   }
 
   function ldRenderSession() {
-    var card = ldEl('ldSessionCard');
-    if (!card || !ldSession) return;
+    if (!ldSession) return;
     var boxes = ldSession.boxes || [];
     var total = boxes.length;
     var saved = boxes.filter(function (b) {
@@ -6970,59 +7018,90 @@ function wireFqcAnomalies() {
     var loaded = boxes.filter(function (b) { return b.loading_status === 'loaded'; }).length;
     var allLoaded = total > 0 && loaded === total;
 
-    card.innerHTML =
-      '<div style="padding:16px 20px;border-bottom:1px solid var(--bd);' +
-        'display:flex;justify-content:space-between;align-items:center">' +
-        '<div><span class="mono" style="font-size:15px;font-weight:700">' +
-          fqcEsc(ldSession.no || '—') + '</span> · ' +
-          '<span style="font-size:11.5px;color:var(--ink3)">' +
-          fqcEsc(ldSession.buyer_name || '—') + ' · ' +
-          fqcEsc(ldSession.invoice_no || '—') + '</span></div>' +
-        '<button class="btn btn-ghost btn-sm" onclick="ldCloseSession()">&times; Close</button>' +
-      '</div>' +
-      (allLoaded ?
-        '<div class="note n-ok" style="margin:12px 20px;font-size:11.5px">' +
+    var subtitle = ldEl('lsSubtitle');
+    if (subtitle) subtitle.innerHTML =
+      '<span class="mono" style="font-weight:700;color:var(--ink)">' +
+      fqcEsc(ldSession.no || '—') + '</span> · ' +
+      fqcEsc(ldSession.buyer_name || '—') + ' · ' + fqcEsc(ldSession.invoice_no || '—');
+
+    var progress = ldEl('lsProgress');
+    if (progress) progress.textContent = saved + ' of ' + total + ' confirmed';
+
+    var rows = ldEl('lsRows');
+    if (rows) rows.innerHTML = boxes.map(ldPalletRow).join('');
+
+    var scanCard = ldEl('lsScanCard');
+    if (scanCard) {
+      if (allLoaded) {
+        scanCard.innerHTML = '<div class="note n-ok" style="font-size:11.5px">' +
           '<span>✓</span><span>Every pallet already confirmed loaded. ' +
-          'This session is read-only - scanning is disabled.</span></div>'
-        : '<div style="padding:14px 20px 0"><label style="font-size:11px;' +
-          'font-weight:700;color:var(--ink3);text-transform:uppercase;' +
-          'letter-spacing:.5px">Scan or type a pallet number</label>' +
+          'This session is read-only - scanning is disabled.</span></div>';
+      } else {
+        scanCard.innerHTML =
+          '<label style="font-size:11px;font-weight:700;color:var(--ink3);' +
+          'text-transform:uppercase;letter-spacing:.5px">Pallet number</label>' +
           '<input id="ldSessionScan" class="mono" style="width:100%;padding:8px 10px;' +
           'margin-top:5px;border:1px solid var(--line);border-radius:var(--r)" ' +
           'placeholder="ISPL260901/K001 — Enter to find, Space to confirm">' +
-          '<div id="ldSessionMsg" style="margin-top:8px"></div></div>') +
-      '<div class="scroll" style="max-height:340px;margin-top:12px">' +
-        '<table style="width:100%"><thead><tr><th style="width:36px">#</th>' +
-          '<th>Pallet</th><th>Model</th><th>Grade</th><th class="num">Qty</th>' +
-          '<th>Status</th></tr></thead><tbody>' +
-          boxes.map(ldPalletRow).join('') +
-        '</tbody></table></div>' +
-      '<div style="padding:12px 20px;border-top:1px solid var(--bd);' +
-        'display:flex;gap:8px;align-items:center">' +
-        '<span class="tag t-mute">' + saved + ' of ' + total + ' confirmed</span>' +
-        '<span style="flex:1"></span>' +
-        '<button class="btn btn-ghost" onclick="ldCloseSession()">Save</button>' +
-        (allLoaded ? '' :
-          '<button class="btn btn-primary" onclick="ldSubmit()">Save &amp; Submit</button>') +
-      '</div>';
-
-    var input = ldEl('ldSessionScan');
-    if (input) {
-      input.focus();
-      input.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') { e.preventDefault(); ldLookup(); }
-        else if (e.code === 'Space' && ldHold && ldHold.ok) {
-          e.preventDefault(); ldConfirm();
+          '<div id="ldSessionMsg" style="margin-top:10px"></div>';
+        var input = ldEl('ldSessionScan');
+        if (input) {
+          input.focus();
+          input.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); ldLookup(); }
+            else if (e.code === 'Space' && ldHold && ldHold.ok) {
+              e.preventDefault(); ldConfirm();
+            }
+          });
         }
-      });
+      }
     }
+
+    var acts = ldEl('lsActs');
+    if (acts) acts.innerHTML =
+      '<button class="btn btn-ghost" onclick="ldCloseSession()">Save</button>' +
+      (allLoaded ? '' :
+        '<button class="btn btn-primary" onclick="ldSubmit()">Save &amp; Submit</button>');
   }
 
-  function ldMsg(cls, txt) {
+  // The same .pending/.lookup/.gate card New Pallet's own scan-confirm
+  // uses (packLookup, above) instead of a single line of coloured text -
+  // one visual language for "I scanned something, here is what it is and
+  // whether it is good to go" everywhere it appears in the app.
+  function ldRenderPending(state) {
     var host = ldEl('ldSessionMsg');
     if (!host) return;
-    host.innerHTML = '<div class="scan-msg ' + cls + '">' +
-      (cls === 'ok' ? '✓' : '✕') + '<span>' + fqcEsc(txt) + '</span></div>';
+    if (!state) { host.innerHTML = ''; return; }
+    if (!state.ok) {
+      host.innerHTML = '<div class="pending blocked">' +
+        '<div class="pending-h"><span class="ph-t">Not found</span>' +
+        '<span class="ph-s">' + fqcEsc(state.box_no) + '</span></div>' +
+        '<div class="gates" style="padding:9px 12px"><span class="gate no">' +
+          fqcEsc(state.why) + '</span></div></div>';
+      return;
+    }
+    var row = state.row;
+    var pending = !state.confirmed && row.loading_status === 'pending';
+    var statusText = state.confirmed ? 'Confirmed just now'
+      : row.loading_status === 'pending' ? 'Not yet confirmed'
+      : row.loading_status === 'saved' ? 'Already saved' : 'Already loaded';
+    var gateCls = (state.confirmed || pending) ? 'ok' : 'warn';
+    var gateText = state.confirmed ? 'Confirmed'
+      : pending ? 'Ready to confirm' : 'Already confirmed once';
+    host.innerHTML = '<div class="pending">' +
+      '<div class="pending-h"><span class="ph-t">' +
+        (state.confirmed ? 'Confirmed' : 'Found') + '</span>' +
+        '<span class="ph-s">' + fqcEsc(state.box_no) + '</span>' +
+        '<div class="ph-r">' + (pending ?
+          '<span class="tag t-mute">Space to confirm</span>' : '') + '</div></div>' +
+      '<div class="lookup">' +
+        '<div><label>Model</label><div class="lv mono">' + fqcEsc(row.model || '—') + '</div></div>' +
+        '<div><label>Grade</label><div class="lv">' + fqcEsc(row.grade || '—') + '</div></div>' +
+        '<div><label>Quantity</label><div class="lv mono">' + row.qty + '</div></div>' +
+        '<div><label>Status</label><div class="lv">' + fqcEsc(statusText) + '</div></div>' +
+      '</div>' +
+      '<div class="gates" style="padding:9px 12px">' +
+        '<span class="gate ' + gateCls + '">' + fqcEsc(gateText) + '</span></div></div>';
   }
 
   window.ldLookup = function () {
@@ -7034,18 +7113,11 @@ function wireFqcAnomalies() {
       return b.box_no === no; })[0];
     if (!row) {
       ldHold = null;
-      ldMsg('bad', no + ' is not on this challan.');
+      ldRenderPending({ ok: false, box_no: no, why: no + ' is not on this challan.' });
       return;
     }
     ldHold = { box_no: no, ok: true };
-    if (row.loading_status !== 'pending') {
-      ldMsg('ok', no + ' — already ' + row.loading_status +
-            '. Space confirms it again if you need to.');
-    } else {
-      ldMsg('ok', no + ' found — ' + row.model + ' · grade ' +
-            (row.grade || '—') + ' · ' + row.qty + ' modules. ' +
-            'Space to confirm.');
-    }
+    ldRenderPending({ ok: true, box_no: no, row: row });
   };
 
   window.ldConfirm = function () {
@@ -7056,15 +7128,27 @@ function wireFqcAnomalies() {
       body: JSON.stringify({ box_no: boxNo }) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (!d.ok) { ldMsg('bad', d.why || 'Could not confirm.'); return; }
+        if (!d.ok) {
+          ldRenderPending({ ok: false, box_no: boxNo, why: d.why || 'Could not confirm.' });
+          return;
+        }
         ldHold = null;
         var row = (ldSession.boxes || []).filter(function (b) {
           return b.box_no === boxNo; })[0];
         if (row) row.loading_status = 'saved';
-        ldMsg('ok', boxNo + ' confirmed.');
+        // rendered BEFORE the confirmation message - ldRenderSession()
+        // rebuilds the scan card (and its now-empty ldSessionMsg) from
+        // scratch, so filling it in the other order just had the
+        // "confirmed" message wiped out the instant it appeared. The
+        // test mock's innerHTML assignment does not actually destroy
+        // child stub objects the way a real browser does, so this
+        // ordering is verified live (check_scan.py), not here.
         ldRenderSession();
+        if (row) ldRenderPending({ ok: true, box_no: boxNo, row: row, confirmed: true });
       })
-      .catch(function () { ldMsg('bad', 'The server did not answer.'); });
+      .catch(function () {
+        ldRenderPending({ ok: false, box_no: boxNo, why: 'The server did not answer.' });
+      });
   };
 
   window.ldSubmit = function () {
@@ -7118,6 +7202,7 @@ function wireFqcAnomalies() {
       try {
         if (view === 'challan-list') clInjectView();
         if (view === 'loading-list') ldInjectView();
+        if (view === 'loadsession') ldInjectSessionView();
       } catch (e) {}
       var result;
       try {
