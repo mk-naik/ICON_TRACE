@@ -7548,7 +7548,23 @@ function wireFqcAnomalies() {
   function gpHideUnwiredFields() {
     ['Gate pass no.', 'Delivery order no.', 'Container no.'].forEach(function (label) {
       var f = gpFldFor(label);
-      if (f) f.style.display = 'none';
+      if (!f) return;
+      f.style.display = 'none';
+      // Hiding the field is not enough on its own. "Gate pass no." carries
+      // the fake number as its VALUE ATTRIBUTE - setting the .value
+      // PROPERTY does not touch that (the "dirty value flag": confirmed
+      // live, outerHTML still showed value="GP-2608-0031" after
+      // inp.value=''). "Delivery order no." carries PS26812-0007 as a
+      // PLACEHOLDER instead, a wholly different attribute .value never
+      // touches at all. Both still serialize into innerHTML while merely
+      // hidden, so both are stripped outright, not just cleared to blank
+      // (an empty value="" or placeholder="" attribute would still be an
+      // attribute sitting in the DOM).
+      var inp = f.querySelector('input');
+      if (inp) {
+        inp.removeAttribute('value'); inp.value = '';
+        inp.removeAttribute('placeholder');
+      }
     });
     var view = document.getElementById('v-gp');
     if (!view) return;

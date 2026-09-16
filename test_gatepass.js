@@ -19,6 +19,10 @@ if (!Array.prototype.forEach) Array.prototype.forEach = function (f) {
 if (!Array.prototype.map) Array.prototype.map = function (f) {
   var o = []; for (var i = 0; i < this.length; i++) o.push(f(this[i], i, this));
   return o; };
+if (!Array.prototype.filter) Array.prototype.filter = function (f) {
+  var o = []; for (var i = 0; i < this.length; i++)
+    if (f(this[i], i, this)) o.push(this[i]);
+  return o; };
 if (!String.prototype.trim) String.prototype.trim = function () {
   return this.replace(/^\s+/, '').replace(/\s+$/, ''); };
 
@@ -43,12 +47,43 @@ function readFile(path) {
 }
 
 /* ---- a just-enough DOM: real v4 markup is '.rail .card-b .fld' elements
-   carrying one <label> each, found by label text - not a selector engine */
-function fld(labelText) {
+   carrying one <label> each, found by label text - not a selector engine.
+   An input models the real attribute-vs-property split: setting .value
+   (a plain field here, same as the DOM's live property) does NOT touch
+   _attrValue (what outerHTML/innerHTML actually serializes) - only
+   removeAttribute/setAttribute do. This is the exact distinction that
+   let a real bug through once already: gpHideUnwiredFields() cleared
+   .value and the field still rendered with value="GP-2608-0031". */
+function fldInput(opts) {
+  opts = opts || {};
+  var attrs = { value: opts.value || null, placeholder: opts.placeholder || null };
+  return {
+    value: opts.value || '',
+    removeAttribute: function (name) {
+      if (Object.prototype.hasOwnProperty.call(attrs, name)) attrs[name] = null;
+    },
+    setAttribute: function (name, v) {
+      if (Object.prototype.hasOwnProperty.call(attrs, name)) attrs[name] = v;
+    },
+    // what innerHTML would actually serialize - independent of .value,
+    // the live property, exactly like the real DOM
+    serialized: function () {
+      return [attrs.value, attrs.placeholder].filter(function (v) {
+        return v !== null && v !== undefined;
+      }).join(' ');
+    }
+  };
+}
+function fld(labelText, inputOpts) {
   var label = { textContent: labelText };
+  var input = inputOpts ? fldInput(inputOpts) : null;
   return {
     style: {},
-    querySelector: function (sel) { return sel === 'label' ? label : null; }
+    querySelector: function (sel) {
+      if (sel === 'label') return label;
+      if (sel === 'input') return input;
+      return null;
+    }
   };
 }
 function note(text) {
@@ -105,8 +140,10 @@ function realCard() {
   return {
     flds: [
       fld('Type'), fld('Party / destination'), fld('Material going out'),
-      fld('Against challan'), fld('Gate pass no.'), fld('Delivery order no.'),
-      fld('Container no.'), fld('Prepared by')
+      fld('Against challan'), fld('Gate pass no.', { value: 'GP-2608-0031' }),
+      fld('Delivery order no.', { placeholder: 'PS26812-0007' }),
+      fld('Container no.', { placeholder: 'Optional' }),
+      fld('Prepared by')
     ],
     notes: [note('Placeholder series. Switches to the the other system PS format once confirmed.')],
     btns: [btn("printDoc('Gate pass','GP-2608-0031',3)"),
@@ -150,19 +187,28 @@ test('gpHideUnwiredFields strips the fake gate pass number out of the '
   });
 });
 
-test('nothing on the rendered card - fields, notes or buttons - contains '
-    + 'GP-2608 or PS26812 anywhere after cleanup, matching the exact bug '
-    + 'report', function () {
+test('nothing on the rendered card - fields, notes, buttons, or the '
+    + 'still-attached inputs\' own attributes - contains GP-2608 or '
+    + 'PS26812 anywhere after cleanup, matching the exact bug report',
+function () {
   var c = realCard();
   DOM['v-gp'] = gpView(c.flds, c.notes, c.btns);
   gpHideUnwiredFields();
+  // hidden fields keep their label text and their <input> node (display:
+  // none, not removed) - a real regression once slipped through here:
+  // gpHideUnwiredFields() cleared the .value PROPERTY, which real
+  // browsers do NOT reflect back into the value ATTRIBUTE (or touch
+  // placeholder at all), so innerHTML still carried the literal string
+  // through a field that LOOKED cleaned. serialized() models exactly
+  // that split - only removeAttribute actually clears it.
   var haystack = c.flds.map(function (f) { return f.querySelector('label').textContent; })
+    .concat(c.flds.map(function (f) {
+      var inp = f.querySelector('input');
+      return inp ? inp.serialized() : '';
+    }))
     .concat(c.notes.map(function (n) { return n.textContent; }))
     .concat(c.btns.map(function (b) { return b.getAttribute('onclick'); }))
     .join(' | ');
-  // hidden fields keep their label text (display:none, not removed) - the
-  // literal numbers themselves live only in the note text and the button
-  // onclicks, both cleaned above.
   assert(haystack.indexOf('GP-2608') === -1, haystack);
   assert(haystack.indexOf('PS26812') === -1, haystack);
 });
