@@ -213,6 +213,116 @@
   }
   window.wireDynamicFilters = wireDynamicFilters;
 
+  
+  // --- MANAGEMENT OVERVIEW ---
+  function wireMgmt() {
+    if (window.__mgmtWired) return;
+    window.__mgmtWired = true;
+    
+    var flds = ['mgFrom', 'mgTo', 'mgCust', 'mgModel', 'mgWatt', 'mgLine', 'mgShift'];
+    flds.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('change', renderMgmt);
+    });
+    
+    window.mgReset = function() {
+      var today = new Date().toISOString().split('T')[0];
+      ['mgFrom', 'mgTo'].forEach(function(id) {
+        var el = document.getElementById(id); if (el) el.value = today;
+      });
+      ['mgCust', 'mgModel', 'mgWatt', 'mgLine', 'mgShift'].forEach(function(id) {
+        var el = document.getElementById(id); if (el) el.selectedIndex = 0;
+      });
+      renderMgmt();
+      if (typeof toast === 'function') toast('Filters reset.');
+    };
+  }
+  window.wireMgmt = wireMgmt;
+
+  function renderMgmt() {
+    var g = function(id) { var e = document.getElementById(id); return e ? (e.value === 'All customers' || e.value.startsWith('All') || e.value.startsWith('Both') ? '' : e.value) : ''; };
+    var f = {
+      from: g('mgFrom'), to: g('mgTo') || g('mgFrom'),
+      cust: g('mgCust'), model: g('mgModel'),
+      watt: g('mgWatt'), line: g('mgLine'), shift: g('mgShift')
+    };
+    
+    var qsProd = '?from='+encodeURIComponent(f.from)+'&to='+encodeURIComponent(f.to)+'&shift='+encodeURIComponent(f.shift)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model);
+    // fqc uses shift 1, 2, 3 instead of A, B, C sometimes? fqcDashQuery handles it but let's just pass raw string and API might handle it. Wait, fqc API takes '1' for A.
+    var fqcShift = f.shift === 'A' ? '1' : (f.shift === 'B' ? '2' : (f.shift === 'C' ? '3' : ''));
+    var qsFqc = '?from='+encodeURIComponent(f.from)+'&to='+encodeURIComponent(f.to)+'&shift='+encodeURIComponent(fqcShift)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model);
+    var qsDisp = '?date='+encodeURIComponent(f.from)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model);
+    
+    var el = function(id, txt) { var e = document.getElementById(id); if(e) e.innerHTML = txt; };
+
+    Promise.all([
+      fetch('/api/prod/dashboard' + qsProd).then(function(r) { return r.json(); }).catch(function(){ return {}; }),
+      fetch('/api/fqc/dashboard' + qsFqc).then(function(r) { return r.json(); }).catch(function(){ return {}; }),
+      fetch('/api/stock_dispatch' + qsDisp).then(function(r) { return r.json(); }).catch(function(){ return {}; })
+    ]).then(function(results) {
+      var prod = results[0], fqc = results[1], disp = results[2];
+      
+      var pk = prod.kpi || {};
+      el('mk1', (pk.alloc || 0).toLocaleString());
+      el('mk2', (pk.prod || 0).toLocaleString());
+      el('mk3', (pk.disp || 0).toLocaleString());
+      
+      var dispKW = (disp.disp_today && disp.disp_today.kw) || 0;
+      if (!dispKW && disp.table_fg) {
+        dispKW = disp.table_fg.reduce(function(acc, x){ return acc + (x.kw||0); }, 0);
+      }
+      el('mk4', dispKW.toFixed(1));
+      
+      var pendingQual = (fqc.totals && fqc.totals.awaiting_quality) || 0;
+      el('mk5', pendingQual.toLocaleString());
+      
+      if (typeof drawDonut === 'function') {
+         drawDonut('mgDonut', 'mgLegend', [
+           {n:'Produced', v:pk.prod||0, c:C.solar},
+           {n:'Passed FQC', v:pk.fqc||0, c:C.navy},
+           {n:'Packed', v:pk.packed||0, c:C.info},
+           {n:'Dispatched', v:pk.disp||0, c:C.green}
+         ], ((pk.alloc || 0)/1000).toFixed(1)+'k', 'allocated');
+         
+         var ft = fqc.totals || {};
+         drawDonut('mgQDonut', 'mgQLegend', [
+           {n:'Passed', v:ft.passed||0, c:C.green},
+           {n:'GY', v:ft.gy||0, c:C.amber},
+           {n:'BGY', v:ft.bgy||0, c:C.red},
+           {n:'Pending Qual', v:ft.awaiting_quality||0, c:C.navy}
+         ], (ft.inspected||0).toLocaleString(), 'inspected');
+      }
+      
+      var sr = document.getElementById('mgShiftRows');
+      if (sr && fqc.rows) {
+         sr.innerHTML = fqc.rows.map(function(r) {
+            var pct = r.inspected ? (r.rejected / r.inspected * 100).toFixed(2) : '0.00';
+            var sMap = {1: 'A', 2: 'B', 3: 'C'};
+            var sName = sMap[r.shift] || r.shift;
+            return '<tr><td>'+sName+'</td><td>'+(r.wattage||'—')+'</td><td>'+fqcEsc(r.model)+'</td>'+
+                   '<td class="num">'+r.inspected+'</td><td class="num">'+r.passed+'</td><td class="num">'+r.rejected+'</td>'+
+                   '<td><div class="bar-wrap"><div class="bar"><i style="width:'+Math.min(pct*12, 100)+'%"></i></div><span class="mono">'+pct+'%</span></div></td>'+
+                   '<td class="num">'+r.inspected+'</td></tr>';
+         }).join('');
+      } else if (sr) {
+         sr.innerHTML = '<tr><td colspan="8"><div class="empty-state">No shift data found</div></td></tr>';
+      }
+      
+      var stock = document.getElementById('mgStockRows');
+      if (stock && disp.table_fg) {
+         stock.innerHTML = disp.table_fg.map(function(r) {
+           return '<tr><td>'+fqcEsc(r.customer_name || r.customer || '—')+'</td>'+
+                  '<td>'+fqcEsc(r.model)+'</td><td class="num">'+(r.box_count||0)+'</td>'+
+                  '<td class="num">'+(r.modules||0)+'</td><td class="num">0</td><td class="num">'+(r.kw||0).toFixed(1)+'</td></tr>';
+         }).join('');
+      } else if (stock) {
+         stock.innerHTML = '<tr><td colspan="6"><div class="empty-state">No stock data found</div></td></tr>';
+      }
+      
+    });
+  }
+  window.renderMgmt = renderMgmt;
+
   function rerender() {
     ['renderMgmt', 'renderProd', 'renderFqcDash', 'renderLiveFqcDash',
      'renderLiveFqcRecent', 'renderPackLog',
@@ -533,10 +643,23 @@ function wireFqcAnomalies() {
     }
     
     // Patch v-packdash (Packing Log)
+    // In Packing Log, originally there was one 'Date' input which we mapped to 'plFrom'
     var pkDate = document.querySelector('#v-packdash input[type="date"]');
     if (pkDate && (pkDate.value === '2026-08-19' || !pkDate.value)) { 
         pkDate.value = today; 
     }
+
+    // Patch v-proddash (Production Dashboard)
+    var pdFrom = document.querySelector('#pdFrom');
+    if (pdFrom && (!pdFrom.value || pdFrom.value === '2026-08-01')) pdFrom.value = today;
+    var pdTo = document.querySelector('#pdTo');
+    if (pdTo && (!pdTo.value || pdTo.value === '2026-08-21')) pdTo.value = today;
+
+    // Patch v-mgmt (Management Overview)
+    var mgFrom = document.querySelector('#mgFrom');
+    if (mgFrom && (!mgFrom.value || mgFrom.value === '2026-08-01')) mgFrom.value = today;
+    var mgTo = document.querySelector('#mgTo');
+    if (mgTo && (!mgTo.value || mgTo.value === '2026-08-21')) mgTo.value = today;
     
     // Inject Close button into Create Challan view
     var chAct = document.querySelector('#v-challan .pg-act');
@@ -548,8 +671,8 @@ function wireFqcAnomalies() {
         btn.onclick = function() { 
             if (typeof go === 'function') go('challan-list', document.querySelector('[data-view="challan-list"]')); 
         };
-        // Append instead of prepend so it goes to the right of the tags
-        chAct.appendChild(btn);
+        // Prepend so it sits on the left of the tags and looks right
+        chAct.insertBefore(btn, chAct.firstChild);
     }
 
     if (typeof window.dispApply === 'function') window.dispApply(); 
@@ -816,6 +939,29 @@ function wireFqcAnomalies() {
             kpis[3].querySelector('.v').textContent = kWaitBoxes.toLocaleString();
             kpis[3].querySelector('.d').textContent = kWaitMods.toLocaleString() + ' modules \u2014 ' + kWaitKw.toFixed(1) + ' KW';
           }
+            if (typeof drawDonut === 'function') {
+              var pMap = { 'packed': 0, 'repacked': 0, 'challaned': 0, 'dispatched': 0, 'open': 0 };
+              var gMap = { 'A': 0, 'GY': 0, 'BGY': 0 };
+              rows.forEach(function(r) {
+                var s = r.state || 'open';
+                pMap[s] = (pMap[s] || 0) + 1;
+                var g = r.grade || '—';
+                gMap[g] = (gMap[g] || 0) + (r.qty || 0);
+              });
+              
+              drawDonut('pkDonut', 'pkLegend', [
+                {n:'Packed', v:pMap.packed, c:C.solar},
+                {n:'Challaned', v:pMap.challaned, c:C.amber},
+                {n:'Dispatched', v:pMap.dispatched, c:C.green},
+                {n:'Repacked', v:pMap.repacked, c:C.mute}
+              ], kLists.toString(), 'boxes total');
+              
+              drawDonut('pkGDonut', 'pkGLegend', [
+                {n:'A Grade', v:gMap['A'], c:C.green},
+                {n:'GY', v:gMap['GY'], c:C.amber},
+                {n:'BGY', v:gMap['BGY'], c:C.fail}
+              ], kMods.toString(), 'modules total');
+            }
         }
       });
   }

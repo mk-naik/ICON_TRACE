@@ -1191,3 +1191,17 @@ not know any of the following, and each is a change to make on top of it.
 | Two lines, each with its own SS and EL and its own column map | Evidence, FQC, FTR |
 | A source that is down is NC, never NA — even with the other readable | FQC |
 
+
+**Round 5 — Live Dashboards, Filters, and UI fixes.**
+
+**What was wrong.** Dashboards (Management, Production, Packing, Stock) had fixed filter dropdowns and dates that didn't do anything or match the database. "Donate" (donut charts) did not reflect data from DB; they were static v4 placeholders on Mgmt and Packing Log dashboards. The Close button on the Create Challan view was misplaced.
+
+**Root cause.** The UI relied on v4 demo HTML values. `icon_live.js` failed to dynamically patch the date inputs to default to today, failed to wire the Management dashboard (`wireMgmt` and `mgApply` were non-existent), and Packing Log didn't update `pkDonut` and `pkGDonut`. `chCloseBtn` was appended (`appendChild`) instead of prepended, throwing off the flex layout of `.pg-act` tags.
+
+**What changed.**
+- Updated `icon_live.js` `initUI()` to default all date ranges (Production, Mgmt, Packing, Stock) to today's date.
+- Changed the `chCloseBtn` injection to `insertBefore(btn, chAct.firstChild)` to fix placement in the challan view.
+- Injected `pkDonut` and `pkGDonut` rendering in `renderLivePackLog()` to synthesize counts from the boxes array in JS.
+- Built a complete `wireMgmt()` and `renderMgmt()` in `icon_live.js` that fetch `/api/prod/dashboard`, `/api/fqc/dashboard`, and `/api/stock_dispatch` simultaneously using `Promise.all` to compose the Management Overview dashboard components, making it fully dynamic and database-driven.
+
+**Which test proves it.** Tested via Playwright UI screenshot validation (`test_ui2.py` locally) showing the dynamic rendering, correct close button placement, and real data integration in the Mgmt dashboard without requiring a new backend endpoint.
