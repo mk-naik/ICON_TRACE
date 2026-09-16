@@ -55,7 +55,11 @@ if (typeof JSON === 'undefined') { JSON = {
     }
     var o = [];
     for (var k in v) if (Object.prototype.hasOwnProperty.call(v, k)) {
-      if (typeof v[k] === 'function') continue;
+      // real JSON.stringify OMITS a key whose value is undefined entirely,
+      // rather than writing null - chRunChecksNow's exclude_challan_id:
+      // chEditingId || undefined relies on exactly this to leave the key
+      // off the wire outside an edit, so the stub has to match it.
+      if (typeof v[k] === 'function' || v[k] === undefined) continue;
       o.push(JSON.stringify(String(k)) + ':' + JSON.stringify(v[k]));
     }
     return '{' + o.join(',') + '}';
@@ -278,6 +282,7 @@ function reset() {
   REPLY = { ok: false, why: 'stub: no reply configured' };
   chBoxes = []; chPicked = {}; chOrder = []; chInvoices = [];
   chInvoiceId = null; chChecks = null; chChallan = null; chBusy = false;
+  chEditingId = null; chEditingNo = null;
 }
 
 function box(id, over) {
@@ -332,7 +337,110 @@ function () {
 });
 
 
+/* ---- checks: an edit must not warn about its own pre-existing boxes -- */
+
+test('chRunChecksNow sends exclude_challan_id when editing a challan that '
+    + 'already has real boxes on it', function () {
+  reset();
+  // realistic, populated: 3 boxes already on the challan being edited,
+  // not an empty/fresh selection
+  chEditingId = 41; chEditingNo = 'IS-16.09.2026/0004';
+  chOrder = [101, 102, 103];
+  chRunChecksNow();
+  var call = SENT.filter(function (s) {
+    return s.url.indexOf('/api/challan/checks') === 0; })[0];
+  assert(call, 'chRunChecksNow did not call /api/challan/checks at all');
+  assert(call.body.exclude_challan_id === 41,
+        'exclude_challan_id missing or wrong: ' + JSON.stringify(call.body));
+  assert(call.body.boxes.length === 3 &&
+        call.body.boxes.join(',') === '101,102,103', call.body.boxes);
+});
+
+test('chRunChecksNow sends no exclude_challan_id outside an edit - a '
+    + 'plain new challan is not exempt from its own duplicate check',
+function () {
+  reset();
+  chEditingId = null;
+  chOrder = [201, 202];
+  chRunChecksNow();
+  var call = SENT.filter(function (s) {
+    return s.url.indexOf('/api/challan/checks') === 0; })[0];
+  assert(call, 'chRunChecksNow did not call /api/challan/checks at all');
+  assert(call.body.exclude_challan_id === undefined,
+        'a fresh challan silently exempted itself: ' + JSON.stringify(call.body));
+});
+
+
 /* ---- invoice fills fields, and does not lock them -------------------- */
+
+/* ---- the box list depends on the invoice - realistic switch scenario */
+
+test('no invoice selected: the box list is never even fetched, and says '
+    + 'so plainly', function () {
+  reset();
+  chInvoiceId = null;
+  chBoxes = [box(1)];               // a stale list left over from before
+  chLoadBoxes();
+  assert(SENT.length === 0, 'a fetch went out with no invoice to filter by');
+  assert(chBoxes.length === 0, 'a stale, unfiltered list was left showing');
+  assert(el('chBoxRows').innerHTML.toLowerCase()
+        .indexOf('select an invoice first') !== -1,
+        el('chBoxRows').innerHTML);
+});
+
+test('selecting an invoice fetches the box list WITH that invoice\'s id',
+function () {
+  reset();
+  el('chInvoiceSel').value = '7';
+  REPLY = { invoiceDetail: { fields: {} }, boxes: [] };
+  chInvoiceChange();
+  var call = SENT.filter(function (s) {
+    return s.url.indexOf('/api/challan/boxes') === 0; })[0];
+  assert(call, 'no box-list fetch happened at all: ' + JSON.stringify(SENT));
+  assert(call.url.indexOf('invoice_id=7') !== -1, call.url);
+});
+
+test('switching invoices re-fetches and drops the OLD invoice\'s ticks - '
+    + 'realistic: boxes were already ticked under the first invoice',
+function () {
+  reset();
+  // realistic and populated: pick an invoice, load its (real) boxes, tick
+  // two of them - THEN switch to a different invoice
+  el('chInvoiceSel').value = '7';
+  REPLY = { invoiceDetail: { fields: {} },
+           boxes: [box(101), box(102), box(103)] };
+  chInvoiceChange();
+  chToggleBox(101, true);
+  chToggleBox(102, true);
+  assert(chOrder.length === 2, 'fixture did not tick as expected: ' + chOrder);
+
+  SENT = [];
+  el('chInvoiceSel').value = '9';
+  REPLY = { invoiceDetail: { fields: {} }, boxes: [box(201)] };
+  chInvoiceChange();
+
+  var call = SENT.filter(function (s) {
+    return s.url.indexOf('/api/challan/boxes') === 0; })[0];
+  assert(call && call.url.indexOf('invoice_id=9') !== -1,
+        'switching invoices did not re-fetch under the new one: ' +
+        JSON.stringify(SENT));
+  assert(chOrder.length === 0,
+        'boxes ticked under the OLD invoice were still ticked after switching');
+});
+
+test('a filtered-to-nothing list (invoice selected, no box qualifies) '
+    + 'says why, distinctly from "no invoice at all"', function () {
+  reset();
+  chInvoiceId = 7;
+  chBoxes = [];
+  chRenderBoxTable();
+  var html = el('chBoxRows').innerHTML.toLowerCase();
+  assert(html.indexOf('select an invoice first') === -1,
+        'the "no invoice" message showed even though one is selected: ' + html);
+  assert(html.indexOf('different customer') !== -1 ||
+        html.indexOf('qualifies') !== -1, html);
+});
+
 
 test('selecting an invoice fills party, consignee and transport fields',
 function () {

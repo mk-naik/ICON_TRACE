@@ -26,8 +26,17 @@ if (!Array.prototype.filter) Array.prototype.filter = function (f) {
   var o = []; for (var i = 0; i < this.length; i++)
     if (f(this[i], i, this)) o.push(this[i]);
   return o; };
+if (!Array.prototype.some) Array.prototype.some = function (f) {
+  for (var i = 0; i < this.length; i++) if (f(this[i], i, this)) return true;
+  return false; };
 if (!String.prototype.trim) String.prototype.trim = function () {
   return this.replace(/^\s+/, '').replace(/\s+$/, ''); };
+if (!Date.prototype.toISOString) Date.prototype.toISOString = function () {
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+  return this.getUTCFullYear() + '-' + pad(this.getUTCMonth() + 1) + '-' +
+    pad(this.getUTCDate()) + 'T' + pad(this.getUTCHours()) + ':' +
+    pad(this.getUTCMinutes()) + ':' + pad(this.getUTCSeconds()) + '.000Z';
+};
 if (typeof JSON === 'undefined') { JSON = {
   stringify: function (v) {
     if (v === null || v === undefined) return 'null';
@@ -80,13 +89,29 @@ El.prototype.focus = function () {};
 El.prototype.fire = function (ev, evt) {
   if (this._listeners[ev]) this._listeners[ev](evt);
 };
+El.prototype.appendChild = function (child) {
+  this.children = this.children || [];
+  this.children.push(child);
+  return child;
+};
+// Good enough to prove ldInjectView() attaches a real section under .main
+// and to let its own '[data-role="search"]' lookup resolve without
+// throwing - not a general selector engine.
+El.prototype.querySelector = function (sel) {
+  var found = null;
+  (this.children || []).some(function (c) {
+    if (sel.charAt(0) === '#' && c.id === sel.slice(1)) { found = c; return true; }
+    return false;
+  });
+  return found;
+};
 
-var DOM = {};
+var DOM = {}, mainEl = null;
 function el(id) { if (!DOM[id]) DOM[id] = new El(id); return DOM[id]; }
 var document = {
   getElementById: function (id) {
     return Object.prototype.hasOwnProperty.call(DOM, id) ? DOM[id] : null; },
-  querySelector: function () { return null; },
+  querySelector: function (sel) { return sel === '.main' ? mainEl : null; },
   createElement: function (t) { return new El(t); }
 };
 var window = (typeof global !== 'undefined') ? global : this;
@@ -138,13 +163,26 @@ function pallet(box_no, status) {
 
 function reset(boxes) {
   DOM = {};
+  mainEl = new El('div');
   ['ldSessionCard', 'ldTableBody', 'ldFrom', 'ldTo', 'ldStatusFilter',
-   'ldSessionOverlay', 'ldMsg', 'ldScan'].forEach(function (id) { el(id); });
+   'ldSessionOverlay', 'ldMsg', 'ldScan', 'ldCount'].forEach(function (id) { el(id); });
   toasts = []; SENT = [];
   REPLY = { ok: false, why: 'stub: no reply configured' };
   ldRows = []; ldBusy = false; ldHold = null;
   ldSession = { challan_id: 9, no: 'IS-16.09.2026/0001',
                buyer_name: 'AGNI', invoice_no: 'INV-1', boxes: boxes || [] };
+}
+
+function challanRow(id, agg) {
+  return { challan_id: id, challan_no: 'IS-16.09.2026/' + id,
+          challan_date: '2026-09-16', buyer_name: 'AGNI', invoice_no: 'INV-1',
+          n_loaded: 0, n_total: 2, agg_status: agg || 'pending' };
+}
+
+function renderedRowCount() {
+  var html = el('ldTableBody').innerHTML;
+  var m = html.match(/onclick="ldOpenSession\(/g);
+  return m ? m.length : 0;
 }
 
 var width = 0;
@@ -250,6 +288,91 @@ test('once every pallet is loaded, the session renders read-only - no '
   assert(html.indexOf('Save &amp; Submit') === -1 && html.indexOf('Save & Submit') === -1,
         'a completed session still offered Save & Submit');
   assert(html.toLowerCase().indexOf('read-only') !== -1, html);
+});
+
+
+/* ---- the count badge: one owner, always matching what is rendered ---- */
+
+test('after a real fetch, the count badge matches the actual number of '
+    + 'rendered rows exactly - asserted directly, not "the fetch succeeded"',
+function () {
+  reset();
+  REPLY = { challans: [challanRow(1), challanRow(2), challanRow(3)] };
+  ldLoad();
+  assert(renderedRowCount() === 3, 'expected 3 rendered rows, got ' +
+        renderedRowCount());
+  assert(el('ldCount').textContent === '3 rows',
+        'badge says ' + JSON.stringify(el('ldCount').textContent) +
+        ' but 3 rows were rendered');
+});
+
+test('switching the status filter after a real fetch has already '
+    + 'completed updates the badge to the NEW count, not the stale one',
+function () {
+  reset();
+  // realistic: a full fetch has ALREADY completed with 3 rows, THEN the
+  // operator toggles the status filter and a second, smaller fetch lands
+  REPLY = { challans: [challanRow(1), challanRow(2), challanRow(3)] };
+  ldLoad();
+  assert(el('ldCount').textContent === '3 rows', el('ldCount').textContent);
+
+  REPLY = { challans: [challanRow(1, 'loaded')] };
+  el('ldStatusFilter').value = 'loaded';
+  ldLoad();
+  assert(renderedRowCount() === 1, 'expected 1 rendered row after the '
+        + 'filter changed, got ' + renderedRowCount());
+  assert(el('ldCount').textContent === '1 row',
+        'badge still reads ' + JSON.stringify(el('ldCount').textContent) +
+        ' after the filter reduced the list to one');
+});
+
+test('an empty result after a real fetch shows 0, not a leftover number '
+    + 'from before', function () {
+  reset();
+  REPLY = { challans: [challanRow(1), challanRow(2)] };
+  ldLoad();
+  assert(el('ldCount').textContent === '2 rows', el('ldCount').textContent);
+
+  REPLY = { challans: [] };
+  ldLoad();
+  assert(renderedRowCount() === 0);
+  assert(el('ldCount').textContent.indexOf('0') !== -1 ||
+        el('ldCount').textContent === '', el('ldCount').textContent);
+});
+
+
+/* ---- "Verify one pallet's contents" stays inside the app (bug #4) ---- */
+
+test('the landing list opens the pallet check in-app instead of linking '
+    + 'out to a separate page', function () {
+  reset();
+  ldInjectView();
+  assert(mainEl.children.length === 1, 'ldInjectView did not attach a section');
+  var html = mainEl.children[0].innerHTML;
+  assert(html.indexOf('href="/loading"') === -1,
+        'the landing list still links out of the app to /loading');
+  assert(html.indexOf("go('loadver')") !== -1,
+        'the "Verify one pallet\'s contents" control no longer opens ' +
+        'the pallet check in-app');
+});
+
+test('ldInjectPalletCheckClose puts a close button in front of the '
+    + 'fragment, once, wired back to the landing list', function () {
+  var host = new El('section');
+  host.innerHTML = '<div class="pg"><h2>Pallet check</h2></div>';
+  ldInjectPalletCheckClose(host);
+  assert(host.innerHTML.indexOf('id="ldPalletCheckClose"') !== -1,
+        'no close button was injected');
+  assert(host.innerHTML.indexOf("go('loading-list')") !== -1,
+        'the close button does not return to the landing list');
+  var once = host.innerHTML;
+  ldInjectPalletCheckClose(host);
+  assert(host.innerHTML === once,
+        'a second call injected a second close button');
+});
+
+test('ldInjectPalletCheckClose does nothing without an element', function () {
+  ldInjectPalletCheckClose(null);   // must not throw
 });
 
 

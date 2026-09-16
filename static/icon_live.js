@@ -4271,6 +4271,10 @@ function wireFqcAnomalies() {
           n.textContent = old.textContent;
           old.parentNode.replaceChild(n, old);
         });
+        // frag_loading.html (the old serial-contents check) is reached from
+        // Loading Verification's landing list now, not its own URL - so it
+        // needs a way back into the app instead of a browser back button.
+        if (id === 'loadver') ldInjectPalletCheckClose(el);
         if (window.iconTable) window.iconTable.wireAll();
       })
       .catch(function (e) {
@@ -5341,6 +5345,26 @@ function wireFqcAnomalies() {
     }
   }
 
+  /* .work is a CSS grid where every card sits in column 1 with no explicit
+     grid-row (icon.css), so at normal desktop width the visual stacking
+     order is plain DOM SOURCE order - the .o1/.o2/.o3 classes only carry
+     an actual `order` value inside icon.css's narrow-viewport media query.
+     Reordering for real means moving the node, not trusting the class. */
+  function chReorderCards() {
+    var view = chEl('v-challan');
+    if (!view) return;
+    var work = view.querySelector('.work');
+    if (!work) return;
+    var boxesCard = work.querySelector('.wmain.o1');
+    var detailsCard = work.querySelector('.wmain.o3');
+    if (!boxesCard || !detailsCard) return;
+    // Challan details - starting with the invoice selector, its first
+    // section - has to be seen and used before Select boxes even has
+    // anything to show, now that the box list is filtered by the
+    // invoice's own buyer.
+    work.insertBefore(detailsCard, boxesCard);
+  }
+
   /* v4 never had a phone field beside "Contact person" - only a name. */
   function chContactPhoneField() {
     if (chEl('chContactPhone')) return;
@@ -5433,9 +5457,14 @@ function wireFqcAnomalies() {
     var sel = chEl('chInvoiceSel');
     var id = sel && sel.value;
     chInvoiceId = id ? parseInt(id, 10) : null;
+    // The box list is filtered to this invoice's own buyer - whatever was
+    // ticked under a DIFFERENT (or no) invoice no longer means anything,
+    // so switching clears the selection rather than leaving a tick on a
+    // box that has just silently dropped out of the visible list.
+    chPicked = {}; chOrder = [];
     if (!chInvoiceId) {
       chRenderInvoiceHint(null);
-      chRunChecks();
+      chLoadBoxes().then(chRunChecksNow);
       return;
     }
     fetch('/api/invoice/' + chInvoiceId, { cache: 'no-store' })
@@ -5443,11 +5472,11 @@ function wireFqcAnomalies() {
       .then(function (d) {
         if (d.error) {
           if (typeof toast === 'function') toast(d.error);
-          return;
+        } else {
+          chFillFromInvoice(d);
+          chRenderInvoiceHint(d);
         }
-        chFillFromInvoice(d);
-        chRenderInvoiceHint(d);
-        chRunChecks();
+        chLoadBoxes().then(chRunChecksNow);
       });
   }
 
@@ -5527,7 +5556,19 @@ function wireFqcAnomalies() {
   /* ---- boxes: only what is real, ticked ONLY in the order ticked ------ */
 
   function chLoadBoxes() {
-    var qs = chEditingId ? ('?exclude_challan_id=' + chEditingId) : '';
+    // The list depends on an invoice being selected at all - the server
+    // refuses to guess a customer to filter against and returns nothing
+    // without one, so there is no point asking without chInvoiceId either.
+    if (!chInvoiceId) {
+      chBoxes = [];
+      chRenderBoxTable();
+      // every caller only ever does chLoadBoxes().then(fn) - a minimal
+      // thenable, not a real Promise, so this keeps working on whatever
+      // engine loads it rather than assuming ES6 is available
+      return { then: function (f) { if (f) f(); return this; } };
+    }
+    var qs = '?invoice_id=' + chInvoiceId +
+      (chEditingId ? '&exclude_challan_id=' + chEditingId : '');
     return fetch('/api/challan/boxes' + qs, { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (rows) {
@@ -5579,9 +5620,14 @@ function wireFqcAnomalies() {
           (b.is_partial ? ' <span class="tag t-mute">part</span>' : '') +
           '</td>' +
         '<td>' + status + '</td></tr>';
-    }).join('') : '<tr><td colspan="10"><div class="empty-state"><p>No closed ' +
-      'pallet is available — everything is either still open or already ' +
-      'on a live challan.</p></div></td></tr>';
+    }).join('') : ('<tr><td colspan="10"><div class="empty-state"><p>' +
+      (chInvoiceId
+        ? 'No closed pallet qualifies for this invoice’s buyer — ' +
+          'everything is either still open, already on a live challan, or ' +
+          'belongs to a different customer.'
+        : 'Select an invoice first — boxes are shown once there is a ' +
+          'buyer to filter them against.') +
+      '</p></div></td></tr>');
   }
 
   window.chToggleBox = function (id, on) {
@@ -5635,7 +5681,13 @@ function wireFqcAnomalies() {
     if (chChallan) return;          // nothing left to check once written
     fetch('/api/challan/checks', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ boxes: chOrder, invoice_id: chInvoiceId }) })
+      body: JSON.stringify({ boxes: chOrder, invoice_id: chInvoiceId,
+        // Without this, editing a challan already holding real boxes
+        // shows E-DUPSERIAL against its OWN pre-existing serials - the
+        // precheck has no way to know this box is what the edit is
+        // supposed to be allowed to re-select. chEditingId is already
+        // set correctly by chBeginEdit() before this is ever called.
+        exclude_challan_id: chEditingId || undefined }) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         chChecks = d;
@@ -6084,9 +6136,13 @@ function wireFqcAnomalies() {
       return;
     }
     chResetFields();
-    chRenderBoxTable();
+    // chResetFields() clears chInvoiceId but leaves chBoxes holding
+    // whatever the OLD invoice's filtered list was - a bare re-render
+    // would show those stale, no-longer-applicable rows with nothing
+    // ticked, not the "select an invoice" state clearing the form is
+    // actually meant to leave it in.
+    chLoadBoxes().then(chRunChecksNow);
     chRenderSummary();
-    chRunChecksNow();
     if (typeof toast === 'function') toast('Form cleared.');
   };
 
@@ -6100,6 +6156,7 @@ function wireFqcAnomalies() {
       chContactPhoneField();
       chTrimDetailsCard();
       chClearFormButton();
+      chReorderCards();
       var draftBtn = view.querySelector('.rail-acts .btn-ghost');
       if (draftBtn) {
         draftBtn.id = 'chDraftBtn';
@@ -6636,8 +6693,13 @@ function wireFqcAnomalies() {
    *
    * The NEW_VIEWS entry 'loadver' already reserves the nav slot, icon and
    * label "Loading Verification" and points at the OLD serial-contents
-   * check (frag_loading.html, via /view/loading) - untouched, and still
-   * reachable exactly as it always was at its own standalone /loading URL.
+   * check (frag_loading.html, via /view/loading) - fetched once at sign-in
+   * and left completely unchanged. It's reached from the landing list's
+   * "Verify one pallet's contents" button (go('loadver') with no nav-i
+   * element, so the redirect below doesn't fire) rather than at its own
+   * standalone /loading URL, so it stays inside the SPA shell; a close bar
+   * is injected once its fragment loads (see ldInjectPalletCheckClose,
+   * called from loadView) since the fragment itself has no way back.
    * That check answers "is this ONE pallet's contents what packing said";
    * this screen answers "has every pallet on THIS CHALLAN actually been
    * put on the vehicle", and what it writes is what gates the challan's
@@ -6653,6 +6715,18 @@ function wireFqcAnomalies() {
 
   function ldEl(id) { return document.getElementById(id); }
 
+  // frag_loading.html is server-rendered markup with no knowledge that it
+  // now lives inside a v4 section instead of its own page - it has no way
+  // back on its own. Prepending this once, right after loadView() drops the
+  // fragment in, is what makes "Verify one pallet's contents" a real screen
+  // instead of a one-way door out of the SPA.
+  function ldInjectPalletCheckClose(el) {
+    if (!el || el.innerHTML.indexOf('id="ldPalletCheckClose"') !== -1) return;
+    el.innerHTML = '<div class="pg-act"><button class="btn btn-ghost btn-sm" ' +
+      'id="ldPalletCheckClose" onclick="go(\'loading-list\')">' +
+      '← Back to Loading Verification</button></div>' + el.innerHTML;
+  }
+
   function ldInjectView() {
     if (document.getElementById('v-loading-list')) return;
     var main = document.querySelector('.main');
@@ -6665,9 +6739,9 @@ function wireFqcAnomalies() {
         '<p>Confirm every pallet on a challan is actually on the vehicle ' +
         'before its documents can be produced</p>' +
         '<div class="pg-act">' +
-          '<a class="btn btn-ghost" href="/loading" target="_blank" rel="noopener" ' +
+          '<button class="btn btn-ghost" onclick="go(\'loadver\')" ' +
             'title="The original pallet-contents check, unchanged">' +
-            'Verify one pallet’s contents →</a>' +
+            'Verify one pallet’s contents →</button>' +
         '</div>' +
       '</div>' +
       '<div class="filters">' +
@@ -6688,7 +6762,13 @@ function wireFqcAnomalies() {
               'style="width:200px">' +
             '<button class="btn btn-ghost btn-sm" data-role="reset">Reset</button>' +
             '<button class="btn btn-ghost btn-sm" data-role="export">Export</button>' +
-            '<span data-role="count" class="tag t-mute"></span>' +
+            // Not data-role="count": icon_table.js's apply() only fires on
+            // ITS OWN search/filter controls firing, and ldLoad() replaces
+            // the whole tbody from a server fetch, on a date range and
+            // status this screen filters server-side - two triggers for
+            // one number is how it goes stale. ldLoad() owns this span
+            // directly (see the end of its success callback below).
+            '<span id="ldCount" class="tag t-mute"></span>' +
           '</div></div>' +
           '<div class="card-b flush scroll"><table style="width:100%">' +
             '<thead><tr><th>Challan No.</th><th>Date</th><th>Buyer</th>' +
@@ -6712,6 +6792,10 @@ function wireFqcAnomalies() {
     var today = new Date().toISOString().slice(0, 10);
     ldEl('ldFrom').value = today;
     ldEl('ldTo').value = today;
+    // icon_table.js's own search box still hides/shows rows visually;
+    // this keeps the (separately owned) count text in step with it.
+    var search = sec.querySelector('[data-role="search"]');
+    if (search) search.addEventListener('input', ldRecount);
   }
 
   function ldStatusTag(agg, n_loaded, n_total) {
@@ -6738,6 +6822,28 @@ function wireFqcAnomalies() {
       '</tr>';
   }
 
+  /* The count badge, owned entirely here rather than by icon_table.js's
+     own apply() - computed straight from ldRows plus whatever is in the
+     search box, never from re-reading rendered DOM rows, so it cannot
+     drift from what a fetch just set regardless of when or how often
+     apply() itself happens to run. */
+  function ldRecount() {
+    var cnt = ldEl('ldCount');
+    if (!cnt) return;
+    var view = ldEl('v-loading-list') || document.getElementById('v-loading-list');
+    var input = view && view.querySelector ?
+      view.querySelector('[data-role="search"]') : null;
+    var q = (input && input.value || '').trim().toLowerCase();
+    var total = ldRows.length;
+    var shown = !q ? total : ldRows.filter(function (r) {
+      return ((r.challan_no || '') + (r.buyer_name || '') +
+             (r.invoice_no || '')).toLowerCase().indexOf(q) !== -1;
+    }).length;
+    cnt.textContent = shown === total
+      ? total + (total === 1 ? ' row' : ' rows')
+      : shown + ' of ' + total + ' rows';
+  }
+
   window.ldLoad = function () {
     if (ldBusy) return;
     var host = ldEl('ldTableBody');
@@ -6759,12 +6865,15 @@ function wireFqcAnomalies() {
           '<tr><td colspan="7"><div class="empty-state"><p>No challan in this ' +
           'range.</p></div></td></tr>';
         if (window.iconTable) window.iconTable.wireAll();
+        ldRecount();
       })
       .catch(function () {
         ldBusy = false;
         var h2 = ldEl('ldTableBody');
         if (h2) h2.innerHTML = '<tr><td colspan="7" style="color:var(--fail);' +
           'padding:20px">Could not load challans.</td></tr>';
+        ldRows = [];
+        ldRecount();
       });
   };
 
@@ -6955,10 +7064,10 @@ function wireFqcAnomalies() {
       // The NEW_VIEWS 'loadver' entry already reserves the nav slot,
       // icon and label "Loading Verification" and fetches /view/loading
       // into v-loadver - a fragment this layer must not touch. The
-      // challan-level landing list is now what that button opens; the
-      // old serial-contents screen becomes a link FROM the landing list
-      // instead (see ldInjectView), reachable exactly as before at its
-      // own standalone /loading URL.
+      // challan-level landing list is now what the NAV BUTTON opens; the
+      // old serial-contents screen is still v-loadver itself, reached
+      // in-app from a button on the landing list instead (see ldInjectView
+      // and ldInjectPalletCheckClose) so it never leaves the SPA shell.
       if (view === 'loadver' && btn && btn.classList && btn.classList.contains('nav-i')) {
         view = 'loading-list';
         arguments[0] = view;
@@ -7413,6 +7522,47 @@ function wireFqcAnomalies() {
       }
   };
 
+  function gpFldFor(label) {
+    var view = document.getElementById('v-gp');
+    if (!view) return null;
+    var flds = view.querySelectorAll('.rail .card-b .fld');
+    for (var i = 0; i < flds.length; i++) {
+      var lab = flds[i].querySelector('label');
+      var text = lab && lab.textContent.replace(/\s+/g, ' ').trim();
+      if (text && text.indexOf(label) === 0) return flds[i];
+    }
+    return null;
+  }
+
+  // v4's "Issue details" card shipped with a Gate pass no. input PRE-FILLED
+  // with a literal placeholder ("GP-2608-0031") and two fields issueGP()
+  // never reads (Delivery order no., Container no.) - not disabled, not
+  // greyed, just sitting there looking real next to the actual fields this
+  // layer injects above them. The real number only exists once the server
+  // assigns it on submit, and the other two map to nothing this system
+  // tracks, so all three are hidden rather than left to be mistaken for
+  // inputs that do something. Same treatment for the two "Gate pass
+  // preview" print/export buttons, whose onclick carried that same fake
+  // number as the document ref to resolve - a ref that never existed
+  // server-side, so clicking them already failed with a toast naming it.
+  function gpHideUnwiredFields() {
+    ['Gate pass no.', 'Delivery order no.', 'Container no.'].forEach(function (label) {
+      var f = gpFldFor(label);
+      if (f) f.style.display = 'none';
+    });
+    var view = document.getElementById('v-gp');
+    if (!view) return;
+    var notes = view.querySelectorAll('.rail .card-b .note.n-warn');
+    notes.forEach(function (n) {
+      if (n.textContent.indexOf('Placeholder series') !== -1) n.style.display = 'none';
+    });
+    var btns = view.querySelectorAll('button[onclick*="GP-2608-0031"]');
+    btns.forEach(function (b) {
+      var oc = b.getAttribute('onclick');
+      if (oc) b.setAttribute('onclick', oc.replace(/GP-2608-0031/g, ''));
+    });
+  }
+
   function wireGp() {
       var vGp = document.getElementById('v-gp');
       if (!vGp) return;
@@ -7473,6 +7623,8 @@ function wireFqcAnomalies() {
               }
           }
       }
+
+      gpHideUnwiredFields();
 
       document.getElementById('gpBtn').disabled = false;
       document.getElementById('gpBtn').textContent = 'Issue gate pass';

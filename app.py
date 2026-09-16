@@ -1274,13 +1274,37 @@ def api_challan_available_boxes():
     superseded ancestor's challan_serial rows are never deleted, so
     editing MB still has to see boxes reserved by the original and by MA
     as its own.
+
+    `invoice_id` is required to get anything back at all. Without an
+    invoice there is no customer to filter against, and offering every
+    closed box in the building - most of it allocated to somebody else
+    entirely - is how the wrong pallet ends up ticked. With one, only a
+    box that is General Stock (unassigned, becomes this invoice's buyer
+    the moment the challan is written - see assign_customer_on_challan)
+    or already belongs to that exact buyer is offered; everything else is
+    left off the list entirely, never shown disabled.
     """
     exclude = request.args.get("exclude_challan_id")
     try:
         exclude = int(exclude) if exclude else None
     except (TypeError, ValueError):
         exclude = None
+    invoice_id = request.args.get("invoice_id")
+    try:
+        invoice_id = int(invoice_id) if invoice_id else None
+    except (TypeError, ValueError):
+        invoice_id = None
+    if not invoice_id:
+        return jsonify([])
+
     with store.conn() as (cx, cur):
+        invoice = db.get_invoice_by_id(cur, invoice_id)
+        if not invoice:
+            return jsonify([])
+        buyer = customers.resolve(invoice.get("buyer_name"),
+                                  invoice.get("buyer_gstin"))
+        buyer_code = buyer["customer_code"] if buyer else None
+
         q = ("SELECT DISTINCT bs.box_id FROM box_serial bs "
              "JOIN challan_serial cs ON cs.serial=bs.serial "
              "JOIN challan c ON c.challan_id=cs.challan_id "
@@ -1296,6 +1320,10 @@ def api_challan_available_boxes():
     out = []
     for b in closed:
         owner = _box_owner(b.get("customer"))
+        # General Stock (owner is None) always qualifies; anything already
+        # claimed by a customer only qualifies for THAT customer's invoice.
+        if owner and owner != buyer_code:
+            continue
         cr = customers.get(owner) if owner else None
         m = models.BY_CODE.get(b.get("model")) or {}
         out.append({
@@ -1531,6 +1559,15 @@ def api_challan_checks():
     except (TypeError, ValueError):
         exclude = None
     with store.conn() as (cx, cur):
+        # A second (or later) edit sends the CURRENT live challan's own id -
+        # editing never deletes an ancestor's challan_serial rows (see
+        # _write_challan), so on an MB the original's rows for these same
+        # boxes are still there under ITS id, not MA's. Widening to the
+        # whole lineage here is exactly what api_challan_edit_save already
+        # does for the write itself; without it the live rail would warn
+        # about a "duplicate" that Create would go on to accept anyway.
+        if exclude:
+            exclude = _lineage_ids(cur, exclude)
         chk = _challan_precheck(cur, box_ids, invoice_id,
                                 exclude_challan_id=exclude)
     return jsonify(chk)

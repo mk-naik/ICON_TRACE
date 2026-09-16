@@ -238,16 +238,85 @@ def t_box_not_reselectable():
     assert "already on" in r2.get_json()["why"], r2.get_json()
 
 
+@test("no invoice selected: the box list is empty, not the full "
+     "unfiltered list")
+def t_boxes_empty_without_invoice():
+    c = setup()
+    packed_box(c, [0, 1], customer=None)          # a real, biddable box
+    r = c.get("/api/challan/boxes")
+    assert r.status_code == 200
+    assert r.get_json() == [], \
+        "boxes were offered with no invoice to filter them against"
+
+
+@test("selecting an invoice shows General Stock and that invoice's own "
+     "customer - a box owned by a DIFFERENT customer does not appear")
+def t_boxes_filtered_by_invoice_customer():
+    # realistic and populated: two real closed boxes, one General Stock,
+    # one already allocated to a customer the invoice does not belong to
+    c = setup()
+    general = packed_box(c, [10, 11], customer=None)
+    foreign = packed_box(c, [12, 13], customer=BOROSIL_CODE)
+    inv = make_invoice(qty=2)                      # buyer resolves to C0001 (AGNI)
+    rows = c.get("/api/challan/boxes?invoice_id=%d" % inv).get_json()
+    ids = {r["box_id"] for r in rows}
+    assert general in ids, "General Stock did not appear"
+    assert foreign not in ids, \
+        "a box belonging to a different customer was offered anyway"
+
+
+@test("a box already owned by THIS invoice's own customer appears too")
+def t_boxes_include_own_customer():
+    c = setup()
+    own = packed_box(c, [14, 15], customer="C0001")     # AGNI, same as below
+    other = packed_box(c, [16, 17], customer=BOROSIL_CODE)
+    inv = make_invoice(qty=2)                            # buyer -> C0001 (AGNI)
+    ids = {r["box_id"] for r in
+          c.get("/api/challan/boxes?invoice_id=%d" % inv).get_json()}
+    assert own in ids, "a box already belonging to the invoice's own buyer was hidden"
+    assert other not in ids
+
+
+@test("switching the invoice re-filters - a box no longer visible under "
+     "the old invoice becomes visible under the new one")
+def t_boxes_refilter_on_invoice_switch():
+    c = setup()
+    borosil_box = packed_box(c, [18, 19], customer=BOROSIL_CODE)
+    inv_agni = make_invoice(qty=2)                        # -> C0001 AGNI
+    with store.conn() as (cx, cur):
+        inv_borosil = db.insert_invoice(cur, {
+            "buyer_name": "BOROSIL RENEWABLES LIMITED", "buyer_gstin": None,
+            "declared_qty": 2, "declared_model": MODEL,
+            "ewb_no": "111122223333",
+            "ewb_valid_upto": (datetime.date.today() +
+                              datetime.timedelta(days=10)).isoformat(),
+            "invoice_no": "INV-BOROSIL", "irn": None,
+            "consignee_same_as_buyer": 1},
+            "test.pdf", "deadbeefborosil",
+            {"fields": {}, "compare_only": {}, "qr": {}}, False, {}, "tester")
+
+    under_agni = {r["box_id"] for r in
+                 c.get("/api/challan/boxes?invoice_id=%d" % inv_agni).get_json()}
+    assert borosil_box not in under_agni
+
+    under_borosil = {r["box_id"] for r in
+                    c.get("/api/challan/boxes?invoice_id=%d" % inv_borosil).get_json()}
+    assert borosil_box in under_borosil, \
+        "switching invoices did not re-filter to the new buyer's own boxes"
+
+
 @test("a box on a live challan is excluded from the available list")
 def t_box_excluded_from_list():
     c = setup()
     b = packed_box(c, [0, 1])
-    before = {r["box_id"] for r in c.get("/api/challan/boxes").get_json()}
-    assert b in before
     inv = make_invoice(qty=2)
+    before = {r["box_id"] for r in
+             c.get("/api/challan/boxes?invoice_id=%d" % inv).get_json()}
+    assert b in before
     c.post("/api/challan", json={"action": "create", "boxes": [b],
                                  "invoice_id": inv})
-    after = {r["box_id"] for r in c.get("/api/challan/boxes").get_json()}
+    after = {r["box_id"] for r in
+            c.get("/api/challan/boxes?invoice_id=%d" % inv).get_json()}
     assert b not in after, "a taken box still offered itself for selection"
 
 
@@ -490,7 +559,8 @@ def t_discard_frees_boxes():
     chid = r.get_json()["challan_id"]
     r2 = c.post("/api/challan/%d/discard" % chid, json={})
     assert r2.status_code == 200, r2.get_json()
-    ids = {row["box_id"] for row in c.get("/api/challan/boxes").get_json()}
+    ids = {row["box_id"] for row in
+          c.get("/api/challan/boxes?invoice_id=%d" % inv).get_json()}
     assert b in ids, "discarding a draft did not free its box"
     assert challan_row(chid)["status"] == "cancelled"
     # and it can now go on a real challan
@@ -1005,6 +1075,41 @@ def t_edit_second_generation_mb():
     # nor can the intermediate MA generation
     r4 = c.post("/api/challan/%d/edit-draft" % ma_id, json={})
     assert r4.status_code == 400, "the intermediate generation was editable"
+
+
+@test("the live verification rail on a SECOND edit excludes the WHOLE "
+     "lineage, not just the challan being edited - the original's "
+     "challan_serial rows are still there under its own, different id")
+def t_checks_excludes_whole_lineage_on_second_edit():
+    c = setup()
+    b = packed_box(c, [119, 120])
+    inv = make_invoice(qty=2, invoice_no="INV-CHECKSLINEAGE")
+    chid = make_issued_challan(c, [b], inv)
+
+    r1 = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": [b], "invoice_id": inv,
+                     "vehicle_no": "CG04MA0003"})
+    ma_id = r1.get_json()["challan_id"]
+
+    # what the client sends while a SECOND edit (of ma_id) is open: only
+    # ma_id itself, exactly what chEditingId holds - the rail has to widen
+    # this to the lineage on its own, the same way edit-save already does
+    r = c.post("/api/challan/checks",
+               json={"boxes": [b], "invoice_id": inv,
+                     "exclude_challan_id": ma_id})
+    assert r.status_code == 200, r.get_json()
+    chk = r.get_json()
+    codes = [i["code"] for box in chk["boxes"] for i in box["issues"]]
+    assert "E-DUPSERIAL" not in codes, \
+        "the rail warned about the box's own prior generation: " + str(chk)
+    assert chk["ok"], chk
+
+    # confirms the rail was not just permissive by accident: the SAME
+    # save the client is building towards actually succeeds
+    r2 = c.post("/api/challan/%d/edit-save" % ma_id,
+               json={"boxes": [b], "invoice_id": inv,
+                     "vehicle_no": "CG04MB0004"})
+    assert r2.status_code == 200, r2.get_json()
 
 
 @test("the invoice cannot be changed through an edit, submitted or not")

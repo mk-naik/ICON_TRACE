@@ -709,6 +709,48 @@ stays a separate, unreachable-from-Edit action. Whether it is actually
 gated to admins in the UI was not touched or verified either way; the
 instruction described it as already true and out of scope for this pass.
 
+**Round 4 — two bugs found once Round 3's Edit was tested against a
+challan with real boxes already on it, not an empty one.**
+
+- [x] **`chRunChecksNow()` never sent `exclude_challan_id`.** The live
+      verification rail called `/api/challan/checks` with `chEditingId`
+      sitting right there, unused — so opening Edit on any challan with
+      boxes on it already showed every one of its own boxes as a
+      "duplicate serial", the exact false refusal Round 3's server-side
+      widening was built to prevent. Fixed by sending it, exactly as
+      given: `exclude_challan_id: chEditingId || undefined`.
+- [x] **A second edit's rail excluded only the challan being edited, not
+      its whole lineage.** `/api/challan/checks` passed the client's
+      single `exclude_challan_id` straight to `_challan_precheck` without
+      the `_lineage_ids()` widening `edit-save` itself already applies —
+      so editing `MA` into `MB` warned about the box's own entry under the
+      **original's** id, which editing never deletes (Round 3's own
+      finding). The save would have gone through regardless; the rail
+      was lying about it first. Fixed by widening `exclude_challan_id` to
+      `_lineage_ids(cur, exclude)` before the precheck, the same way
+      `edit-save` already does.
+- [x] **Invoice-first, customer-filtered box list.** `GET
+      /api/challan/boxes` returned every unreserved closed pallet
+      regardless of buyer — a box belonging to a different customer than
+      the selected invoice was tickable, refused only after the fact by
+      `_challan_precheck`. It now **requires** `invoice_id` (`[]` without
+      one) and filters to General Stock or that invoice's buyer's own
+      boxes, resolved the same way `_challan_precheck` resolves ownership.
+      "Challan details" (the invoice selector) was moved physically above
+      "Select boxes" in the DOM — v4's `.wmain`/`.card` grid has no
+      explicit `grid-row`, so at desktop width visual order **is** DOM
+      order; the `.o1`/`.o2`/`.o3` CSS `order` classes only take effect
+      under 1400px. `chInvoiceChange()` now re-fetches and re-renders on
+      every change, in every branch; `chClearForm()` had the same
+      staleness bug one level up — it cleared `chInvoiceId` but re-rendered
+      the box table from the still-populated `chBoxes` array — fixed the
+      same way.
+- [x] Tests: 2 new `test_challan.js` cases for `exclude_challan_id`, 4 more
+      for invoice-first filtering (`test_challan.js`, 35 total); 1 new
+      `test_challan.py` case for the lineage-widening bug on the live rail
+      (55 total). Every rule mutation-tested — the lineage one reproduces
+      the exact false "already on IS-…" warning before the fix.
+
 ## 16. Loading Verification — NEW SCREEN (Team 3)
 
 - [x] Two modes: **Scan boxes** (for gate pass) and **Verify serials**.
@@ -782,14 +824,41 @@ into it.
       it is not on it), Space confirms. A fully loaded session renders
       **read-only** — no scan field, no Save & Submit, just the record.
       A **Verify one pallet's contents →** button opens the existing,
-      untouched `/loading` screen in a new tab.
+      untouched pallet-contents check (`frag_loading.html`, served at
+      `/view/loading`) as a real `v-loadver` section inside the app shell —
+      see the "opened a browser tab, not a screen" fix below.
 - [x] The existing `NEW_VIEWS` nav entry `loadver` ("Loading Verification",
       positioned before Gate Pass) already reserved the icon, label and
-      slot but pointed at a `/view/loading` route that was never
-      registered — clicking it did nothing. Repointed, the same way the
-      existing `challan` → `challan-list` nav redirect already works, to
-      this new landing list; the old fragment it used to fetch is
-      untouched and still reachable at its own standalone `/loading` URL.
+      slot, fetches `/view/loading` into `v-loadver` once at sign-in, and
+      is what the nav button itself opens (redirected to the landing list
+      above, the same way the existing `challan` → `challan-list` nav
+      redirect already works). The fragment it fetches is untouched.
+
+**Round 2 — three bugs found once this was tested against a realistic,
+already-populated challan and a real fetch, not an empty screen.**
+
+- [x] **The "N rows" count went stale.** `data-itable="loading"`'s own
+      count logic only reacts to ITS OWN search/filter controls firing;
+      `ldLoad()` replaces the whole `tbody` directly from a server fetch on
+      a date range and status this screen filters server-side — two
+      triggers claiming the same number is how it drifts. Fixed by picking
+      one owner: the card no longer carries `data-role="count"` at all,
+      and `ldRecount()` sets the badge directly from `ldRows.length` (plus
+      the search box's own text match) at the end of every `ldLoad()`
+      call, success or failure.
+- [x] **"Verify one pallet's contents" left the app.** It was a plain
+      `<a href="/loading" target="_blank">` — the exact "two apps" problem
+      already fixed once elsewhere, reintroduced here. It now calls
+      `go('loadver')` directly (no nav-i element, so the landing-list
+      redirect above does not fire) to show the real, already-fetched
+      `v-loadver` fragment in-app. Since that fragment has no idea it now
+      lives inside a v4 section instead of its own page, `loadView()`
+      prepends a close bar (`ldInjectPalletCheckClose()`) the one time it
+      loads `id === 'loadver'`, wired back to `go('loading-list')`.
+- [x] Tests: 3 new `test_loading.js` cases for the count badge (asserted
+      against the actual rendered row count, not "the fetch succeeded"),
+      3 more for the in-app pallet check and its close button (`test_loading.js`,
+      17 total). Every rule mutation-tested.
 
 **A real bug found by testing, not assumed away.** `_challan_bundle` (used
 by print, excel and FTR) resolves a bare `(fy, seq)` with no `?suffix=` to
@@ -829,6 +898,49 @@ exercised again end-to-end in `test_loading.py`.
       gate; RGP 3: creator, gate, recipient — recipient returns theirs).
       **Settled:** `ISGP260831/0667`, one series for every type, sequence
       resets on the financial year, padded to 4. Padding is display only.
+
+**Live-layer fix — v4's original fields left sitting beside the real
+ones.**
+
+**What was wrong.** `wireGp()` already injects the real "Issue details"
+fields (Type, Party / destination, Material going out, …) — but it
+injects them ABOVE v4's own original card content instead of replacing
+it, so three fields `issueGP()` never reads stayed on screen, looking
+just as real: a "Gate pass no." input PRE-FILLED with the literal
+`GP-2608-0031` (the actual number is only known once the server assigns
+it on submit), a "Delivery order no." and a "Container no." that map to
+nothing this system tracks. The same fake number was also baked into the
+"Gate pass preview" card's Print/Export PDF buttons, whose `onclick`
+already resolved it against `/api/print/resolve` — a document ref that
+never existed server-side, so both buttons already failed silently with
+a toast naming that exact fake number.
+
+**What changed (`static/icon_live.js` only — `icon_trace.html` untouched,
+per the standing rule).**
+- [x] `gpFldFor(label)` / `gpHideUnwiredFields()` — hides the three
+      unconnected `.fld`s by label text (`style.display='none'`, not
+      removed, so nothing downstream that reads the DOM by position
+      breaks), hides the now-meaningless "Placeholder series… PS format"
+      warning note next to where the fake number used to show, and strips
+      `GP-2608-0031` out of the two preview buttons' `onclick` in place.
+      Called once per `wireGp()` — idempotent, so re-navigating to Gate
+      Pass re-running it is harmless.
+- [x] Tests: `test_gatepass.js` (new, 7 cases) — a realistic populated
+      "Issue details" card (the real injected fields alongside v4's
+      original ones, exactly as `wireGp()` actually renders it), asserting
+      the three dead fields and the stale note are hidden, the real ones
+      are not touched, both preview buttons lose the fake ref, and nothing
+      on the card contains `GP-2608` or `PS26812` anywhere after cleanup —
+      the literal assertion the bug report named. Every rule
+      mutation-tested.
+
+**Open, not decided here:** v4's Create Challan screen has its own,
+separate "Delivery order no." / "Delivery order date" pair (Order
+reference section) with the same `PS26812-0007` placeholder and the same
+"unconnected to anything real" problem — out of scope for this pass since
+the bug report and its test both named the Gate Pass form specifically,
+but the same question (do either of these map to a real field, e.g. LR
+no.?) applies there too and is still open with Mukesh.
 
 ## 18. Hold & Needs Review  *(decided, not yet built)*
 
@@ -1079,158 +1191,3 @@ not know any of the following, and each is a change to make on top of it.
 | Two lines, each with its own SS and EL and its own column map | Evidence, FQC, FTR |
 | A source that is down is NC, never NA — even with the other readable | FQC |
 
-
----
-
-## Challan Lifecycle  *(built)*
-
-### What was wrong
-- There was no way to list created challans - no landing screen existed for challan history.
-- An issued challan could not be cancelled (only drafts could be discarded).
-- No "Edit" path existed for issued challans.
-- Gate pass used a free-text challan_no field - no real FK, no validation, and a
-  selector could not be shown because nothing knew which challans were issued.
-- An invoice already on a live challan still appeared in the Create Challan invoice
-  selector, allowing a second challan to attempt the same invoice.
-- Boxes on a live (draft OR issued) challan appeared in the Repack source list,
-  locked but present - the rule is "absent, not merely locked".
-
-### What changed
-
-**schema_sqlite.sql / store.py**
-- Added gatepass.challan_id INTEGER NULL REFERENCES challan(challan_id).
-  Migration guard added to _migrate() so existing DBs pick up the column on
-  first restart without manual SQL.
-
-**db.py**
-- challans_list() - challan list query with status/fy/q filters and gp_count.
-- challan_detail() - full record + boxes + gp_count + serial_count.
-- gp_count_for_challan() - counts gate passes via the real FK.
-- challans_issued() - issued, non-cancelled challans for the GP selector.
-
-**app.py**
-- GET /api/challans - challan list for the new landing screen.
-- GET /api/challan/<id> - challan detail for the detail panel.
-- POST /api/challan/<id>/cancel - cancel an issued challan (same audit fields
-  as discard; blocked if any gate pass references it via FK; reverts all serials
-  dispatched -> packed).
-- GET /api/challans/issued - issued challans for the Gate Pass selector.
-- GET /api/invoices?for_challan=1 - excludes invoices on live challans;
-  ?exclude_challan_id=<n> exempts one challan so its own invoice stays visible
-  while editing.
-- GET /api/boxes?exclude_live_challan=1 - omits boxes on live challans from
-  the list entirely (not locked - absent).
-- POST /gatepass - now accepts challan_id FK in addition to the legacy
-  challan_no text field; renders the number from the record if only the id is given.
-
-**icon_live.js**
-- Challan List screen (#v-challan-list) injected into .main, with search,
-  status filter, Refresh and New Challan buttons.
-- Challan Detail overlay: full header, box list, serial/gp counts, print/Excel links,
-  Cancel / Edit / Verify loading / Create gate pass actions (gated correctly).
-  Cancel and Edit are hidden when any gate pass references the challan (locked).
-  Create gate pass and Verify loading are always available on issued challans
-  (split loads: second GP can be added after the first locks editing).
-- Edit path: fetches detail, cancels via /cancel, navigates to Create Challan with
-  the original invoice pre-selected. Original row untouched except status=cancelled.
-- Gate Pass form: free-text challan_no replaced by a live select populated
-  from /api/challans/issued; challan_id written as a hidden field on submit.
-- chLoadInvoices() patched to pass ?for_challan=1 so the Create Challan invoice
-  selector only shows available invoices.
-- rpLoad() patched to pass ?exclude_live_challan=1 so boxes on live challans
-  are absent from Repack, not locked.
-- Stock & Dispatch dashboard KPIs: three new tiles - Open drafts, Issued today,
-  Awaiting gate pass.
-
-### Tests that prove it (test_challan.py, now 41 tests)
-
-| Test | Rule defended |
-|---|---|
-| a challan already referenced by a gate pass cannot be cancelled | GP lock blocks cancel |
-| a challan already referenced by a gate pass cannot be edited | GP lock blocks edit |
-| cancelling an issued challan reverts every serial to packed, not dispatched | state revert |
-| a cancelled challan's boxes reappear in the repack list after cancel | repack freed |
-| a cancelled challan's invoice reappears in the for-challan invoice selector | invoice freed |
-| an invoice on a live challan does not appear in the for-challan invoice selector | invoice hidden |
-| a box on a live DRAFT challan is absent from the repack list, not merely locked | absent not locked |
-| a box on a live ISSUED challan is absent from the repack list, not merely locked | absent not locked |
-| a second gate pass can be created against a challan that already has one | N gate passes per challan |
-| Edit produces a new draft; the original row is unchanged except for its cancelled status | document never rewritten |
-
-
----
-
-## Challan Lifecycle  *(built)*
-
-### What was wrong
-- There was no way to list created challans - no landing screen existed for challan history.
-- An issued challan could not be cancelled (only drafts could be discarded).
-- No "Edit" path existed for issued challans.
-- Gate pass used a free-text challan_no field - no real FK, no validation, and a
-  selector could not be shown because nothing knew which challans were issued.
-- An invoice already on a live challan still appeared in the Create Challan invoice
-  selector, allowing a second challan to attempt the same invoice.
-- Boxes on a live (draft OR issued) challan appeared in the Repack source list,
-  locked but present - the rule is "absent, not merely locked".
-
-### What changed
-
-**schema_sqlite.sql / store.py**
-- Added gatepass.challan_id INTEGER NULL REFERENCES challan(challan_id).
-  Migration guard added to _migrate() so existing DBs pick up the column on
-  first restart without manual SQL.
-
-**db.py**
-- challans_list() - challan list query with status/fy/q filters and gp_count.
-- challan_detail() - full record + boxes + gp_count + serial_count.
-- gp_count_for_challan() - counts gate passes via the real FK.
-- challans_issued() - issued, non-cancelled challans for the GP selector.
-
-**app.py**
-- GET /api/challans - challan list for the new landing screen.
-- GET /api/challan/<id> - challan detail for the detail panel.
-- POST /api/challan/<id>/cancel - cancel an issued challan (same audit fields
-  as discard; blocked if any gate pass references it via FK; reverts all serials
-  dispatched -> packed).
-- GET /api/challans/issued - issued challans for the Gate Pass selector.
-- GET /api/invoices?for_challan=1 - excludes invoices on live challans;
-  ?exclude_challan_id=<n> exempts one challan so its own invoice stays visible
-  while editing.
-- GET /api/boxes?exclude_live_challan=1 - omits boxes on live challans from
-  the list entirely (not locked - absent).
-- POST /gatepass - now accepts challan_id FK in addition to the legacy
-  challan_no text field; renders the number from the record if only the id is given.
-
-**icon_live.js**
-- Challan List screen (#v-challan-list) injected into .main, with search,
-  status filter, Refresh and New Challan buttons.
-- Challan Detail overlay: full header, box list, serial/gp counts, print/Excel links,
-  Cancel / Edit / Verify loading / Create gate pass actions (gated correctly).
-  Cancel and Edit are hidden when any gate pass references the challan (locked).
-  Create gate pass and Verify loading are always available on issued challans
-  (split loads: second GP can be added after the first locks editing).
-- Edit path: fetches detail, cancels via /cancel, navigates to Create Challan with
-  the original invoice pre-selected. Original row untouched except status=cancelled.
-- Gate Pass form: free-text challan_no replaced by a live select populated
-  from /api/challans/issued; challan_id written as a hidden field on submit.
-- chLoadInvoices() patched to pass ?for_challan=1 so the Create Challan invoice
-  selector only shows available invoices.
-- rpLoad() patched to pass ?exclude_live_challan=1 so boxes on live challans
-  are absent from Repack, not locked.
-- Stock & Dispatch dashboard KPIs: three new tiles - Open drafts, Issued today,
-  Awaiting gate pass.
-
-### Tests that prove it (test_challan.py, now 41 tests)
-
-| Test | Rule defended |
-|---|---|
-| a challan already referenced by a gate pass cannot be cancelled | GP lock blocks cancel |
-| a challan already referenced by a gate pass cannot be edited | GP lock blocks edit |
-| cancelling an issued challan reverts every serial to packed, not dispatched | state revert |
-| a cancelled challan's boxes reappear in the repack list after cancel | repack freed |
-| a cancelled challan's invoice reappears in the for-challan invoice selector | invoice freed |
-| an invoice on a live challan does not appear in the for-challan invoice selector | invoice hidden |
-| a box on a live DRAFT challan is absent from the repack list, not merely locked | absent not locked |
-| a box on a live ISSUED challan is absent from the repack list, not merely locked | absent not locked |
-| a second gate pass can be created against a challan that already has one | N gate passes per challan |
-| Edit produces a new draft; the original row is unchanged except for its cancelled status | document never rewritten |
