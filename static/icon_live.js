@@ -6963,14 +6963,30 @@ function wireFqcAnomalies() {
         view = 'loading-list';
         arguments[0] = view;
       }
-      var result = _origGoCh.apply(this, arguments);
+      // v4's own go() does document.getElementById('v-'+id).classList.add
+      // ('on') with no null check - called on a view this layer injects
+      // lazily, that throws, and since it throws BEFORE go() reaches its
+      // own nav-button-highlighting lines, every .view loses its 'on'
+      // class (the first line, which already ran) while nothing gets it
+      // back: a blank page, with whatever nav button was highlighted
+      // before the click left stuck that way. The section has to exist
+      // BEFORE _origGoCh runs, not after.
+      try {
+        if (view === 'challan-list') clInjectView();
+        if (view === 'loading-list') ldInjectView();
+      } catch (e) {}
+      var result;
+      try {
+        result = _origGoCh.apply(this, arguments);
+      } catch (e) {
+        result = undefined;
+      }
       try {
         if (view === 'challan-list') {
-          clInjectView();
           wireChList();
         }
         if (view === 'loading-list') {
-          try { ldInjectView(); ldLoad(); } catch (e) {}
+          ldLoad();
         }
         if (view === 'gp') { wireGp(); }
         if (view === 'disp') {
@@ -6984,6 +7000,7 @@ function wireFqcAnomalies() {
 
   /* Pre-wire on load if either screen is already active */
   try { clInjectView(); } catch (e) {}
+  try { ldInjectView(); } catch (e) {}
   try { gpInjectChallanSelector(); } catch (e) {}
 
   /* ---- Stock & Dispatch dashboard KPIs ----------------------------------- */
