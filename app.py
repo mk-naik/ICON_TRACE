@@ -2281,7 +2281,8 @@ def gatepass_print(gp_no):
     else:
         copies = ["Copy 1 of 3 — creator", "Copy 2 of 3 — gate",
                   "Copy 3 of 3 — gate"]
-    return render_template("gatepass_print.html", gp=gp, copies=copies)
+    qr = bc.qr_svg(f"ICONTRACE|GATEPASS|{gp_no}")
+    return render_template("gatepass_print.html", gp=gp, copies=copies, qr=qr)
 
 
 @app.route("/challan/<int:fy>/<int:seq>/ftr")
@@ -5053,6 +5054,18 @@ def api_gatepass():
         ch_id = None
 
     with store.conn() as (cx, cur):
+        is_solar = body.get("is_solar")
+        if is_solar:
+            if not ch_id:
+                return jsonify({"ok": False, "why": "A challan must be selected for solar modules"}), 400
+            bundle = db.challan_detail(cur, ch_id)
+            if not bundle or not bundle.get("challan"):
+                return jsonify({"ok": False, "why": "Challan not found"}), 400
+            
+            why = _loading_incomplete(bundle.get("boxes", []))
+            if why and bundle["challan"]["origin"] != "historical":
+                return jsonify({"ok": False, "why": why}), 400
+
         seq = db.draw_gp_seq(cur, d)
         no = db.render_gp_no(d, seq)
         ch_no = str(body.get("challan_no") or "").strip()

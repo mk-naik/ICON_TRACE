@@ -1227,3 +1227,18 @@ not know any of the following, and each is a change to make on top of it.
 - Refactored `dpDonut` drawing in `renderStock` to use the standard `drawDonut()` function.
 
 **Which test proves it.** Playwright local tests (`test_ui3.py`) rendering screenshots of all dashboards, validating that donut wheels form, data populates the Production dashboard, shift aggregations total correctly, and KW appears on day-wise inspection.
+
+**Round 7 — Gate Pass Dual Mode (Module Flow)**
+
+**What was wrong.** The Gate Pass form was a simple data-entry screen (standalone mode) cleanup of v4's demo. None of the new "Solar module" flow (fetching a challan, auto-filling fields, locking them, and enforcing loading verification) existed. The required QR code (`ICONTRACE|GATEPASS|<gp_no>`) was missing from the print format.
+
+**Root cause.** This was new feature work as agreed with Mukesh, intended to gate Gate Pass issuance behind a verified loading state from a linked challan.
+
+**What changed.**
+- Added a "This gate pass is for solar modules." checkbox to the Gate Pass form in `icon_live.js` `wireGp()`.
+- Checking it displays a challan selector and makes the descriptive fields (Party, Vehicle, Material, Qty) read-only, populated directly from the selected challan via `/api/challan/<id>`.
+- Added UI logic to evaluate the challan's loading state. If `loadedBoxes === totalBoxes` (or if origin is historical), the gate pass is allowed; otherwise, a refusal note is shown ("Loading verification is not complete - N of M pallets confirmed") and the Issue button is disabled.
+- Enforced the loading verification check server-side in `app.py` `api_gatepass` for `is_solar=True` requests.
+- Added the QR code `ICONTRACE|GATEPASS|<gp_no>` to the print format in `app.py` `gatepass_print` and displayed it in `gatepass_print.html`.
+
+**Which test proves it.** Updated `test_gatepass.py` backend tests to verify `api_gatepass` rejects `is_solar=True` requests when the challan has pending pallets, and accepts them when fully loaded or when `is_solar=False` (standalone mode). Validated via Playwright and python tests.

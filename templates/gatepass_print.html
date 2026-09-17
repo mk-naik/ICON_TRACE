@@ -12,6 +12,8 @@
  .hd .doc{width:52mm;border-left:1px solid #000;font-size:8.5pt}
  .hd .doc div{padding:1.5mm 2.5mm;border-bottom:1px solid #000}
  .hd .doc div:last-child{border-bottom:none}
+ .hd .qr{width:22mm;padding:2mm;border-left:1px solid #000;text-align:center}
+ .hd .qr svg{width:18mm;height:18mm}
  .kind{text-align:center;font-weight:700;padding:2mm;border-bottom:1.5px solid #000;
    font-size:10.5pt;letter-spacing:.3px}
  table{width:100%;border-collapse:collapse}
@@ -47,6 +49,7 @@
       <div><b>DATE</b> {{ gp.gp_date }}</div>
       <div><b>GATE ENTRY NO.</b></div>
     </div>
+    {% if qr %}<div class="qr">{{ qr | safe }}</div>{% endif %}
   </div>
 
   <div class="kind">GATE PASS &mdash; {{ 'NON RETURNABLE (NRGP)' if gp.kind=='NRGP' else 'RETURNABLE (RGP)' }}</div>

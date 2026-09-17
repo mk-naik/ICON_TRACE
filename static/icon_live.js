@@ -7748,7 +7748,9 @@ function wireFqcAnomalies() {
       var qtyRaw = (document.getElementById('gpQty') || {}).value || '';
       var expectedRet = document.getElementById('gpExpectedRet') ? document.getElementById('gpExpectedRet').value : '';
 
+      var isSolar = document.getElementById('gpIsSolar') && document.getElementById('gpIsSolar').checked;
       var payload = {
+          is_solar: isSolar,
           kind: typeNRGP,
           party: party.trim(),
           delivery_address: addr.trim(),
@@ -7783,7 +7785,48 @@ function wireFqcAnomalies() {
         });
   };
 
-  window.gpSetKind = function(k) {
+  
+  window.gpToggleSolarMode = function() {
+      var isSolar = document.getElementById('gpIsSolar').checked;
+      var selWrap = document.getElementById('gpChallanSelV4') ? document.getElementById('gpChallanSelV4').closest('.fld') : null;
+      var partyEl = document.getElementById('gpParty');
+      var vehEl = document.getElementById('gpVehicle');
+      var descEl = document.getElementById('gpDesc');
+      var qtyEl = document.getElementById('gpQty');
+      var lWrap = document.getElementById('gpLoadingStateWrap');
+      var btn = document.getElementById('gpBtn');
+      var sel = document.getElementById('gpChallanSelV4');
+
+      if (isSolar) {
+          if (selWrap) selWrap.style.display = 'block';
+          partyEl.readOnly = true;
+          vehEl.readOnly = true;
+          descEl.readOnly = true;
+          qtyEl.readOnly = true;
+          partyEl.classList.add('ro');
+          vehEl.classList.add('ro');
+          descEl.classList.add('ro');
+          qtyEl.classList.add('ro');
+          
+          if (sel && sel.onchange) sel.onchange(); // Trigger evaluation
+      } else {
+          if (selWrap) selWrap.style.display = 'none';
+          partyEl.readOnly = false;
+          vehEl.readOnly = false;
+          descEl.readOnly = false;
+          qtyEl.readOnly = false;
+          partyEl.classList.remove('ro');
+          vehEl.classList.remove('ro');
+          descEl.classList.remove('ro');
+          qtyEl.classList.remove('ro');
+          if (lWrap) lWrap.style.display = 'none';
+          if (btn) btn.disabled = false;
+          if (sel) sel.value = '';
+          gpRenderPreview(null);
+      }
+  };
+
+window.gpSetKind = function(k) {
       var nr = document.getElementById('gpNRGP');
       var r = document.getElementById('gpRGP');
       var retWrap = document.getElementById('gpRetWrap');
@@ -8017,7 +8060,8 @@ function wireFqcAnomalies() {
               // stock between units) could not be issued through this
               // screen no matter what the challan dropdown was set to.
               var injectHtml =
-                '<div class="fld"><label>Type</label>' +
+                '<div class="fld"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="gpIsSolar" onchange="window.gpToggleSolarMode()"> This gate pass is for solar modules</label></div>' +
+                '<div class="fld" id="gpTypeWrap"><label>Type</label>' +
                 '<div class="seg" id="gpKindSeg">' +
                 '<button class="on" id="gpNRGP" onclick="gpSetKind(\'NRGP\')">NRGP</button>' +
                 '<button id="gpRGP" onclick="gpSetKind(\'RGP\')">RGP</button></div></div>' +
@@ -8032,8 +8076,10 @@ function wireFqcAnomalies() {
                 '<div class="fld"><label>Quantity</label>' +
                 '<input id="gpQty" type="number" min="1"></div>' +
                 '<div class="fld" id="gpRetWrap" style="display:none"><label>Expected return</label>' +
-                '<input type="date" id="gpExpectedRet"></div>';
-              detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
+                '<input type="date" id="gpExpectedRet"></div>' +
+                '<div class="fld" id="gpLoadingStateWrap" style="display:none; grid-column:1/-1">' +
+                '<span id="gpLoadingState" class="tag"></span></div>';
+detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
 
               // Replace placeholder select - a CONVENIENCE, never a
               // requirement. Choosing a challan pre-fills party/vehicle/qty
@@ -8048,11 +8094,18 @@ function wireFqcAnomalies() {
                   if (reqLabel) reqLabel.classList.remove('req');
                   selFld.onchange = function() {
                       var chId = this.value ? parseInt(this.value, 10) : null;
-                      if (!chId) { gpRenderPreview(null); return; }
-                      // The list this selector is built from (/api/challans)
-                      // carries no vehicle_no, no GSTIN, no box breakdown -
-                      // the preview needs the full detail bundle regardless,
-                      // so it is what this fetches, once, per selection.
+                      if (!chId) { 
+                          gpRenderPreview(null); 
+                          if (document.getElementById('gpIsSolar') && document.getElementById('gpIsSolar').checked) {
+                              document.getElementById('gpParty').value = '';
+                              document.getElementById('gpVehicle').value = '';
+                              document.getElementById('gpQty').value = '';
+                              document.getElementById('gpDesc').value = '';
+                              document.getElementById('gpBtn').disabled = true;
+                              document.getElementById('gpLoadingStateWrap').style.display = 'none';
+                          }
+                          return; 
+                      }
                       fetch('/api/challan/' + chId, { cache: 'no-store' })
                         .then(function(r) { return r.json(); })
                         .then(function(bundle) {
@@ -8062,20 +8115,62 @@ function wireFqcAnomalies() {
                             var vehEl = document.getElementById('gpVehicle');
                             var qtyEl = document.getElementById('gpQty');
                             var descEl = document.getElementById('gpDesc');
-                            if (partyEl && !partyEl.value) partyEl.value = ch.buyer_name || '';
-                            if (vehEl && !vehEl.value) vehEl.value = ch.vehicle_no || '';
-                            if (qtyEl && !qtyEl.value) qtyEl.value = ch.qty || '';
-                            if (descEl && !descEl.value) descEl.value = ch.model ?
-                              (ch.model + ' modules') : 'Modules against ' + (ch.challan_no || 'challan');
+                            var isSolar = document.getElementById('gpIsSolar') && document.getElementById('gpIsSolar').checked;
+                            
+                            var cname = ch.buyer_name || '';
+                            var cveh = ch.vehicle_no || '';
+                            var cqty = ch.qty || '';
+                            var cdesc = ch.model ? (ch.model + ' modules') : 'Modules against ' + (ch.challan_no || 'challan');
+
+                            if (isSolar) {
+                                partyEl.value = cname;
+                                vehEl.value = cveh;
+                                qtyEl.value = cqty;
+                                descEl.value = cdesc;
+                                
+                                var lWrap = document.getElementById('gpLoadingStateWrap');
+                                var lState = document.getElementById('gpLoadingState');
+                                lWrap.style.display = 'block';
+                                
+                                var totalBoxes = bundle.boxes ? bundle.boxes.length : 0;
+                                var loadedBoxes = 0;
+                                if (bundle.boxes) {
+                                    bundle.boxes.forEach(function(b) {
+                                        if (b.loading_status === 'loaded') loadedBoxes++;
+                                    });
+                                }
+                                
+                                if (ch.origin === 'historical' || totalBoxes === 0) {
+                                    lState.className = 'tag t-pass';
+                                    lState.textContent = 'Ready for dispatch';
+                                    document.getElementById('gpBtn').disabled = false;
+                                } else if (loadedBoxes === totalBoxes) {
+                                    lState.className = 'tag t-pass';
+                                    lState.textContent = 'All pallets confirmed (' + loadedBoxes + ' of ' + totalBoxes + ')';
+                                    document.getElementById('gpBtn').disabled = false;
+                                } else {
+                                    lState.className = 'tag t-fail';
+                                    lState.textContent = 'Loading verification is not complete - ' + loadedBoxes + ' of ' + totalBoxes + ' pallet(s) confirmed';
+                                    document.getElementById('gpBtn').disabled = true;
+                                }
+                            } else {
+                                if (partyEl && !partyEl.value) partyEl.value = cname;
+                                if (vehEl && !vehEl.value) vehEl.value = cveh;
+                                if (qtyEl && !qtyEl.value) qtyEl.value = cqty;
+                                if (descEl && !descEl.value) descEl.value = cdesc;
+                            }
+                            
                             gpRenderPreview(bundle);
                         })
                         .catch(function() {});
                   };
+
               }
           }
       }
       gpRenderPreview(null);
 
+      if (document.getElementById('gpIsSolar')) { document.getElementById('gpIsSolar').checked = false; window.gpToggleSolarMode(); }
       gpHideUnwiredFields();
 
       document.getElementById('gpBtn').disabled = false;
