@@ -1345,3 +1345,87 @@ not know any of the following, and each is a change to make on top of it.
 - Added the QR code `ICONTRACE|GATEPASS|<gp_no>` to the print format in `app.py` `gatepass_print` and displayed it in `gatepass_print.html`.
 
 **Which test proves it.** Updated `test_gatepass.py` backend tests to verify `api_gatepass` rejects `is_solar=True` requests when the challan has pending pallets, and accepts them when fully loaded or when `is_solar=False` (standalone mode). Validated via Playwright and python tests.
+
+
+**Round 8 — Production Entry**
+
+**What was wrong.** The Production Entry screen was purely a mockup using hardcoded UI elements. Dummy data was displayed, and the actual capability to log produced modules did not exist. Module counts on dashboards were empty or misaligned because `state` never transitioned from `planned` to `produced`.
+
+**Root cause.** The backend and frontend logic for submitting new ranges of serials produced and tracking them was a missing feature.
+
+**What changed.**
+- Added `production_entry` table to the database schema to persistently track entries.
+- Created `/api/prodentries` and `/api/prodentry` routes to handle retrieving recent entries and submitting new ranges.
+- Rebuilt the Production Entry frontend to use the standard 'New Entry' profile: dynamic filtering (date, shift, customer, wattage search), togglable manual entry form, and real-time calculation preview (`peCalc()`).
+- Connected the submission to validate that serials exist in the master and are currently `planned` before updating them to `produced`.
+
+**Which test proves it.** `test_production.py` verifies the backend accepts planned modules and correctly rejects out-of-bounds ranges or already produced serials.
+
+**Round 8b — this landed broken: every screen after Production Entry in
+v4's own boot sequence silently stopped getting real data.**
+
+**What was wrong.** Reported directly: "only production entry is correct
+and other all screens are demo like." Two separate bugs, both in the
+code above.
+
+1. `window.renderPE`/`peInit`/`peToggleForm`/`peClearForm`/`peSave` were
+   appended to `icon_live.js` **after** the file's closing `})();`  -
+   outside the live layer's own IIFE entirely, in the plain global scope.
+   `renderPE()` calling the plain `api(...)` helper (a function private
+   to that IIFE) threw `ReferenceError: api is not defined` the instant
+   it ran. v4's own `initAll()` calls every screen's render function
+   **synchronously, in one sequence**, and `renderPE()` sits in the
+   middle of it - `peCalc()`, `renderLoss()`, `renderChBoxes()`,
+   `renderUsers()`, `renderMach()`, `renderStations()`, `renderHolds()`,
+   `renderLoad()`, `renderDrafts()`, `doSearch()`, and everything else
+   after it in that list never ran, because one uncaught exception
+   partway through a synchronous function stops the rest of it cold.
+   Production Entry itself had already rendered by that point, which is
+   exactly why it alone looked right while everything after it stayed on
+   v4's original sample data.
+2. `GET /api/prodentries`'s customer lookup joined against
+   `allocation.start_serial`/`allocation.end_serial` - columns that do
+   not exist; `allocation` stores its range as `seq_from`/`seq_to`,
+   parsed integers, never serial-range text (the same rule everywhere
+   else in this project: the serial string is decomposed once, at
+   generation, and nothing downstream re-parses it). Threw a 500 the
+   moment Production Entry's own list tried to load.
+
+**Found by** bisecting `icon_live.js` at its real top-level function
+boundaries through a headless browser's own parser
+(`new Function(source)`), since the visible symptom carried no useful
+line number and reading the surrounding code repeatedly found nothing
+wrong - because there was nothing wrong nearby; the break was several
+thousand lines from where any of this session's own work had touched.
+
+**What changed.**
+- Moved the entire Production Entry wiring block back inside the main
+  IIFE, immediately before its closing `})();` - the only change; the
+  code itself was correct once it could actually see `api`/`fqcEsc`.
+- Rewrote the customer lookup to join `serial.customer` directly against
+  the entry's own `start_serial` - the real, existing link (each serial
+  already carries its own customer, set at allocation/generation time,
+  `NULL` until decided) - instead of guessing a range match against
+  columns that were never there.
+- Removed `test_pw_production.py`, the file the previous entry named as
+  proving the UI flow: it connected directly to the real `icontrace.db`
+  (not an isolated `ICON_DB_FILE`), ran `DELETE FROM serial` against it,
+  and started the real server on port 8080 - the exact "never open a
+  second data store" and "test data should be thrown away, not real
+  data" rules this project holds everywhere else. Also removed four
+  other stray, uncommitted scratch/patch files left in the repo root
+  (`diff_live.txt`, `patch_app_sql.py`, `patch_pe_js_correct.py`,
+  `app_prodentries.txt`) - disposable tooling artifacts, not part of the
+  application.
+- `test_production.py` rewritten to this project's own isolated-DB,
+  `@test()`-runner convention (it was `pytest` + `DELETE FROM serial`
+  against whatever `icontrace.db` was current - the same class of bug as
+  the removed Playwright script, just less severe since a test run
+  wouldn't also restart the real server). Six cases, including one that
+  reproduces the exact broken customer-lookup query directly.
+
+**Verified live** against a running server with Playwright: sign-in and
+every screen navigated to (`dash`, `search`, `challan-list`,
+`loading-list`, `gp`, `prodentry`) with zero console errors, Challan
+List and Loading Verification both showing real, non-demo data again,
+and Gate Pass's module mode from the previous round still intact.

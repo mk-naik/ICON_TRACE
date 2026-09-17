@@ -8212,9 +8212,6 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
 
   console.log('[ICON TRACE] live layer active \u00B7 build', B.build,
               '\u00B7', B.live ? 'SQLite ' + B.db_file : 'no database');
-})();
-
-
 
   /* == PRODUCTION ENTRY WIRING == */
   window.peInit = function() {
@@ -8403,3 +8400,5 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
         st.innerHTML = '<div class="note n-warn"><span>!</span><span>' + fqcEsc(e.message || e.why || 'Failed to record') + '</span></div>';
       });
   };
+
+})();

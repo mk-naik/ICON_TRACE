@@ -713,3 +713,27 @@ CREATE TABLE IF NOT EXISTS cell_efficiency (
   seq    INTEGER NOT NULL DEFAULT 0
 ) ;
 
+
+
+-- ==========================================================================
+-- Production Entry
+-- Records the bulk creation/production of serials. The serial master is
+-- updated directly, and this table serves as the historical record of when
+-- and by whom those serials were marked as produced.
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS production_entry (
+  entry_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  prod_date      TEXT NOT NULL,
+  shift          TEXT NOT NULL,
+  shift_incharge TEXT NOT NULL,
+  line           TEXT NULL,
+  model          TEXT NOT NULL,
+  wattage        INT NOT NULL,
+  start_serial   TEXT NOT NULL,
+  end_serial     TEXT NOT NULL,
+  qty            INT NOT NULL,
+  kw_output      REAL NOT NULL,
+  material_note  TEXT NULL,
+  created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_by     TEXT NOT NULL
+) ;

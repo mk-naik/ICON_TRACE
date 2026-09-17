@@ -2419,18 +2419,26 @@ def api_prodentries():
     dto = (request.args.get("to") or "").strip()
     
     with store.conn() as (cx, cur):
-        sql = "SELECT p.*, (SELECT a.customer FROM allocation a WHERE p.start_serial <= a.end_serial AND p.end_serial >= a.start_serial AND p.model = a.model LIMIT 1) as customer FROM production_entry p WHERE 1=1"
+        # allocation stores its own range as seq_from/seq_to - integers
+        # parsed out of the serial once, at generation - never as
+        # start_serial/end_serial text to lexicographically compare a
+        # range against (the project's own rule: nothing downstream
+        # re-parses the serial string). The serial table already carries
+        # its own customer directly, set at allocation/generation time
+        # (NULL until decided, same as a box's own customer before it is
+        # assigned) - looked up from the entry's first serial, which
+        # names the batch's customer for the ordinary case of one
+        # customer per shift's production entry.
+        sql = "SELECT p.*, (SELECT s.customer FROM serial s WHERE s.serial = p.start_serial LIMIT 1) as customer FROM production_entry p WHERE 1=1"
         args = []
         if q:
             sql += " AND (p.start_serial LIKE %s OR p.end_serial LIKE %s OR p.model LIKE %s)"
             args.extend(["%" + q + "%", "%" + q + "%", "%" + q + "%"])
         if cust:
             sql += """ AND EXISTS (
-                SELECT 1 FROM allocation a 
-                WHERE p.start_serial <= a.end_serial 
-                  AND p.end_serial >= a.start_serial 
-                  AND p.model = a.model 
-                  AND a.customer LIKE %s
+                SELECT 1 FROM serial s
+                WHERE s.serial = p.start_serial
+                  AND s.customer LIKE %s
             )"""
             args.append("%" + cust + "%")
         if shift:
