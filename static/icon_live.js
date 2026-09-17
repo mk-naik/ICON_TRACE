@@ -7706,19 +7706,6 @@ function wireFqcAnomalies() {
                {n:'GY', v:grades['GY']||0, c:C.amber},
                {n:'BGY', v:grades['BGY']||0, c:C.red}
              ], total.toLocaleString(), 'modules packed');
-         });
-             var pA = total ? ((grades['A']||0)/total)*100 : 0;
-             var pGY = total ? ((grades['GY']||0)/total)*100 : 0;
-             var pBGY = total ? ((grades['BGY']||0)/total)*100 : 0;
-             
-             donut.style.background = total > 0 ? 
-                'conic-gradient(var(--p2) 0% ' + pA + '%, var(--c2) ' + pA + '% ' + (pA+pGY) + '%, var(--n2) ' + (pA+pGY) + '% 100%)' :
-                'var(--bd)';
-                
-             legend.innerHTML = 
-                '<div class="donut-l"><div class="donut-sq" style="background:var(--p2)"></div><div class="l">A-Grade</div><div class="v">' + (grades['A']||0) + '</div></div>' +
-                '<div class="donut-l"><div class="donut-sq" style="background:var(--c2)"></div><div class="l">GY-Grade</div><div class="v">' + (grades['GY']||0) + '</div></div>' +
-                '<div class="donut-l"><div class="donut-sq" style="background:var(--n2)"></div><div class="l">BGY-Grade</div><div class="v">' + (grades['BGY']||0) + '</div></div>';
          }
       })
       .catch(function(err) {
@@ -7768,6 +7755,22 @@ function wireFqcAnomalies() {
       if (!payload.description) {
           toast('Say what material is going out.');
           return;
+      }
+      if (isSolar) {
+          if (!chId) { toast('Select a challan first.'); return; }
+          // The server enforces this regardless (POST /api/gatepass
+          // refuses any challan-linked gate pass whose loading is
+          // incomplete, keyed on challan_id itself - see api_gatepass).
+          // This is only so the operator finds out before submitting,
+          // not instead of the real rule - Issue is already disabled
+          // while this is false, but a disabled attribute is a hint, not
+          // where the rule lives.
+          if (window._gpChallanReady !== true) {
+              var lState = document.getElementById('gpLoadingState');
+              toast((lState && lState.textContent.trim()) ||
+                'Loading verification is not complete for this challan yet.');
+              return;
+          }
       }
 
       btn.disabled = true;
@@ -7822,6 +7825,7 @@ function wireFqcAnomalies() {
           if (lWrap) lWrap.style.display = 'none';
           if (btn) btn.disabled = false;
           if (sel) sel.value = '';
+          window._gpChallanReady = null;
           gpRenderPreview(null);
       }
   };
@@ -8094,8 +8098,9 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
                   if (reqLabel) reqLabel.classList.remove('req');
                   selFld.onchange = function() {
                       var chId = this.value ? parseInt(this.value, 10) : null;
-                      if (!chId) { 
-                          gpRenderPreview(null); 
+                      window._gpChallanReady = null;
+                      if (!chId) {
+                          gpRenderPreview(null);
                           if (document.getElementById('gpIsSolar') && document.getElementById('gpIsSolar').checked) {
                               document.getElementById('gpParty').value = '';
                               document.getElementById('gpVehicle').value = '';
@@ -8104,7 +8109,7 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
                               document.getElementById('gpBtn').disabled = true;
                               document.getElementById('gpLoadingStateWrap').style.display = 'none';
                           }
-                          return; 
+                          return;
                       }
                       fetch('/api/challan/' + chId, { cache: 'no-store' })
                         .then(function(r) { return r.json(); })
@@ -8116,7 +8121,7 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
                             var qtyEl = document.getElementById('gpQty');
                             var descEl = document.getElementById('gpDesc');
                             var isSolar = document.getElementById('gpIsSolar') && document.getElementById('gpIsSolar').checked;
-                            
+
                             var cname = ch.buyer_name || '';
                             var cveh = ch.vehicle_no || '';
                             var cqty = ch.qty || '';
@@ -8127,30 +8132,30 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
                                 vehEl.value = cveh;
                                 qtyEl.value = cqty;
                                 descEl.value = cdesc;
-                                
+
+                                // ch.loading_agg / loading_why / loading_n_*
+                                // come straight from the server
+                                // (_loading_agg_status / _loading_incomplete,
+                                // the same functions Loading Verification's
+                                // own list and the print/excel refusal
+                                // already call) - not recomputed here from
+                                // bundle.boxes, so this can never drift from
+                                // what the server will actually enforce.
                                 var lWrap = document.getElementById('gpLoadingStateWrap');
                                 var lState = document.getElementById('gpLoadingState');
                                 lWrap.style.display = 'block';
-                                
-                                var totalBoxes = bundle.boxes ? bundle.boxes.length : 0;
-                                var loadedBoxes = 0;
-                                if (bundle.boxes) {
-                                    bundle.boxes.forEach(function(b) {
-                                        if (b.loading_status === 'loaded') loadedBoxes++;
-                                    });
-                                }
-                                
-                                if (ch.origin === 'historical' || totalBoxes === 0) {
+                                window._gpChallanReady = ch.loading_agg === 'loaded';
+
+                                if (ch.loading_agg === 'loaded') {
                                     lState.className = 'tag t-pass';
-                                    lState.textContent = 'Ready for dispatch';
-                                    document.getElementById('gpBtn').disabled = false;
-                                } else if (loadedBoxes === totalBoxes) {
-                                    lState.className = 'tag t-pass';
-                                    lState.textContent = 'All pallets confirmed (' + loadedBoxes + ' of ' + totalBoxes + ')';
+                                    lState.textContent = '✔ ' + ch.loading_n_loaded + ' of ' +
+                                      ch.loading_n_total + ' pallets loaded';
                                     document.getElementById('gpBtn').disabled = false;
                                 } else {
                                     lState.className = 'tag t-fail';
-                                    lState.textContent = 'Loading verification is not complete - ' + loadedBoxes + ' of ' + totalBoxes + ' pallet(s) confirmed';
+                                    lState.textContent = ch.loading_why ||
+                                      ((ch.loading_n_loaded || 0) + ' of ' + (ch.loading_n_total || 0) +
+                                       ' pallets loaded — not ready');
                                     document.getElementById('gpBtn').disabled = true;
                                 }
                             } else {
@@ -8159,7 +8164,7 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
                                 if (qtyEl && !qtyEl.value) qtyEl.value = cqty;
                                 if (descEl && !descEl.value) descEl.value = cdesc;
                             }
-                            
+
                             gpRenderPreview(bundle);
                         })
                         .catch(function() {});

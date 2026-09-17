@@ -25,6 +25,26 @@ if (!Array.prototype.filter) Array.prototype.filter = function (f) {
   return o; };
 if (!String.prototype.trim) String.prototype.trim = function () {
   return this.replace(/^\s+/, '').replace(/\s+$/, ''); };
+if (typeof JSON === 'undefined') { JSON = {
+  stringify: function (v) {
+    if (v === null || v === undefined) return 'null';
+    var t = typeof v;
+    if (t === 'number' || t === 'boolean') return String(v);
+    if (t === 'string') return '"' + v.replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
+    if (Object.prototype.toString.call(v) === '[object Array]') {
+      var a = []; for (var i = 0; i < v.length; i++) a.push(JSON.stringify(v[i]));
+      return '[' + a.join(',') + ']';
+    }
+    var o = [];
+    for (var k in v) if (Object.prototype.hasOwnProperty.call(v, k)) {
+      if (typeof v[k] === 'function' || v[k] === undefined) continue;
+      o.push(JSON.stringify(String(k)) + ':' + JSON.stringify(v[k]));
+    }
+    return '{' + o.join(',') + '}';
+  },
+  parse: function (s) { return eval('(' + s + ')'); }
+}; }
 
 var WSH = (typeof WScript !== 'undefined');
 function echo(s) { if (WSH) WScript.Echo(s); else console.log(s); }
@@ -109,7 +129,19 @@ function gpView(flds, notes, btns) {
 
 var DOM = {};
 function el(id) { if (!DOM[id]) DOM[id] = new El(id); return DOM[id]; }
-function El(tag) { this.tag = tag || 'div'; }
+function El(tag) {
+  this.tag = tag || 'div';
+  this.value = ''; this.checked = false; this.disabled = false;
+  this.readOnly = false; this.textContent = ''; this.style = {};
+  this._classes = {};
+  this.classList = {
+    contains: function (c) { return !!this._owner._classes[c]; },
+    add: function (c) { this._owner._classes[c] = true; },
+    remove: function (c) { delete this._owner._classes[c]; }
+  };
+  this.classList._owner = this;
+}
+El.prototype.closest = function () { return this._closestFld || null; };
 var document = {
   getElementById: function (id) {
     return Object.prototype.hasOwnProperty.call(DOM, id) ? DOM[id] : null; }
@@ -128,10 +160,50 @@ if (from < 0 || to < 0 || to < from) {
 }
 eval(src.substring(from, to));
 
+/* ---- issueGP() / gpToggleSolarMode(): the module-mode gate itself ------ */
+var from2 = src.indexOf('  window.issueGP = function() {');
+var to2 = src.indexOf('window.gpSetKind = function(k) {');
+if (from2 < 0 || to2 < 0 || to2 < from2) {
+  echo('CANNOT RUN: icon_live.js no longer has issueGP/gpToggleSolarMode ' +
+       'between those two markers.');
+  if (WSH) WScript.Quit(1); else process.exit(1);
+}
+var toasts = [];
+function toast(t) { toasts.push(t); }
+var API_CALLS = [];
+function api(path, opts) {
+  API_CALLS.push({ path: path, body: opts && opts.body ? JSON.parse(opts.body) : null });
+  return { then: function () { return this; }, 'catch': function () { return this; } };
+}
+var GO_CALLS = [];
+function go(view) { GO_CALLS.push(view); }
+// JScript's eval() cannot parse .catch( via dot notation - catch is
+// reserved and old engines refuse it as a property name there, even
+// though it is a normal method call at runtime. Same workaround
+// test_challan.js's own harness already uses.
+eval(src.substring(from2, to2).replace(/\.catch\(/g, "['catch']("));
+
 /* ---- harness ------------------------------------------------------------ */
 var tests = [], passed = 0, failed = 0;
 function test(name, fn) { tests.push([name, fn]); }
 function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); }
+
+/* a realistic populated Issue details card, module mode already checked
+   and a challan already selected - the state issueGP() actually runs
+   against, not an empty form */
+function resetIssueGpDom() {
+  DOM = {};
+  toasts = []; API_CALLS = []; GO_CALLS = [];
+  window._gpChallanReady = null;
+  ['gpBtn', 'gpChallanSelV4', 'gpNRGP', 'gpRGP', 'gpParty', 'gpVehicle',
+   'gpAddr', 'gpDesc', 'gpQty', 'gpExpectedRet', 'gpIsSolar',
+   'gpLoadingState', 'gpLoadingStateWrap'].forEach(function (id) { el(id); });
+  el('gpNRGP').classList.add('on');
+  el('gpParty').value = 'AGNI GREEN POWER LIMITED (MZ)';
+  el('gpDesc').value = 'ISEN630-G12R modules';
+  el('gpQty').value = '2';
+  el('gpChallanSelV4').value = '9';
+}
 
 /* the real "Issue details" card, exactly as v4 renders it, with wireGp()'s
    own injected fields (Type, Party / destination, ...) mixed in ahead of
@@ -241,6 +313,87 @@ test('running gpHideUnwiredFields twice (every wireGp() call re-runs it) '
   c.btns.forEach(function (b) {
     assert(b.getAttribute('onclick').indexOf('GP-2608') === -1);
   });
+});
+
+
+/* ---- module mode: the checkbox, the challan-derived lock, and the ------
+   client-side Issue gate. The server enforces the real rule regardless
+   (test_gatepass.py's bypass tests prove that); this is what stops the
+   operator from finding out only after clicking Issue. */
+
+test('checking module mode reveals the challan selector and locks the '
+    + 'challan-derived fields - unchecking it restores today\'s editable '
+    + 'standalone flow, nothing left locked or stale', function () {
+  resetIssueGpDom();
+  var chFld = { style: {} };
+  el('gpChallanSelV4')._closestFld = chFld;
+  el('gpIsSolar').checked = true;
+  window.gpToggleSolarMode();
+  assert(chFld.style.display === 'block', 'challan field did not reveal');
+  assert(el('gpParty').readOnly === true, 'Party was not locked');
+  assert(el('gpVehicle').readOnly === true, 'Vehicle was not locked');
+  assert(el('gpDesc').readOnly === true, 'Description was not locked');
+  assert(el('gpQty').readOnly === true, 'Quantity was not locked');
+
+  el('gpIsSolar').checked = false;
+  window.gpToggleSolarMode();
+  assert(chFld.style.display === 'none', 'challan field did not hide again');
+  assert(el('gpParty').readOnly === false, 'Party stayed locked after unchecking');
+  assert(el('gpVehicle').readOnly === false, 'Vehicle stayed locked after unchecking');
+  assert(el('gpDesc').readOnly === false, 'Description stayed locked after unchecking');
+  assert(el('gpQty').readOnly === false, 'Quantity stayed locked after unchecking');
+  assert(el('gpChallanSelV4').value === '', 'the old challan selection survived unchecking');
+  assert(window._gpChallanReady === null, '_gpChallanReady was not reset on uncheck');
+});
+
+test('Issue refuses client-side when module mode is checked but the '
+    + 'selected challan is not yet fully loaded - the operator finds out '
+    + 'without submitting, not from a refused POST', function () {
+  resetIssueGpDom();
+  el('gpIsSolar').checked = true;
+  window._gpChallanReady = false;
+  el('gpLoadingState').textContent = '0 of 3 pallets loaded';
+  window.issueGP();
+  assert(API_CALLS.length === 0, 'a POST was sent despite the incomplete challan: ' +
+        JSON.stringify(API_CALLS));
+  assert(toasts.length === 1, toasts);
+  assert(toasts[0].indexOf('0 of 3') !== -1, toasts[0]);
+});
+
+test('Issue refuses client-side when module mode is checked but no '
+    + 'challan has been selected at all', function () {
+  resetIssueGpDom();
+  el('gpIsSolar').checked = true;
+  el('gpChallanSelV4').value = '';
+  window._gpChallanReady = null;
+  window.issueGP();
+  assert(API_CALLS.length === 0, API_CALLS);
+  assert(toasts.length === 1 && toasts[0].toLowerCase().indexOf('select a challan') !== -1,
+        toasts);
+});
+
+test('Issue proceeds and posts is_solar + the real challan_id once the '
+    + 'selected challan is fully loaded', function () {
+  resetIssueGpDom();
+  el('gpIsSolar').checked = true;
+  window._gpChallanReady = true;
+  window.issueGP();
+  assert(API_CALLS.length === 1, 'no POST was sent for a ready challan: ' + JSON.stringify(API_CALLS));
+  var call = API_CALLS[0];
+  assert(call.path === 'gatepass', call.path);
+  assert(call.body.is_solar === true, call.body);
+  assert(call.body.challan_id === 9, call.body);
+});
+
+test('standalone mode (module checkbox off) never consults '
+    + '_gpChallanReady at all - today\'s flow is untouched', function () {
+  resetIssueGpDom();
+  el('gpIsSolar').checked = false;
+  el('gpChallanSelV4').value = '';
+  window._gpChallanReady = null;
+  window.issueGP();
+  assert(API_CALLS.length === 1, 'standalone Issue was blocked: ' + JSON.stringify(toasts));
+  assert(API_CALLS[0].body.is_solar === false, API_CALLS[0].body);
 });
 
 

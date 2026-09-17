@@ -1827,12 +1827,30 @@ def api_challan_get(challan_id):
     except (TypeError, ValueError):
         ch["challan_no"] = None
     ch["locked"] = bundle["gp_count"] > 0
-    
+
     _shifts = {1: 'A', 2: 'B', 3: 'C', "1": "A", "2": "B", "3": "C"}
     for b in bundle.get("boxes", []):
         if b.get("pack_shift") in _shifts:
             b["pack_shift"] = _shifts[b["pack_shift"]]
-            
+
+    # Module-mode Gate Pass reads this to decide whether Issue may proceed
+    # - the same aggregate Loading Verification's own landing list already
+    # computes (_loading_agg_status) and the same refusal wording
+    # print/excel already enforce (_loading_incomplete), not a second
+    # version of either. Historical challans predate Loading Verification
+    # entirely - the same exemption print/excel already give them.
+    boxes = bundle.get("boxes", [])
+    if ch.get("origin") == "historical":
+        ch["loading_agg"] = "loaded"
+        ch["loading_why"] = None
+    else:
+        n_saved = sum(1 for b in boxes if b["loading_status"] in ("saved", "loaded"))
+        n_loaded = sum(1 for b in boxes if b["loading_status"] == "loaded")
+        ch["loading_agg"] = _loading_agg_status(len(boxes), n_saved, n_loaded)
+        ch["loading_why"] = _loading_incomplete(boxes)
+    ch["loading_n_total"] = len(boxes)
+    ch["loading_n_loaded"] = sum(1 for b in boxes if b["loading_status"] == "loaded")
+
     bundle["challan"] = ch
     return jsonify(bundle)
 
@@ -2281,7 +2299,7 @@ def gatepass_print(gp_no):
     else:
         copies = ["Copy 1 of 3 — creator", "Copy 2 of 3 — gate",
                   "Copy 3 of 3 — gate"]
-    qr = bc.qr_svg(f"ICONTRACE|GATEPASS|{gp_no}")
+    qr = bc.qr_svg(bc.gp_qr_payload(gp_no))
     return render_template("gatepass_print.html", gp=gp, copies=copies, qr=qr)
 
 
@@ -5054,30 +5072,39 @@ def api_gatepass():
         ch_id = None
 
     with store.conn() as (cx, cur):
-        is_solar = body.get("is_solar")
-        if is_solar:
-            if not ch_id:
-                return jsonify({"ok": False, "why": "A challan must be selected for solar modules"}), 400
-            bundle = db.challan_detail(cur, ch_id)
-            if not bundle or not bundle.get("challan"):
-                return jsonify({"ok": False, "why": "Challan not found"}), 400
-            
-            why = _loading_incomplete(bundle.get("boxes", []))
-            if why and bundle["challan"]["origin"] != "historical":
-                return jsonify({"ok": False, "why": why}), 400
+        # Keyed on ch_id being present - a fact resolved against the real
+        # challan row - never on the client's own "is_solar" flag. A
+        # client can always omit is_solar (or send False) while still
+        # linking a real challan_id; gating on the flag instead of the
+        # link meant that alone was enough to skip the loading check
+        # entirely, the exact "trust the button state" gap the no-
+        # override rule exists to close everywhere else (the quantity
+        # gate, the e-Way Bill expiry check - same shape).
+        ch_row = None
+        if ch_id:
+            ch_row = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s", (ch_id,))
+            if not ch_row:
+                return jsonify({"ok": False, "why": "That challan no longer exists."}), 400
+            if ch_row["status"] != "issued":
+                return jsonify({"ok": False,
+                    "why": "That challan is not a live, issued challan."}), 400
+            if ch_row["origin"] != "historical":
+                boxes = store.rows(cur,
+                    "SELECT * FROM challan_box WHERE challan_id=%s", (ch_id,))
+                why = _loading_incomplete(boxes)
+                if why:
+                    return jsonify({"ok": False, "why": why}), 400
 
         seq = db.draw_gp_seq(cur, d)
         no = db.render_gp_no(d, seq)
         ch_no = str(body.get("challan_no") or "").strip()
-        if ch_id and not ch_no:
-            ch_row = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s", (ch_id,))
-            if ch_row:
-                try:
-                    cdate = datetime.date.fromisoformat(ch_row["challan_date"])
-                    ch_no = db.render_challan_no(cdate, ch_row["seq"], ch_row.get("suffix"))
-                except:
-                    pass
-        
+        if ch_id and not ch_no and ch_row:
+            try:
+                cdate = datetime.date.fromisoformat(ch_row["challan_date"])
+                ch_no = db.render_challan_no(cdate, ch_row["seq"], ch_row.get("suffix"))
+            except (TypeError, ValueError):
+                pass
+
         rec = {
             "gp_no": no, "gp_date": d.isoformat(),
             "kind": str(body.get("kind") or "NRGP").strip(),

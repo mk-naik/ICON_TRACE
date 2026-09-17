@@ -124,3 +124,10 @@ def box_qr_payload(box_no, model, grade, qty, pack_date):
     without a lookup, and nothing that changes after printing - no customer,
     no challan, because a box can wait months before it is dispatched."""
     return "ICONTRACE|BOX|%s|%s|%s|%d|%s" % (box_no, model, grade, qty, pack_date)
+
+
+def gp_qr_payload(gp_no):
+    """Identity only, same shape as box_qr_payload - the gate pass number
+    resolves back to the full record by lookup; nothing that could go
+    stale (party, vehicle, challan) is worth encoding twice."""
+    return "ICONTRACE|GATEPASS|%s" % gp_no

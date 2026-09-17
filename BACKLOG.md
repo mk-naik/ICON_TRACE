@@ -893,7 +893,7 @@ exercised again end-to-end in `test_loading.py`.
 
 ## 17. Gate Pass
 
-- [ ] For modules and for all other materials.
+- [x] For modules and for all other materials.
 - [ ] RGP and NRGP, with the copy counts already agreed (NRGP 3: creator + 2
       gate; RGP 3: creator, gate, recipient — recipient returns theirs).
       **Settled:** `ISGP260831/0667`, one series for every type, sequence
@@ -941,6 +941,109 @@ reference section) with the same `PS26812-0007` placeholder and the same
 the bug report and its test both named the Gate Pass form specifically,
 but the same question (do either of these map to a real field, e.g. LR
 no.?) applies there too and is still open with Mukesh.
+
+**Module mode — the checkbox-gated dual flow, built  *(built)***
+
+**What was wrong.** Gate Pass had exactly one flow: hand-typed
+party/vehicle/description/qty, with a challan selector that only ever
+*pre-filled* those fields as a convenience — nothing stopped a module
+gate pass from being issued before the modules on its challan were
+actually confirmed on the vehicle. Loading Verification's own
+`loading_status` work (already correct, already gating print/excel) had
+no connection to Gate Pass at all.
+
+**The model, as agreed with Mukesh.** A checkbox — "This gate pass is for
+solar modules" — splits the screen into its two real modes. Unchecked:
+today's standalone flow, hand-typed, no challan, untouched. Checked: a
+challan selector appears; picking a live, issued challan force-fills
+party/vehicle/material/quantity from it and **locks** those fields
+(`readOnly`, confirmation rather than data entry), shows a plain tag
+naming exactly how many pallets are loaded, and disables Issue until
+every pallet on that challan is confirmed — the same rule the print/excel
+routes already enforce, not a second version of it.
+
+**What changed — backend (`app.py`, `icon_barcode.py`).**
+- [x] `GET /api/challan/<id>` now carries `loading_agg` / `loading_why` /
+      `loading_n_total` / `loading_n_loaded` on the challan object,
+      computed by calling `_loading_agg_status()` and
+      `_loading_incomplete()` directly — the exact functions Loading
+      Verification's own landing list and the print/excel refusal already
+      call. The client reads these, rather than recomputing the
+      aggregate itself from `bundle.boxes`, so the two can never drift
+      apart. Historical challans report `loaded` unconditionally, the
+      same exemption print/excel already give them.
+- [x] `POST /api/gatepass` refuses a challan-linked gate pass whose
+      loading is incomplete — keyed on **`challan_id` being present and
+      resolving to a real, issued challan**, never on a client-sent
+      `is_solar` flag. Also refuses a `challan_id` that does not exist or
+      is not `status='issued'` (draft, cancelled). Standalone gate passes
+      (no `challan_id` at all) are completely untouched.
+- [x] `bc.gp_qr_payload(gp_no)` — `ICONTRACE|GATEPASS|<gp_no>`, the same
+      identity-only shape `box_qr_payload` already uses. `/gatepass/<no>
+      /print` renders it into `gatepass_print.html`'s header, the same
+      place the logo already sits (logo untouched, was already correct).
+
+**A real bug found by testing, not assumed away.** The first working
+version gated the loading check on the client's own `is_solar` flag:
+`if (is_solar) { ...check...}`. A request that simply omitted `is_solar`
+(or sent it `false`) while still linking a real, incomplete `challan_id`
+skipped the check entirely and issued anyway — the exact "trust the
+button state" gap the no-override discipline exists everywhere else in
+this project to close (the quantity gate, the e-Way Bill expiry check).
+Rewired to key on `challan_id` itself, a fact resolved against the real
+row, never a client assertion. `test_gatepass.py` reproduces this exact
+bypass directly (POSTing with `is_solar` omitted, and again with it
+`false`) rather than trusting the disabled button.
+
+**What changed — frontend (`static/icon_live.js` only).**
+- [x] `#gpIsSolar` checkbox, injected the same way `gpParty`/`gpDesc`
+      etc. already are; `gpToggleSolarMode()` shows/hides the challan
+      selector and locks/unlocks the four challan-derived fields.
+- [x] The challan `onchange` handler force-fills those fields and renders
+      `#gpLoadingState` from the server's `loading_agg`/`loading_why` —
+      not recomputed client-side — setting `window._gpChallanReady` and
+      `Issue`'s `disabled` state from it.
+- [x] `issueGP()` refuses client-side (`toast`, no request sent) when
+      module mode is checked and `_gpChallanReady !== true` — so the
+      operator finds out before submitting, not from a refused POST. The
+      server rule above is what actually matters; this is the courtesy on
+      top of it, not instead of it.
+
+**A second, unrelated bug found while verifying this live, not by
+reading the code.** `wireDisp()` (Stock & Dispatch's own donut chart,
+from an earlier, separate pass) had a stray extra `});` in the middle of
+an `if` block, followed by ~12 lines of dead code referencing variables
+that were never in scope — syntactically broken in a way that silently
+poisoned the *entire* live layer the moment anything downstream tried to
+parse past it, throwing "Unexpected token ')'" with no useful line
+number. Found by bisecting the file at real function boundaries through
+a headless browser's own parser (`new Function(source)`) rather than by
+inspection — reading the surrounding code repeatedly found nothing wrong,
+because there was nothing wrong nearby; the actual break was several
+hundred lines earlier. Fixed by removing the stray closer and the dead
+code after it, keeping the one working `drawDonut(...)` call.
+
+- [x] Tests: `test_gatepass.py` (11, was 3 — the original file also
+      `os.remove()`'d the real `icontrace.db` directly rather than using
+      an isolated `ICON_DB_FILE`, and used `unittest` instead of this
+      project's own `@test()` runner; rewritten to match every other test
+      file's convention, including the isolated-DB discipline). New
+      `test_gatepass.js` cases (12, was 7) cover the checkbox's two
+      states, the client-side Issue gate (ready / not-ready / no challan
+      selected), and that standalone mode never consults
+      `_gpChallanReady` at all. Every rule mutation-tested, including the
+      `is_solar` bypass and the client-side gate.
+- [x] Verified live against a running server with Playwright (55 checks
+      across four scripts) — the checkbox reveal, field locking, the
+      loading tag for both an incomplete and a fully-loaded real challan,
+      a direct bypass POST refused server-side, and an actual successful
+      issuance end to end.
+
+**Open, not decided here:** the copy-count/RGP-NRGP item above this
+section is unrelated and still open. Whether module-mode fields should
+stay locked if the operator unchecks and rechecks the box mid-edit, and
+whether a second gate pass against an already-gate-passed challan should
+warn, were not raised and were not touched.
 
 ## 18. Hold & Needs Review  *(decided, not yet built)*
 
