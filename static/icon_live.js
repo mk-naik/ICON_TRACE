@@ -7370,6 +7370,7 @@ function wireFqcAnomalies() {
           ldLoad();
         }
         if (view === 'gp') { wireGp(); }
+        if (view === 'prodentry') { if (typeof peInit === 'function') peInit(); }
         if (view === 'disp') {
           wireDisp();
         }
@@ -8212,3 +8213,193 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
   console.log('[ICON TRACE] live layer active \u00B7 build', B.build,
               '\u00B7', B.live ? 'SQLite ' + B.db_file : 'no database');
 })();
+
+
+
+  /* == PRODUCTION ENTRY WIRING == */
+  window.peInit = function() {
+    var view = document.getElementById('v-prodentry');
+    if (!view || view.__peInitDone) return;
+    view.__peInitDone = true;
+
+    var pg = view.querySelector('.pg');
+    if (pg && !pg.querySelector('.pg-act')) {
+      var act = document.createElement('div');
+      act.className = 'pg-act';
+      pg.appendChild(act);
+    }
+    var act = pg.querySelector('.pg-act');
+    if (act && !document.getElementById('peNewBtn')) {
+      var b = document.createElement('button');
+      b.id = 'peNewBtn';
+      b.className = 'btn btn-primary';
+      b.textContent = 'New production entry';
+      b.onclick = function() { 
+        var o1 = view.querySelector('.wmain.o1');
+        var isHidden = o1 && o1.style.display === 'none';
+        window.peToggleForm(isHidden); 
+      };
+      act.insertBefore(b, act.firstChild);
+    }
+
+    var railActs = view.querySelector('.rail.o2 .rail-acts');
+    if (railActs && !document.getElementById('peClearBtn')) {
+      var clr = document.createElement('button');
+      clr.id = 'peClearBtn';
+      clr.className = 'btn btn-ghost';
+      clr.textContent = 'Clear form';
+      clr.onclick = function() { window.peClearForm(); };
+      railActs.appendChild(clr);
+    }
+
+    window.peToggleForm(false);
+  };
+
+  window.peToggleForm = function(show) {
+    var view = document.getElementById('v-prodentry');
+    if (!view) return;
+    
+    var o1 = view.querySelector('.wmain.o1');
+    var o2 = view.querySelector('.rail.o2');
+    var o3 = view.querySelector('.wmain.o3');
+    var newBtn = document.getElementById('peNewBtn');
+
+    if (o1) o1.style.display = show ? '' : 'none';
+    if (o2) o2.style.display = show ? '' : 'none';
+    if (o3) o3.style.gridColumn = show ? '' : '1 / -1';
+
+    if (newBtn) {
+      newBtn.textContent = show ? 'Close the form' : 'New production entry';
+      newBtn.className = show ? 'btn btn-ghost' : 'btn btn-primary';
+    }
+
+    if (show) {
+      window.peClearForm();
+    }
+  };
+
+  window.peClearForm = function() {
+    var from = document.getElementById('peFrom');
+    var to = document.getElementById('peTo');
+    var matChg = document.getElementById('peMatChg');
+    if (from) from.value = '';
+    if (to) to.value = '';
+    if (matChg) {
+      matChg.checked = false;
+      if (typeof window.peMatToggle === 'function') window.peMatToggle();
+    }
+    if (typeof window.peCalc === 'function') window.peCalc();
+  };
+
+  window.renderPE = function() {
+    var view = document.getElementById('v-prodentry');
+    if (!view) return;
+    var card = view.querySelector('.wmain.o3 .card');
+    if (!card) return;
+    
+    if (!card.getAttribute('data-itable')) {
+        card.setAttribute('data-itable', 'prodentries');
+        card.setAttribute('data-export', 'prodentries');
+        
+        var headRow = card.querySelector('thead tr');
+        if (headRow) {
+          headRow.innerHTML = '<th>Date</th><th>Shift</th><th>Customer</th><th>Wattage</th><th>Model</th><th>Start serial</th><th>End serial</th><th style="text-align:right">Qty</th><th style="text-align:right">KW</th><th>By</th>';
+        }
+        
+        var head = card.querySelector('.card-h');
+        if (head && !head.querySelector('[data-role=search]')) {
+          head.insertAdjacentHTML('beforeend',
+            '<div style="margin-left:auto;display:flex;gap:10px">' +
+            '<div style="display:flex;gap:5px;align-items:center"><input type="date" id="peFilterFrom" onchange="window.renderPE()" style="width:130px"><span>-</span><input type="date" id="peFilterTo" onchange="window.renderPE()" style="width:130px"></div>' +
+            '<select data-role="filter" data-col="1"><option value="">All shifts</option></select>' +
+            '<select data-role="filter" data-col="2"><option value="">All customers</option></select>' +
+            '<select data-role="filter" data-col="3"><option value="">All wattages</option></select>' +
+            '<input data-role="search" placeholder="Search..."></div>');
+        }
+    }
+    
+    var tbody = document.getElementById('peRows');
+    if (!tbody) return;
+    
+    var f = (document.getElementById('peFilterFrom')||{}).value || '';
+    var t = (document.getElementById('peFilterTo')||{}).value || '';
+    var qs = '';
+    if (f || t) qs = '?from=' + encodeURIComponent(f) + '&to=' + encodeURIComponent(t);
+    
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:12px;color:var(--ink3)">Loading...</td></tr>';
+    
+    api('prodentries' + qs).then(function(d) {
+      var data = d.entries || [];
+      if (!data.length) {
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:12px;color:var(--ink3)">No production entries found.</td></tr>';
+        return;
+      }
+      
+      tbody.innerHTML = data.map(function(r) {
+        var dateParts = r.prod_date.split('-');
+        var fmtDate = dateParts.length === 3 ? dateParts[2]+'-'+dateParts[1]+'-'+dateParts[0] : r.prod_date;
+        return '<tr>' +
+          '<td class="mono">' + fqcEsc(fmtDate) + '</td>' +
+          '<td class="s' + r.shift + '">' + fqcEsc(r.shift) + '</td>' +
+          '<td>' + fqcEsc(r.customer || '—') + '</td>' +
+          '<td class="mono">' + r.wattage + 'W</td>' +
+          '<td class="mono">' + fqcEsc(r.model) + '</td>' +
+          '<td class="mono">' + fqcEsc(r.start_serial) + '</td>' +
+          '<td class="mono">' + fqcEsc(r.end_serial) + '</td>' +
+          '<td class="num">' + r.qty + '</td>' +
+          '<td class="num">' + Number(r.kw_output).toFixed(2) + '</td>' +
+          '<td>' + fqcEsc(r.shift_incharge) + '</td>' +
+          '</tr>';
+      }).join('');
+      
+      if (window.iconTable) window.iconTable.wireAll();
+    }).catch(function(e) {
+      tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:12px;color:var(--fail)">Failed to load entries: ' + fqcEsc(e.message) + '</td></tr>';
+    });
+  };
+
+  window.peSave = function() {
+    if (!window.peOK) return;
+    
+    var btn = document.getElementById('peSave');
+    var st = document.getElementById('peStatus');
+    
+    var dateFld = document.querySelector('#peManual input[type="date"]');
+    var shiftFld = document.querySelector('#peManual select:nth-of-type(1)');
+    var inchargeFld = document.querySelector('#peManual select:nth-of-type(2)');
+    var lineFld = document.querySelector('#peManual select:nth-of-type(3)');
+    var matChgFld = document.getElementById('peMatChg');
+    
+    var d = {
+      date: dateFld ? dateFld.value : '',
+      shift: shiftFld ? shiftFld.value : '',
+      incharge: inchargeFld ? inchargeFld.value : '',
+      line: lineFld ? lineFld.value : '',
+      start_serial: document.getElementById('peFrom').value.trim().toUpperCase(),
+      end_serial: document.getElementById('peTo').value.trim().toUpperCase(),
+      material_note: (matChgFld && matChgFld.checked) ? JSON.stringify(window.MATCHG || {}) : null
+    };
+    
+    if (!d.date || !d.start_serial || !d.end_serial) return;
+    
+    btn.disabled = true;
+    btn.textContent = 'Recording...';
+    st.innerHTML = '';
+    
+    api('prodentry', { method: 'POST', body: JSON.stringify(d) })
+      .then(function(r) {
+        toast('Recorded ' + r.qty + ' modules as produced.');
+        
+        window.peToggleForm(false);
+        if (typeof renderProd === 'function') renderProd();
+        if (typeof window.renderPE === 'function') window.renderPE();
+        
+        btn.disabled = false;
+        btn.textContent = 'Record production';
+      })
+      .catch(function(e) {
+        btn.disabled = false;
+        btn.textContent = 'Record production';
+        st.innerHTML = '<div class="note n-warn"><span>!</span><span>' + fqcEsc(e.message || e.why || 'Failed to record') + '</span></div>';
+      });
+  };

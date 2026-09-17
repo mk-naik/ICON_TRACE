@@ -2408,6 +2408,128 @@ def api_prod():
     return jsonify(out)
 
 
+
+@app.route("/api/prodentries", methods=["GET"])
+def api_prodentries():
+    limit = int(request.args.get("limit", 100))
+    q = (request.args.get("q") or "").strip()
+    cust = (request.args.get("cust") or "").strip()
+    shift = (request.args.get("shift") or "").strip()
+    dfrom = (request.args.get("from") or "").strip()
+    dto = (request.args.get("to") or "").strip()
+    
+    with store.conn() as (cx, cur):
+        sql = "SELECT p.*, (SELECT a.customer FROM allocation a WHERE p.start_serial <= a.end_serial AND p.end_serial >= a.start_serial AND p.model = a.model LIMIT 1) as customer FROM production_entry p WHERE 1=1"
+        args = []
+        if q:
+            sql += " AND (p.start_serial LIKE %s OR p.end_serial LIKE %s OR p.model LIKE %s)"
+            args.extend(["%" + q + "%", "%" + q + "%", "%" + q + "%"])
+        if cust:
+            sql += """ AND EXISTS (
+                SELECT 1 FROM allocation a 
+                WHERE p.start_serial <= a.end_serial 
+                  AND p.end_serial >= a.start_serial 
+                  AND p.model = a.model 
+                  AND a.customer LIKE %s
+            )"""
+            args.append("%" + cust + "%")
+        if shift:
+            sql += " AND p.shift = %s"
+            args.append(shift)
+        if dfrom:
+            sql += " AND p.prod_date >= %s"
+            args.append(dfrom)
+        if dto:
+            sql += " AND p.prod_date <= %s"
+            args.append(dto)
+            
+        sql += " ORDER BY p.created_at DESC LIMIT %s"
+        args.append(limit)
+        
+        rows = store.rows(cur, sql, tuple(args))
+    return jsonify({"entries": rows})
+
+
+@app.route("/api/prodentry", methods=["POST"])
+@_sync_guard
+def api_prodentry():
+    d = request.get_json(force=True)
+    date = (d.get("date") or "").strip()
+    shift = (d.get("shift") or "").strip()
+    incharge = (d.get("incharge") or "").strip()
+    line = (d.get("line") or "").strip()
+    start_serial = (d.get("start_serial") or "").strip().upper()
+    end_serial = (d.get("end_serial") or "").strip().upper()
+    mat_note = d.get("material_note")
+    
+    if not date or not shift or not incharge or not start_serial or not end_serial:
+        return jsonify({"ok": False, "why": "Missing required fields."}), 400
+        
+    with store.conn() as (cx, cur):
+        start_row = store.one(cur, "SELECT sequence, wattage, model FROM serial WHERE serial=%s AND build_instance=1", (start_serial,))
+        if not start_row:
+            return jsonify({"ok": False, "why": f"Start serial {start_serial} not found in planning."}), 400
+            
+        end_row = store.one(cur, "SELECT sequence, wattage, model FROM serial WHERE serial=%s AND build_instance=1", (end_serial,))
+        if not end_row:
+            return jsonify({"ok": False, "why": f"End serial {end_serial} not found in planning."}), 400
+            
+        if start_row["model"] != end_row["model"] or start_row["wattage"] != end_row["wattage"]:
+            return jsonify({"ok": False, "why": "Start and end serials are for different models/wattages."}), 400
+            
+        if start_row["sequence"] > end_row["sequence"]:
+            return jsonify({"ok": False, "why": "Start serial is greater than end serial."}), 400
+            
+        # Verify that all serials in the range are planned and find the exact ones
+        seq_start = start_row["sequence"]
+        seq_end = end_row["sequence"]
+        qty = (seq_end - seq_start) + 1
+        
+        serials_in_range = store.rows(cur, 
+            "SELECT serial, state FROM serial WHERE sequence >= %s AND sequence <= %s "
+            "AND model=%s AND wattage=%s AND build_instance=1",
+            (seq_start, seq_end, start_row["model"], start_row["wattage"]))
+            
+        if len(serials_in_range) != qty:
+            return jsonify({"ok": False, "why": f"Expected {qty} serials in range, but found {len(serials_in_range)}."}), 400
+            
+        not_planned = [s["serial"] for s in serials_in_range if s["state"] != "planned"]
+        if not_planned:
+            return jsonify({"ok": False, "why": f"Serials are already produced or graded: {not_planned[0]}..."}), 400
+            
+        kw_output = (qty * start_row["wattage"]) / 1000.0
+        
+        # Insert production entry
+        eid = store.insert(cur, "production_entry", {
+            "prod_date": date,
+            "shift": shift,
+            "shift_incharge": incharge,
+            "line": line,
+            "model": start_row["model"],
+            "wattage": start_row["wattage"],
+            "start_serial": start_serial,
+            "end_serial": end_serial,
+            "qty": qty,
+            "kw_output": kw_output,
+            "material_note": mat_note,
+            "created_by": actor()
+        })
+        
+        # Update serials
+        cur.execute(
+            "UPDATE serial SET state='produced', date_produced=%s, shift=%s "
+            "WHERE sequence >= %s AND sequence <= %s AND model=%s AND wattage=%s AND build_instance=1",
+            (date, shift, seq_start, seq_end, start_row["model"], start_row["wattage"])
+        )
+        
+        db.audit(cur, actor(), "production.entry", "production_entry", eid, {
+            "start_serial": start_serial,
+            "end_serial": end_serial,
+            "qty": qty
+        })
+        
+    return jsonify({"ok": True, "entry_id": eid, "qty": qty})
+
 @app.route("/api/prod/dashboard")
 def api_prod_dashboard():
     """Live endpoint for the Production Dashboard, allowing filtering by date,
