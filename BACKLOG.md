@@ -294,7 +294,84 @@ A new screen gets both for free.
 - [ ] Recent Production Entries: Excel report, filters, search, scroll.
 - [ ] Export format is the **Traceability Report**.
 
-## 7. Loss of Production — *skipped for now, Mukesh's call*
+## 7. Loss of Production  *(landing + real persistence, built)*
+
+**What was wrong.** v4's own screen (`v-loss`) was a fully-worked mockup -
+"Open events" / "Closed events this shift" / "In-process scrap" tables,
+a rich "Open a downtime event" form (line, machine, coded reason,
+planned/unplanned, primary-or-induced with a linked-event dropdown,
+start time, entry mode), and a genuinely correct machine-capacity-share
+calculation in `renderLoss()` (`MACHINES`, `machCount()`) that turns
+closed primary events into modules lost, excluding induced time from
+the total so a cascaded stop is never counted twice. All of it ran
+against the sample `EVENTS` array, permanently - nothing persisted.
+
+**What changed.** Same shape as every other screen this project has
+brought over from v4: the calculation logic (`renderLoss`, `evMins`,
+`machListFor`, `MACHINES`/`machCount`) is kept **completely unchanged** -
+not reimplemented server-side, since it is already correct and doing
+that a second time in Python is exactly how the two versions drift.
+Only the data source changed, from the sample array to real rows, on
+top of a landing/form split matching Production Entry's own pattern.
+
+- [x] `loss_event` table - opened, then closed; `minutes` is always
+      derived from the two real timestamps at close time, never typed.
+      An induced stop's `linked_event_id` is a real foreign key, checked
+      server-side against a currently-open primary event - not a string
+      match on a display label the way v4's own demo linked them.
+- [x] `POST /api/loss_event` (open), `POST /api/loss_event/<id>/close`,
+      `GET /api/loss_events` (list, with `date`/`shift`/`q` filters,
+      server-side).
+- [x] `openEvent()`/`closeEvent()`/`evMachines()` replaced outright (not
+      patched - their whole job changes from a local array mutation to a
+      real write). `evMachines()` specifically: the "Caused by" dropdown
+      now carries each open primary's real `event_id` as its option
+      value, not v4's own display-string id, which the server has no way
+      to resolve back to a row.
+- [x] A "Record downtime event" button (`.pg-act`, matching Production
+      Entry's own) toggles between the landing (Open/Closed/Scrap
+      tables) and the rail form - reusing v4's existing Date/Shift
+      filter fields at the top of the screen as the landing list's own
+      filters, given real ids, rather than building a second set next to
+      them.
+- [x] The "Closed events this shift" card is this screen's own recent-
+      items list. No search/filter wiring was added to it directly -
+      `'loss'` is already in `TABLE_SCREENS`, so `wireScreenTables()` (run
+      once at sign-in) had already claimed every table-holding card in
+      this view before this round touched it. Confirmed live, not
+      assumed - an initial attempt to add a second, explicit
+      `data-itable` assignment here was dead code that never ran.
+      `SCRAP` and "Submit shift" are untouched, out of scope.
+
+**Two real bugs found live, not by reading the code.**
+1. The "Record downtime event" button's own toggle logic was copied from
+   Production Entry's, which checks whether `.wmain.o1` is hidden to
+   decide whether to reveal its form. In Loss of Production the layout
+   is the other way round - `.wmain.o1` is the *landing*, `.rail.o2` is
+   the *form* - so the copied check answered the opposite question and
+   the button did nothing on the first click. Fixed to check `.rail.o2`
+   directly.
+2. The screen's Date filter field ships in v4's own markup pre-filled
+   with a fixed demo date (`2026-08-21`). Left as-is, every fetch
+   (including immediately after opening a brand-new event) silently
+   filtered every real, current event out by date - "Nothing is down
+   right now" even seconds after opening one. Reset to today's date the
+   first time the field is given its real id, the same fix Loading
+   Verification needed for the same reason earlier this week.
+
+**Which tests prove it.** `test_loss.py` (new, 9 cases: open/close, the
+induced-link rule checked both ways - refused with no link, refused
+against a closed or nonexistent primary, accepted against a real open
+one - date/shift/text filtering, and required-field validation). Every
+rule mutation-tested. Verified live against a running server with
+Playwright (15 checks): the button toggle, the form appearing and
+returning to the landing list, a real primary event opening and showing
+up in the real "Open events" table, an induced event correctly linked by
+real `event_id`, the same induced event refused client-side with no
+link selected (confirmed the request was never even sent, not just that
+a toast appeared), closing an event and getting back real derived
+minutes, and the recent-items search box. Full suite still green: 91
+Python + 71 JS.
 
 ## 8. FQC Dashboard
 

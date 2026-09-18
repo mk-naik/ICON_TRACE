@@ -737,3 +737,35 @@ CREATE TABLE IF NOT EXISTS production_entry (
   created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_by     TEXT NOT NULL
 ) ;
+
+-- ==========================================================================
+-- Loss of Production
+-- Downtime is opened and closed as an EVENT, never typed as a shift total -
+-- the moment a summary replaces the events behind it, per-shift OEE and
+-- per-model SPC become impossible forever. An induced stop names the real
+-- primary event that caused it (linked_event_id, a real FK - not a string
+-- match on a display label) so its minutes are excluded from the capacity
+-- total instead of double-counting the same stoppage twice.
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS loss_event (
+  event_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_date      TEXT NOT NULL,
+  shift           TEXT NOT NULL,
+  line            TEXT NOT NULL,
+  machine         TEXT NOT NULL,
+  reason          TEXT NOT NULL,        -- coded, e.g. LOP-POWER
+  planned         INTEGER NOT NULL DEFAULT 0,
+  kind            TEXT NOT NULL,        -- 'P' primary | 'I' induced
+  linked_event_id INTEGER NULL,
+  start_time      TEXT NOT NULL,        -- HH:MM
+  end_time        TEXT NULL,            -- HH:MM, NULL while still open
+  minutes         INTEGER NULL,         -- derived from start/end at close,
+                                        -- never typed
+  entry_mode      TEXT NOT NULL,        -- 'Live' | 'Retro'
+  created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_by      TEXT NOT NULL,
+  closed_by       TEXT NULL,
+
+  CONSTRAINT fk_loss_link FOREIGN KEY (linked_event_id)
+    REFERENCES loss_event (event_id)
+) ;

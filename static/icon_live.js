@@ -7371,6 +7371,7 @@ function wireFqcAnomalies() {
         }
         if (view === 'gp') { wireGp(); }
         if (view === 'prodentry') { if (typeof peInit === 'function') peInit(); }
+        if (view === 'loss') { if (typeof loInit === 'function') loInit(); }
         if (view === 'disp') {
           wireDisp();
         }
@@ -8399,6 +8400,213 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
         btn.textContent = 'Record production';
         st.innerHTML = '<div class="note n-warn"><span>!</span><span>' + fqcEsc(e.message || e.why || 'Failed to record') + '</span></div>';
       });
+  };
+
+  /* == LOSS OF PRODUCTION WIRING ==
+   * v4's own EVENTS sample array and renderLoss()'s machine-capacity math
+   * (MACHINES, machCount(), evMins()) are kept completely unchanged - the
+   * same safe pattern this whole live layer uses everywhere: swap the
+   * sample array for real rows, let the existing render/calc function do
+   * the same work it already did, against real data instead of a second,
+   * independently-written copy of the same math. openEvent()/closeEvent()
+   * are replaced outright, not patched - their whole job changes from a
+   * local array mutation to a real write, and evMachines() is replaced
+   * too, only because the "Caused by" link must carry the real event_id
+   * (a real foreign key checked server-side), not v4's own display-string
+   * id, which the server never receives back the way v4's own code sends
+   * it. SCRAP and "Submit shift" are untouched - out of scope here.
+   */
+  window.loInit = function () {
+    var view = document.getElementById('v-loss');
+    if (!view || view.__loInitDone) return;
+    view.__loInitDone = true;
+
+    var pgAct = view.querySelector('.pg-act');
+    if (pgAct && !document.getElementById('loNewBtn')) {
+      var b = document.createElement('button');
+      b.id = 'loNewBtn';
+      b.className = 'btn btn-primary';
+      b.textContent = 'Record downtime event';
+      b.onclick = function () {
+        // Unlike Production Entry, the FORM here is the rail (o2), not
+        // o1 - o1 is the landing tables. Check the form's own hidden
+        // state, not the landing's.
+        var o2 = view.querySelector('.rail.o2');
+        var isFormHidden = o2 && o2.style.display === 'none';
+        window.loToggleForm(isFormHidden);
+      };
+      pgAct.insertBefore(b, pgAct.firstChild);
+    }
+
+    // The Date/Shift fields already at the top of this screen double as
+    // the landing list's own filters - given real ids so they can be read
+    // and reacted to, the same fields v4 already renders, not a second
+    // set of controls placed next to them.
+    var filterFlds = view.querySelectorAll('.filters .fld');
+    if (filterFlds[0]) {
+      var dateInp = filterFlds[0].querySelector('input');
+      if (dateInp && !dateInp.id) {
+        dateInp.id = 'loDate';
+        // v4's own markup ships this pre-filled with a fixed demo date
+        // ("2026-08-21") - left as-is, every fetch would silently filter
+        // out today's own real events forever.
+        dateInp.value = new Date().toISOString().slice(0, 10);
+        dateInp.onchange = function () { window.loFetchAndRender(); };
+      }
+    }
+    if (filterFlds[1]) {
+      var shiftSel = filterFlds[1].querySelector('select');
+      if (shiftSel && !shiftSel.id) {
+        shiftSel.id = 'loShift';
+        shiftSel.onchange = function () { window.loFetchAndRender(); };
+      }
+    }
+
+    // "Closed events this shift" is this screen's own recent-items list -
+    // it does NOT need a search box built here: 'loss' is already in
+    // TABLE_SCREENS, so wireScreenTables() (run once at sign-in, well
+    // before this ever fires) has already claimed every card in this
+    // view with its own data-itable/search/reset/count, this one
+    // included. Confirmed live rather than assumed.
+
+    window.loToggleForm(false);
+  };
+
+  window.loToggleForm = function (show) {
+    var view = document.getElementById('v-loss');
+    if (!view) return;
+    var o1 = view.querySelector('.wmain.o1');
+    var o2 = view.querySelector('.rail.o2');
+    if (o1) {
+      o1.style.display = show ? 'none' : '';
+      o1.style.gridColumn = show ? '' : '1 / -1';
+    }
+    if (o2) {
+      o2.style.display = show ? '' : 'none';
+      o2.style.gridColumn = show ? '1 / -1' : '';
+    }
+    var newBtn = document.getElementById('loNewBtn');
+    if (newBtn) {
+      newBtn.textContent = show ? 'Back to events' : 'Record downtime event';
+      newBtn.className = show ? 'btn btn-ghost' : 'btn btn-primary';
+    }
+    // Leaving the form (or just having landed on the list) is exactly
+    // when "recent" needs to actually be current.
+    if (!show) window.loFetchAndRender();
+  };
+
+  window.loFetchAndRender = function () {
+    var view = document.getElementById('v-loss');
+    if (!view) return;
+    var dateEl = document.getElementById('loDate');
+    var shiftEl = document.getElementById('loShift');
+    var qs = [];
+    if (dateEl && dateEl.value) qs.push('date=' + encodeURIComponent(dateEl.value));
+    if (shiftEl && shiftEl.value) qs.push('shift=' + encodeURIComponent(shiftEl.value));
+    fetch('/api/loss_events' + (qs.length ? '?' + qs.join('&') : ''), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var rows = d.events || [];
+        if (typeof EVENTS === 'undefined') return;
+        EVENTS.length = 0;
+        rows.forEach(function (r) { EVENTS.push(r); });
+        if (typeof renderLoss === 'function') renderLoss();
+        if (window.iconTable) window.iconTable.wireAll();
+      })
+      .catch(function () {});
+  };
+
+  // Replaces v4's own evMachines() - identical machine-list behaviour
+  // (still built from the real machListFor(), unchanged), but the
+  // "Caused by" dropdown now carries each open primary event's real
+  // event_id as its value instead of v4's own display-string id, which
+  // the server has no way to resolve back to a row.
+  window.evMachines = function () {
+    var lineEl = document.getElementById('evLine');
+    if (!lineEl) return;
+    var line = lineEl.value;
+    var machEl = document.getElementById('evMach');
+    if (machEl && typeof machListFor === 'function') {
+      machEl.innerHTML = machListFor(line).map(function (m) {
+        return '<option>' + m + '</option>';
+      }).join('');
+    }
+    var open = (typeof EVENTS !== 'undefined' ? EVENTS : []).filter(function (e) {
+      return !e.end && e.kind === 'P';
+    });
+    var linkEl = document.getElementById('evLink');
+    if (linkEl) {
+      linkEl.innerHTML = open.length
+        ? open.map(function (e) {
+            return '<option value="' + e.event_id + '">' + fqcEsc(e.id) +
+              ' — ' + fqcEsc(e.mach) + '</option>';
+          }).join('')
+        : '<option value="">— no open primary event —</option>';
+    }
+  };
+
+  window.openEvent = function () {
+    var kindEl = document.getElementById('evInduced');
+    var kind = kindEl ? kindEl.value : 'P';
+    var linkSel = document.getElementById('evLink');
+    var linkedEventId = (kind === 'I' && linkSel && linkSel.value)
+      ? (parseInt(linkSel.value, 10) || null) : null;
+    if (kind === 'I' && !linkedEventId) {
+      toast('An induced stop must name the primary event that caused it, or it double-counts.');
+      return;
+    }
+    var lineEl = document.getElementById('evLine');
+    var machEl = document.getElementById('evMach');
+    var reasonEl = document.getElementById('evReason');
+    var plannedEl = document.getElementById('evPlanned');
+    var startEl = document.getElementById('evStart');
+    var modeEl = document.getElementById('evMode');
+    var shiftEl = document.getElementById('loShift');
+
+    var payload = {
+      line: lineEl ? lineEl.value : '',
+      mach: machEl ? machEl.value : '',
+      reason: reasonEl ? reasonEl.value.split(' — ')[0] : '',
+      planned: !!(plannedEl && plannedEl.value === 'Planned'),
+      kind: kind,
+      linked_event_id: linkedEventId,
+      start: startEl ? startEl.value : '',
+      mode: modeEl ? modeEl.value.split(' — ')[0] : 'Live',
+      date: new Date().toISOString().slice(0, 10),
+      shift: shiftEl ? shiftEl.value : ''
+    };
+    if (!payload.line || !payload.mach || !payload.reason || !payload.start) {
+      toast('Line, machine, reason and start time are all required.');
+      return;
+    }
+
+    fetch('/api/loss_event', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { toast(d.why || 'Could not open the event.'); return; }
+        toast('Event ' + d.id + ' opened and left running. Close it when the machine restarts ' +
+              '— the duration is derived from the two timestamps, never typed.');
+        // Back to the landing list, the same way peSave() returns to
+        // Production Entry's - loToggleForm(false) refreshes it too.
+        window.loToggleForm(false);
+      })
+      .catch(function () { toast('The server did not answer.'); });
+  };
+
+  window.closeEvent = function (i) {
+    var row = (typeof EVENTS !== 'undefined' ? EVENTS : [])[i];
+    if (!row || !row.event_id) return;
+    fetch('/api/loss_event/' + row.event_id + '/close', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { toast(d.why || 'Could not close the event.'); return; }
+        toast(row.id + ' closed at ' + d.end + ' — ' + d.minutes + ' minutes recorded.');
+        window.loFetchAndRender();
+      })
+      .catch(function () { toast('The server did not answer.'); });
   };
 
 })();

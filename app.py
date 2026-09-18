@@ -2538,6 +2538,142 @@ def api_prodentry():
         
     return jsonify({"ok": True, "entry_id": eid, "qty": qty})
 
+
+# --------------------------------------------------------------------------
+# Loss of Production - downtime events. Opened, then closed; a duration is
+# always derived from the two real timestamps, never typed as a total.
+# Everything the machine-capacity math needs (MACHINES, machCount()) already
+# lives correctly in v4's own renderLoss() - these routes persist the same
+# shape that function already expects, so the calculation itself is never
+# reimplemented here, only fed real rows instead of the sample array.
+# --------------------------------------------------------------------------
+
+def _loss_display_id(event_id):
+    return "DT-%d" % event_id
+
+
+@app.route("/api/loss_events")
+def api_loss_events():
+    date = (request.args.get("date") or "").strip()
+    shift = (request.args.get("shift") or "").strip()
+    q = (request.args.get("q") or "").strip()
+    limit = int(request.args.get("limit", 200))
+
+    sql = ("SELECT e.*, l.event_id AS link_event_id "
+           "FROM loss_event e "
+           "LEFT JOIN loss_event l ON l.event_id = e.linked_event_id "
+           "WHERE 1=1")
+    args = []
+    if date:
+        sql += " AND e.event_date = %s"
+        args.append(date)
+    if shift:
+        sql += " AND e.shift = %s"
+        args.append(shift)
+    if q:
+        sql += " AND (e.line LIKE %s OR e.machine LIKE %s OR e.reason LIKE %s)"
+        args.extend(["%" + q + "%", "%" + q + "%", "%" + q + "%"])
+    sql += " ORDER BY e.event_id DESC"
+
+    with store.conn() as (cx, cur):
+        rows = store.rows(cur, sql, tuple(args), limit=limit)
+
+    out = []
+    for r in rows:
+        out.append({
+            "event_id": r["event_id"],
+            "id": _loss_display_id(r["event_id"]),
+            "line": r["line"], "mach": r["machine"],
+            "start": r["start_time"], "end": r["end_time"],
+            "reason": r["reason"], "planned": bool(r["planned"]),
+            "kind": r["kind"],
+            "linked_event_id": r["linked_event_id"],
+            "link": _loss_display_id(r["linked_event_id"])
+                    if r["linked_event_id"] else None,
+            "mode": r["entry_mode"], "minutes": r["minutes"],
+            "event_date": r["event_date"], "shift": r["shift"],
+        })
+    return jsonify({"events": out})
+
+
+@app.route("/api/loss_event", methods=["POST"])
+@_sync_guard
+def api_loss_event_open():
+    d = request.get_json(force=True) or {}
+    line = (d.get("line") or "").strip()
+    machine = (d.get("mach") or d.get("machine") or "").strip()
+    reason = (d.get("reason") or "").strip()
+    kind = (d.get("kind") or "P").strip()
+    start = (d.get("start") or "").strip()
+    mode = (d.get("mode") or "Live").strip()
+    date = (d.get("date") or datetime.date.today().isoformat()).strip()
+    shift = (d.get("shift") or "").strip()
+    planned = bool(d.get("planned"))
+    linked_raw = d.get("linked_event_id")
+    try:
+        linked_event_id = int(linked_raw) if linked_raw else None
+    except (TypeError, ValueError):
+        linked_event_id = None
+
+    if not line or not machine or not reason or not start:
+        return jsonify({"ok": False, "why": "Line, machine, reason and start time are required."}), 400
+    if kind not in ("P", "I"):
+        return jsonify({"ok": False, "why": "Kind must be Primary or Induced."}), 400
+
+    with store.conn() as (cx, cur):
+        if kind == "I":
+            # An induced stop must name a REAL, still-open primary event -
+            # never a free-text guess - or its minutes have nothing to be
+            # excluded from and it silently double-counts the same
+            # stoppage the primary event already accounts for.
+            if not linked_event_id:
+                return jsonify({"ok": False,
+                    "why": "An induced stop must name the primary event that caused it, or it double-counts."}), 400
+            primary = store.one(cur,
+                "SELECT * FROM loss_event WHERE event_id=%s", (linked_event_id,))
+            if not primary or primary["kind"] != "P" or primary["end_time"] is not None:
+                return jsonify({"ok": False,
+                    "why": "That primary event is not currently open."}), 400
+
+        eid = store.insert(cur, "loss_event", {
+            "event_date": date, "shift": shift, "line": line,
+            "machine": machine, "reason": reason, "planned": planned,
+            "kind": kind, "linked_event_id": linked_event_id,
+            "start_time": start, "end_time": None, "minutes": None,
+            "entry_mode": mode, "created_by": actor()
+        })
+        db.audit(cur, actor(), "loss.open", "loss_event", eid, {
+            "line": line, "machine": machine, "reason": reason, "kind": kind
+        })
+    return jsonify({"ok": True, "event_id": eid, "id": _loss_display_id(eid)})
+
+
+@app.route("/api/loss_event/<int:event_id>/close", methods=["POST"])
+@_sync_guard
+def api_loss_event_close(event_id):
+    with store.conn() as (cx, cur):
+        row = store.one(cur, "SELECT * FROM loss_event WHERE event_id=%s", (event_id,))
+        if not row:
+            return jsonify({"ok": False, "why": "That event no longer exists."}), 404
+        if row["end_time"] is not None:
+            return jsonify({"ok": False, "why": "That event is already closed."}), 400
+
+        end = datetime.datetime.now().strftime("%H:%M")
+
+        def to_min(t):
+            h, m = t.split(":")
+            return int(h) * 60 + int(m)
+        minutes = max(0, to_min(end) - to_min(row["start_time"]))
+
+        cur.execute(
+            "UPDATE loss_event SET end_time=%s, minutes=%s, closed_by=%s "
+            "WHERE event_id=%s",
+            (end, minutes, actor(), event_id))
+        db.audit(cur, actor(), "loss.close", "loss_event", event_id,
+                 {"end_time": end, "minutes": minutes})
+    return jsonify({"ok": True, "event_id": event_id, "end": end, "minutes": minutes})
+
+
 @app.route("/api/prod/dashboard")
 def api_prod_dashboard():
     """Live endpoint for the Production Dashboard, allowing filtering by date,
