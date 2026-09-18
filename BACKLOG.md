@@ -1654,3 +1654,61 @@ collapsed state; a genuine second click (mouse moved away and back)
 proven to reach the toggle's handler via a listener counter, not just a
 class check; full regression (91 Python + 71 JS) and the round's own
 39-check Playwright suite all still green.
+
+**Round 9, second follow-up - the actual root cause.** Reported directly
+with screenshots: still not resolved, plus a new one - the toggle sat
+almost flush against "Management Overview" with no breathing room below
+it.
+
+**What was actually wrong, found by checking a file that should have
+been checked at the very start of Round 9.** `static/icon_add.css`
+already carried a **complete, working** sidebar-collapse implementation
+- `#app.side-collapsed`, the 46px rail, `.nav-sec`/`.nav-i`/`.nav-i b`
+all hidden and restored on `:hover` (via `font-size:0`/`opacity:0`, not
+a display toggle), a `transition:width .12s ease`, its own wheel-scroll
+fix, all of it - predating this entire round. Its own file comment says
+outright: "Without it... the sidebar collapse did nothing at all." What
+was genuinely missing was only the JS half: nothing had ever created a
+`.side-toggle` button or put `side-collapsed` on `#app`, so none of that
+CSS ever activated. Round 9's "no CSS rule anywhere gives that class a
+narrower column" was the wrong diagnosis, made without checking this
+file - and every round since then had been rebuilding a second,
+independent collapse mechanism **in parallel** with this one, both
+toggling the same class, each carrying its own width/display rules that
+periodically contradicted the other. The specific bug reported this time
+- hovering widened the rail but showed no text - was exactly that: this
+file's own `.nav-label{display:none}` (from the previous, by-then-
+abandoned hover attempt) had no matching `:hover` restore rule left
+after hover was "removed," and sat on top of `icon_add.css`'s own,
+already-correct hover restore, silently overruling it. Confirmed live by
+listing every CSS rule actually matching the element during a hover, not
+guessed.
+
+**What changed.** Deleted the second implementation entirely - the
+`.nav-label` DOM wrapping, the duplicate `#app.side-collapsed` width/
+display rules, all of it. `sidebarToggle()` now does exactly two things:
+creates the toggle button (moved into `#sidenav`, the inline SVG mirrored
+for the two states, kept from Round 9) and flips `side-collapsed` on
+`#app` - `icon_add.css` does the rest, the way it always could have.
+Small additive overrides give the toggle (which `icon_add.css` originally
+styled for a flex row it no longer sits in) the same padding/centering
+`.nav-i` gets, so its icon lines up with the icons below it, plus its own
+bottom border and margin so it reads as the rail's header rather than the
+first nav item - the exact "need a bigger gap" complaint.
+
+The hover-to-peek behavior Round 9 had removed for "silently eating a
+second click" turned out to be a real bug in **this round's own
+duplicate** implementation, not in `icon_add.css`'s - proven directly: the
+identical click-after-move-away-and-back scenario that previously failed
+now reaches the handler correctly, tested against `icon_add.css`'s
+mechanism alone with nothing left competing with it.
+
+**Which tests prove it.** No backend change; full suite unmodified and
+green (91 Python + 71 JS). The scratch Playwright suite grew to 42
+checks: the toggle icon's offset now measured directly against a nav
+icon's offset in the same frame (both collapsed and hovering); hovering
+proven to both widen the rail and restore real font-size (not just
+width); the exact second-click-after-move-away scenario proven fixed via
+a listener counter, not just a class check; pin-open still restores
+everything. Verified live with screenshots at two viewport widths,
+including one matching the reported screenshot's narrow proportions.

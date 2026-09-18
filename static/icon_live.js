@@ -4570,45 +4570,39 @@ function wireFqcAnomalies() {
   }
 
   /* ---- 3c. collapsible sidebar -------------------------------------
-   * Collapsed it is a 46px rail of icons, centered exactly like the
-   * nav-i icons below the toggle. Click it again to pin the full 198px
-   * rail back open. The choice is remembered for the session.
+   * static/icon_add.css already carries a complete, working collapse
+   * implementation (#app.side-collapsed, the 46px rail, hover-to-198px
+   * with a transition and its own wheel-scroll fix, .nav-sec/.nav-i/.b
+   * all handled) - see icon_add.css around "collapsible sidebar". It
+   * predates this round entirely. What was actually missing was the
+   * JS half: nothing ever created a .side-toggle button or put
+   * #app.side-collapsed on #app, so none of that CSS ever activated -
+   * "no CSS rule anywhere" was the wrong diagnosis, made without
+   * checking that file first.
    *
-   * This replaces an earlier version of the same idea that never actually
-   * worked: it toggled a `side-collapsed` class and swapped a
-   * '<<' / '>>' glyph, but no CSS rule anywhere gave that class a
-   * narrower column or hid the labels - clicking it changed nothing
-   * visible except the character in one button, and that button lived in
-   * the top header, not the menu itself (asked for explicitly: like the
-   * collapse control in Omada's own side menu, not a header icon). The
-   * two glyphs also came from the OS's own serif fallback font for <<
-   * and >>, which is why they read as "old" next to the rest of the
-   * UI's drawn icons - replaced with one inline SVG, mirrored with a CSS
-   * transform for the other state, so open/collapse are guaranteed to be
-   * the same icon rather than two glyphs that happen to be chosen to
-   * look related.
+   * Two earlier drafts this round rebuilt the whole collapse mechanism
+   * from scratch in here instead, in parallel with icon_add.css's own -
+   * two independent implementations toggling the same class, each with
+   * its own width/display rules, occasionally directly contradicting
+   * each other (this file's `.nav-label{display:none}` with no matching
+   * :hover restore, sitting on top of icon_add.css's OWN already-correct
+   * hover restore, is exactly why hovering showed a widened rail with no
+   * text - reported directly, and reproduced by inspecting which rules
+   * actually matched the element live). Removed all of that. This
+   * function now only creates the toggle and flips the class -
+   * icon_add.css does the rest, the way it always could have.
    *
-   * A second draft made the toggle button a small fixed-position square,
-   * centered differently from the .nav-i icons below it - same icon
-   * size, different centering method, so the two columns of icons did
-   * not actually line up. Fixed by styling the toggle exactly like a
-   * .nav-i (same padding/justify-content values), so it sits in the same
-   * column as every icon below it by construction.
-   *
-   * A third draft also expanded the rail on :hover while collapsed, so a
-   * pass along it revealed the labels without a click - closer to what
-   * was actually asked for ("hovering shows just icons, not text" was
-   * reported as a bug, i.e. it was expected to reveal them). Dropped
-   * anyway: with the rail expanding out from under the pointer on
-   * :hover, a SECOND click on anything inside it - the toggle or any
-   * nav-i - after the mouse had moved away and come back stopped
-   * reaching its click handler at all, confirmed directly (a listener
-   * counter that simply never incremented). That is not a browser-
-   * automation quirk; it reproduces with a real mouse, real move-away,
-   * real click, and it would mean a nav item silently failing to
-   * navigate for a real operator. A plain click-to-pin toggle has none
-   * of that - two static states, nothing moves except on an explicit
-   * click.
+   * The toggle itself moved from the top header into the menu (asked
+   * for explicitly, to match Omada's own placement) and its glyph
+   * changed from '<<'/'>>' - the OS's serif fallback for those
+   * characters, which is why they read as "old" next to the UI's drawn
+   * icons - to one inline SVG, mirrored via a CSS transform for the
+   * other state, so open/collapsed are guaranteed to be the same icon.
+   * icon_add.css's own .side-toggle rule assumed it would sit in a flex
+   * row (margin-left:auto) with a bordered 22px box; now that it lives
+   * in the rail, the overrides below give it the same padding/width/
+   * centering rhythm .nav-i already uses, so its icon lines up with the
+   * icons below it and gets the same collapsed/hover treatment they do.
    */
   function injectSideCss() {
     if (document.getElementById('iconLiveSideCss')) return;
@@ -4627,20 +4621,21 @@ function wireFqcAnomalies() {
          track/thumb cluttering a 198px rail. */
       '.side{scrollbar-width:none;-ms-overflow-style:none}' +
       '.side::-webkit-scrollbar{display:none}' +
-      '.nav-label{display:inline}' +
-      '#app{position:relative}' +
-      /* Same box model as .nav-i (padding:8px 16px, flex, centered
-         icon width) so the toggle's icon lands in the exact column the
-         nav icons below it use - collapsed and expanded alike. */
+      /* Overrides icon_add.css's own .side-toggle (a small bordered
+         square meant for a flex row) now that the button lives in the
+         rail: full-width, same padding/centering as .nav-i, its own
+         bottom border and margin so it reads as the rail's header
+         rather than the first nav item. */
       '.side-toggle{width:100%;display:flex;align-items:center;' +
-        'justify-content:flex-start;padding:8px 16px;color:#8FA5BC}' +
+        'justify-content:flex-start;padding:10px 16px;color:#8FA5BC;' +
+        'margin:0 0 8px;border:none;border-bottom:1px solid rgba(255,255,255,.1);' +
+        'border-radius:0;background:none;height:auto}' +
       '.side-toggle:hover{background:rgba(255,255,255,.05);color:#fff}' +
-      '.side-toggle svg{flex:none;width:15px;text-align:center;transition:transform .15s}' +
-      '#app.side-collapsed{grid-template-columns:46px 1fr}' +
-      '.side-collapsed .nav-label,.side-collapsed .nav-sec,.side-collapsed .nav-i b' +
-        '{display:none}' +
-      '.side-collapsed .nav-i,.side-collapsed .side-toggle{justify-content:center;padding:8px 0;gap:0}' +
-      '.side-collapsed .side-toggle svg{transform:scaleX(-1)}';
+      '.side-toggle svg{flex:none;width:15px;transition:transform .15s}' +
+      '#app.side-collapsed .side .side-toggle{justify-content:center;padding:9px 0}' +
+      '#app.side-collapsed .side .side-toggle svg{transform:scaleX(-1)}' +
+      '#app.side-collapsed .side:hover .side-toggle' +
+        '{justify-content:flex-start;padding:8px 16px}';
     document.head.appendChild(css);
   }
 
@@ -4657,24 +4652,6 @@ function wireFqcAnomalies() {
     if (!app || !nav || document.getElementById('sideBtn')) return;
     injectSideCss();
 
-    /* v4's own markup is <button class="nav-i"><em>icon</em>Label text
-       <b>3</b></button> - an icon element plus a bare text node (and,
-       on a couple of items, a count badge), nothing a collapsed-state
-       rule could target independently of the icon. Wrap the text alone,
-       once; the badge (where present) stays a direct child of .nav-i so
-       its own margin-left:auto keeps pushing it flush right exactly as
-       before - it gets its own, simpler collapse rule instead. */
-    Array.prototype.forEach.call(nav.querySelectorAll('.nav-i'), function (item) {
-      if (item.querySelector('.nav-label')) return;
-      var label = document.createElement('span');
-      label.className = 'nav-label';
-      Array.prototype.slice.call(item.childNodes).forEach(function (n) {
-        if (n.nodeType === 1 && (n.tagName === 'EM' || n.tagName === 'B')) return;
-        label.appendChild(n);
-      });
-      item.insertBefore(label, item.querySelector('b') || null);
-    });
-
     var btn = document.createElement('button');
     btn.id = 'sideBtn';
     btn.className = 'side-toggle';
@@ -4683,7 +4660,7 @@ function wireFqcAnomalies() {
 
     function setC(on) {
       app.classList.toggle('side-collapsed', on);
-      btn.title = on ? 'Pin the menu open' : 'Collapse the menu';
+      btn.title = on ? 'Pin the menu open' : 'Collapse the menu (hover the rail to bring it back)';
       try { sessionStorage.setItem('icon.side', on ? '1' : '0'); } catch (e) {}
     }
     btn.onclick = function (e) {
