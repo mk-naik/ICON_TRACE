@@ -1733,3 +1733,48 @@ checks: the rail's list scrolled 400px, the toggle's own position
 confirmed to stay within the rail's top padding rather than moving with
 the scroll, and a click while scrolled confirmed to still reach the
 handler.
+
+**Round 9, fourth follow-up.** Asked directly, for the first screenshot
+this round showed: is the sidebar meant to cover the page behind it
+while hovering, or push it aside? Answer: push it aside - confirmed the
+overlap was the actual complaint, not a design choice to defend.
+
+**What changed.** `icon_add.css`'s own hover rule widens `.side` itself
+to 198px but never touched the grid TRACK, which stayed 46px - so the
+wider rail painted on top of the page instead of the page making room
+for it. `:has()` lets the grid container react to its own child:
+`#app.side-collapsed:has(.side:hover){grid-template-columns:198px 1fr}`
+widens the track itself when the rail is hovered, so `.main`'s column
+genuinely shrinks and the content shifts aside rather than being
+covered. Deliberately `:hover` only, not `:focus-within` too - clicking
+the toggle leaves it focused (focus does not clear just because the
+mouse moves away), and `:focus-within` in the same rule kept `.main`
+pushed aside indefinitely after any click, long after the mouse had
+left - caught live before it shipped, by reading `.main`'s own position
+with the mouse resting somewhere else entirely.
+
+Also asked directly, of an unrelated toast seen on Management Overview's
+own screenshots: why "Showing everything." fired there. Traced to
+`initUI()` (an IIFE that runs once at sign-in patching default date
+values for a handful of screens) unconditionally calling
+`window.dispApply()` at the end - which, AT THAT POINT in the file's own
+top-to-bottom execution, still resolves to v4's original Stock &
+Dispatch filter-apply (this file's own reassignment to the real,
+toast-free `wireDisp()` happens later in the same file), and v4's own
+version toasts "Showing everything." whenever no Dispatch filter is
+active. Since `initUI()` runs once regardless of which screen is
+actually visible, that toast fired on every sign-in no matter what the
+user was looking at. Removed the stray call - `go()`'s own per-view hook
+already calls the real `wireDisp()` the moment Stock & Dispatch is
+actually visited, so this pre-emptive call from a hidden view was never
+needed for the screen to work.
+
+**Which tests prove it.** No backend change; full suite unmodified and
+green (91 Python + 71 JS). The scratch Playwright suite grew to 48
+checks: `.main`'s own bounding box measured directly before, during and
+after hover to prove it moves rather than a `z-index` illusion; the
+focus-left-behind scenario reproduced and proven fixed by clicking twice
+then checking `.main`'s position with the mouse elsewhere; no toast
+present immediately after sign-in. Verified live against the exact
+screenshot reported - Production Entry, sidebar hovered, at the same
+narrow width - confirming zero overlap.

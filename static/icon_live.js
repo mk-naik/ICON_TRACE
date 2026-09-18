@@ -681,8 +681,18 @@ function wireFqcAnomalies() {
         chAct.insertBefore(btn, chAct.firstChild);
     }
 
-    if (typeof window.dispApply === 'function') window.dispApply(); 
-    if (typeof window.packApply === 'function') window.packApply(); 
+    /* Not window.dispApply() here: at this point in the file it is still
+       v4's own original Stock & Dispatch filter-apply, not yet the
+       version further down that this file reassigns it to - and v4's
+       own toasts "Showing everything." whenever no filter is active.
+       This whole IIFE runs once at sign-in regardless of which screen
+       is actually on screen, so that toast fired on every sign-in no
+       matter what the user was looking at - reported directly, seen on
+       Management Overview. go()'s own per-view hook already calls
+       wireDisp() (the real, reassigned version, no toast) the moment
+       Stock & Dispatch is actually visited, so pre-calling it here from
+       a hidden view was never necessary for the screen to work. */
+    if (typeof window.packApply === 'function') window.packApply();
   })();
 
   /* ---- FQC Dashboard: one real, filtered picture, everywhere on the page
@@ -4643,7 +4653,23 @@ function wireFqcAnomalies() {
       '#app.side-collapsed .side .side-toggle{justify-content:center;padding:9px 0}' +
       '#app.side-collapsed .side .side-toggle svg{transform:scaleX(-1)}' +
       '#app.side-collapsed .side:hover .side-toggle' +
-        '{justify-content:flex-start;padding:8px 16px}';
+        '{justify-content:flex-start;padding:8px 16px}' +
+      /* icon_add.css's own hover rule widens .side itself to 198px but
+         leaves the grid TRACK at 46px, so the wider rail paints on top
+         of the page instead of the page making room for it - reported
+         directly as the sidebar covering the content behind it. :has()
+         lets the grid container react to its own child's :hover: the
+         track itself grows to 198px too, so .main's column genuinely
+         shrinks and the content is pushed aside, not covered.
+
+         :hover only, deliberately not :focus-within too - clicking the
+         toggle leaves IT focused (focus does not clear just because the
+         mouse moves away), and :focus-within would then keep the track
+         widened until something else was focused instead, long after
+         the mouse had left - confirmed live, cols stayed 198px with the
+         mouse sitting over unrelated page content. */
+      '#app.side-collapsed:has(.side:hover){grid-template-columns:198px 1fr}' +
+      '#app{transition:grid-template-columns .12s ease}';
     document.head.appendChild(css);
   }
 
