@@ -170,6 +170,25 @@ def t_list_filters():
     assert len(by_q_reason) == 1 and by_q_reason[0]["reason"] == "LOP-POWER"
 
 
+@test("date_from/date_to filter a real range, independent of the exact-match date param")
+def t_list_date_range():
+    c = setup()
+    open_event(c, line="A", mach="Laminator-2", reason="LOP-MACH", date="2026-09-15")
+    open_event(c, line="A", mach="Stringer-5", reason="LOP-POWER", date="2026-09-17")
+    open_event(c, line="B", mach="Glass loader-1", reason="LOP-MAT", date="2026-09-20")
+
+    in_range = c.get("/api/loss_events?date_from=2026-09-16&date_to=2026-09-18").get_json()["events"]
+    assert len(in_range) == 1 and in_range[0]["mach"] == "Stringer-5", in_range
+
+    from_only = c.get("/api/loss_events?date_from=2026-09-17").get_json()["events"]
+    assert len(from_only) == 2, from_only
+    assert set(r["mach"] for r in from_only) == {"Stringer-5", "Glass loader-1"}
+
+    to_only = c.get("/api/loss_events?date_to=2026-09-17").get_json()["events"]
+    assert len(to_only) == 2, to_only
+    assert set(r["mach"] for r in to_only) == {"Laminator-2", "Stringer-5"}
+
+
 @test("missing required fields (line, machine, reason, start) are "
      "refused before anything is written")
 def t_missing_fields_refused():

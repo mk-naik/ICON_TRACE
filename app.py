@@ -2555,6 +2555,8 @@ def _loss_display_id(event_id):
 @app.route("/api/loss_events")
 def api_loss_events():
     date = (request.args.get("date") or "").strip()
+    date_from = (request.args.get("date_from") or "").strip()
+    date_to = (request.args.get("date_to") or "").strip()
     shift = (request.args.get("shift") or "").strip()
     q = (request.args.get("q") or "").strip()
     limit = int(request.args.get("limit", 200))
@@ -2567,6 +2569,12 @@ def api_loss_events():
     if date:
         sql += " AND e.event_date = %s"
         args.append(date)
+    if date_from:
+        sql += " AND e.event_date >= %s"
+        args.append(date_from)
+    if date_to:
+        sql += " AND e.event_date <= %s"
+        args.append(date_to)
     if shift:
         sql += " AND e.shift = %s"
         args.append(shift)

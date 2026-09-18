@@ -2341,8 +2341,15 @@ function wireFqcAnomalies() {
    * Every card that holds a table gets the same treatment, so a screen
    * added later gets it by existing rather than by being wired.
    */
+  /* 'prodentry' is deliberately NOT here - its "Recent production entries"
+     card gets its own real date-range/shift/customer filter bar
+     (peWireFilters), wired server-side. Letting wireScreenTables() claim
+     the card first (it runs at sign-in, well before peInit ever fires)
+     would set data-itable before that bar's own setup could run, and the
+     generic client-only search box would win by default - exactly the
+     silent-dead-code bug this round found and fixed. */
   var TABLE_SCREENS = ['mgmt', 'proddash', 'dash', 'packdash', 'disp',
-                       'fqc', 'pack', 'repack', 'prodentry', 'loss', 'gp',
+                       'fqc', 'pack', 'repack', 'loss', 'gp',
                        'challan', 'drafts', 'hold', 'review'];
 
   function wireScreenTables() {
@@ -4563,31 +4570,106 @@ function wireFqcAnomalies() {
   }
 
   /* ---- 3c. collapsible sidebar -------------------------------------
-   * Collapsed it is a 46px rail of icons; hovering slides the labels back
-   * out over the page, so a scanning screen gets the width without losing
-   * the ability to navigate. The choice is remembered for the session.
+   * Collapsed it is a 46px rail of icons; click the same toggle again to
+   * pin it back open at its full 198px. The choice is remembered for the
+   * session.
+   *
+   * This replaces an earlier version of the same idea that never actually
+   * worked: it toggled a `side-collapsed` class and swapped a
+   * '<<' / '>>' glyph, but no CSS rule anywhere gave that class a
+   * narrower column or hid the labels - clicking it changed nothing
+   * visible except the character in one button, and that button lived in
+   * the top header, not the menu itself (asked for explicitly this round:
+   * like the collapse control in Omada's own side menu, not a header
+   * icon). The two glyphs also came from the OS's own serif fallback font
+   * for << and >>, which is why they read as "old" next to the rest of
+   * the UI's drawn icons - replaced with one inline SVG, mirrored with a
+   * CSS transform for the other state, so open/collapse are guaranteed to
+   * be the same icon rather than two glyphs that happen to be chosen to
+   * look related.
+   *
+   * An earlier draft of this fix also expanded the rail on :hover while
+   * collapsed, so a quick pass along it revealed the labels without a
+   * click. Dropped: reaching the rail to hover it necessarily means the
+   * mouse crosses it first, and the moment it does, the rail (and
+   * whatever the mouse is over inside it, the toggle button included)
+   * grows out from under the pointer - a moving target for a real mouse
+   * and something Playwright's own actionability check flatly refused to
+   * click, timing out waiting for a box that kept resizing itself in
+   * response to being approached. A plain click-to-pin toggle has none of
+   * that: two static states, nothing moves except on an explicit click.
    */
+  function injectSideCss() {
+    if (document.getElementById('iconLiveSideCss')) return;
+    var css = document.createElement('style');
+    css.id = 'iconLiveSideCss';
+    css.textContent =
+      /* Every .pg-act (a title row's button group) had no align-items of
+         its own, so it defaulted to stretch: a tag/span next to a taller
+         button stretched to match the button's height without its text
+         re-centering inside that height - the classic "button and label
+         look unaligned" bug, on every screen that mixes a tag with a
+         button in that row. */
+      '.pg-act{align-items:center}' +
+      /* Hidden, not removed - .side keeps overflow-y:auto and still
+         scrolls by wheel, trackpad or keyboard; there is just no visible
+         track/thumb cluttering a 198px rail. */
+      '.side{scrollbar-width:none;-ms-overflow-style:none}' +
+      '.side::-webkit-scrollbar{display:none}' +
+      '.nav-label{display:inline}' +
+      '.side-toggle-row{position:relative;height:34px}' +
+      '.side-toggle{position:absolute;left:10px;top:4px;width:26px;height:26px;' +
+        'border-radius:4px;display:inline-flex;align-items:center;justify-content:center;' +
+        'color:#8FA5BC;background:rgba(255,255,255,.06)}' +
+      '.side-toggle:hover{background:rgba(255,255,255,.16);color:#fff}' +
+      '.side-toggle svg{transition:transform .15s}' +
+      '#app.side-collapsed{grid-template-columns:46px 1fr}' +
+      '.side-collapsed .nav-label,.side-collapsed .nav-sec,.side-collapsed .nav-i b' +
+        '{display:none}' +
+      '.side-collapsed .nav-i{justify-content:center;padding:8px 0;gap:0}' +
+      '.side-collapsed .side-toggle svg{transform:scaleX(-1)}';
+    document.head.appendChild(css);
+  }
+
+  var SIDE_TOGGLE_SVG =
+    '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<rect x="3" y="4" width="18" height="16" rx="2"></rect>' +
+    '<line x1="9.5" y1="4" x2="9.5" y2="20"></line>' +
+    '<path d="M14 9l-2.5 3 2.5 3"></path></svg>';
+
   function sidebarToggle() {
     var app = document.getElementById('app');
     var nav = document.getElementById('sidenav');
     if (!app || !nav || document.getElementById('sideBtn')) return;
+    injectSideCss();
 
-    var btn = document.createElement('button');
-    btn.id = 'sideBtn';
-    btn.className = 'side-toggle';
-    btn.title = 'Collapse the menu (hover the rail to bring it back)';
-    btn.innerHTML = '\u00AB';
-    /* .tb-mark is a fixed 180px flex:none box holding the sun, the wordmark
-       and the unit chip - a fourth child overflows it and is invisible. The
-       button goes into the topbar itself, straight after the mark. */
-    var bar = document.querySelector('.topbar');
-    var mark = document.querySelector('.tb-mark');
-    if (mark && mark.nextSibling) bar.insertBefore(btn, mark.nextSibling);
-    else if (bar) bar.appendChild(btn);
+    /* v4's own markup is <button class="nav-i"><em>icon</em>Label text
+       <b>3</b></button> - an icon element plus a bare text node (and,
+       on a couple of items, a count badge), nothing a collapsed-state
+       rule could target independently of the icon. Wrap the text alone,
+       once; the badge (where present) stays a direct child of .nav-i so
+       its own margin-left:auto keeps pushing it flush right exactly as
+       before - it gets its own, simpler collapse rule instead. */
+    Array.prototype.forEach.call(nav.querySelectorAll('.nav-i'), function (item) {
+      if (item.querySelector('.nav-label')) return;
+      var label = document.createElement('span');
+      label.className = 'nav-label';
+      Array.prototype.slice.call(item.childNodes).forEach(function (n) {
+        if (n.nodeType === 1 && (n.tagName === 'EM' || n.tagName === 'B')) return;
+        label.appendChild(n);
+      });
+      item.insertBefore(label, item.querySelector('b') || null);
+    });
+
+    var row = document.createElement('div');
+    row.className = 'side-toggle-row';
+    row.innerHTML = '<button id="sideBtn" class="side-toggle">' + SIDE_TOGGLE_SVG + '</button>';
+    nav.insertBefore(row, nav.firstChild);
+    var btn = document.getElementById('sideBtn');
 
     function setC(on) {
       app.classList.toggle('side-collapsed', on);
-      btn.innerHTML = on ? '\u00BB' : '\u00AB';
       btn.title = on ? 'Pin the menu open' : 'Collapse the menu';
       try { sessionStorage.setItem('icon.side', on ? '1' : '0'); } catch (e) {}
     }
@@ -4597,7 +4679,7 @@ function wireFqcAnomalies() {
     };
     var saved = null;
     try { saved = sessionStorage.getItem('icon.side'); } catch (e) {}
-    if (saved === '1') setC(true);
+    setC(saved === '1');
   }
 
   /* ---- 4. real connection status ----------------------------------
@@ -8289,50 +8371,146 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
     if (typeof window.peCalc === 'function') window.peCalc();
   };
 
-  window.renderPE = function() {
+  /* Date range, shift and customer are sent to the server - api/prodentries
+     already accepted from/to/shift/cust, nothing before this round ever
+     wired a control to them. 'prodentry' was removed from TABLE_SCREENS
+     above so wireScreenTables() never claims this card first and replaces
+     this bar with its own generic client-only search box, which is what
+     silently happened before: the bar below was built but never inserted,
+     because the card already had data-itable by the time this ran. */
+  window.peWireFilters = function() {
     var view = document.getElementById('v-prodentry');
     if (!view) return;
     var card = view.querySelector('.wmain.o3 .card');
-    if (!card) return;
-    
-    if (!card.getAttribute('data-itable')) {
-        card.setAttribute('data-itable', 'prodentries');
-        card.setAttribute('data-export', 'prodentries');
-        
-        var headRow = card.querySelector('thead tr');
-        if (headRow) {
-          headRow.innerHTML = '<th>Date</th><th>Shift</th><th>Customer</th><th>Wattage</th><th>Model</th><th>Start serial</th><th>End serial</th><th style="text-align:right">Qty</th><th style="text-align:right">KW</th><th>By</th>';
-        }
-        
-        var head = card.querySelector('.card-h');
-        if (head && !head.querySelector('[data-role=search]')) {
-          head.insertAdjacentHTML('beforeend',
-            '<div style="margin-left:auto;display:flex;gap:10px">' +
-            '<div style="display:flex;gap:5px;align-items:center"><input type="date" id="peFilterFrom" onchange="window.renderPE()" style="width:130px"><span>-</span><input type="date" id="peFilterTo" onchange="window.renderPE()" style="width:130px"></div>' +
-            '<select data-role="filter" data-col="1"><option value="">All shifts</option></select>' +
-            '<select data-role="filter" data-col="2"><option value="">All customers</option></select>' +
-            '<select data-role="filter" data-col="3"><option value="">All wattages</option></select>' +
-            '<input data-role="search" placeholder="Search..."></div>');
-        }
+    if (!card || card.__peWired) return;
+    card.__peWired = true;
+
+    var headRow = card.querySelector('thead tr');
+    if (headRow) {
+      headRow.innerHTML = '<th>Date</th><th>Shift</th><th>Customer</th><th>Wattage</th>' +
+        '<th>Model</th><th>Start serial</th><th>End serial</th>' +
+        '<th style="text-align:right">Qty</th><th style="text-align:right">KW</th><th>By</th>';
     }
-    
+
+    var tbl = card.querySelector('table');
+    var holder = tbl && tbl.parentNode;
+    if (holder && !holder.classList.contains('scroll')) {
+      var box = document.createElement('div');
+      box.className = 'scroll';
+      box.style.maxHeight = '420px';
+      holder.insertBefore(box, tbl);
+      box.appendChild(tbl);
+    }
+
+    var bar = card.querySelector('.card-h .ch-r');
+    if (bar && !document.getElementById('peFilterFrom')) {
+      bar.insertAdjacentHTML('beforeend',
+        '<div style="display:flex;gap:5px;align-items:center">' +
+        '<input type="date" id="peFilterFrom" style="width:130px"><span>–</span>' +
+        '<input type="date" id="peFilterTo" style="width:130px"></div>' +
+        '<select id="peFilterShift"><option value="">All shifts</option>' +
+        '<option>A</option><option>B</option><option>C</option></select>' +
+        '<select id="peFilterCust"><option value="">All customers</option></select>' +
+        '<input id="peFilterQ" placeholder="Search serial / model…" style="width:150px">' +
+        '<button class="btn btn-ghost btn-sm" id="peFilterReset">Reset</button>' +
+        '<span class="tag t-mute" id="peFilterCount"></span>');
+
+      var refetch = function() { window.renderPE(); };
+      document.getElementById('peFilterFrom').onchange = refetch;
+      document.getElementById('peFilterTo').onchange = refetch;
+      document.getElementById('peFilterShift').onchange = refetch;
+      document.getElementById('peFilterCust').onchange = refetch;
+      document.getElementById('peFilterQ').onchange = refetch;
+      var peReset = document.getElementById('peFilterReset');
+      // wireResets() claims any button labelled Reset, clears every
+      // input/select in the closest .card (this whole table) and calls
+      // the generic rerender() - not window.renderPE(). Marking it as
+      // already-claimed keeps this button's own, correct handler as the
+      // only one that runs, same as wireScreenTables() does for its own
+      // per-card Reset buttons.
+      peReset.__reset = true;
+      peReset.onclick = function() { window.peResetFilters(); };
+    }
+
+    if (!document.getElementById('peKpis')) {
+      var kwrap = document.createElement('div');
+      kwrap.id = 'peKpis';
+      kwrap.className = 'grid g3';
+      kwrap.style.marginBottom = '14px';
+      kwrap.innerHTML =
+        '<div class="kpi"><label>Entries</label><div class="v" id="peKpiN">0</div>' +
+        '<div class="d">in this range</div></div>' +
+        '<div class="kpi k-solar"><label>Modules produced</label><div class="v" id="peKpiQty">0</div>' +
+        '<div class="d">quantity, not typed</div></div>' +
+        '<div class="kpi k-pass"><label>Output</label><div class="v" id="peKpiKw">0</div>' +
+        '<div class="d">KW</div></div>';
+      view.querySelector('.wmain.o3').insertBefore(kwrap, card);
+    }
+  };
+
+  window.peResetFilters = function() {
+    ['peFilterFrom', 'peFilterTo', 'peFilterShift', 'peFilterCust', 'peFilterQ']
+      .forEach(function(id) { var el = document.getElementById(id); if (el) el.value = ''; });
+    window.renderPE();
+  };
+
+  window.renderPE = function() {
+    var view = document.getElementById('v-prodentry');
+    if (!view) return;
+    window.peWireFilters();
+
     var tbody = document.getElementById('peRows');
     if (!tbody) return;
-    
-    var f = (document.getElementById('peFilterFrom')||{}).value || '';
-    var t = (document.getElementById('peFilterTo')||{}).value || '';
-    var qs = '';
-    if (f || t) qs = '?from=' + encodeURIComponent(f) + '&to=' + encodeURIComponent(t);
-    
+
+    var params = [];
+    var from = (document.getElementById('peFilterFrom')||{}).value || '';
+    var to = (document.getElementById('peFilterTo')||{}).value || '';
+    var shift = (document.getElementById('peFilterShift')||{}).value || '';
+    var cust = (document.getElementById('peFilterCust')||{}).value || '';
+    var q = (document.getElementById('peFilterQ')||{}).value || '';
+    if (from) params.push('from=' + encodeURIComponent(from));
+    if (to) params.push('to=' + encodeURIComponent(to));
+    if (shift) params.push('shift=' + encodeURIComponent(shift));
+    if (cust) params.push('cust=' + encodeURIComponent(cust));
+    if (q) params.push('q=' + encodeURIComponent(q));
+    var qs = params.length ? '?' + params.join('&') : '';
+
     tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:12px;color:var(--ink3)">Loading...</td></tr>';
-    
+
     api('prodentries' + qs).then(function(d) {
       var data = d.entries || [];
+
+      /* Customer options come from what is actually on record, rebuilt
+         every fetch - not a fixed demo list. The current selection is
+         kept even when this (already customer-filtered) fetch only
+         returned that one name, so re-fetching does not blank it. */
+      var custSel = document.getElementById('peFilterCust');
+      if (custSel) {
+        var current = custSel.value, seen = {}, names = [];
+        data.forEach(function(r) {
+          if (r.customer && !seen[r.customer]) { seen[r.customer] = true; names.push(r.customer); }
+        });
+        if (current && !seen[current]) names.push(current);
+        names.sort();
+        custSel.innerHTML = '<option value="">All customers</option>' +
+          names.map(function(n) {
+            return '<option' + (n === current ? ' selected' : '') + '>' + fqcEsc(n) + '</option>';
+          }).join('');
+      }
+
+      var qtyTot = 0, kwTot = 0;
+      data.forEach(function(r) { qtyTot += (+r.qty || 0); kwTot += (+r.kw_output || 0); });
+      var kn = document.getElementById('peKpiN'); if (kn) kn.textContent = data.length;
+      var kq = document.getElementById('peKpiQty'); if (kq) kq.textContent = qtyTot.toLocaleString();
+      var kk = document.getElementById('peKpiKw'); if (kk) kk.textContent = kwTot.toFixed(2);
+      var kc = document.getElementById('peFilterCount');
+      if (kc) kc.textContent = data.length + (data.length === 1 ? ' row' : ' rows');
+
       if (!data.length) {
         tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:12px;color:var(--ink3)">No production entries found.</td></tr>';
         return;
       }
-      
+
       tbody.innerHTML = data.map(function(r) {
         var dateParts = r.prod_date.split('-');
         var fmtDate = dateParts.length === 3 ? dateParts[2]+'-'+dateParts[1]+'-'+dateParts[0] : r.prod_date;
@@ -8349,8 +8527,6 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
           '<td>' + fqcEsc(r.shift_incharge) + '</td>' +
           '</tr>';
       }).join('');
-      
-      if (window.iconTable) window.iconTable.wireAll();
     }).catch(function(e) {
       tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:12px;color:var(--fail)">Failed to load entries: ' + fqcEsc(e.message) + '</td></tr>';
     });
@@ -8438,38 +8614,92 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
       pgAct.insertBefore(b, pgAct.firstChild);
     }
 
-    // The Date/Shift fields already at the top of this screen double as
-    // the landing list's own filters - given real ids so they can be read
-    // and reacted to, the same fields v4 already renders, not a second
-    // set of controls placed next to them.
+    // The Date/Shift fields at the top of this screen are shift SETUP -
+    // scheduled minutes and the ideal rate are read against them by
+    // calcLoss() - not data filters, even though an earlier round wired
+    // them as if they were. #loShift is still read directly by
+    // openEvent() below to tag a newly opened event with the current
+    // shift, so the id stays; only the onchange-triggers-refetch behavior
+    // is removed, in favor of the dedicated filter bar below.
     var filterFlds = view.querySelectorAll('.filters .fld');
     if (filterFlds[0]) {
       var dateInp = filterFlds[0].querySelector('input');
       if (dateInp && !dateInp.id) {
         dateInp.id = 'loDate';
         // v4's own markup ships this pre-filled with a fixed demo date
-        // ("2026-08-21") - left as-is, every fetch would silently filter
-        // out today's own real events forever.
+        // ("2026-08-21") - cosmetic only (nothing reads it), but a shift
+        // setup panel showing last month's date while working today reads
+        // as broken.
         dateInp.value = new Date().toISOString().slice(0, 10);
-        dateInp.onchange = function () { window.loFetchAndRender(); };
       }
     }
     if (filterFlds[1]) {
       var shiftSel = filterFlds[1].querySelector('select');
-      if (shiftSel && !shiftSel.id) {
-        shiftSel.id = 'loShift';
-        shiftSel.onchange = function () { window.loFetchAndRender(); };
-      }
+      if (shiftSel && !shiftSel.id) shiftSel.id = 'loShift';
     }
 
-    // "Closed events this shift" is this screen's own recent-items list -
-    // it does NOT need a search box built here: 'loss' is already in
-    // TABLE_SCREENS, so wireScreenTables() (run once at sign-in, well
-    // before this ever fires) has already claimed every card in this
-    // view with its own data-itable/search/reset/count, this one
-    // included. Confirmed live rather than assumed.
-
+    window.loWireFilters();
     window.loToggleForm(false);
+  };
+
+  /* A real filter bar for the landing tables - date RANGE (not just a
+     single exact day), shift, and a Reset that actually clears them and
+     re-fetches, none of which existed when the shift-setup fields above
+     were doubling as filters. Per-card search/reset/export/count on Open
+     events / Closed events / Scrap stays exactly as it was - 'loss' is
+     still in TABLE_SCREENS and wireScreenTables() still claims those three
+     cards individually; this bar is a level above that, controlling what
+     the server sends in the first place. */
+  window.loWireFilters = function () {
+    var view = document.getElementById('v-loss');
+    if (!view) return;
+    var o1 = view.querySelector('.wmain.o1');
+    var firstCard = o1 && o1.querySelector('.card');
+    if (!o1 || !firstCard || document.getElementById('loFilterFrom')) return;
+
+    var today = new Date().toISOString().slice(0, 10);
+
+    var bar = document.createElement('div');
+    bar.className = 'filters';
+    bar.innerHTML =
+      '<div class="fld"><label>Date from</label><input type="date" id="loFilterFrom" value="' + today + '"></div>' +
+      '<div class="fld"><label>Date to</label><input type="date" id="loFilterTo" value="' + today + '"></div>' +
+      '<div class="fld"><label>Shift</label><select id="loFilterShift"><option value="">All shifts</option>' +
+      '<option>A</option><option>B</option><option>C</option></select></div>' +
+      '<div class="sp"><button class="btn btn-ghost" id="loFilterReset">Reset</button></div>';
+    o1.insertBefore(bar, firstCard);
+
+    var refetch = function () { window.loFetchAndRender(); };
+    document.getElementById('loFilterFrom').onchange = refetch;
+    document.getElementById('loFilterTo').onchange = refetch;
+    document.getElementById('loFilterShift').onchange = refetch;
+    var loReset = document.getElementById('loFilterReset');
+    // Same reason as peFilterReset below: wireResets() claims any button
+    // labelled Reset and, since this bar is itself a .filters, would
+    // blank it and call the generic rerender() instead of re-fetching
+    // from the server - mark it spoken for.
+    loReset.__reset = true;
+    loReset.onclick = function () {
+      document.getElementById('loFilterFrom').value = today;
+      document.getElementById('loFilterTo').value = today;
+      document.getElementById('loFilterShift').value = '';
+      window.loFetchAndRender();
+    };
+
+    var kwrap = document.createElement('div');
+    kwrap.id = 'loKpis';
+    kwrap.className = 'grid g4';
+    kwrap.style.marginBottom = '14px';
+    kwrap.innerHTML =
+      '<div class="kpi k-fail"><label>Open now</label><div class="v" id="loKpiOpen">0</div>' +
+        '<div class="d">still running</div></div>' +
+      '<div class="kpi"><label>Closed in range</label><div class="v" id="loKpiClosed">0</div>' +
+        '<div class="d">events</div></div>' +
+      '<div class="kpi k-rev"><label>Primary minutes lost</label><div class="v" id="loKpiMin">0</div>' +
+        '<div class="d">induced excluded</div></div>' +
+      '<div class="kpi k-solar"><label>Modules lost</label><div class="v" id="loKpiMod">0</div>' +
+        '<div class="d">derived, not typed</div></div>';
+    o1.insertBefore(kwrap, bar.nextSibling);
   };
 
   window.loToggleForm = function (show) {
@@ -8498,10 +8728,12 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
   window.loFetchAndRender = function () {
     var view = document.getElementById('v-loss');
     if (!view) return;
-    var dateEl = document.getElementById('loDate');
-    var shiftEl = document.getElementById('loShift');
+    var fromEl = document.getElementById('loFilterFrom');
+    var toEl = document.getElementById('loFilterTo');
+    var shiftEl = document.getElementById('loFilterShift');
     var qs = [];
-    if (dateEl && dateEl.value) qs.push('date=' + encodeURIComponent(dateEl.value));
+    if (fromEl && fromEl.value) qs.push('date_from=' + encodeURIComponent(fromEl.value));
+    if (toEl && toEl.value) qs.push('date_to=' + encodeURIComponent(toEl.value));
     if (shiftEl && shiftEl.value) qs.push('shift=' + encodeURIComponent(shiftEl.value));
     fetch('/api/loss_events' + (qs.length ? '?' + qs.join('&') : ''), { cache: 'no-store' })
       .then(function (r) { return r.json(); })
@@ -8512,6 +8744,20 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
         rows.forEach(function (r) { EVENTS.push(r); });
         if (typeof renderLoss === 'function') renderLoss();
         if (window.iconTable) window.iconTable.wireAll();
+
+        /* Mirrors what renderLoss() (v4's own, unchanged) just derived for
+           this EVENTS set - never a second, independent computation. */
+        var sumOpen = document.getElementById('sumOpen');
+        var sumMach = document.getElementById('sumMach');
+        var sumMod = document.getElementById('sumMod');
+        var ko = document.getElementById('loKpiOpen');
+        var km = document.getElementById('loKpiMin');
+        var kmod = document.getElementById('loKpiMod');
+        var kc = document.getElementById('loKpiClosed');
+        if (ko && sumOpen) ko.textContent = sumOpen.textContent;
+        if (km && sumMach) km.textContent = sumMach.textContent;
+        if (kmod && sumMod) kmod.textContent = sumMod.textContent;
+        if (kc) kc.textContent = rows.filter(function (r) { return r.end; }).length;
       })
       .catch(function () {});
   };

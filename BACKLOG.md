@@ -291,7 +291,10 @@ A new screen gets both for free.
 - [ ] Ticking "material changed part-way" with nothing filled blocks the save.
 - [ ] Multiple changes per range (currently one).
 - [ ] Remove second verification.
-- [ ] Recent Production Entries: Excel report, filters, search, scroll.
+- [x] Recent Production Entries: real date-range/shift/customer filters,
+      a Reset, a search box and a scrolling card - see Round 9 below. The
+      Export button itself still just toasts (`exportNote()`); a real
+      **Traceability Report** export format is still open.
 - [ ] Export format is the **Traceability Report**.
 
 ## 7. Loss of Production  *(landing + real persistence, built)*
@@ -330,10 +333,10 @@ top of a landing/form split matching Production Entry's own pattern.
       to resolve back to a row.
 - [x] A "Record downtime event" button (`.pg-act`, matching Production
       Entry's own) toggles between the landing (Open/Closed/Scrap
-      tables) and the rail form - reusing v4's existing Date/Shift
-      filter fields at the top of the screen as the landing list's own
-      filters, given real ids, rather than building a second set next to
-      them.
+      tables) and the rail form. The landing's own date-range/shift
+      filter bar and Reset were added in Round 9, below - v4's Date/
+      Shift fields at the top stay shift SETUP only now (read by
+      `calcLoss()`/`openEvent()`), not filters.
 - [x] The "Closed events this shift" card is this screen's own recent-
       items list. No search/filter wiring was added to it directly -
       `'loss'` is already in `TABLE_SCREENS`, so `wireScreenTables()` (run
@@ -1506,3 +1509,113 @@ every screen navigated to (`dash`, `search`, `challan-list`,
 `loading-list`, `gp`, `prodentry`) with zero console errors, Challan
 List and Loading Verification both showing real, non-demo data again,
 and Gate Pass's module mode from the previous round still intact.
+
+**Round 9 — Loss of Production & Production Entry filter bars, sidebar
+collapse, and a button-alignment bug.**
+
+**What was wrong.** Reported directly, with a screenshot of Loss of
+Production and a reference screenshot of Omada's own side menu: buttons
+in a title row weren't vertically aligned; the filter row had no Reset
+and no date range; there was no summary above the tables; and the
+sidebar's collapse toggle sat in the top header, its scrollbar was
+visible, and its two icons (`«`/`»`) didn't visually match.
+
+**Root causes, one per complaint.**
+1. `.pg-act` (any title row's button group - Loss of Production's
+   "Record downtime event" + the "manual entry" tag + Export, and every
+   other screen that mixes a tag with a button the same way) never set
+   `align-items`, so it defaulted to `stretch`: the tag stretched to the
+   taller button's height without its own text re-centering inside it.
+2. Loss of Production's only "filter" was v4's own shift-setup row
+   (Date, Shift, Shift incharge, Scheduled minutes, Ideal rate) - fields
+   `calcLoss()` reads for the capacity math, not a query filter, with no
+   Reset and no way to see more than one exact day.
+3. Production Entry's "Recent production entries" card already had a
+   real date-range/shift/customer/wattage filter bar written into
+   `renderPE()` - entirely dead code. `'prodentry'` was in
+   `TABLE_SCREENS`, so `wireScreenTables()` (run once at sign-in, well
+   before `renderPE()` ever gets called) claimed the card first, set its
+   own `data-itable`, and `renderPE()`'s own
+   `if (!card.getAttribute('data-itable'))` guard then skipped the whole
+   bar forever. The card that shipped was `wireScreenTables()`'s generic,
+   client-only search box - the same silent race this project already
+   found once, for `'loss'`, in Round 8b.
+4. The sidebar collapse toggle (`sidebarToggle()`) toggled a
+   `side-collapsed` class and swapped a `«`/`»` glyph, but no CSS rule
+   anywhere gave that class a narrower grid column or hid the nav labels
+   - clicking it changed nothing on screen except the character in one
+   button. That button also lived in the top header, not the side menu
+   (asked for explicitly: like Omada's own collapse control, in the
+   menu). The two glyphs render from the OS's own serif fallback font
+   for `<<`/`>>`, which is why they read as "old" next to the rest of
+   the UI's drawn icons.
+
+**What changed.**
+- `.pg-act{align-items:center}`, injected once alongside the rest of
+  this round's CSS - fixes every screen's title-row button group, not
+  only Loss of Production's.
+- Loss of Production: a new `.filters` bar (Date from / Date to / Shift
+  / Reset) above the landing tables, wired to real server-side
+  `date_from`/`date_to`/`shift` query params - `GET /api/loss_events`
+  gained `date_from`/`date_to` (range) alongside the existing exact-match
+  `date` (kept, unused by this bar, harmless). A KPI strip (Open now /
+  Closed in range / Primary minutes lost / Modules lost) sits above the
+  tables too - it **mirrors** `#sumOpen`/`#sumMach`/`#sumMod`, the
+  numbers `renderLoss()` (v4's own, still unchanged) already derives
+  correctly for the current `EVENTS` set, rather than computing a second,
+  independent total. v4's Date/Shift fields at the top revert to pure
+  shift setup - `#loShift` is still read directly by `openEvent()` to tag
+  a new event with the current shift, so its id stays; only the
+  onchange-triggers-a-fetch behavior an earlier round gave it is removed.
+  The per-card search/reset/export/count on Open events / Closed events /
+  Scrap is untouched - `'loss'` stays in `TABLE_SCREENS`.
+- Production Entry: `'prodentry'` removed from `TABLE_SCREENS` so nothing
+  claims the card before its own bar can. The bar itself was rebuilt as
+  `peWireFilters()` - date range, shift and customer are sent to the
+  server (`/api/prodentries` already accepted `from`/`to`/`shift`/`cust`;
+  nothing before this round ever wired a control to them), the customer
+  dropdown's options are rebuilt from what each fetch actually returns
+  (not a fixed list), and a free-text search maps to the same `q` param
+  the backend already supports. Reset clears every field and re-fetches.
+  A KPI strip (Entries / Modules produced / Output) sums the current,
+  filtered fetch. The wattage filter from the original dead code was
+  dropped - not something asked for, and not backed by a server param.
+- Sidebar: real CSS behind the collapsed state at last -
+  `#app.side-collapsed{grid-template-columns:46px 1fr}`, nav labels and
+  section headers hidden, icons centered in the 46px rail. The toggle
+  button moved into `#sidenav` itself (a small icon button above
+  "Overview", not in the topbar) and is one inline SVG, mirrored via
+  `transform:scaleX(-1)` for the open/collapsed states - guaranteed to be
+  the same icon rather than two glyphs chosen to look related. The
+  scrollbar is hidden (`scrollbar-width:none` / `::-webkit-scrollbar
+  {display:none}`) while `.side` keeps `overflow-y:auto` - still
+  scrollable, just no visible track.
+  - An earlier draft of this also expanded the rail on `:hover` while
+    collapsed, matching a comment already in the code from before this
+    round. Dropped: reaching the rail to hover it means the mouse
+    necessarily crosses it first, and the moment it does, the rail (and
+    whatever the mouse is over inside it) grows out from under the
+    pointer - a moving target for a real mouse, and something
+    Playwright's own actionability check flatly refused to click,
+    timing out waiting for a box that kept resizing itself in response
+    to being approached. Never asked for explicitly; replaced with a
+    plain click-to-pin toggle - two static states, nothing moves except
+    on a click.
+
+**Which tests prove it.** `test_loss.py` gained a `date_from`/`date_to`
+range case (10 total, mutation-tested: the range clauses commented out,
+confirmed the new test fails, restored). `test_production.py`,
+`test_challan.py`, `test_loading.py`, `test_gatepass.py` all still green
+unmodified (91 Python total). All three JS suites still green unmodified
+(71 total) - this round touched no function under JS test. Verified live
+against a running server with Playwright, seeded with real production
+entries and loss events across several dates/shifts/customers: the
+sidebar's grid column genuinely changes width on click (not just the
+class), labels hide/reappear correctly, the collapse icon is mirrored
+rather than swapped, `.pg-act` computes `align-items:center`; Loss of
+Production's date range narrows the tables and its Reset genuinely
+returns to today (not blank) with the KPI strip matching the rail's own
+unmodified totals; Production Entry's customer dropdown is populated
+from real fetched names, date range + customer filters combine
+server-side, and Reset clears everything back to the full set. A full
+navigation sweep (11 screens) confirmed zero console/page errors.
