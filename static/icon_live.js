@@ -4625,12 +4625,20 @@ function wireFqcAnomalies() {
          square meant for a flex row) now that the button lives in the
          rail: full-width, same padding/centering as .nav-i, its own
          bottom border and margin so it reads as the rail's header
-         rather than the first nav item. */
+         rather than the first nav item.
+
+         sticky, not a static first child: .side is the scroll container
+         (overflow-y:auto, and there are more items than fit even
+         expanded), and a plain first child scrolls away with the list -
+         collapsing again meant scrolling all the way back to the top to
+         find the button. Pinned to the rail's own top instead, with the
+         same solid background so scrolled items don't show through it. */
       '.side-toggle{width:100%;display:flex;align-items:center;' +
         'justify-content:flex-start;padding:10px 16px;color:#8FA5BC;' +
         'margin:0 0 8px;border:none;border-bottom:1px solid rgba(255,255,255,.1);' +
-        'border-radius:0;background:none;height:auto}' +
-      '.side-toggle:hover{background:rgba(255,255,255,.05);color:#fff}' +
+        'border-radius:0;background:#152538;height:auto;' +
+        'position:sticky;top:0;z-index:5}' +
+      '.side-toggle:hover{background:#1b3350;color:#fff}' +
       '.side-toggle svg{flex:none;width:15px;transition:transform .15s}' +
       '#app.side-collapsed .side .side-toggle{justify-content:center;padding:9px 0}' +
       '#app.side-collapsed .side .side-toggle svg{transform:scaleX(-1)}' +

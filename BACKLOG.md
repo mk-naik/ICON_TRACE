@@ -1712,3 +1712,24 @@ width); the exact second-click-after-move-away scenario proven fixed via
 a listener counter, not just a class check; pin-open still restores
 everything. Verified live with screenshots at two viewport widths,
 including one matching the reported screenshot's narrow proportions.
+
+**Round 9, third follow-up.** Reported directly: after scrolling the
+menu down to reach a lower item, the toggle scrolled away with the rest
+of the list - collapsing again meant scrolling all the way back to the
+top to find it.
+
+**What was wrong.** `.side-toggle` was a plain first child of `#sidenav`,
+which is itself the scroll container (`overflow-y:auto`, and the list is
+taller than the rail even expanded) - nothing kept the button out of
+that scroll.
+
+**What changed.** `position:sticky;top:0;z-index:5` on `.side-toggle`,
+with its background set to the rail's own solid navy instead of `none`
+so scrolled items don't show through it while it's pinned.
+
+**Which tests prove it.** No backend change; full suite unmodified and
+green (91 Python + 71 JS). The scratch Playwright suite grew to 45
+checks: the rail's list scrolled 400px, the toggle's own position
+confirmed to stay within the rail's top padding rather than moving with
+the scroll, and a click while scrolled confirmed to still reach the
+handler.
