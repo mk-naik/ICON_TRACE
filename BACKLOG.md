@@ -1619,3 +1619,38 @@ unmodified totals; Production Entry's customer dropdown is populated
 from real fetched names, date range + customer filters combine
 server-side, and Reset clears everything back to the full set. A full
 navigation sweep (11 screens) confirmed zero console/page errors.
+
+**Round 9 follow-up.** Reported directly, with screenshots: the toggle's
+own icon sat at a visibly different distance from the rail's edge than
+the `.nav-i` icons below it, and hovering the collapsed rail (which
+Round 9 had made expand it) showed icons with no text - read, correctly,
+as broken rather than as a feature nobody had asked for.
+
+- **Alignment**: the toggle had been a small, separately-sized button
+  positioned with its own fixed offset (`left:10px`), not centered the
+  way `.nav-i` centers its icon. Restyled to the exact same box model as
+  `.nav-i` (`width:100%`, the same `padding`/`justify-content` values,
+  collapsed and expanded) so its icon lands in the same column by
+  construction - verified live, the two icons' left offsets now land
+  within ~2.6px of each other (down from an ~8px gap before), the
+  residual difference being an SVG box against a text glyph's own
+  centering inside its 15px box, not a layout bug.
+- **Hover**: reinstated it first, since the report read as "this should
+  reveal text, not just icons." Confirmed live it should not go back in
+  this form. A listener-counter test proved a **second** click on
+  anything inside the rail - the toggle, or any ordinary `.nav-i` - after
+  the mouse moved away and came back never reached its handler at all:
+  the rail expanding out from under the pointer on `:hover` leaves the
+  click landing somewhere that is no longer the element it started at.
+  Not a browser-automation artifact - it reproduces with an ordinary
+  move-away-and-click sequence, and it would mean a real operator's
+  second click on a nav item silently doing nothing. Removed again,
+  this time for good: collapsed means icons-only until an explicit
+  click, full stop - the tooltip no longer mentions hovering either.
+
+**Verified live** the same way as Round 9 itself: the toggle's icon
+offset compared directly against a `.nav-i` icon's offset in the same
+collapsed state; a genuine second click (mouse moved away and back)
+proven to reach the toggle's handler via a listener counter, not just a
+class check; full regression (91 Python + 71 JS) and the round's own
+39-check Playwright suite all still green.
