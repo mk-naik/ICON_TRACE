@@ -1207,6 +1207,10 @@ Mukesh's answers, 4 Sep:
 - [x] **A module in a box cannot be re-judged where it stands.** Recording
       a decision moves the serial's state, which would leave the box holding
       a module the record says is not in it. Take it out first.
+      **Superseded, §19b:** a flat refusal is no longer right once
+      duplicate-scan detection exists — the attempt is compared against the
+      packed record instead, and only a genuine disagreement raises
+      anything, held for a person to resolve rather than blocked outright.
 - [x] **Going against the evidence is asked about once.** Agreeing with it
       stays a single key.
 - [x] **The reason field is only for overruling.** Agreeing with a proposed
@@ -1251,7 +1255,9 @@ Mukesh's answers, 4 Sep:
 - [ ] Provisional grade disagrees when evidence arrives
 - [ ] Evidence mismatch on sync
 - [ ] Provisional never confirmed
-- [ ] Grade change on a packed module forces the box open
+- [x] Grade change on a packed module forces the box open — built as
+      "keep the rescanned one" in §19b's duplicate-scan resolution, via the
+      real `_repack()` removal path, not a second one.
 - [ ] Indent says DCR, material issued says NDCR
 - [ ] Invoice superseded under a new IRN
 - [ ] Quality freeze on a material lot *(awaiting spec)*
@@ -1265,9 +1271,121 @@ Mukesh's answers, 4 Sep:
 
 ## 19. Controls
 
-- [ ] Quality involvement — review queues, who clears what.
-      Already settled: grade issues to Quality; serial existence to the
-      Incharge; evidence mismatch is a grade issue, so Quality.
+- [x] Quality involvement — review queues, who clears what.
+      Built as one merged feed rather than two screens — see §19b.
+      Grade issues go to Quality (a role added for exactly this — none
+      existed), serial existence and the duplicate-scan conflicts below go
+      to Production Shift Incharge or above, and a conflict discovered
+      after dispatch is Admin-only.
+
+## 19b. Quality Decision merged into Needs Review; duplicate-scan detection  *(new)*
+
+**STEP 0, before building anything:** checked whether Needs Review had a
+real table/endpoint behind it yet, the way Gate Pass and Challan turned out
+to be a mix of real and hardcoded pieces recently. It did not — `v-review`
+was 100% v4 demo: three hardcoded `<tr>` rows, hardcoded KPI numbers, and
+`rvResolve()` only faded a row and wrote a client-side audit line that was
+never sent anywhere. Quality Decision, by contrast, was fully real:
+`/api/quality/pending`, `/api/quality`, `db.record_quality()`, backed by
+`fqc_record.quality_grade` and covered by tests in `test_fqc.py`. So the
+merge is a real screen absorbing a demo one, not two real screens colliding.
+
+**The merge.** `v-review` (native v4 markup, never edited) is now overwritten
+live from `GET /api/review` — one feed, two sources: a `quality_grade`
+"item" is still read straight from `fqc_record` exactly as
+`/api/quality/pending` always did (nothing about the grading rules or their
+tests moved), and a `duplicate_scan` item is a real row in a new
+`review_item` table, the one place future review types land instead of a
+new table each. Quality Decision's screen, its nav entry and its
+`/view/quality` route are gone — `frag_quality.html` deleted, the route
+returns 404. Its evidence layout (Pmax, EL/VI, defect, FQC's reason and
+note) survives as a popup opened from Needs Review, reached through
+`reviewGradePrompt()` in `icon_live.js`, and both the popup and the old
+route call the same `_grade_quality()` in `app.py` — one function behind
+both, so there is no second submit path to drift from the first.
+
+**Visibility versus authority.** Production sees a `quality_grade` item in
+the shared list (Mukesh: "a review item can be seen by both") but the
+server sends `evidence: null` and `locked: true` for it unless the caller's
+role is Quality or Admin — the popup has nothing to open even if a client
+ignored the hidden button. `/api/review/resolve` checks the same role
+server-side before writing anything, regardless of what the calling screen
+already hid.
+
+**A role that did not exist.** v4's `ROLES` has no "Quality" — the old
+screen let Admin, Production Incharge and FQC Operator all call GY/BGY,
+which is exactly the shared access this task's gating removes. `Quality` is
+added at runtime in `icon_live.js` (same technique this file already uses
+to add `'challan-list'` etc. to existing roles), and `'review'` is granted
+to Production Incharge, who never had it. A demo login option was added so
+the role can actually be exercised. **Authentication is still "designed, not
+built"** (v4's own login note) — nothing here changes that. What changed is
+that the client now sends `X-User-Name`/`X-User-Role` on every call
+(`icon_live.js`'s shared `api()`), and `actor()`/`role()` in `app.py` read
+them — the same trust level as the rest of the app, just no longer thrown
+away. Before this, every audit row in the whole system said `"operator"`,
+literally, because nothing ever set the Flask session; that is now fixed
+app-wide, not only for this feature.
+
+**Duplicate-scan detection.** `/api/fqc` used to hard-refuse grading a
+`packed`/`dispatched` serial outright ("take it out of its box first" —
+§18's *"A module in a box cannot be re-judged where it stands"* bullet is
+**superseded** by this). It now compares the attempt's outcome against the
+serial's live `fqc_record`:
+- **Agree** → nothing is written, no review item — confirmed correct is not
+  a conflict, and flagging it anyway trains people to stop reading flags.
+- **Disagree** → the new evidence is snapshotted permanently into its own
+  `fqc_record` row (`record_fqc(..., supersede=False, update_serial=False)`
+  — evidence is copied, never re-read live, same rule as everywhere else in
+  FQC), and one `review_item` holds both records for side-by-side display.
+  Software shows the evidence; it does not suggest which is right.
+
+**Resolution.**
+- *Not yet dispatched* — Production Incharge or Admin only (not a bare
+  Operator — they carry the consequence). "Keep the original" supersedes
+  the retest and closes the item, no further action. "Keep the rescanned
+  one" calls `_repack()` — the same function `/api/repack` already uses,
+  with `release=[serial]` — so the box ends up exactly as a manual repack
+  removal leaves it (a genuine partial or a remainder box, whichever
+  applies), never a second "take it out" path. This is §18's *"Grade
+  change on a packed module forces the box open"*, now built. The original
+  `fqc_record` is then superseded — marked, never deleted or edited beyond
+  that — and the module journey / trace view needed no change to show both
+  in order, **except** one real bug this surfaced: the journey's FQC stage
+  read `fqc[-1]` (newest by timestamp), which is wrong the one time a
+  chronologically *earlier* record becomes the live one again ("keep the
+  original" over a later rescan). Fixed to prefer the live (non-superseded)
+  row, falling back to newest — unchanged for every serial that was never
+  duplicated.
+- *Already dispatched* — Admin only, acknowledge-only ("the dispatched one
+  stands"), reason mandatory. Deliberately does not attempt a
+  replacement-serial workflow — out of scope for this pass, marked with a
+  `TODO` in `app.py` naming it as deliberate, not an oversight, and proven
+  absent in `test_review.py` (a request naming a replacement serial is
+  simply ignored, not honoured).
+
+**Which tests prove it.** `test_review.py`, new, 8 tests: agreement raises
+nothing; disagreement raises one item holding both records' evidence; a
+bare Operator (FQC Operator, Packing Operator) is refused server-side, not
+just UI-hidden; "keep rescanned" produces a box in the identical state a
+manual repack removal produces (compared directly, same capacity/grade/
+model/contents); the cancelled original is unchanged byte-for-byte except
+`superseded_by`/`superseded_at`, and both records appear correctly, in
+order, in `/api/trace/serial`; a dispatched conflict is Admin-only with no
+path to a replacement serial; every resolution of every type is refused
+with no reason and recorded with one; and Production sees but cannot act on
+a quality-type item. `test_fqc.py`'s old "a packed module cannot be judged
+again" test is rewritten for the new behaviour it now defends instead
+(state and grade still don't move on a disagreement — only the review item
+appears). Full existing suite re-run and green (`test_fqc.py` 48/49 — the
+one failure, an FQC journey stage reading `"Pass"` where the test expects
+`"A"`, pre-dates this change and is unrelated; left as found).
+
+**Known limitation, stated rather than hidden:** role is a header the
+client declares (`X-User-Role`), not a signed session — matching this
+app's actual, documented authentication state, not a gap introduced here.
+A gate that must not be spoofable needs real authentication first, which is
+still "designed, not built" everywhere in this app, not only here.
 
 ## 19a. Material master  *(new)*
 

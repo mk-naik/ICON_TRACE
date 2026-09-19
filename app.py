@@ -199,7 +199,18 @@ def _sync_guard(fn):
 
 
 def actor():
-    return session.get("user", "operator")
+    # Authentication is designed, not built (v4's own login note says so).
+    # USER.name is chosen client-side with nothing behind it - but a
+    # gate that checks a role has to know one, so the live layer sends the
+    # signed-in name and role on every call and this is where the server
+    # reads it, same trust level as the rest of the app, just no longer
+    # thrown away. Falls back exactly as before when the header is absent.
+    return (request.headers.get("X-User-Name") or "").strip() \
+        or session.get("user", "operator")
+
+
+def role():
+    return (request.headers.get("X-User-Role") or "").strip()
 
 
 @app.context_processor
@@ -2814,11 +2825,14 @@ def view_fragment(name):
     """A screen's markup only - no shell. Dropped into a v4 <section class=
     "view"> by the live layer, so it uses v4's own card, grid and table
     classes and cannot drift into looking like a second application."""
+    # 'quality' retired - Quality Decision merged into Needs Review (v-review).
+    # A screen name is never left in this map once its route stops being
+    # reachable from anywhere: a dead screen with live data behind it is
+    # exactly what this merge was for.
     allowed = {"indent": "frag_indent.html",
                "loading": "frag_loading.html",
                "indent-form": "frag_indent_form.html",
                "items": "frag_items.html",
-               "quality": "frag_quality.html",
                "settings": "frag_settings.html"}
     if name not in allowed:
         abort(404)
@@ -3589,7 +3603,12 @@ def api_trace_serial(serial):
                         "tag": anomaly["at"] or "", "tone": "t-fail"})
 
     if fqc:
-        f = fqc[-1]
+        # The live record, not simply the newest by timestamp: a resolved
+        # duplicate-scan conflict can leave an EARLIER row as the one that
+        # stands (keep the original packed decision over a later rescan),
+        # and fqc is ordered by `at` alone. Falls back to the newest row,
+        # unchanged from before, on every serial that was never duplicated.
+        f = next((r for r in fqc if not r.get("superseded_by")), fqc[-1])
         # FQC records pass or reject
         if f["outcome"] == "pass":
             value, tone = "Pass", "t-pass"
@@ -4560,6 +4579,73 @@ def api_fqc_lookup():
     return jsonify(out), 200 if out.get("ok") else 404
 
 
+def _handle_duplicate_scan(cur, rec, evidence, serial, outcome, reason,
+                           defect, note):
+    """serial is already 'packed' or 'dispatched' and has just been graded
+    again at FQC. Compare what this attempt would record against the FQC
+    record packing (or dispatch) already acted on:
+
+      - agree  -> nothing to do. Confirmed correct is not a conflict, and
+                  flagging it anyway trains people to stop reading flags.
+      - disagree -> snapshot this reading permanently (never re-read later
+                  from a source that can move), leave the original exactly
+                  as it stood, and raise ONE review item holding both -
+                  software shows the evidence, it does not pick a side.
+
+    A BAD reading is still not a decision, whichever record it is being
+    compared against, so that refusal applies here too.
+    """
+    if evidence.get("ss_state") == ev.BAD:
+        return jsonify({"ok": False, "why":
+            "The Sun Simulator returned BAD for this serial. It cannot be "
+            "judged until the probe, polarity, or junction-box fault is "
+            "reviewed."}), 400
+
+    original = store.one(cur, "SELECT * FROM fqc_record WHERE serial=%s "
+                              "AND superseded_by IS NULL "
+                              "ORDER BY fqc_id DESC LIMIT 1", (serial,))
+    if not original:
+        return jsonify({"ok": False, "why":
+            "%s is %s but has no FQC record behind it - that should not "
+            "happen." % (serial, rec.get("state"))}), 400
+
+    if outcome == original.get("outcome"):
+        return jsonify({"ok": True, "serial": serial, "duplicate_scan": True,
+                        "agree": True, "outcome": outcome,
+                        "why": "This confirms the %s already on file for %s "
+                              "- no change made." % (original.get("outcome"),
+                                                     serial)})
+
+    # Disagreement: the EL verdict is the defect unless the operator named
+    # another - same rule the normal grading path applies.
+    if outcome == "reject" and not defect:
+        verdict = (evidence.get("el") or "").strip()
+        if verdict and verdict.lower() not in ev.EL_CLEAN:
+            defect = verdict
+    mode = evidence.get("mode") or "provisional"
+    if mode not in ("confirmed", "provisional"):
+        mode = "provisional"
+
+    new_rec = db.record_fqc(cur, serial, outcome, evidence, actor(), mode,
+                            reason, defect, note,
+                            supersede=False, update_serial=False)
+    review_id = db.create_review_item(
+        cur, "duplicate_scan", serial, fqc_id=original["fqc_id"],
+        new_fqc_id=new_rec["fqc_id"],
+        dispatched=(rec.get("state") == "dispatched"), created_by=actor())
+    db.audit(cur, actor(), "review.duplicate_scan", "serial", serial,
+             {"review_id": review_id, "original_fqc_id": original["fqc_id"],
+              "new_fqc_id": new_rec["fqc_id"], "original_outcome":
+              original.get("outcome"), "new_outcome": outcome})
+    return jsonify({"ok": True, "serial": serial, "duplicate_scan": True,
+                    "agree": False, "review_id": review_id, "why":
+                    "%s is already %s as %s, and this reads %s. Flagged to "
+                    "Needs Review as review #%d rather than guessing which "
+                    "is right." % (serial, rec.get("state"),
+                                   original.get("outcome"), outcome,
+                                   review_id)})
+
+
 @app.route("/api/fqc", methods=["POST"])
 @_sync_guard
 def api_fqc_grade():
@@ -4599,14 +4685,14 @@ def api_fqc_grade():
         if not rec:
             return jsonify(out), 404
 
-        # A module already in a box cannot be re-judged where it stands:
-        # recording a decision moves its state, and it would leave the box
-        # holding a module the record says is not packed. Take it out first.
+        # A module already packed or dispatched being scanned again at FQC
+        # is not a normal grading event - the line has already acted on a
+        # decision for it. It is a duplicate scan: compare what this reading
+        # says against the record that decision was made from, rather than
+        # silently re-judging a module sitting in a real box.
         if rec.get("state") in ("packed", "dispatched"):
-            return jsonify({"ok": False, "why":
-                "%s is %s. Take it out of its box before judging it again — "
-                "otherwise the box holds a module the record says is not in "
-                "it." % (serial, rec.get("state"))}), 400
+            return _handle_duplicate_scan(cur, rec, evidence, serial, outcome,
+                                          reason, defect, note)
 
         if evidence.get("ss_state") == ev.BAD:
             return jsonify({"ok": False, "why":
@@ -4690,61 +4776,247 @@ def api_quality_pending():
     return jsonify(rows)
 
 
-@app.route("/api/quality", methods=["POST"])
-@_sync_guard
-def api_quality_grade():
-    """Quality calls a rejected module GY or BGY.
+def _grade_quality(cur, serial, grade, note, decided_by):
+    """Quality calls a rejected module GY or BGY - the one code path behind
+    every screen that can make this call. Raises _Refuse; never returns a
+    Flask response itself, so a caller with its own response shape (the
+    merged Needs Review resolve endpoint included) can wrap it.
 
     Only here does a rejected module get a grade, and only then can it be
-    packed. Pass is not on this screen: FQC decided that, and a module that
+    packed. Pass is not decided here: FQC decided that, and a module that
     failed to make its wattage does not become an A module by review.
     """
-    d = request.get_json(force=True)
-    serial = (d.get("serial") or "").strip().upper()
-    grade = (d.get("grade") or "").strip().upper()
-    note = (d.get("note") or "").strip() or None
+    grade = (grade or "").strip().upper()
+    note = (note or "").strip() or None
     if grade not in ("A", "GY", "BGY"):
-        return jsonify({"ok": False, "why":
-                        "Quality decides A, GY or BGY."}), 400
+        raise _Refuse("Quality decides A, GY or BGY.")
     # GY and BGY are not interchangeable and the difference is a judgement,
     # so the judgement is written down. A grade with no reasoning behind it
     # is one nobody can defend to a customer later.
     if not note:
-        return jsonify({"ok": False, "why":
-            "Say why this is %s — the reasoning is what makes the grade "
-            "defensible afterwards." % grade}), 400
-    with store.conn() as (cx, cur):
-        rec = db.find_serial(cur, serial)
-        if not rec:
-            return jsonify({"ok": False, "why":
-                "%s is not in the serial master." % serial}), 404
-        if rec.get("state") != "rejected":
-            return jsonify({"ok": False, "why":
-                "%s is %s, not awaiting a quality decision."
-                % (serial, rec.get("state"))}), 400
+        raise _Refuse("Say why this is %s — the reasoning is what makes "
+                      "the grade defensible afterwards." % grade)
+    rec = db.find_serial(cur, serial)
+    if not rec:
+        raise _Refuse("%s is not in the serial master." % serial, 404)
+    if rec.get("state") != "rejected":
+        raise _Refuse("%s is %s, not awaiting a quality decision."
+                      % (serial, rec.get("state")))
 
-        # Quality can pass a module back to A - it sees the image and the
-        # reading, and FQC may have called it on a verdict the image does
-        # not support. What it cannot do is pass one that MEASURED SHORT: A
-        # means Pmax at or above the wattage, and that is a measurement, not
-        # a judgement. Retest it in the Sun Simulator instead.
-        if grade == "A":
-            cfg = db.get_config(cur)
-            e = ev.gather(cfg, serial, rec.get("wattage") or 0)
-            pmax, want = e.get("pmax"), (rec.get("wattage") or 0)
-            if pmax is None or pmax < want:
-                return jsonify({"ok": False, "why":
-                    "%s cannot be passed: %s A means Pmax at or above the "
-                    "wattage, which is measured, not judged — retest it in "
-                    "the Sun Simulator."
-                    % (serial, e.get("why") or "the reading is unavailable.")
-                    }), 400
+    # Quality can pass a module back to A - it sees the image and the
+    # reading, and FQC may have called it on a verdict the image does
+    # not support. What it cannot do is pass one that MEASURED SHORT: A
+    # means Pmax at or above the wattage, and that is a measurement, not
+    # a judgement. Retest it in the Sun Simulator instead.
+    if grade == "A":
+        cfg = db.get_config(cur)
+        e = ev.gather(cfg, serial, rec.get("wattage") or 0)
+        pmax, want = e.get("pmax"), (rec.get("wattage") or 0)
+        if pmax is None or pmax < want:
+            raise _Refuse(
+                "%s cannot be passed: %s A means Pmax at or above the "
+                "wattage, which is measured, not judged — retest it in "
+                "the Sun Simulator."
+                % (serial, e.get("why") or "the reading is unavailable."))
 
-        saved = db.record_quality(cur, serial, grade, actor(), note)
-        db.audit(cur, actor(), "quality.grade", "serial", serial,
-                 {"grade": grade, "note": note})
-    return jsonify({"ok": True, "serial": serial, "grade": grade,
+    saved = db.record_quality(cur, serial, grade, decided_by, note)
+    db.audit(cur, decided_by, "quality.grade", "serial", serial,
+             {"grade": grade, "note": note})
+    return saved
+
+
+@app.route("/api/quality", methods=["POST"])
+@_sync_guard
+def api_quality_grade():
+    d = request.get_json(force=True)
+    serial = (d.get("serial") or "").strip().upper()
+    try:
+        with store.conn() as (cx, cur):
+            saved = _grade_quality(cur, serial, d.get("grade"), d.get("note"),
+                                   actor())
+    except _Refuse as e:
+        return jsonify({"ok": False, "why": e.why}), e.code
+    return jsonify({"ok": True, "serial": serial, "grade": saved.get("grade"),
                     "record": saved})
+
+
+# Needs Review: one merged feed, whatever type of item is in it. A
+# quality-type item can be SEEN by Production in the shared list (Mukesh:
+# "a review item can be seen by both") but not opened or acted on - enforced
+# here, not just by a hidden button, by redacting the evidence a client
+# would need to render the decision popup at all.
+_QUALITY_ROLES = ("Quality", "Admin")
+_INCHARGE_ROLES = ("Production Incharge", "Admin")
+
+
+def _evid_side(r):
+    if not r:
+        return None
+    return {"outcome": r.get("outcome"), "pmax": r.get("ss_pmax"),
+            "wattage": r.get("wattage"),
+            "el_verdict": r.get("el_verdict"), "defect": r.get("defect"),
+            "reason": r.get("reason"), "note": r.get("note"),
+            "decided_by": r.get("decided_by"), "at": r.get("at")}
+
+
+@app.route("/api/review")
+def api_review_list():
+    """The merged Needs Review feed.
+
+    A quality-type item is not a stored row - it is read live from
+    fqc_record exactly as /api/quality/pending always did, so the Quality
+    grading rules and their tests do not move underneath this screen. A
+    duplicate-scan item is a real review_item row: there is no other table
+    that already says "FQC disagreed with a module already packed".
+    """
+    viewer = role()
+    with store.conn() as (cx, cur):
+        items = []
+        for r in db.quality_pending(cur):
+            r = dict(r)
+            locked = viewer not in _QUALITY_ROLES
+            items.append({
+                "type": "quality_grade", "id": r["serial"], "serial": r["serial"],
+                "model": r.get("model"), "customer": r.get("customer"),
+                "flag": "Awaiting Quality", "stage": "FQC",
+                "detail": "Rejected" + (" — " + r["defect"] if r.get("defect") else ""),
+                "user": r.get("decided_by"), "at": r.get("at"),
+                "locked": locked,
+                "evidence": None if locked else {"original": _evid_side(r)},
+            })
+        for r in db.review_items_open(cur, "duplicate_scan"):
+            r = dict(r)
+            orig = store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s",
+                             (r["fqc_id"],))
+            new = store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s",
+                            (r["new_fqc_id"],))
+            orig_side, new_side = _evid_side(orig), _evid_side(new)
+            # fqc_record itself carries no wattage column - it lives on
+            # serial, already joined onto this review row.
+            if orig_side is not None: orig_side["wattage"] = r.get("wattage")
+            if new_side is not None: new_side["wattage"] = r.get("wattage")
+            items.append({
+                "type": "duplicate_scan", "id": r["review_id"], "serial": r["serial"],
+                "model": r.get("model"), "customer": r.get("customer"),
+                "flag": "Duplicate scan", "stage": r.get("state"),
+                "detail": "%s said %s, rescanned %s" % (
+                    "dispatched" if r.get("dispatched") else "packed",
+                    (orig or {}).get("outcome"), (new or {}).get("outcome")),
+                "user": r.get("created_by"), "at": r.get("created_at"),
+                "dispatched": bool(r.get("dispatched")),
+                "locked": False,
+                "evidence": {"original": orig_side, "rescan": new_side},
+            })
+    items.sort(key=lambda x: x.get("at") or "", reverse=True)
+    return jsonify(items)
+
+
+def _resolve_duplicate_scan(cur, review_id, resolution, reason):
+    item = db.review_item_get(cur, review_id)
+    if not item:
+        raise _Refuse("No such review item.", 404)
+    if item["status"] != "open":
+        raise _Refuse("Review #%d is already resolved." % review_id)
+
+    serial = item["serial"]
+    srec = db.find_serial(cur, serial)
+    dispatched = bool(item.get("dispatched")) or \
+        bool((srec or {}).get("state") == "dispatched")
+
+    if dispatched:
+        if role() != "Admin":
+            raise _Refuse("Only Admin can resolve a conflict on a serial "
+                          "that has already been dispatched.", 403)
+        # TODO(deliberate, future work): a dispatched duplicate-scan conflict
+        # may eventually need a replacement-serial workflow - the customer
+        # already has the original module, and making the rescan's outcome
+        # count for anything downstream would need a new serial to carry it.
+        # That is explicitly out of scope for this pass. This branch only
+        # records which record stands and creates nothing - no replacement
+        # serial is selected, generated, or offered anywhere below.
+        db.supersede_fqc(cur, item["new_fqc_id"], item["fqc_id"])
+        resolution = "acknowledged"
+    else:
+        if role() not in _INCHARGE_ROLES:
+            raise _Refuse("Only a Production Shift Incharge or above can "
+                          "resolve a duplicate scan - they carry the "
+                          "consequence of the choice.", 403)
+        resolution = (resolution or "").strip()
+        if resolution not in ("keep_original", "keep_rescanned"):
+            raise _Refuse("Choose which record stands: the original or "
+                          "the rescan.")
+        if resolution == "keep_original":
+            db.supersede_fqc(cur, item["new_fqc_id"], item["fqc_id"])
+        else:
+            box = store.serial_in_live_box(cur, serial)
+            if not box:
+                raise _Refuse("%s is not sitting in a live box any more - "
+                              "it may already have been taken out." % serial)
+            # The exact same removal Repack already does for any pallet
+            # losing a module - top-up or a genuine partial - not a second,
+            # parallel "take it out of the box" path.
+            _repack(cur, [box["box_id"]], None, [serial], reason)
+            new_rec = store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s",
+                                (item["new_fqc_id"],))
+            db.supersede_fqc(cur, item["fqc_id"], item["new_fqc_id"])
+            db.set_serial(cur, serial,
+                          state="graded" if new_rec["outcome"] == "pass"
+                          else "rejected", grade=new_rec["grade"])
+
+    at = datetime.datetime.now().isoformat(timespec="seconds")
+    cur.execute("UPDATE review_item SET status='resolved', resolved_by=%s, "
+                "resolved_at=%s, resolution=%s, reason=%s WHERE review_id=%s",
+                (actor(), at, resolution, reason, review_id))
+    db.audit(cur, actor(), "review.resolve", "serial", serial,
+             {"review_id": review_id, "type": "duplicate_scan",
+              "resolution": resolution, "reason": reason})
+    return {"ok": True, "review_id": review_id, "resolution": resolution}
+
+
+@app.route("/api/review/resolve", methods=["POST"])
+@_sync_guard
+def api_review_resolve():
+    """One endpoint behind every resolve action in Needs Review, whatever
+    the item's type and wherever it is reached from - resolving from Needs
+    Review calls exactly this, because there is nowhere else left that
+    resolves anything. Role is re-checked here regardless of what the
+    calling screen already hid.
+    """
+    d = request.get_json(force=True) or {}
+    item_type = (d.get("type") or "").strip()
+    reason = (d.get("reason") or d.get("note") or "").strip()
+    if not reason:
+        return jsonify({"ok": False, "why":
+            "Say why — every resolution needs a reason, no exceptions."}), 400
+
+    if item_type == "quality_grade":
+        if role() not in _QUALITY_ROLES:
+            return jsonify({"ok": False, "why":
+                "Only Quality can resolve a quality decision."}), 403
+        serial = (d.get("id") or d.get("serial") or "").strip().upper()
+        try:
+            with store.conn() as (cx, cur):
+                saved = _grade_quality(cur, serial, d.get("grade"), reason,
+                                       actor())
+        except _Refuse as e:
+            return jsonify({"ok": False, "why": e.why}), e.code
+        return jsonify({"ok": True, "type": item_type, "serial": serial,
+                        "grade": saved.get("grade"), "record": saved})
+
+    if item_type == "duplicate_scan":
+        try:
+            review_id = int(d.get("id"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "why": "No such review item."}), 404
+        try:
+            with store.conn() as (cx, cur):
+                out = _resolve_duplicate_scan(cur, review_id,
+                                              d.get("resolution"), reason)
+        except _Refuse as e:
+            return jsonify({"ok": False, "why": e.why}), e.code
+        return jsonify(out)
+
+    return jsonify({"ok": False, "why": "Unknown review item type."}), 400
 
 
 @app.route("/api/el/image")

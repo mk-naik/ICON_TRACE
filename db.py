@@ -732,7 +732,7 @@ def serials_for(cur, alloc_id=None, state=None, limit=500):
 # ==========================================================================
 
 def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
-               defect=None, note=None):
+               defect=None, note=None, supersede=True, update_serial=True):
     """Snapshot the evidence onto the record. A later re-import must never
     be able to rewrite why a module was judged.
 
@@ -740,6 +740,14 @@ def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
     to pack. A reject has NO grade until Quality gives it one, and no grade
     is what keeps it out of a box: the packing gate wants state='graded'
     with a grade matching the label, and a reject is neither.
+
+    `supersede` and `update_serial` default to the behaviour above and stay
+    that way for every normal grading call. A duplicate-scan retest (a
+    module already packed or dispatched, read again) passes both False: the
+    reading is snapshotted permanently so it is never re-read from a moving
+    source, but it must not silently replace the record packing already
+    acted on, or move a serial that is sitting in a real box, until a person
+    resolves which of the two stands.
     """
     outcome = (outcome or "").strip().lower()
     if outcome not in ("pass", "reject"):
@@ -765,14 +773,74 @@ def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
         # rather than deleted: it is why the module was treated as it was at
         # the time, and every count reads the live row only, so a retested
         # module is one module and not two.
-        cur.execute("UPDATE fqc_record SET superseded_by=%s, superseded_at=%s "
-                    "WHERE serial=%s AND fqc_id<>%s AND superseded_by IS NULL",
-                    (new_id, rec["at"], serial, new_id))
+        if supersede:
+            cur.execute("UPDATE fqc_record SET superseded_by=%s, superseded_at=%s "
+                        "WHERE serial=%s AND fqc_id<>%s AND superseded_by IS NULL",
+                        (new_id, rec["at"], serial, new_id))
         rec["fqc_id"] = new_id
-    set_serial(cur, serial,
-               state="graded" if outcome == "pass" else "rejected",
-               grade=grade)
+    if update_serial:
+        set_serial(cur, serial,
+                   state="graded" if outcome == "pass" else "rejected",
+                   grade=grade)
     return rec
+
+
+def supersede_fqc(cur, fqc_id, by_id):
+    """Mark one fqc_record LOSING - not deleted, not mutated beyond this -
+    because another record is the one now trusted. Used both directions: a
+    duplicate-scan resolution can supersede the ORIGINAL (keep the rescan)
+    or supersede the RETEST (keep the original the box was already built
+    from). Whichever way it goes, the losing row is exactly what it always
+    was except for these two columns."""
+    at = datetime.datetime.now().isoformat(timespec="seconds")
+    if cur is not None:
+        cur.execute("UPDATE fqc_record SET superseded_by=%s, superseded_at=%s "
+                    "WHERE fqc_id=%s", (by_id, at, fqc_id))
+    return at
+
+
+def create_review_item(cur, item_type, serial, fqc_id=None, new_fqc_id=None,
+                       dispatched=False, created_by=None):
+    """One row, one type column - Needs Review's whole point is not to grow
+    a table per flavour of thing that needs a decision."""
+    if cur is None:
+        return None
+    rec = {"type": item_type, "serial": serial, "status": "open",
+           "fqc_id": fqc_id, "new_fqc_id": new_fqc_id,
+           "dispatched": 1 if dispatched else 0,
+           "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+           "created_by": created_by}
+    cur.execute(
+        "INSERT INTO review_item (type, serial, status, fqc_id, new_fqc_id, "
+        "dispatched, created_at, created_by) VALUES "
+        "(%s,%s,%s,%s,%s,%s,%s,%s)",
+        (rec["type"], rec["serial"], rec["status"], rec["fqc_id"],
+         rec["new_fqc_id"], rec["dispatched"], rec["created_at"],
+         rec["created_by"]))
+    return cur.lastrowid
+
+
+def review_item_get(cur, review_id):
+    if cur is None:
+        return None
+    return _store.one(cur, "SELECT * FROM review_item WHERE review_id=%s",
+                      (review_id,))
+
+
+def review_items_open(cur, item_type=None, n=200):
+    """Every open row, newest first - joined to the serial for model and
+    customer, the same way quality_pending() joins fqc_record to serial."""
+    if cur is None:
+        return []
+    q = ("SELECT r.*, s.model AS model, s.wattage AS wattage, "
+         "s.customer AS customer, s.state AS state "
+         "FROM review_item r JOIN serial s ON s.serial=r.serial "
+         "WHERE r.status='open'")
+    args = []
+    if item_type:
+        q += " AND r.type=%s"; args.append(item_type)
+    q += " ORDER BY r.review_id DESC LIMIT %s"; args.append(n)
+    return _store.rows(cur, q, args)
 
 
 def record_quality(cur, serial, grade, decided_by, note=None):

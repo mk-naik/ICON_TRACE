@@ -39,6 +39,28 @@
            ROLES[k].views.push('loadsession');
        }
     });
+    // Needs Review now carries every rejected-awaiting-Quality module too
+    // (the merged feed), not only duplicate/not-in-master flags - Production
+    // Incharge ("Production Shift Incharge") needs to see it to resolve the
+    // duplicate-scan conflicts they're entitled to act on, so the view is
+    // granted here the same way 'challan-list' was above. v4 never listed
+    // 'review' for this role at all.
+    if (ROLES['Production Incharge'] &&
+        ROLES['Production Incharge'].views.indexOf('review') === -1) {
+      ROLES['Production Incharge'].views.push('review');
+    }
+    // Quality has no role of its own in v4 - the old Quality Decision
+    // screen let Admin, Production Incharge and FQC Operator all call
+    // GY/BGY, which is exactly the access this merge is meant to remove:
+    // a quality-type item's resolve action is gated to Quality only,
+    // server-side (see /api/review/resolve). A role has to exist for that
+    // gate to mean anything, so it is added here, the same way this file
+    // already adds views to existing roles - v4's ROLES object is treated
+    // as master data the live layer may extend, per the file banner above.
+    if (!ROLES['Quality']) {
+      ROLES['Quality'] = { home: 'review', views: ['search', 'dash', 'review'],
+        perms: ['Quality decision — pass back to A, GY or BGY'] };
+    }
   }
 
   /* v4's page carries its stylesheet INLINE and links nothing, so every rule
@@ -57,9 +79,20 @@
   })();
 
   function api(path, opts) {
-    return fetch('/api/' + path, Object.assign({
-      headers: { 'Content-Type': 'application/json' }
-    }, opts || {})).then(function (r) {
+    opts = opts || {};
+    // Authentication is designed, not built - USER is chosen at sign-in
+    // with nothing behind it. But a server-side role gate (Quality-only,
+    // Shift-Incharge-or-above) has to know a role to check, so it travels
+    // on every call here, once, rather than each new endpoint inventing its
+    // own way to say who is asking. See actor()/role() in app.py.
+    var headers = Object.assign({ 'Content-Type': 'application/json' },
+      opts.headers || {});
+    if (typeof USER !== 'undefined' && USER && USER.name) {
+      headers['X-User-Name'] = USER.name;
+      headers['X-User-Role'] = USER.role || '';
+    }
+    return fetch('/api/' + path, Object.assign({}, opts, { headers: headers }))
+      .then(function (r) {
       /* A refusal carries its reason in the body. Throwing on the status code
          alone would replace "only 240 remain on that line" with "400". */
       return r.json().then(function (body) {
@@ -3469,6 +3502,9 @@ function wireFqcAnomalies() {
     }
     if (id === 'repack') { try { wireRepack(); } catch (e) {} }
     if (id === 'challan') { try { wireChallan(); } catch (e) {} }
+    if (id === 'review') {
+      try { reviewWireFilters(); window.iconReviewRefresh(); } catch (e) {}
+    }
   };
 
   /* ---- Planning: the serial must agree with the indent line -----------
@@ -4406,13 +4442,12 @@ function wireFqcAnomalies() {
     { id: 'items', label: 'Item Master', icon: '\u25A5', after: 'admin',
       roles: ['Admin'], url: '/view/items',
       title: 'Maintained by Admin, not by operators' },
-    /* FQC passes or rejects; what is rejected is called GY or BGY here.
-       Beside the FQC dashboard, because that is where the rejections come
-       from and where somebody notices they are piling up. */
-    { id: 'quality', label: 'Quality Decision', icon: '\u2696', after: 'dash',
-      roles: ['Admin', 'Production Incharge', 'FQC Operator'],
-      url: '/view/quality',
-      title: 'Call a rejected module GY or BGY' },
+    /* Quality Decision used to live here as its own screen. It is retired -
+       merged into Needs Review (v-review, native to v4) as the
+       'quality_grade' item type in one shared feed. Do not re-add a
+       'quality' entry: a second screen calling the same grade endpoint is
+       exactly the duplicate this merge removed. See reviewResolve() and
+       iconReviewRefresh() further down this file. */
     /* Evidence Sources is NOT a screen of its own. Admin already has a
        "Stations & sources" tab whose data_source card describes where
        evidence comes from; a second page configuring the same thing is two
@@ -4500,6 +4535,306 @@ function wireFqcAnomalies() {
       });
   }
   window.iconLoadView = loadView;
+
+  /* ---- Needs Review: the merged feed --------------------------------
+   *
+   * v-review is native v4 markup (icon_trace.html is never edited), and it
+   * shipped with three hardcoded demo rows and demo KPI numbers. This
+   * overwrites that content from /api/review on every visit, the same way
+   * Quality Decision (now retired - see the NEW_VIEWS comment above) drew
+   * its table from /api/quality/pending. rvFilter/rvResolve, v4's own
+   * functions for the old static rows, are left in place unused rather
+   * than edited out of a file this project does not touch - nothing calls
+   * them once this has run.
+   *
+   * One popup, reached from this one screen, calling one endpoint
+   * (/api/review/resolve) regardless of item type - so there is exactly
+   * one submit code path behind every resolution, not one per screen.
+   */
+  function reviewEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  function reviewCanActDuplicate(item) {
+    if (typeof USER === 'undefined' || !USER) return false;
+    if (item.dispatched) return USER.role === 'Admin';
+    return USER.role === 'Production Incharge' || USER.role === 'Admin';
+  }
+
+  function reviewRenderKpis(rows) {
+    var kpis = document.querySelectorAll('#v-review .kpi');
+    var dup = rows.filter(function (r) { return r.type === 'duplicate_scan'; }).length;
+    var qual = rows.filter(function (r) { return r.type === 'quality_grade'; }).length;
+    if (kpis[0]) {
+      var v0 = kpis[0].querySelector('.v'); if (v0) v0.textContent = dup;
+    }
+    if (kpis[1]) {
+      var l1 = kpis[1].querySelector('label'); if (l1) l1.textContent = 'Awaiting Quality';
+      var v1 = kpis[1].querySelector('.v'); if (v1) v1.textContent = qual;
+      var d1 = kpis[1].querySelector('.d'); if (d1) d1.textContent = 'rejected, no grade yet';
+    }
+    if (kpis[2]) {
+      var l2 = kpis[2].querySelector('label'); if (l2) l2.textContent = 'Open items';
+      var v2 = kpis[2].querySelector('.v'); if (v2) v2.textContent = rows.length;
+      var d2 = kpis[2].querySelector('.d'); if (d2) d2.textContent = 'across every type, this list';
+    }
+  }
+
+  function reviewRenderRows(rows, filter) {
+    var body = document.getElementById('rvRows');
+    if (!body) return;
+    window.__reviewFilter = filter;
+    var shown = filter === 'All' ? rows
+      : filter === 'Quality' ? rows.filter(function (r) { return r.type === 'quality_grade'; })
+      : rows.filter(function (r) { return r.type === 'duplicate_scan'; });
+    // v-review is on TABLE_SCREENS (wireScreenTables(), above), so this
+    // card was already auto-marked data-itable="flagged-entries" at sign-in
+    // - search, reset, export and a "Nothing matches those filters." empty
+    // row all come from that shared layer already. Rendering a second,
+    // differently-worded empty message here would stack both under a
+    // table with nothing else visible. An empty tbody plus the wireAll()
+    // call below is the same thing every other screen on that list does.
+    var esc = reviewEsc;
+    body.innerHTML = shown.map(function (r) {
+      var when = (r.at || '').replace('T', ' ').slice(0, 16);
+      var flagTag = '<span class="tag ' + (r.type === 'quality_grade' ? 't-fail' : 't-rev') +
+        '">' + esc(r.flag) + '</span>';
+      var action;
+      if (r.locked) {
+        action = '<span class="hint">Quality only</span>';
+      } else if (r.type === 'quality_grade') {
+        action = '<button class="btn btn-ghost btn-sm" onclick="reviewGradePrompt(\'' +
+            esc(r.serial) + '\',\'A\')" title="Pass it back to A — only if it makes its wattage">Pass A</button> ' +
+          '<button class="btn btn-ghost btn-sm" onclick="reviewGradePrompt(\'' +
+            esc(r.serial) + '\',\'GY\')">GY</button> ' +
+          '<button class="btn btn-ghost btn-sm" onclick="reviewGradePrompt(\'' +
+            esc(r.serial) + '\',\'BGY\')">BGY</button>';
+      } else {
+        action = '<button class="btn btn-ghost btn-sm" onclick="reviewOpenDuplicate(' +
+          r.id + ')">Resolve</button>';
+      }
+      return '<tr><td class="mono" style="font-size:11px">' + esc(when) + '</td>' +
+        '<td class="mono">' + esc(r.serial) + '</td>' +
+        '<td>' + flagTag + '</td>' +
+        '<td>' + esc(r.stage || '—') + '</td>' +
+        '<td>' + esc(r.detail || '—') + '</td>' +
+        '<td>' + esc(r.user || '—') + '</td>' +
+        '<td style="white-space:nowrap">' + action + '</td></tr>';
+    }).join('');
+    if (window.iconTable) window.iconTable.wireAll();
+  }
+
+  window.iconReviewRefresh = function () {
+    if (!document.getElementById('rvRows')) return;
+    api('review').then(function (rows) {
+      rows = rows || [];
+      window.__reviewItems = rows;
+      reviewRenderKpis(rows);
+      reviewRenderRows(rows, window.__reviewFilter || 'All');
+    });
+  };
+
+  function reviewWireFilters() {
+    var seg = document.querySelector('#v-review .card-h .seg');
+    if (!seg || seg.getAttribute('data-review-wired')) return;
+    seg.setAttribute('data-review-wired', '1');
+    var btns = Array.prototype.slice.call(seg.querySelectorAll('button'));
+    var labels = ['All', 'Quality', 'Duplicate scan'];
+    btns.forEach(function (b, i) {
+      if (labels[i] == null) return;
+      b.textContent = labels[i];
+      b.onclick = function () {
+        btns.forEach(function (x) { x.classList.remove('on'); });
+        b.classList.add('on');
+        reviewRenderRows(window.__reviewItems || [], labels[i]);
+      };
+    });
+  }
+
+  /* The same evidence layout Quality Decision used to show on its own
+     page - Pmax, EL/VI verdict, defect, FQC's own reason and note - now a
+     popup reached from Needs Review, calling the merged endpoint. */
+  window.reviewGradePrompt = function (serial, grade) {
+    var item = (window.__reviewItems || []).filter(function (r) {
+      return r.type === 'quality_grade' && r.serial === serial; })[0];
+    if (!item || item.locked) return;
+    var row = (item.evidence && item.evidence.original) || {};
+    var host = document.getElementById('mdlGeneric');
+    var mdl = document.getElementById('mdl');
+    if (!host || !mdl) return;
+    var esc = reviewEsc;
+    var title = document.getElementById('mdlTitle');
+    var sub = document.getElementById('mdlSub');
+    if (title) title.textContent = 'Quality decision · ' + serial;
+    if (sub) sub.textContent = (grade === 'A' ? 'Passing it back to A'
+      : 'Grading it ' + grade) + ' — say what the evidence shows';
+    if (typeof modalMode === 'function') modalMode(true);
+    host.innerHTML =
+      '<div class="card" style="margin:0"><div class="card-b">' +
+      '<div class="lookup" style="padding:0 0 12px">' +
+        '<div><label>Pmax</label><div class="lv">' +
+          (row.pmax == null ? '—' : row.pmax + ' W') +
+          (row.wattage ? ' <span style="color:var(--ink3)">of ' +
+            row.wattage + ' W</span>' : '') + '</div></div>' +
+        '<div><label>EL/VI verdict</label><div class="lv">' +
+          esc(row.el_verdict || '—') + '</div></div>' +
+        '<div><label>Defect at FQC</label><div class="lv">' +
+          esc(row.defect || '—') + '</div></div>' +
+        '<div><label>FQC reason</label><div class="lv" ' +
+          'style="font-size:11.5px">' + esc(row.reason || '—') + '</div></div>' +
+        '<div><label>FQC note</label><div class="lv" ' +
+          'style="font-size:11.5px">' + esc(row.note || '—') + '</div></div>' +
+        '<div><label>Rejected by</label><div class="lv">' +
+          esc(row.decided_by || '—') + '</div></div>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;margin:0 0 10px">' +
+        '<button class="btn btn-ghost btn-sm" onclick="iconShowEl(\'' +
+          esc(serial) + '\')">View EL image</button>' +
+        '<button class="btn btn-ghost btn-sm" onclick="iconShowFtr(\'' +
+          esc(serial) + '\')">Flash test values</button></div>' +
+      '<div class="fld"><label>Why ' +
+        (grade === 'A' ? 'pass this' : grade) + '? (required)</label>' +
+        '<textarea id="revWhy" rows="3" placeholder="what the image and the ' +
+        'reading show, and why that makes it ' + grade + '"></textarea></div>' +
+      '</div><div class="card-f">' +
+      '<button class="btn btn-primary" onclick="reviewSubmitQuality(\'' +
+        esc(serial) + '\',\'' + grade + '\')">Record ' + grade + '</button>' +
+      '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+      '<span class="hint" style="margin-left:auto">A grade with no reasoning ' +
+        'behind it is one nobody can defend later.</span></div></div>';
+    mdl.classList.add('on');
+    var box = document.getElementById('revWhy');
+    if (box) box.focus();
+  };
+
+  window.reviewSubmitQuality = function (serial, grade) {
+    var box = document.getElementById('revWhy');
+    var why = box ? box.value.trim() : '';
+    if (!why) {
+      if (typeof toast === 'function') toast('Say why this is ' + grade + ' before recording it.');
+      if (box) box.focus();
+      return;
+    }
+    api('review/resolve', { method: 'POST', body: JSON.stringify(
+      { type: 'quality_grade', id: serial, grade: grade, reason: why }) })
+      .then(function (d) {
+        if (!d.ok) { if (typeof toast === 'function') toast(d.why); return; }
+        if (typeof closeModal === 'function') closeModal();
+        if (typeof toast === 'function')
+          toast(serial + ' is ' + grade + ' — it can be packed into a ' +
+                grade + ' box.');
+        window.iconReviewRefresh();
+        if (window.iconRefresh) window.iconRefresh();
+      });
+  };
+
+  /* Both records shown side by side - software never picks one. */
+  window.reviewOpenDuplicate = function (reviewId) {
+    var item = (window.__reviewItems || []).filter(function (r) {
+      return r.type === 'duplicate_scan' && String(r.id) === String(reviewId); })[0];
+    if (!item) return;
+    var o = (item.evidence && item.evidence.original) || {};
+    var n = (item.evidence && item.evidence.rescan) || {};
+    var host = document.getElementById('mdlGeneric');
+    var mdl = document.getElementById('mdl');
+    if (!host || !mdl) return;
+    var esc = reviewEsc;
+    var title = document.getElementById('mdlTitle');
+    var sub = document.getElementById('mdlSub');
+    if (title) title.textContent = 'Duplicate scan · ' + item.serial;
+    if (sub) sub.textContent = 'Already ' +
+      (item.dispatched ? 'dispatched' : item.stage) + ' — the two records disagree';
+    if (typeof modalMode === 'function') modalMode(true);
+
+    function side(label, r) {
+      return '<div class="card" style="margin:0;flex:1 1 0"><div class="card-h">' +
+        '<h3>' + label + '</h3></div><div class="card-b">' +
+        '<div class="lookup" style="padding:0">' +
+        '<div><label>Outcome</label><div class="lv">' + esc(r.outcome || '—') + '</div></div>' +
+        '<div><label>Pmax</label><div class="lv">' + (r.pmax == null ? '—' : r.pmax + ' W') + '</div></div>' +
+        '<div><label>EL/VI</label><div class="lv">' + esc(r.el_verdict || '—') + '</div></div>' +
+        '<div><label>Defect</label><div class="lv">' + esc(r.defect || '—') + '</div></div>' +
+        '<div><label>Decided by</label><div class="lv">' + esc(r.decided_by || '—') + '</div></div>' +
+        '<div><label>When</label><div class="lv mono" style="font-size:11px">' +
+          esc((r.at || '').replace('T', ' ').slice(0, 16)) + '</div></div>' +
+        '</div></div></div>';
+    }
+
+    var canAct = reviewCanActDuplicate(item);
+    var actionHtml;
+    if (!canAct) {
+      actionHtml = '<div class="note n-warn"><span>⚑</span><span>' + (item.dispatched
+        ? 'Only Admin can resolve a conflict on a serial that has already shipped.'
+        : 'Only a Production Shift Incharge or above can resolve this — they ' +
+          'carry the consequence of the choice.') + '</span></div>';
+    } else if (item.dispatched) {
+      actionHtml =
+        '<div class="fld"><label>Why does the dispatched record stand? (required)</label>' +
+        '<textarea id="revWhy" rows="3"></textarea></div>' +
+        '<div class="card-f"><button class="btn btn-primary" onclick="reviewSubmitDuplicate(' +
+          item.id + ',\'acknowledged\')">Acknowledge — the dispatched record stands</button>' +
+        '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+        '<span class="hint" style="margin-left:auto">Out of scope for now: this does not ' +
+          'create a replacement serial.</span></div>';
+    } else {
+      actionHtml =
+        '<div class="fld"><label>Why? (required)</label>' +
+        '<textarea id="revWhy" rows="3" placeholder="what makes this the right one to keep"></textarea></div>' +
+        '<div class="card-f" style="flex-wrap:wrap">' +
+        '<button class="btn btn-ghost" onclick="reviewSubmitDuplicate(' +
+          item.id + ',\'keep_original\')">Keep the original (packed)</button>' +
+        '<button class="btn btn-primary" onclick="reviewSubmitDuplicate(' +
+          item.id + ',\'keep_rescanned\')">Keep the rescanned — remove from box</button>' +
+        '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>';
+    }
+
+    host.innerHTML =
+      '<div class="note n-info"><span>ⓘ</span><span>' + esc(item.serial) +
+        ' is already ' + (item.dispatched ? 'dispatched' : item.stage) +
+        '. The rescan disagrees with the record that decision was already ' +
+        'acted on — shown side by side, nothing here picks a side.</span></div>' +
+      '<div style="display:flex;gap:10px;margin:10px 0;flex-wrap:wrap">' +
+        side('Original — on file', o) + side('Rescan — just now', n) + '</div>' +
+      actionHtml;
+    mdl.classList.add('on');
+    var box = document.getElementById('revWhy');
+    if (box) box.focus();
+  };
+
+  window.reviewSubmitDuplicate = function (reviewId, resolution) {
+    var box = document.getElementById('revWhy');
+    var why = box ? box.value.trim() : '';
+    if (!why) {
+      if (typeof toast === 'function') toast('Say why before resolving this.');
+      if (box) box.focus();
+      return;
+    }
+    api('review/resolve', { method: 'POST', body: JSON.stringify(
+      { type: 'duplicate_scan', id: reviewId, resolution: resolution, reason: why }) })
+      .then(function (d) {
+        if (!d.ok) { if (typeof toast === 'function') toast(d.why); return; }
+        if (typeof closeModal === 'function') closeModal();
+        if (typeof toast === 'function')
+          toast('Review #' + reviewId + ' resolved: ' + d.resolution.replace(/_/g, ' ') + '.');
+        window.iconReviewRefresh();
+        if (window.iconRefresh) window.iconRefresh();
+      });
+  };
+
+  /* A demo login for the role this merge added - authentication is
+     designed, not built, same note v4's own login screen already carries;
+     the option lets a Quality decision actually be exercised end to end. */
+  (function addQualityLogin() {
+    var sel = document.getElementById('who');
+    if (!sel || sel.querySelector('option[data-quality-demo]')) return;
+    var opt = document.createElement('option');
+    opt.value = 'Neha Verma|Quality|FQC-01';
+    opt.setAttribute('data-quality-demo', '1');
+    opt.textContent = 'Neha Verma — Quality';
+    sel.appendChild(opt);
+  })();
 
   /* Evidence Sources, merged into Admin > Stations & sources.
    *

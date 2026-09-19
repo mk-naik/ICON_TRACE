@@ -634,6 +634,33 @@ CREATE TABLE IF NOT EXISTS fqc_record (
   superseded_at TEXT NULL
 ) ;
 
+-- Needs Review, one table for every type of item it holds - a type column,
+-- never a table per type. Only 'duplicate_scan' writes here for now; a
+-- quality_grade item is still derived live from fqc_record (outcome='reject'
+-- and quality_grade IS NULL), exactly as it was before the screens merged,
+-- so nothing about the 49 FQC tests or the Quality grading rules moves.
+CREATE TABLE IF NOT EXISTS review_item (
+  review_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+  type        TEXT NOT NULL,
+  serial      TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'open',   -- 'open' | 'resolved'
+  fqc_id      INTEGER NULL,          -- duplicate_scan: the record standing
+                                      -- at the time this was raised (what
+                                      -- packing/dispatch already acted on)
+  new_fqc_id  INTEGER NULL,          -- duplicate_scan: the retest's own
+                                      -- record, snapshotted the moment it
+                                      -- disagreed - never re-read live
+  dispatched  INTEGER NOT NULL DEFAULT 0,  -- serial had already shipped
+                                            -- when this was raised
+  created_at  TEXT NOT NULL,
+  created_by  TEXT NOT NULL,
+  resolved_by TEXT NULL,
+  resolved_at TEXT NULL,
+  resolution  TEXT NULL,             -- 'keep_original' | 'keep_rescanned' |
+                                      -- 'acknowledged'
+  reason      TEXT NULL              -- mandatory at resolution, no exceptions
+) ;
+
 CREATE TABLE IF NOT EXISTS gp_counter (
   gp_date  TEXT NOT NULL PRIMARY KEY,
   next_seq INT  NOT NULL DEFAULT 1

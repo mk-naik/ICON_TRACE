@@ -559,8 +559,13 @@ def t_journey_reads():
     assert fqc_stage(CRACKED)["done"] is False, "never judged, but shown as done"
 
 
-@test("a packed module cannot be judged again where it stands")
+@test("a packed module is never silently re-judged where it stands")
 def t_packed_not_rejudged():
+    # Superseded by the duplicate-scan feature (see test_review.py): a
+    # packed module graded again is no longer a flat 400. It is compared
+    # against the record packing already acted on, and only a DISAGREEMENT
+    # raises anything - but even then the box, the state and the grade are
+    # left exactly as they were until a person resolves it.
     c = setup()
     c.post("/api/fqc", json={"serial": FULL, "outcome": "pass"})
     b = c.post("/api/box/open", json={"grade": "A", "model": "ISEN625-G12R",
@@ -568,11 +573,11 @@ def t_packed_not_rejudged():
     c.post("/api/box/%d/scan" % b["box_id"], json={"serial": FULL})
     r = c.post("/api/fqc", json={"serial": FULL, "outcome": "reject",
                                  "reason": "OV-RETEST — retested"})
-    assert r.status_code == 400, \
-        "a module was re-judged while sitting in a box - the box would hold " \
-        "a module the record says is not in it"
-    assert "box" in (r.get_json().get("why") or "").lower(), r.get_json()
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json().get("duplicate_scan") is True, r.get_json()
+    assert r.get_json().get("agree") is False, r.get_json()
     assert serial_row(FULL)["state"] == "packed", "its state moved anyway"
+    assert serial_row(FULL)["grade"] == "A", "its grade moved anyway"
 
 
 @test("a failed retest is not a change - the latest valid row still wins")
