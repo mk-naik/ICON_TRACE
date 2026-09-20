@@ -2,7 +2,7 @@
   <p>Marketing's instruction to the factory &middot; form IS-HO-MRK-FM-03</p>
   <div class="pg-act">
     <button id="indToggleBtn" class="btn btn-primary" onclick="indNew()">New indent</button>
-    <button class="btn" data-role="export">Export table</button>
+    <button class="btn" onclick="exportNote()">Export table</button>
   </div>
 </div>
 
@@ -34,10 +34,11 @@
   <div class="card-h"><h3>Indents</h3></div>
   <div class="scroll">
     <table><thead><tr>
-      <th>Indent</th><th>Customer</th><th>Item</th><th>Cell</th>
-      <th class="num">Ordered</th><th class="num">KW</th>
+      <th>Indent</th><th>Customer</th><th>Item</th><th>Cell type</th>
+      <th class="num">Ordered</th><th class="num" data-noexport>KW</th>
       <th class="num">Dispatched</th><th class="num">Remaining</th>
-      <th>Status</th><th>Due</th><th></th>
+      <th data-noexport>Status</th><th data-noexport>Due</th>
+      <th data-noexport></th>
     </tr></thead><tbody id="indRows"></tbody></table>
   </div>
   <div class="card-b hint">Dispatched and Remaining are counted, never typed.
@@ -76,12 +77,17 @@
           /* One row per ITEM, so an indent carrying two items is two rows -
              the same number twice is the second item, not a duplicate. */
           var repeat = i > 0 && rows[i - 1].indent_no === p.indent_no;
-          return '<tr><td class="mono">' +
+          /* An indent with no item is not an indent ITEM, so it stays out of
+             the export. On screen the second item of an indent shows no
+             customer and a note under the number; the file needs both
+             filled, so those cells say what they hold (data-x). */
+          return '<tr' + (empty ? ' data-noexport' : '') + '><td class="mono" data-x="' +
+            esc(p.indent_no) + '">' +
             (repeat ? '<span style="color:var(--line)">' + esc(p.indent_no) +
                       '</span>' : esc(p.indent_no)) +
             (p.line_no ? '<div class="hint">item ' + p.line_no + '</div>' : '') +
             '</td>' +
-            '<td>' + (repeat ? '' : esc(p.customer)) + '</td>' +
+            '<td data-x="' + esc(p.customer) + '">' + (repeat ? '' : esc(p.customer)) + '</td>' +
             '<td class="mono">' + (empty ?
               '<span style="color:var(--review)">no item on this indent</span>'
               : esc(p.item || p.model)) + '</td>' +

@@ -222,13 +222,16 @@ def t_reject_against_proposal():
     assert fqc_row(FULL)["outcome"] == "reject"
 
 
-@test("a module with no evidence cannot be passed on nothing")
+@test("a module with no evidence cannot be passed on nothing - it needs a "
+      "coded reason, and it is only ever a provisional pass")
 def t_no_evidence_no_pass():
     c = setup(ss_path=os.path.join(TMP, "gone.csv"))
     r = c.post("/api/fqc", json={"serial": FULL, "outcome": "pass"})
     assert r.status_code == 400, \
         "a module was passed while the tester was unreachable"
-    assert "evidence" in (r.get_json().get("why") or "").lower(), r.get_json()
+    why = (r.get_json().get("why") or "").lower()
+    assert "evidence" in why and "reason" in why, r.get_json()
+    assert fqc_row(FULL) is None and serial_row(FULL)["state"] == "planned"
 
 
 @test("but it can be rejected with the tester unreachable, provisionally")
@@ -725,6 +728,203 @@ def t_dash_empty_result():
     c = dash_setup()
     t = c.get("/api/fqc/dashboard?customer=NOBODY").get_json()["totals"]
     assert (t.get("inspected") or 0) == 0, t
+
+
+# --------------------------------------------------------------------------
+# a decision made without the tester: held, then reconciled when it is back
+#
+#   NC (the Sun Simulator is unreachable) - the operator may pass or reject on
+#   what is in front of them. A PASS is held (state 'hold', no grade, not
+#   packable) in Hold & Deviation. When the reading is available: it agrees ->
+#   confirmed, released, packable, automatically; it disagrees -> Needs Review
+#   for Quality. Nothing is packed on a reading nobody has seen.
+# --------------------------------------------------------------------------
+
+GONE = os.path.join(TMP, "gone.csv")
+REASON = "OV-EVIDENCE — evidence missing, judged visually"
+
+
+def tester_back(rows=None):
+    """The link returns: the file is readable again."""
+    write_ss(rows if rows is not None else ROWS)
+    with store.conn() as (cx, cur):
+        db.set_config(cur, {
+            "ss_csv_path": SS, "ss_a_csv_path": "", "ss_b_csv_path": "",
+            "el_root": EL_ROOT, "el_a_root": "", "el_b_root": ""})
+
+
+def live_records(serial):
+    with store.conn() as (cx, cur):
+        return [dict(r) for r in store.rows(
+            cur, "SELECT * FROM fqc_record WHERE serial=%s ORDER BY fqc_id", (serial,))]
+
+
+def hold(c):
+    return c.get("/api/hold").get_json()
+
+
+@test("with the tester unreachable a PASS is recorded provisionally and the "
+      "module is HELD: no grade, state 'hold', on the Hold list, not packable")
+def t_provisional_pass_is_held():
+    c = setup(ss_path=GONE)
+    r = c.post("/api/fqc", json={"serial": FULL, "outcome": "pass", "reason": REASON,
+                                 "note": "Sun Simulator down; EL clean, seen on the line"})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["held"] is True and r.get_json()["grade"] is None, r.get_json()
+    s = serial_row(FULL)
+    assert (s["state"], s["grade"]) == ("hold", None), s
+    rec = fqc_row(FULL)
+    assert (rec["outcome"], rec["mode"], rec["ss_state"], rec["grade"]) == \
+        ("pass", "provisional", ev.NC, None), rec
+    h = hold(c)
+    assert [(x["serial"], x["status"], x["outcome"], x["waiting_for"]) for x in h["rows"]] == \
+        [(FULL, "awaiting", "pass", "Sun Simulator")], h
+    assert h["reconciled"] == {"confirmed": 0, "flagged": 0, "waiting": 1}, h["reconciled"]
+
+    b = c.post("/api/box/open", json={"grade": "A", "model": "ISEN625-G12R",
+                                      "capacity": 36, "customer": "STOCK"}).get_json()
+    r = c.post("/api/box/%d/scan" % b["box_id"], json={"serial": FULL})
+    assert r.status_code == 400 and "on hold" in r.get_json()["why"], r.get_json()
+
+
+@test("the tester comes back and AGREES: the held pass is confirmed by itself - "
+      "a new confirmed record supersedes the provisional one - and the module "
+      "is graded A and can be packed")
+def t_reconcile_agree():
+    c = setup(ss_path=GONE)
+    c.post("/api/fqc", json={"serial": FULL, "outcome": "pass", "reason": REASON})
+    assert hold(c)["reconciled"]["waiting"] == 1
+    assert serial_row(FULL)["state"] == "hold"
+
+    tester_back()                                   # FULL reads 628.4, EL clean
+    h = hold(c)
+    assert h["reconciled"]["confirmed"] == 1 and h["rows"] == [], h
+    s = serial_row(FULL)
+    assert (s["state"], s["grade"]) == ("graded", "A"), s
+    recs = live_records(FULL)
+    assert [(r["mode"], r["superseded_by"] is not None) for r in recs] == \
+        [("provisional", True), ("confirmed", False)], recs
+    assert recs[1]["ss_pmax"] == 628.4 and recs[1]["decided_by"] == "system"
+
+    b = c.post("/api/box/open", json={"grade": "A", "model": "ISEN625-G12R",
+                                      "capacity": 36, "customer": "STOCK"}).get_json()
+    r = c.post("/api/box/%d/scan" % b["box_id"], json={"serial": FULL})
+    assert r.status_code == 200, r.get_json()
+    assert hold(c)["confirmed_this_month"] == 1
+
+
+@test("while the tester is still away nothing moves: the hold stays and "
+      "nothing is confirmed or flagged")
+def t_reconcile_waits():
+    c = setup(ss_path=GONE)
+    c.post("/api/fqc", json={"serial": FULL, "outcome": "pass", "reason": REASON})
+    for _ in range(3):
+        assert hold(c)["reconciled"] == {"confirmed": 0, "flagged": 0, "waiting": 1}
+    assert serial_row(FULL)["state"] == "hold" and len(live_records(FULL)) == 1
+
+
+@test("the tester comes back and DISAGREES: nothing picks a side - the module "
+      "stays held, Needs Review gets an item for Quality, once")
+def t_reconcile_disagree():
+    c = setup(ss_path=GONE)
+    c.post("/api/fqc", json={"serial": SHORT, "outcome": "pass", "reason": REASON})
+    tester_back()                                   # SHORT reads 620.5 < 625
+    h = hold(c)
+    assert h["reconciled"]["flagged"] == 1, h
+    assert [(x["status"], x["outcome"], x["evidence_says"]) for x in h["rows"]] == \
+        [("review", "pass", "reject")], h["rows"]
+    assert serial_row(SHORT)["state"] == "hold", serial_row(SHORT)
+    for _ in range(3):                              # opening the list again flags nothing more
+        assert hold(c)["reconciled"]["flagged"] == 0
+    with store.conn() as (cx, cur):
+        n = store.one(cur, "SELECT COUNT(*) AS n FROM review_item WHERE "
+                           "type='provisional_mismatch'")["n"]
+    assert n == 1, "%d review items for one module" % n
+
+    items = [i for i in c.get("/api/review").get_json() if i["type"] == "provisional_mismatch"]
+    assert len(items) == 1 and items[0]["serial"] == SHORT, items
+    assert items[0]["evidence"]["original"]["outcome"] == "pass"
+    assert items[0]["evidence"]["evidence"]["outcome"] == "reject"
+
+    # a module in Needs Review is not re-judged at the FQC desk
+    r = c.post("/api/fqc", json={"serial": SHORT, "outcome": "reject"})
+    assert r.status_code == 400 and "Needs Review" in r.get_json()["why"], r.get_json()
+
+
+@test("Quality resolves it: keeping the evidence rejects the module, keeping "
+      "the decision passes it as A - each needs a reason, only Quality may, "
+      "and the other record is superseded, not deleted")
+def t_resolve_provisional_mismatch():
+    for choice, want_state, want_grade in (("keep_evidence", "rejected", None),
+                                           ("keep_decision", "graded", "A")):
+        c = setup(ss_path=GONE)
+        c.post("/api/fqc", json={"serial": SHORT, "outcome": "pass", "reason": REASON})
+        tester_back()
+        rid = [i for i in c.get("/api/review").get_json()
+               if i["type"] == "provisional_mismatch"][0]["id"]
+        body = {"type": "provisional_mismatch", "id": rid, "resolution": choice,
+                "reason": "looked at the image and the flash report"}
+
+        r = c.post("/api/review/resolve", json=body, headers={"X-User-Role": "FQC Operator"})
+        assert r.status_code == 403, "an operator resolved a Quality decision"
+        r = c.post("/api/review/resolve", json=dict(body, reason=""),
+                   headers={"X-User-Role": "Quality"})
+        assert r.status_code == 400, "resolved with no reason"
+        r = c.post("/api/review/resolve", json=body, headers={"X-User-Role": "Quality"})
+        assert r.status_code == 200, r.get_json()
+
+        s = serial_row(SHORT)
+        assert (s["state"], s["grade"]) == (want_state, want_grade), (choice, s)
+        recs = live_records(SHORT)
+        assert len(recs) == 2 and sum(1 for x in recs if x["superseded_by"] is None) == 1, \
+            "one live decision expected, kept both rows: %s" % recs
+        assert hold(c)["rows"] == [], "still on the Hold list after resolving"
+        r = c.post("/api/review/resolve", json=body, headers={"X-User-Role": "Quality"})
+        assert r.status_code == 400, "resolved twice"
+
+
+@test("a provisional REJECT is confirmed by agreeing evidence - and sent to "
+      "Needs Review if the evidence says it was a good module")
+def t_provisional_reject_reconciles():
+    c = setup(ss_path=GONE)
+    c.post("/api/fqc", json={"serial": SHORT, "outcome": "reject"})     # will agree
+    c.post("/api/fqc", json={"serial": FULL, "outcome": "reject"})      # will not
+    assert sorted(x["serial"] for x in hold(c)["rows"]) == sorted([SHORT, FULL])
+    assert serial_row(SHORT)["state"] == serial_row(FULL)["state"] == "rejected"
+
+    tester_back()
+    h = hold(c)
+    assert h["reconciled"] == {"confirmed": 1, "flagged": 1, "waiting": 0}, h["reconciled"]
+    assert (serial_row(SHORT)["state"], fqc_row(SHORT)["mode"]) == ("rejected", "confirmed")
+    assert serial_row(FULL)["state"] == "hold"
+    assert [(x["serial"], x["status"]) for x in h["rows"]] == [(FULL, "review")]
+
+
+@test("BAD (a probe fault) and NA (the tester is up and has nothing) can never "
+      "be passed - they are quality signals - and a short reading still cannot, "
+      "with or without the tester")
+def t_pass_route_refusals():
+    c = setup()                       # DEAD_S is BAD; NA = a serial the tester never saw
+    r = c.post("/api/fqc", json={"serial": DEAD_S, "outcome": "pass", "reason": REASON})
+    assert r.status_code == 400 and "BAD" in r.get_json()["why"], r.get_json()
+
+    c = setup(ss_rows=[row(SHORT, "2026-09-07 10:05:00", "620.5")])     # FULL: reachable, absent
+    r = c.post("/api/fqc", json={"serial": FULL, "outcome": "pass", "reason": REASON})
+    assert r.status_code == 400 and "nothing for this serial" in r.get_json()["why"], r.get_json()
+    assert serial_row(FULL)["state"] == "planned"
+
+
+@test("the lookup says which way a pass could go: direct, EL-only override, "
+      "provisional, or not at all - and why not")
+def t_lookup_pass_route():
+    c = setup()
+    got = {s: c.get("/api/fqc/lookup?serial=" + s).get_json() for s in (FULL, SHORT, CRACKED)}
+    assert got[FULL]["pass_route"] == "direct", got[FULL]["pass_route"]
+    assert got[CRACKED]["pass_route"] == "el_only", got[CRACKED]["pass_route"]
+    assert got[SHORT]["pass_route"] is None and "Retest" in got[SHORT]["pass_why"], got[SHORT]
+    c = setup(ss_path=GONE)
+    away = c.get("/api/fqc/lookup?serial=" + FULL).get_json()
+    assert away["pass_route"] == "provisional" and "Hold & Deviation" in away["pass_why"], away
 
 
 if __name__ == "__main__":

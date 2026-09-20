@@ -118,11 +118,26 @@ A pass is grade A, and **A means Pmax at or above the nameplate with a clean
 EL** — measured against the number on the label, not a tolerance band below
 it. A 590 W module reading 585 W is not a 590 W module.
 
-**A pass cannot be overruled.** No reason text turns a module that measures
-short into one that does not; the way up is the Sun Simulator, and it is
-tested again. Rejecting is always allowed — a person may see what the
-evidence does not, and rejecting against a proposed pass needs a coded
-reason.
+**A reading below the wattage cannot be overruled.** No reason text turns a
+module that measures short into one that does not; the way up is the Sun
+Simulator, and it is tested again. Rejecting is always allowed — a person may
+see what the evidence does not, and rejecting against a proposed pass needs a
+coded reason.
+
+**How a pass may be recorded** is one function, `app._pass_route(evidence)`,
+which both the lookup (to draw the panel) and `/api/fqc` (to enforce it) ask:
+
+| Route | When | What it costs |
+|---|---|---|
+| `direct` | the evidence itself proposes a pass | nothing |
+| `el_only` | Pmax is at or above the wattage and the EL verdict is the only objection | a coded reason (`OV-OTHER` → note) |
+| `provisional` | a source is `NC` — unreachable — so nothing can be read | a coded reason; the module is **held** (below) |
+| none | Pmax below the wattage; `BAD` (probe fault); `NA` (the tester is up and has nothing) | refused, with the reason — the panel shows the override disabled and says why |
+
+A **defect and a note may be recorded on a pass** as well as a rejection. A
+defect of `Other` says nothing on its own, so its note is compulsory — the
+server enforces it for either outcome. (The dashboard's rejection reasons
+count rejections only.)
 
 What is rejected has **no grade at all**. Quality calls it GY or BGY on its
 own screen, reading the SS figure, the EL verdict and image, and what FQC
@@ -139,9 +154,14 @@ planned
 
 `db.record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason,
 defect, note)` writes the record and the serial's state together, as before.
+The record also snapshots `build_instance` — the build of the serial that was
+judged, `1` by default because `get_serial`/`set_serial` only reach build 1.
+Recent gradings does not list it, but its Model/Customer join follows it.
+`NULL` is a record from before the column existed and reads as 1.
 `db.record_quality(cur, serial, grade, decided_by, note)` is the second half.
 A coded reason of `OV-OTHER` says nothing on its own, so the note becomes
-compulsory with it. Tested in `test_fqc.py`.
+compulsory with it, and so does a defect of `Other` (enforced by the server as
+well as the form). Tested in `test_fqc.py` and `test_fqc_screen.py`.
 
 ### The operator supplies the judgement; the server reads the measurement
 
@@ -180,7 +200,7 @@ Tested in `test_fqc.py`.
 | State | Means | FQC behaviour |
 |---|---|---|
 | `OK` | read cleanly | propose pass or reject |
-| `NC` | source unreachable | reject provisionally; a PASS needs evidence |
+| `NC` | source unreachable | reject or pass **provisionally** — a pass is held |
 | `NA` | reachable, serial absent | review — it may never have been tested |
 | `BAD` | row exists, reading invalid | **no decision at all** — probe fault |
 
@@ -190,13 +210,28 @@ polarity or soldering. It is not missing data.
 
 ### Confirmed versus provisional
 
-- Evidence present and the operator rejects what it would pass → **override**.
-  A coded reason is required. Not a review item; a recorded judgement. The
-  other direction does not exist: a pass cannot be overruled.
+- Evidence present and the operator goes against it → **override**, in either
+  direction: rejecting a proposed pass, or passing an EL-only rejection. A
+  coded reason is required. Not a review item; a recorded judgement. What is
+  never open to argument is a reading below the wattage.
 - Evidence absent (`NC`) and the decision comes from verbal information →
-  **provisional**, and it can only be a rejection — nothing is passed on an
-  absent reading. When evidence arrives: agreement confirms it, disagreement
-  puts the serial on hold.
+  **provisional**. A provisional **reject** is `rejected` as ever. A
+  provisional **pass** is recorded with `mode='provisional'`, the serial goes
+  to state **`hold`** with no grade, and Packing refuses it ("on hold —
+  waiting for the tester's reading"). It is listed in **Hold & Deviation**.
+
+  When the evidence is available (`app._reconcile_provisional`, run whenever
+  Hold & Deviation or Needs Review is read, and polled by the screen):
+  - **it agrees** → a NEW `confirmed` record supersedes the provisional one
+    (the trail stays whole), the module is graded and can be packed —
+    automatically, no one touches it;
+  - **it disagrees** → nothing picks a side. The evidence's own record is
+    snapshotted beside the decision, a `provisional_mismatch` item is raised
+    in **Needs Review** for Quality, and the module stays held. Quality keeps
+    the decision or the evidence, with a reason; the other record is
+    superseded, never deleted.
+  - **still absent** → it stays, however long. There is no expiry: a hold
+    stays until someone (or the tester) decides.
 
 ---
 

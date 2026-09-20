@@ -512,6 +512,10 @@ def _pack_refusal(cur, b, serial):
     if state == "rejected":
         return ("%s was rejected at FQC and is waiting on a quality decision. "
                 "It has no grade yet, so it cannot be packed." % serial)
+    if state == "hold":
+        return ("%s is on hold - its FQC decision was made without the "
+                "tester's reading and is waiting for it (Hold & Deviation). "
+                "It can be packed once the evidence agrees." % serial)
     if state == "planned":
         return ("%s has not been through FQC. Packing an unjudged module is "
                 "how a reject reaches a customer." % serial)
@@ -2718,10 +2722,10 @@ def api_prod_dashboard():
         args.append(shift.replace("Shift ", ""))
     if customer and customer.lower() != "all customers":
         if "G2G (M10R)" in customer:
-            where.append("(b.customer IS NULL OR b.customer='ICON STOCK')")
+            where.append("(s.customer IS NULL OR s.customer='ICON STOCK')")
         else:
-            where.append("(b.customer = ? OR i.customer_name = ?)")
-            args.extend([customer, customer])
+            where.append("s.customer = ?")
+            args.append(customer)
     if model and model.lower() != "all" and model.lower() != "all models":
         where.append("s.model = ?")
         args.append(model)
@@ -2747,6 +2751,20 @@ def api_prod_dashboard():
             WHERE {clause}
             GROUP BY s.shift ORDER BY s.shift""", args)
 
+        customers_rows = store.rows(cur, f"""
+            SELECT DISTINCT COALESCE(s.customer, 'ICON STOCK') AS customer
+            FROM serial s
+            WHERE {clause} AND s.customer IS NOT NULL
+            ORDER BY customer
+        """, args)
+
+        models_rows = store.rows(cur, f"""
+            SELECT DISTINCT s.model AS model
+            FROM serial s
+            WHERE {clause} AND s.model IS NOT NULL
+            ORDER BY model
+        """, args)
+
     kpi = dict(kpi_row) if kpi_row else {"alloc":0, "prod":0, "fqc":0, "rej":0, "packed":0, "disp":0}
     for k in kpi:
         if kpi[k] is None: kpi[k] = 0
@@ -2762,7 +2780,9 @@ def api_prod_dashboard():
 
     return jsonify({
         "kpi": kpi,
-        "shifts": shifts
+        "shifts": shifts,
+        "customers": [r["customer"] for r in customers_rows],
+        "models": [r["model"] for r in models_rows]
     })
 
 
@@ -3499,6 +3519,391 @@ def api_export_xlsx():
     return Response(buf.read(),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="%s"' % fn})
+
+
+# ---------------------------------------------------------------------------
+# Search & Trace - one entry point, and only the numbers this system issues.
+#
+# v4 answered everything that was not a serial from a fixed sample array
+# (BATCHES, a made-up box, a made-up challan CHN-455), so a search for a real
+# challan number returned somebody else's example. Every kind below reads what
+# was recorded, and a lookup that finds nothing says so.
+#
+#   serial    ICON625R1290220484                  /api/trace/serial/<no>
+#   challan   IS-05.09.2026/0001  (or  ... (MA))  the new format, one document
+#   pallet    ISPL260905/K001                      packing list = the pallet
+#   invoice   ICON/26-27/822                       HO's number, any shape
+#   batch     BAT-2609-00007
+#   vehicle   CG04MM1521
+#   customer  SAI BABUJI
+#
+# A repacked pallet has no number of its own beyond the pallets involved: the
+# repack retires the source pallets and mints new ISPL numbers, and the trail
+# is box_lineage. The pallet view shows that trail.
+# ---------------------------------------------------------------------------
+
+import re as _re_trace
+
+CHALLAN_NO_RE = _re_trace.compile(
+    r"^IS-(\d{2})\.(\d{2})\.(\d{4})/(\d+)(?:\s*\(([A-Z]+)\))?$")
+BATCH_NO_RE = _re_trace.compile(r"^BAT-\d{4}-(\d{5})$")
+VEHICLE_NO_RE = _re_trace.compile(r"^[A-Z]{2}\d{2}[A-Z]{1,3}\d{3,4}$")
+_SHIFT_LETTER = {1: "A", 2: "B", 3: "C", "1": "A", "2": "B", "3": "C"}
+
+
+class _TraceMiss(Exception):
+    """A number that was understood and is not on record - or is on record
+    and wrong. The sentence is what the operator is shown."""
+
+
+def _challan_no_of(ch):
+    try:
+        return db.render_challan_no(
+            datetime.date.fromisoformat(ch["challan_date"]), ch["seq"],
+            ch.get("suffix"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _challan_brief(ch):
+    ch = dict(ch)
+    live = ch["status"] != "cancelled" and not ch.get("superseded_by")
+    return {"challan_id": ch["challan_id"], "challan_no": _challan_no_of(ch),
+            "challan_date": ch["challan_date"], "status": ch["status"],
+            "superseded": bool(ch.get("superseded_by")), "live": live,
+            "vehicle_no": ch.get("vehicle_no"), "qty": ch["qty"],
+            "declared_qty": ch.get("declared_qty"), "origin": ch.get("origin"),
+            "invoice_no": ch.get("invoice_no"),
+            "buyer_name": ch.get("buyer_name")}
+
+
+def _challan_boxes(cur, challan_id):
+    """The boxes on a challan in loading order, each with its serials. A
+    serial whose box was never recorded is still on the challan, so it is
+    listed under a box of no number rather than dropped."""
+    boxes = [dict(b) for b in store.rows(cur,
+        "SELECT challan_box_id, box_no, qty, pack_date, load_order, "
+        "loading_status FROM challan_box WHERE challan_id=%s "
+        "ORDER BY load_order", (challan_id,))]
+    sers = store.rows(cur,
+        "SELECT cs.challan_box_id, cs.serial, cs.build_instance, "
+        "cs.wattage, s.model, s.grade "
+        "FROM challan_serial cs LEFT JOIN serial s "
+        "ON s.serial=cs.serial AND s.build_instance=cs.build_instance "
+        "WHERE cs.challan_id=%s ORDER BY cs.challan_serial_id", (challan_id,))
+    by_box = {}
+    for r in sers:
+        by_box.setdefault(r["challan_box_id"], []).append(dict(r))
+    for bx_ in boxes:
+        bx_["serials"] = by_box.pop(bx_["challan_box_id"], [])
+    loose = [r for group in by_box.values() for r in group]
+    if loose:
+        boxes.append({"challan_box_id": None, "box_no": None,
+                      "qty": len(loose), "pack_date": None, "load_order": None,
+                      "loading_status": None, "serials": loose})
+    return boxes
+
+
+def _trace_invoice(cur, q):
+    """Invoice -> challan(s) -> boxes -> serials, from what was recorded.
+
+    An invoice is HO's document; a challan is ours, and quantity on it comes
+    from the boxes scanned, never from the invoice. So this walks the chain
+    the way the goods went, and puts the invoice's own declared quantity next
+    to what actually shipped rather than letting one stand in for the other.
+
+    Challans are matched on the invoice number as well as the invoice row: a
+    historical challan carries the number as text and may have no invoice
+    row behind it at all. A cancelled or superseded challan is listed and
+    marked, not hidden - it is part of what happened to this invoice - but it
+    does not count towards what shipped.
+    """
+    invs = store.rows(cur,
+        "SELECT invoice_id, invoice_no, invoice_date, buyer_name, "
+        "declared_qty, declared_model, superseded_by FROM invoice "
+        "WHERE UPPER(invoice_no)=UPPER(%s) ORDER BY invoice_id", (q,))
+    ids = [i["invoice_id"] for i in invs]
+    marks = ", ".join(["%s"] * len(ids))
+    chs = store.rows(cur,
+        "SELECT * FROM challan WHERE UPPER(invoice_no)=UPPER(%s)" +
+        (" OR invoice_id IN (%s)" % marks if ids else "") +
+        " ORDER BY challan_id", [q] + ids)
+    if not invs and not chs:
+        return None
+    challans = []
+    for ch in chs:
+        c = _challan_brief(ch)
+        c["boxes"] = _challan_boxes(cur, ch["challan_id"])
+        challans.append(c)
+    live = [c for c in challans if c["live"]]
+    return {
+        "ok": True, "kind": "invoice",
+        "invoice_no": (invs[0]["invoice_no"] if invs else chs[0]["invoice_no"]),
+        "invoices": [dict(i, superseded=bool(i.get("superseded_by")))
+                     for i in invs],
+        "challans": challans,
+        "totals": {"challans": len(live),
+                   "boxes": sum(len(c["boxes"]) for c in live),
+                   "serials": sum(len(b["serials"]) for c in live
+                                  for b in c["boxes"]),
+                   "declared_qty": next((i["declared_qty"] for i in invs
+                                         if not i.get("superseded_by")
+                                         and i["declared_qty"] is not None),
+                                        None)}}
+
+
+def _trace_challan(cur, q):
+    m = CHALLAN_NO_RE.match(q)
+    if not m:
+        return None
+    dd, mm, yyyy, seq, suffix = m.groups()
+    ch = store.one(cur,
+        "SELECT * FROM challan WHERE challan_date=%s AND seq=%s "
+        "AND COALESCE(suffix,'')=%s",
+        ("%s-%s-%s" % (yyyy, mm, dd), int(seq), suffix or ""))
+    if not ch:
+        raise _TraceMiss("No challan %s is recorded." % q)
+    brief = _challan_brief(ch)
+    boxes = _challan_boxes(cur, ch["challan_id"])
+    gps = [dict(g) for g in store.rows(cur,
+        "SELECT gp_no, gp_date, kind FROM gatepass WHERE challan_id=%s "
+        "ORDER BY gp_id", (ch["challan_id"],))]
+    brief.update({"transporter": ch.get("transporter"),
+                  "cancelled_reason": ch.get("cancelled_reason"),
+                  "consignee_name": ch.get("consignee_name")})
+    return {"ok": True, "kind": "challan", "challan": brief, "boxes": boxes,
+            "gate_passes": gps,
+            "totals": {"boxes": len(boxes),
+                       "serials": sum(len(b["serials"]) for b in boxes)}}
+
+
+def _trace_box(cur, q):
+    """A pallet, which is also its packing list. Found by the number on the
+    label; a letter that disagrees with the pallet's own grade is a
+    transcription error and is said to be one, not treated as not found."""
+    try:
+        p = boxno.parse(q)
+    except boxno.BoxNumberError:
+        p = None
+    if p:
+        b = store.one(cur, "SELECT * FROM box WHERE pack_date=%s AND seq=%s",
+                      (p["pack_date"].isoformat(), p["seq"]))
+        if not b:
+            raise _TraceMiss("No pallet %s is recorded." % q)
+        want = boxno.grade_letter(b["grade"] or "A", b["seq"],
+                                  b["code_map_version"] or 1)
+        if p["letter"] != want:
+            raise _TraceMiss(
+                "Letter %s does not match pallet %d, which is grade %s. "
+                "Transcription error, or the wrong pallet."
+                % (p["letter"], p["seq"], b["grade"]))
+    else:
+        b = store.one(cur, "SELECT * FROM box WHERE UPPER(legacy_box_no)=%s",
+                      (q,))
+        if not b:
+            return None
+    b = dict(b)
+    label = _box_label(b)
+    mods = [dict(r) for r in store.rows(cur,
+        "SELECT bs.serial, s.model, s.grade, s.state FROM box_serial bs "
+        "LEFT JOIN serial s ON s.serial=bs.serial "
+        "AND s.build_instance=bs.build_instance "
+        "WHERE bs.box_id=%s ORDER BY bs.added_at", (b["box_id"],))]
+
+    def lineage(sql):
+        return [{"box_no": _box_label(dict(r)), "state": r["state"],
+                 "qty": r["qty"], "pack_date": r["pack_date"],
+                 "reason": r.get("retired_reason")}
+                for r in store.rows(cur, sql, (b["box_id"],))]
+    parents = lineage("SELECT bx.* FROM box_lineage l JOIN box bx "
+                      "ON bx.box_id=l.parent_box_id WHERE l.child_box_id=%s "
+                      "ORDER BY bx.box_id")
+    children = lineage("SELECT bx.* FROM box_lineage l JOIN box bx "
+                       "ON bx.box_id=l.child_box_id WHERE l.parent_box_id=%s "
+                       "ORDER BY bx.box_id")
+    chs = store.rows(cur,
+        "SELECT DISTINCT c.* FROM challan_box cb JOIN challan c "
+        "ON c.challan_id=cb.challan_id WHERE cb.box_no IN (%s, %s) "
+        "ORDER BY c.challan_id", (label, b.get("legacy_box_no") or label))
+    cr = customers.get(b.get("customer"))
+    return {"ok": True, "kind": "box", "box_no": label,
+            "legacy_box_no": b.get("legacy_box_no"), "grade": b.get("grade"),
+            "model": b.get("model"), "wattage": b.get("wattage"),
+            "customer": cr["name"] if cr else (b.get("customer") or None),
+            "qty": b.get("qty"), "capacity": b.get("capacity"),
+            "state": b["state"], "bin_no": b.get("bin_no"),
+            "pack_date": b["pack_date"],
+            "pack_shift": _SHIFT_LETTER.get(b.get("pack_shift"),
+                                            b.get("pack_shift")),
+            "retired_reason": b.get("retired_reason"),
+            "serials": mods, "repacked_from": parents,
+            "repacked_into": children,
+            "challans": [_challan_brief(c) for c in chs]}
+
+
+def _trace_vehicle(cur, q):
+    v = _re_trace.sub(r"[\s-]", "", q)
+    if not VEHICLE_NO_RE.match(v):
+        return None
+    norm = "REPLACE(REPLACE(UPPER(vehicle_no),' ',''),'-','')"
+    chs = store.rows(cur, "SELECT * FROM challan WHERE " + norm +
+                          "=%s ORDER BY challan_date DESC, challan_id DESC", (v,))
+    gps = store.rows(cur, "SELECT gp_no, gp_date, kind, challan_no FROM gatepass "
+                          "WHERE " + norm + "=%s ORDER BY gp_id DESC", (v,))
+    if not chs and not gps:
+        raise _TraceMiss("No challan or gate pass carries vehicle %s." % v)
+    out = []
+    for ch in chs:
+        c = _challan_brief(ch)
+        c["boxes"] = store.one(cur, "SELECT COUNT(*) AS n FROM challan_box "
+                                    "WHERE challan_id=%s",
+                               (ch["challan_id"],))["n"]
+        out.append(c)
+    return {"ok": True, "kind": "vehicle", "vehicle_no": v, "challans": out,
+            "gate_passes": [dict(g) for g in gps]}
+
+
+def _trace_batch(cur, q):
+    m = BATCH_NO_RE.match(q)
+    if not m:
+        return None
+    alloc = store.one(cur, "SELECT * FROM allocation WHERE alloc_id=%s",
+                      (int(m.group(1)),))
+    if not alloc or batch_no(alloc) != q:
+        raise _TraceMiss("No batch %s is recorded." % q)
+    line = store.one(cur, "SELECT il.item_description, i.indent_no "
+                          "FROM indent_line il JOIN indent i "
+                          "ON i.indent_id=il.indent_id "
+                          "WHERE il.indent_line_id=%s",
+                     (alloc["indent_line_id"],))
+    # A repacked serial sits in a retired pallet AND a live one. Only the live
+    # pallet is joined - filtering it in the ON clause of the box would still
+    # leave a second row, for the retired one, and count the module twice.
+    rows = store.rows(cur,
+        "SELECT s.serial, s.state, s.grade, lb.pack_date, lb.seq, "
+        "lb.box_grade, lb.code_map_version "
+        "FROM serial s LEFT JOIN ("
+        "  SELECT bs.serial, bs.build_instance, b.pack_date, b.seq, "
+        "         b.grade AS box_grade, b.code_map_version "
+        "  FROM box_serial bs JOIN box b ON b.box_id=bs.box_id "
+        "  WHERE b.state<>'retired') lb "
+        "ON lb.serial=s.serial AND lb.build_instance=s.build_instance "
+        "WHERE s.alloc_id=%s ORDER BY s.sequence LIMIT 5000",
+        (alloc["alloc_id"],))
+    serials, counts = [], {}
+    for r in rows:
+        counts[r["state"]] = counts.get(r["state"], 0) + 1
+        box = None
+        if r.get("pack_date"):
+            box = _box_label({"pack_date": r["pack_date"], "seq": r["seq"],
+                              "grade": r["box_grade"],
+                              "code_map_version": r["code_map_version"]})
+        serials.append({"serial": r["serial"], "state": r["state"],
+                        "grade": r["grade"], "box_no": box})
+    cr = customers.get(alloc.get("customer"))
+    return {"ok": True, "kind": "batch", "batch_no": q,
+            "customer": cr["name"] if cr else alloc.get("customer"),
+            "model": alloc["model"], "wattage": alloc["wattage"],
+            "dcr": alloc.get("dcr"), "date_produced": alloc["date_produced"],
+            "shift": _SHIFT_LETTER.get(alloc["shift"], alloc["shift"]),
+            "qty": alloc["qty"], "seq_from": alloc["seq_from"],
+            "seq_to": alloc["seq_to"],
+            "alloc_type": ALLOC_TYPES.get(alloc.get("alloc_type") or ""),
+            "indent_no": (line or {}).get("indent_no"),
+            "item": (line or {}).get("item_description"),
+            "counts": counts, "serials": serials}
+
+
+def _trace_customer(cur, q):
+    if len(q) < 3:
+        return None
+    hits = [c for c in customers.all_customers()
+            if q == c["customer_code"] or q in c["name"].upper()
+            or any(q in (a or "").upper() for a in (c.get("aliases") or []))]
+    if not hits:
+        return None
+    if len(hits) > 1:
+        return {"ok": True, "kind": "customers",
+                "matches": [{"code": c["customer_code"], "name": c["name"]}
+                            for c in hits]}
+    c = hits[0]
+    code = c["customer_code"]
+    counts = {r["state"]: r["n"] for r in store.rows(cur,
+        "SELECT state, COUNT(*) AS n FROM serial WHERE customer=%s "
+        "GROUP BY state", (code,))}
+    batches = [dict(r, batch_no=batch_no(dict(r))) for r in store.rows(cur,
+        "SELECT alloc_id, date_produced, model, qty FROM allocation "
+        "WHERE customer=%s ORDER BY alloc_id DESC LIMIT 200", (code,))]
+    chs = store.rows(cur,
+        "SELECT DISTINCT c.* FROM challan_serial cs "
+        "JOIN serial s ON s.serial=cs.serial AND s.build_instance=cs.build_instance "
+        "JOIN challan c ON c.challan_id=cs.challan_id "
+        "WHERE s.customer=%s ORDER BY c.challan_date DESC, c.challan_id DESC "
+        "LIMIT 200", (code,))
+    return {"ok": True, "kind": "customer",
+            "customer": {"code": code, "name": c["name"], "gstin": c.get("gstin"),
+                         "state": c.get("state")},
+            "counts": counts, "batches": batches,
+            "challans": [_challan_brief(x) for x in chs]}
+
+
+_TRACE_FINDERS = {"challan": [_trace_challan], "box": [_trace_box],
+                  "invoice": [_trace_invoice], "vehicle": [_trace_vehicle],
+                  "batch": [_trace_batch], "customer": [_trace_customer]}
+# Auto: the shapes that cannot be anything else first, then a lookup by
+# exact number, and a name last. An invoice number has no shape to sniff.
+_TRACE_AUTO = [_trace_challan, _trace_box, _trace_batch, _trace_vehicle,
+               _trace_invoice, _trace_customer]
+_TRACE_MISS = {
+    "challan": "%s is not a challan number. They read IS-05.09.2026/0001.",
+    "box": "No pallet %s is recorded.",
+    "invoice": "No invoice numbered %s is recorded, and no challan carries "
+               "that number either.",
+    "vehicle": "%s is not a vehicle number.",
+    "batch": "%s is not a batch number. They read BAT-2609-00007.",
+    "customer": "No customer matches %s.",
+}
+
+
+@app.route("/api/trace/find")
+def api_trace_find():
+    """Search & Trace for everything that is not a serial. ?kind= narrows it
+    (the screen's "Look in"); without it the number's own shape decides."""
+    q = " ".join((request.args.get("q") or "").split()).upper()
+    kind = (request.args.get("kind") or "auto").strip().lower()
+    if not q:
+        return jsonify({"ok": False, "why": "Enter something to look for."}), 400
+    finders = _TRACE_FINDERS.get(kind) or _TRACE_AUTO
+    try:
+        with store.conn() as (cx, cur):
+            for f in finders:
+                out = f(cur, q)
+                if out:
+                    return jsonify(out)
+    except _TraceMiss as m:
+        return jsonify({"ok": False, "why": str(m)}), 404
+    if kind in _TRACE_MISS:
+        why = _TRACE_MISS[kind] % q
+    else:
+        why = ("Nothing recorded matches “%s”. This screen finds a serial "
+               "(ICON…), a pallet or packing list (ISPL…), a challan "
+               "(IS-…), an invoice number, a batch (BAT-…), a vehicle "
+               "number or a customer." % q)
+    return jsonify({"ok": False, "why": why}), 404
+
+
+@app.route("/api/trace/invoice/<path:invoice_no>")
+def api_trace_invoice(invoice_no):
+    """The invoice walk on its own, for a caller that already knows it has an
+    invoice number (and for a number that contains a slash)."""
+    q = (invoice_no or "").strip()
+    if not q:
+        return jsonify({"ok": False, "why": "Enter an invoice number."}), 400
+    with store.conn() as (cx, cur):
+        out = _trace_invoice(cur, q)
+    if not out:
+        return jsonify({"ok": False, "why": _TRACE_MISS["invoice"] % q}), 404
+    return jsonify(out)
 
 
 @app.route("/api/trace/serial/<path:serial>")
@@ -4562,6 +4967,8 @@ def _fqc_payload(cur, serial, sandbox=False, line=None):
                                                      instances or 1),
                            "dcr": rec.get("dcr"),
                            "evidence": evidence, "record": prior,
+                           "pass_route": _pass_route(evidence)[0],
+                           "pass_why": _pass_route(evidence)[1],
                            # echoed back when grading, so a screen that has
                            # gone stale is told rather than overwriting
                            "evidence_token": _evidence_token(evidence)}
@@ -4646,6 +5053,207 @@ def _handle_duplicate_scan(cur, rec, evidence, serial, outcome, reason,
                                    review_id)})
 
 
+def _pass_route(evidence):
+    """How, if at all, a PASS may be recorded against this evidence.
+
+      direct       the evidence itself proposes a pass
+      el_only      the power is there and the EL verdict is the only objection:
+                   an operator who has looked at the image may overrule it,
+                   with a coded reason
+      provisional  a source is UNREACHABLE (NC), so nothing can be measured or
+                   read: the pass is recorded but the module is HELD until the
+                   evidence arrives (see _reconcile_provisional)
+      None         it cannot: a reading below the wattage is a measurement and
+                   is not open to argument, and BAD (a probe fault) or NA (the
+                   tester is up and has nothing for this serial) are quality
+                   signals that go to review, never through
+
+    Returns (route, why) - `why` is what to tell the operator.
+    """
+    if evidence.get("proposed") == "pass":
+        return "direct", None
+    ss, el = evidence.get("ss_state"), evidence.get("el_state")
+    if ss == ev.BAD:
+        return None, ("The Sun Simulator returned BAD for this serial - a "
+                      "probe fault. It has to be reviewed before it can be "
+                      "judged.")
+    if ss == ev.NA or el == ev.NA:
+        return None, ("The %s is reachable and has nothing for this serial. "
+                      "That is a quality signal - it goes to review, it is "
+                      "not passed." % ("Sun Simulator" if ss == ev.NA
+                                       else "EL/VI"))
+    want = float(evidence.get("wattage") or 0)
+    pmax = evidence.get("pmax")
+    if ss == ev.OK and (pmax is None or pmax < want):
+        return None, ("Retest it in the Sun Simulator - a reading below the "
+                      "wattage cannot be overruled.")
+    if ss == ev.NC or el == ev.NC:
+        return "provisional", (
+            "The %s cannot be reached, so this pass is provisional: the "
+            "module is held in Hold & Deviation until the reading is "
+            "available. If it agrees the module is released to pack "
+            "automatically; if it does not, it goes to Needs Review for a "
+            "Quality decision." % ("Sun Simulator" if ss == ev.NC
+                                   else "EL/VI folder"))
+    return "el_only", None
+
+
+_RECONCILE_LOCK = __import__("threading").Lock()
+
+
+def _reconcile_provisional(cur):
+    """Decisions made without all the evidence, checked against it now that
+    the source may be back.
+
+    For each provisional decision still waiting: read the evidence again. If
+    it is still incomplete, leave it. If it is complete and its proposal is
+    the decision that was made, confirm the decision - a NEW record that
+    supersedes the provisional one, so the trail is whole - and the module is
+    released (a held pass becomes graded and packable). If it disagrees, the
+    software does not pick: the evidence's own record is snapshotted beside
+    the decision, a Needs Review item is raised for Quality, and the module
+    stays held.
+
+    Called with _RECONCILE_LOCK held: two requests reconciling the same
+    module at once would raise its review item twice.
+    """
+    cfg = db.get_config(cur)
+    out = {"confirmed": 0, "flagged": 0, "waiting": 0}
+    for f in db.provisional_pending(cur):
+        f = dict(f)
+        e = ev.gather(cfg, f["serial"], f.get("wattage") or 0)
+        if e.get("mode") != "confirmed" or not e.get("proposed"):
+            out["waiting"] += 1
+            continue
+        if e["proposed"] == f["outcome"]:
+            db.record_fqc(cur, f["serial"], f["outcome"], e, "system",
+                          "confirmed", None, f.get("defect"), f.get("note"),
+                          build_instance=f.get("build_instance") or 1)
+            db.audit(cur, "system", "fqc.reconciled", "serial", f["serial"],
+                     {"outcome": f["outcome"], "provisional_fqc_id": f["fqc_id"]})
+            out["confirmed"] += 1
+            continue
+        defect = None
+        if e["proposed"] == "reject":
+            verdict = (e.get("el") or "").strip()
+            if verdict and verdict.lower() not in ev.EL_CLEAN:
+                defect = verdict
+        snap = db.record_fqc(cur, f["serial"], e["proposed"], e, "system",
+                             "confirmed", None, defect, None, supersede=False,
+                             update_serial=False,
+                             build_instance=f.get("build_instance") or 1)
+        rid = db.create_review_item(
+            cur, "provisional_mismatch", f["serial"], fqc_id=f["fqc_id"],
+            new_fqc_id=snap["fqc_id"], created_by="system")
+        db.set_serial(cur, f["serial"], state="hold", grade=None)
+        db.audit(cur, "system", "review.provisional_mismatch", "serial",
+                 f["serial"], {"review_id": rid, "decided": f["outcome"],
+                               "evidence_proposes": e["proposed"]})
+        out["flagged"] += 1
+    return out
+
+
+def _resolve_provisional_mismatch(cur, review_id, resolution, reason):
+    """Quality's call when a provisional decision and the evidence that later
+    arrived disagree. Either the decision stands or the evidence does; the
+    other record is superseded, never deleted."""
+    item = db.review_item_get(cur, review_id)
+    if not item or item.get("type") != "provisional_mismatch":
+        raise _Refuse("No such review item.", 404)
+    if item["status"] != "open":
+        raise _Refuse("Review #%d is already resolved." % review_id)
+    if role() not in _QUALITY_ROLES:
+        raise _Refuse("Only Quality can resolve a provisional decision that "
+                      "the evidence disagrees with.", 403)
+    resolution = (resolution or "").strip()
+    if resolution not in ("keep_decision", "keep_evidence"):
+        raise _Refuse("Choose which stands: the decision that was made, or "
+                      "what the evidence says.")
+    if resolution == "keep_decision":
+        winner, loser = item["fqc_id"], item["new_fqc_id"]
+    else:
+        winner, loser = item["new_fqc_id"], item["fqc_id"]
+    db.supersede_fqc(cur, loser, winner)
+    rec = store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s", (winner,))
+    passed = rec["outcome"] == "pass"
+    if passed and not rec.get("grade"):
+        cur.execute("UPDATE fqc_record SET grade='A' WHERE fqc_id=%s", (winner,))
+    db.set_serial(cur, item["serial"], state="graded" if passed else "rejected",
+                  grade="A" if passed else None)
+    at = datetime.datetime.now().isoformat(timespec="seconds")
+    cur.execute("UPDATE review_item SET status='resolved', resolved_by=%s, "
+                "resolved_at=%s, resolution=%s, reason=%s WHERE review_id=%s",
+                (actor(), at, resolution, reason, review_id))
+    db.audit(cur, actor(), "review.resolve", "serial", item["serial"],
+             {"review_id": review_id, "type": "provisional_mismatch",
+              "resolution": resolution, "reason": reason})
+    return {"ok": True, "review_id": review_id, "resolution": resolution}
+
+
+def _waiting_for(f):
+    src = []
+    if f.get("ss_state") == ev.NC:
+        src.append("Sun Simulator")
+    if f.get("el_state") == ev.NC:
+        src.append("EL/VI")
+    return " and ".join(src) or "evidence"
+
+
+@app.route("/api/hold")
+def api_hold():
+    """Hold & Deviation: decisions waiting for evidence, and the ones that
+    came back disagreeing. Reconciles first - opening the list is one of the
+    ways the system notices that a source has come back."""
+    with _RECONCILE_LOCK:
+        with store.conn() as (cx, cur):
+            summary = _reconcile_provisional(cur)
+            rows = []
+            for f in db.provisional_pending(cur):
+                f = dict(f)
+                cr = customers.get(f.get("customer"))
+                rows.append({
+                    "status": "awaiting", "serial": f["serial"],
+                    "model": f.get("model"),
+                    "customer": cr["name"] if cr else f.get("customer"),
+                    "outcome": f["outcome"], "state": f["state"],
+                    "reason": f.get("reason"), "note": f.get("note"),
+                    "defect": f.get("defect"), "decided_by": f.get("decided_by"),
+                    "at": f["at"], "waiting_for": _waiting_for(f)})
+            for r in db.review_items_open(cur, "provisional_mismatch"):
+                r = dict(r)
+                orig = store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s",
+                                 (r["fqc_id"],)) or {}
+                new = store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s",
+                                (r["new_fqc_id"],)) or {}
+                cr = customers.get(r.get("customer"))
+                rows.append({
+                    "status": "review", "review_id": r["review_id"],
+                    "serial": r["serial"], "model": r.get("model"),
+                    "customer": cr["name"] if cr else r.get("customer"),
+                    "outcome": orig.get("outcome"), "evidence_says": new.get("outcome"),
+                    "state": r.get("state"), "reason": orig.get("reason"),
+                    "note": orig.get("note"), "defect": orig.get("defect"),
+                    "decided_by": orig.get("decided_by"), "at": orig.get("at"),
+                    "waiting_for": None})
+            month = datetime.date.today().strftime("%Y-%m")
+            confirmed = store.one(cur,
+                "SELECT COUNT(*) AS n FROM dispatch_audit WHERE "
+                "action='fqc.reconciled' AND at LIKE %s", (month + "%",))["n"]
+    rows.sort(key=lambda r: r.get("at") or "", reverse=True)
+    return jsonify({"ok": True, "rows": rows, "reconciled": summary,
+                    "confirmed_this_month": confirmed})
+
+
+def _other_needs_note(defect, note):
+    """"Other" on the defect list says nothing on its own - the note is what
+    was actually wrong. Same rule, and same wording, as a coded reason of
+    OV-OTHER. Returns the sentence to show, or None when nothing is wrong."""
+    if (defect or "").strip().lower() == "other" and not (note or "").strip():
+        return ("“Other” is not a defect on its own — write what it is in "
+                "Note / Remark.")
+    return None
+
+
 @app.route("/api/fqc", methods=["POST"])
 @_sync_guard
 def api_fqc_grade():
@@ -4677,6 +5285,8 @@ def api_fqc_grade():
         return jsonify({"ok": False, "why":
             "“Other” is not a reason on its own — write what it was in "
             "Note / Remark."}), 400
+    if _other_needs_note(defect, note):
+        return jsonify({"ok": False, "why": _other_needs_note(defect, note)}), 400
 
     with store.conn() as (cx, cur):
         rec, evidence, out = _fqc_payload(
@@ -4699,6 +5309,15 @@ def api_fqc_grade():
                 "The Sun Simulator returned BAD for this serial. It cannot be "
                 "judged until the probe, polarity, or junction-box fault is "
                 "reviewed."}), 400
+
+        open_review = store.one(cur, "SELECT review_id FROM review_item WHERE "
+                                     "serial=%s AND status='open' AND "
+                                     "type='provisional_mismatch'", (serial,))
+        if open_review:
+            return jsonify({"ok": False, "why":
+                "%s is in Needs Review (#%d): its provisional decision and the "
+                "evidence that arrived disagree. Quality resolves it there."
+                % (serial, open_review["review_id"])}), 400
 
         # A stale tab is the common case, not a malicious one: the module was
         # retested while the operator was deciding. Say so rather than
@@ -4723,24 +5342,23 @@ def api_fqc_grade():
         # EL is the only objection, an operator who has looked at the image
         # may overrule it, and says why. That is a recorded judgement, not a
         # way round the measurement.
-        if outcome == "pass" and not proposed:
-            return jsonify({"ok": False, "why":
-                "There is not enough evidence to pass this module: %s"
-                % (evidence.get("why") or "the reading is unavailable.")}), 400
-        if outcome == "pass" and proposed != "pass":
-            pmax = evidence.get("pmax")
-            want = evidence.get("wattage") or 0
-            if pmax is None or pmax < want:
+        route = None
+        if outcome == "pass":
+            route, why_no = _pass_route(evidence)
+            if route is None:
                 return jsonify({"ok": False, "why":
-                    "This module cannot be passed: %s Retest it in the Sun "
-                    "Simulator — a reading below the wattage is not something "
-                    "that can be overruled."
-                    % (evidence.get("why") or "")}), 400
-            if not reason:
+                    "This module cannot be passed: %s" % why_no}), 400
+            if route == "el_only" and not reason:
                 return jsonify({"ok": False, "why":
                     "It makes its wattage and the EL is the only objection, so "
                     "it can be passed — but say why with a coded reason, "
                     "having looked at the image."}), 400
+            if route == "provisional" and not reason:
+                return jsonify({"ok": False, "why":
+                    "Without the tester's evidence a pass is provisional and "
+                    "overrules a reading nobody has seen - it needs a coded "
+                    "reason. %s" % _pass_route(evidence)[1]}), 400
+        hold = route == "provisional"
         if outcome == "reject" and proposed == "pass" and not reason:
             return jsonify({"ok": False, "why":
                 "The evidence proposes a pass, so rejecting it needs a coded "
@@ -4757,14 +5375,16 @@ def api_fqc_grade():
             verdict = (evidence.get("el") or "").strip()
             if verdict and verdict.lower() not in ev.EL_CLEAN:
                 defect = verdict
+        if _other_needs_note(defect, note):
+            return jsonify({"ok": False, "why": _other_needs_note(defect, note)}), 400
         saved = db.record_fqc(cur, serial, outcome, evidence, actor(), mode,
-                              reason, defect, note)
+                              reason, defect, note, hold=hold)
         db.audit(cur, actor(), "fqc." + outcome, "serial", serial,
                  {"outcome": outcome, "mode": mode, "reason": reason,
-                  "defect": defect, "proposed": proposed,
+                  "defect": defect, "proposed": proposed, "held": hold,
                   "ss_state": evidence.get("ss_state")})
     return jsonify({"ok": True, "serial": serial, "outcome": outcome,
-                    "grade": saved.get("grade"), "mode": mode,
+                    "grade": saved.get("grade"), "mode": mode, "held": hold,
                     "record": saved})
 
 
@@ -4870,6 +5490,9 @@ def api_review_list():
     that already says "FQC disagreed with a module already packed".
     """
     viewer = role()
+    with _RECONCILE_LOCK:
+        with store.conn() as (cx, cur):
+            _reconcile_provisional(cur)
     with store.conn() as (cx, cur):
         items = []
         for r in db.quality_pending(cur):
@@ -4906,6 +5529,26 @@ def api_review_list():
                 "dispatched": bool(r.get("dispatched")),
                 "locked": False,
                 "evidence": {"original": orig_side, "rescan": new_side},
+            })
+        for r in db.review_items_open(cur, "provisional_mismatch"):
+            r = dict(r)
+            orig = store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s",
+                             (r["fqc_id"],))
+            new = store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s",
+                            (r["new_fqc_id"],))
+            orig_side, new_side = _evid_side(orig), _evid_side(new)
+            if orig_side is not None: orig_side["wattage"] = r.get("wattage")
+            if new_side is not None: new_side["wattage"] = r.get("wattage")
+            items.append({
+                "type": "provisional_mismatch", "id": r["review_id"],
+                "serial": r["serial"], "model": r.get("model"),
+                "customer": r.get("customer"),
+                "flag": "Provisional vs evidence", "stage": "Hold",
+                "detail": "decided %s without the reading; it says %s" % (
+                    (orig or {}).get("outcome"), (new or {}).get("outcome")),
+                "user": (orig or {}).get("decided_by"), "at": r.get("created_at"),
+                "locked": viewer not in _QUALITY_ROLES,
+                "evidence": {"original": orig_side, "evidence": new_side},
             })
     items.sort(key=lambda x: x.get("at") or "", reverse=True)
     return jsonify(items)
@@ -5012,6 +5655,19 @@ def api_review_resolve():
             with store.conn() as (cx, cur):
                 out = _resolve_duplicate_scan(cur, review_id,
                                               d.get("resolution"), reason)
+        except _Refuse as e:
+            return jsonify({"ok": False, "why": e.why}), e.code
+        return jsonify(out)
+
+    if item_type == "provisional_mismatch":
+        try:
+            review_id = int(d.get("id"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "why": "No such review item."}), 404
+        try:
+            with store.conn() as (cx, cur):
+                out = _resolve_provisional_mismatch(cur, review_id,
+                                                    d.get("resolution"), reason)
         except _Refuse as e:
             return jsonify({"ok": False, "why": e.why}), e.code
         return jsonify(out)
@@ -5248,6 +5904,8 @@ def fqc():
         elif reason.upper().startswith("OV-OTHER") and not note:
             flash("“Other” is not a reason on its own — write what it was in "
                   "Note / remark.", "fail")
+        elif _other_needs_note(defect, note):
+            flash(_other_needs_note(defect, note), "fail")
         elif outcome == "reject" and proposed == "pass" and not reason:
             flash("The evidence proposes a pass, so rejecting it needs a "
                   "reason.", "fail")

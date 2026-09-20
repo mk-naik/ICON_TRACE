@@ -358,6 +358,40 @@
          stock.innerHTML = '<tr><td colspan="6"><div class="empty-state">No stock data found</div></td></tr>';
       }
       
+      var sSet={}, cSet={}, mSet={}, wSet={}, lSet={};
+      if (prod && prod.shifts) prod.shifts.forEach(function(r){ if(r.s) sSet[r.s]=1; });
+      if (fqc && fqc.rows) fqc.rows.forEach(function(r){ 
+        if(r.shift) { var sm = {1:'A', 2:'B', 3:'C'}; sSet[sm[r.shift]||r.shift]=1; }
+        if(r.model) mSet[r.model]=1;
+        if(r.wattage) wSet[r.wattage]=1;
+      });
+      if (disp && disp.table_fg) disp.table_fg.forEach(function(r){
+        if(r.customer_name || r.customer) cSet[r.customer_name || r.customer]=1;
+        if(r.model) mSet[r.model]=1;
+        if(r.watt) wSet[r.watt]=1;
+      });
+      if (prod && prod.customers) prod.customers.forEach(function(c){ cSet[c]=1; });
+      if (prod && prod.models) prod.models.forEach(function(m){ mSet[m]=1; });
+      
+      var updateSel = function(id, set, def, fVal) {
+        var sel = document.getElementById(id);
+        if (sel && (!fVal || sel.value === def || sel.value.startsWith('All') || sel.value.startsWith('Both'))) {
+          var cur = sel.value;
+          var arr = Object.keys(set).sort();
+          sel.innerHTML = '<option>' + def + '</option>' + arr.map(function(v){
+            return '<option value="' + fqcEsc(v) + '">' + fqcEsc(v) + '</option>';
+          }).join('');
+          sel.value = cur;
+          if(sel.selectedIndex < 0) sel.value = def;
+        }
+      };
+
+      updateSel('mgShift', sSet, 'All shifts', f.shift);
+      updateSel('mgCust', cSet, 'All customers', f.cust);
+      updateSel('mgModel', mSet, 'All models', f.model);
+      updateSel('mgWatt', wSet, 'All', f.watt);
+      updateSel('mgLine', lSet, 'Both lines', f.line);
+      
     });
   }
   window.renderMgmt = renderMgmt;
@@ -368,6 +402,9 @@
      'renderStock', 'renderPlan'].forEach(function (fn) {
       try { if (typeof window[fn] === 'function') window[fn](); }
       catch (e) { /* a screen that is not on the page yet */ }
+    });
+    document.querySelectorAll('input[type="date"]').forEach(function(el) {
+      el.setAttribute('max', new Date().toISOString().split('T')[0]);
     });
     if (typeof window.iconTable !== 'undefined') window.iconTable.wireAll();
     /* before wireResets(), so the Reset it injects gets wired this pass */
@@ -415,6 +452,217 @@
 
   function fqcState(evidence, key) {
     return evidence && evidence[key] ? evidence[key] : 'NC';
+  }
+
+  /* ---- The defect list ----------------------------------------------
+   * The names a rejection is filed under: Mukesh's 44, verbatim and in his
+   * order, then "Other" - a catch-all whose note is compulsory, because on its
+   * own it says nothing. It REPLACES v4's twelve-entry ELVI_CODES (below):
+   * two lists that disagree is worse than one that is wrong, so v4's array is
+   * rewritten in place from this one and every screen that reads either -
+   * the reject form, the Defect filter, Admin's code table - sees the same
+   * names. Change the list here and nowhere else. */
+  var FQC_DEFECTS = [
+    'Near JB Crack', 'Chip Cut', 'Corner Chip', 'String Gaping',
+    'String Shift', 'String Short', 'Ribbon Short', 'Cross Ribbon',
+    'Bubbles on Output', 'Backsheet Bubble', 'Tape on Cell',
+    'Tape on Backside', 'JB Change', 'JB Defect', 'Channel Defect',
+    'Frame Cut', 'Cell Crack', 'Micro Crack', 'EVA Bubble', 'Delamination',
+    'Ribbon Shift', 'Misalignment', 'Glass Scratch', 'Glass Stain',
+    'Frame Dent', 'Frame Scratch', 'Frame Gap', 'Soldering Defect',
+    'Dry Solder', 'Backsheet Scratch', 'Backsheet Cut', 'Potting Bubble',
+    'Less Potting', 'JB Misalignment', 'JB Gap', 'Busbar Misalignment',
+    'Low Power', 'Electrical Defect', 'Foreign Particle', 'Dust',
+    'Corner Guard Missing', 'Corner Guard Loose', 'Barcode Unreadable',
+    'Barcode Damaged', 'Other'
+  ];
+  window.FQC_DEFECTS = FQC_DEFECTS;
+
+  function defectKey(s) {
+    return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
+  /* What the type-ahead offers. The query is matched ANYWHERE in the name,
+     ignoring case: "jb" returns every defect with JB in it - Near JB Crack,
+     JB Change, JB Gap - not only the ones that begin with it. */
+  function defectMatches(query) {
+    var q = defectKey(query);
+    if (!q) return FQC_DEFECTS.slice();
+    return FQC_DEFECTS.filter(function (d) {
+      return d.toLowerCase().indexOf(q) !== -1;
+    });
+  }
+  window.iconDefectMatches = defectMatches;
+
+  /* The list's own spelling of whatever was typed or read from the EL
+     folder ("cell crack", "Ribbon  Short"), or null when it is not on the
+     list. What gets recorded is always the list's spelling. */
+  function defectCanonical(text) {
+    var k = defectKey(text);
+    if (!k) return null;
+    for (var i = 0; i < FQC_DEFECTS.length; i++) {
+      if (FQC_DEFECTS[i].toLowerCase() === k) return FQC_DEFECTS[i];
+    }
+    return null;
+  }
+  window.iconDefectCanonical = defectCanonical;
+
+  /* v4's ELVI_CODES, rewritten in place (v4 closes over the array, so it
+     cannot be reassigned). The OK entry stays: v4 reads ELVI_CODES[0] as the
+     clean verdict. Codes already referenced by GRADE_RULES keep theirs. */
+  function adoptDefectList() {
+    if (typeof ELVI_CODES === 'undefined' || !Array.isArray(ELVI_CODES)) return;
+    var codes = { 'Cell Crack': 'DF-CELLCRACK', 'Ribbon Short': 'DF-RIBSHORT',
+                  'String Short': 'DF-STRSHORT', 'Chip Cut': 'DF-CHIPCUT' };
+    var clean = ELVI_CODES.filter(function (c) { return !c.ng; });
+    ELVI_CODES.length = 0;
+    clean.forEach(function (c) { ELVI_CODES.push(c); });
+    FQC_DEFECTS.forEach(function (d) {
+      ELVI_CODES.push({ raw: d, label: d, ng: true,
+        code: codes[d] || 'DF-' + d.toUpperCase().replace(/[^A-Z0-9]/g, '') });
+    });
+  }
+  adoptDefectList();
+
+  /* The type-ahead itself. The input is what is read back (#fqcLiveDefect);
+     the list under it is only a way of filling that input in. */
+  var pickerPlace = null;
+  window.addEventListener('resize', function () { if (pickerPlace) pickerPlace(); });
+  /* capture: the panel scrolls, not only the page */
+  window.addEventListener('scroll', function (e) { if (pickerPlace) pickerPlace(e); }, true);
+
+  function defectPicker(input, list, onChange) {
+    var active = -1, shown = [];
+
+    /* The list is drawn in the viewport, not inside the card: the reject
+       panel clips whatever hangs outside it. It sits under the field, or over
+       it when there is more room above. */
+    function place() {
+      var r = input.getBoundingClientRect();
+      var below = window.innerHeight - r.bottom - 10, above = r.top - 10;
+      var up = below < 160 && above > below;
+      list.style.left = r.left + 'px';
+      list.style.width = r.width + 'px';
+      list.style.maxHeight = Math.max(100, Math.min(240, up ? above : below)) + 'px';
+      list.style.top = up ? '' : (r.bottom + 2) + 'px';
+      list.style.bottom = up ? (window.innerHeight - r.top + 2) + 'px' : '';
+    }
+    function open(on) {
+      list.hidden = !on;
+      input.setAttribute('aria-expanded', on ? 'true' : 'false');
+      if (on) place();
+    }
+    /* the form is rebuilt for every rejection, so only the latest list is
+       ever kept in step with the window */
+    pickerPlace = function (e) {
+      if (list.hidden || !document.body.contains(list)) return;
+      if (e && (e.target === list || list.contains(e.target))) return;
+      place();
+    };
+    function mark(text, q) {
+      var i = q ? text.toLowerCase().indexOf(q) : -1;
+      if (i < 0) return fqcEsc(text);
+      return fqcEsc(text.slice(0, i)) + '<b>' + fqcEsc(text.slice(i, i + q.length)) +
+             '</b>' + fqcEsc(text.slice(i + q.length));
+    }
+    function paint() {
+      var q = defectKey(input.value);
+      shown = defectMatches(input.value);
+      if (active >= shown.length) active = shown.length - 1;
+      list.innerHTML = shown.length ? shown.map(function (d, i) {
+        return '<button type="button" class="dl-opt' + (i === active ? ' on' : '') +
+          '" role="option" data-i="' + i + '">' + mark(d, q) + '</button>';
+      }).join('') : '<div class="dl-none">No defect on the list matches “' +
+        fqcEsc(input.value) + '”</div>';
+      open(true);
+    }
+    function choose(i) {
+      if (i < 0 || i >= shown.length) return;
+      input.value = shown[i];
+      active = -1;
+      open(false);
+      if (onChange) onChange();
+    }
+
+    input.addEventListener('focus', paint);
+    input.addEventListener('input', function () {
+      active = -1; paint();
+      if (onChange) onChange();
+    });
+    input.addEventListener('blur', function () { open(false); });
+    /* mousedown, not click: the input's blur would close the list first and
+       the click would land on nothing */
+    list.addEventListener('mousedown', function (e) {
+      var b = e.target.closest ? e.target.closest('.dl-opt') : null;
+      e.preventDefault();
+      if (b) choose(parseInt(b.getAttribute('data-i'), 10));
+    });
+    input.addEventListener('keydown', function (e) {
+      var isOpen = !list.hidden;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!isOpen) { paint(); return; }
+        active = e.key === 'ArrowDown' ? Math.min(active + 1, shown.length - 1)
+                                       : Math.max(active - 1, 0);
+        paint();
+        var on = list.querySelector('.dl-opt.on');
+        if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') {
+        /* never submits or moves on: it only picks, when something is lit */
+        e.preventDefault();
+        if (isOpen && active >= 0) choose(active);
+        else if (isOpen && shown.length === 1) choose(0);
+      } else if (e.key === 'Escape' && isOpen) {
+        /* closes the list and stops there - the document handler would
+           otherwise take the same key as "discard this module" */
+        e.stopPropagation();
+        open(false);
+      }
+    });
+  }
+  window.iconDefectPicker = defectPicker;
+
+  /* v4 owns the <thead> of Recent gradings and cannot be edited, so the
+     live layer reshapes it: Customer goes in right after Model, Disposition
+     goes - FQC passes or rejects, it no longer disposes, so the column was a
+     permanent dash - and so does Bld. The build a decision was made on is
+     recorded with it (and FQC needs it); this list just does not show it. Idempotent, run on every render. Returns the
+     column count, which the empty-state row spans: read from the header
+     itself, so it cannot go stale the next time a column moves. */
+  function fqcRecentHead(host) {
+    var table = host.closest ? host.closest('table') : null;
+    var tr = table && table.querySelector('thead tr');
+    if (!tr) return 11;
+    var find = function (label) {
+      return Array.prototype.filter.call(tr.cells, function (th) {
+        return (th.textContent || '').trim() === label; })[0];
+    };
+    ['Disposition', 'Bld'].forEach(function (label) {
+      var gone = find(label);
+      if (gone) gone.parentNode.removeChild(gone);
+    });
+    var model = find('Model');
+    if (model && !find('Customer')) {
+      var th = document.createElement('th');
+      th.textContent = 'Customer';
+      model.parentNode.insertBefore(th, model.nextSibling);
+    }
+    return tr.cells.length;
+  }
+
+  /* One decision, one row. The cells are in the header's order: Time, Serial,
+     Model, Customer, Pmax, EL/VI verdict, Proposed, Final, Defect, Flag. */
+  function fqcRecentRow(r) {
+    var pass = r.outcome === 'pass';
+    return '<tr><td class="mono">' + fmtIST(r.at) + '</td>' +
+      '<td class="mono">' + fqcEsc(r.serial) + '</td>' +
+      '<td class="mono">' + fqcEsc(r.model || '—') + '</td>' +
+      '<td>' + fqcEsc(r.customer || '—') + '</td>' +
+      '<td class="num">' + (r.ss_pmax == null ? '—' : r.ss_pmax) + '</td>' +
+      '<td>' + fqcEsc(r.el_verdict || '—') + '</td><td>' + fqcEsc(r.proposed || '—') + '</td>' +
+      '<td><span class="tag ' + (pass && r.mode !== 'provisional' ? 't-pass' : pass ? 't-rev' : 't-fail') + '">' + fqcEsc(r.grade || (pass ? (r.mode === 'provisional' ? 'Held' : 'A') : (r.quality_grade || 'Reject'))) + '</span><span style="display:none">' + (pass ? 'pass' : 'reject') + '</span></td>' +
+      '<td>' + fqcEsc(r.defect || '—') + '</td><td>' + (r.mode === 'provisional' ? '<span class="tag t-rev">Provisional</span> ' : '') +
+      (r.reason ? '<span class="tag t-rev">Override</span> ' : '') + '<span style="display:none">watt:' + (r.wattage || '') + '</span></td></tr>';
   }
 
   function renderLiveFqcRecent() {
@@ -487,10 +735,11 @@
           if (prev) sel.value = prev;
         }
         
-        if (window.B && B.defects && document.getElementById('rDefect')) {
+        if (document.getElementById('rDefect')) {
           var sel = document.getElementById('rDefect');
           var prev = sel.value;
-          sel.innerHTML = '<option>All</option>' + B.defects.map(function(d) {
+          /* the one defect list - the boot payload never carried its own */
+          sel.innerHTML = '<option>All</option>' + FQC_DEFECTS.map(function(d) {
             return '<option value="' + fqcEsc(d) + '">' + fqcEsc(d) + '</option>';
           }).join('');
           if (prev) sel.value = prev;
@@ -502,16 +751,10 @@
         if (count) count.textContent = rows.length.toLocaleString();
         if (overrides) overrides.textContent = rows.filter(function (r) { return !!r.reason; }).length;
         if (blind) blind.textContent = rows.filter(function (r) { return r.ss_state !== 'OK'; }).length;
-        host.innerHTML = rows.length ? rows.map(function (r) {
-          var pass = r.outcome === 'pass';
-          return '<tr><td class="mono">' + fmtIST(r.at) + '</td>' +
-            '<td class="mono">' + fqcEsc(r.serial) + '</td><td class="mono">1</td>' +
-            '<td class="mono">' + fqcEsc(r.model || '—') + '</td><td class="num">' + (r.ss_pmax == null ? '—' : r.ss_pmax) + '</td>' +
-            '<td>' + fqcEsc(r.el_verdict || '—') + '</td><td>' + fqcEsc(r.proposed || '—') + '</td>' +
-            '<td><span class="tag ' + (pass ? 't-pass' : 't-fail') + '">' + fqcEsc(r.grade || (pass ? 'A' : (r.quality_grade || 'Reject'))) + '</span><span style="display:none">' + (pass ? 'pass' : 'reject') + '</span></td>' +
-            '<td>' + fqcEsc(r.defect || '—') + '</td><td>—</td><td>' + (r.mode === 'provisional' ? '<span class="tag t-rev">Provisional</span> ' : '') +
-            (r.reason ? '<span class="tag t-rev">Override</span> ' : '') + '<span style="display:none">cust:' + fqcEsc((r.customer||'').toLowerCase()) + ' watt:' + (r.wattage||'') + '</span></td></tr>';
-        }).join('') : '<tr data-empty><td colspan="11"><div class="empty-state">No grading decisions recorded yet.</div></td></tr>';
+        var cols = fqcRecentHead(host);
+        host.innerHTML = rows.length ? rows.map(fqcRecentRow).join('') :
+          '<tr data-empty><td colspan="' + cols + '"><div class="empty-state">' +
+          'No grading decisions recorded yet.</div></td></tr>';
 
         if (window.iconTable) window.iconTable.wireAll();
       });
@@ -622,6 +865,33 @@ function wireFqcAnomalies() {
           if (fStatus && fStatus !== 'All' && b.state !== fStatus.toLowerCase()) ok = false;
           return ok;
         });
+
+        var sSet={}, cSet={}, mSet={}, gSet={}, stSet={};
+        rows.forEach(function(b) {
+          if (b.pack_shift) sSet[b.pack_shift]=1;
+          if (b.customer_name || b.customer) cSet[b.customer_name || b.customer]=1;
+          if (b.model) mSet[b.model]=1;
+          if (b.grade) gSet[b.grade]=1;
+          if (b.state) stSet[b.state]=1;
+        });
+        var updateSel = function(id, set, def, fVal) {
+          var sel = document.getElementById(id);
+          if (sel && (!fVal || fVal === def || fVal.startsWith('All'))) {
+            var cur = sel.value;
+            sel.innerHTML = '<option>' + def + '</option>' + Object.keys(set).sort().map(function(v){
+              var disp = v;
+              if (id === 'pkStatus') disp = v.charAt(0).toUpperCase() + v.slice(1);
+              return '<option value="' + fqcEsc(v) + '">' + fqcEsc(disp) + '</option>';
+            }).join('');
+            sel.value = cur;
+            if (sel.selectedIndex < 0) sel.value = def;
+          }
+        };
+        updateSel('pkShift', sSet, 'All shifts', fShift);
+        updateSel('pkCust', cSet, 'All customers', fCust);
+        updateSel('pkModel', mSet, 'All', fModel);
+        updateSel('pkGrade', gSet, 'All', fGrade);
+        updateSel('pkStatus', stSet, 'All', fStatus);
 
         // Update KPIs
         var kpis = document.querySelectorAll('#v-packdash .kpi .v');
@@ -860,6 +1130,21 @@ function wireFqcAnomalies() {
             }).join('');
           }
         }
+        
+        var updateSel = function(id, arr, def, fVal) {
+          var sel = document.getElementById(id);
+          if (sel && (!fVal || sel.value === def || sel.value.startsWith('All'))) {
+            var cur = sel.value;
+            sel.innerHTML = '<option>' + def + '</option>' + (arr || []).map(function(v) {
+              return '<option value="' + fqcEsc(v) + '">' + fqcEsc(v) + '</option>';
+            }).join('');
+            sel.value = cur;
+            if (sel.selectedIndex < 0) sel.value = def;
+          }
+        };
+        updateSel('pdShift', (d.shifts||[]).map(function(x){return x.s;}), 'All shifts', f.shift);
+        updateSel('pdCust', d.customers, 'All customers', f.customer);
+        updateSel('pdModel', d.models, 'All', f.model);
       });
   }
   window.renderProd = renderLiveProdDash;
@@ -1143,15 +1428,30 @@ function wireFqcAnomalies() {
             (totals.passed / totals.inspected * 100).toFixed(2) + '% yield' : '—';
         }
 
-        // Dynamically update available customers and models based on current visible data
-        var custSet = {}, modelSet = {};
+        // Dynamically update available customers, models, and shifts based on current visible data
+        var custSet = {}, modelSet = {}, shiftSet = {};
         rows.forEach(function(r) {
           if (r.customer) {
             var hit = (B.customers || []).find(function(c) { return c.code === r.customer; });
             custSet[hit ? hit.name : r.customer] = 1;
           }
           if (r.model) modelSet[r.model] = 1;
+          if (r.shift) {
+            var sm = {1:'A', 2:'B', 3:'C'};
+            shiftSet[sm[r.shift] || r.shift] = 1;
+          }
         });
+        
+        var sSel = document.getElementById('fDashShift');
+        if (sSel && (!f.shift || sSel.value === 'All shifts')) {
+          var sPrev = sSel.value;
+          sSel.innerHTML = '<option>All shifts</option>' + Object.keys(shiftSet).sort().map(function(s) {
+            return '<option value="' + fqcEsc(s) + '">' + fqcEsc(s) + '</option>';
+          }).join('');
+          sSel.value = sPrev;
+          if (sSel.selectedIndex < 0) sSel.value = 'All shifts';
+        }
+
         
         var cSel = document.getElementById('fDashCust');
         if (cSel && (!f.customer || cSel.value === 'All customers')) {
@@ -1433,13 +1733,25 @@ function wireFqcAnomalies() {
           ? '<button class="btn btn-solar btn-sm" ' +
               'onclick="fqcCommitLive(\'pass\')">Pass — grade A</button>' +
             '<button class="btn btn-ghost btn-sm" ' +
+              'onclick="fqcShowPassOverride()">Add defect / note…</button>' +
+            '<button class="btn btn-ghost btn-sm" ' +
               'onclick="fqcShowLiveOverride()">Reject…</button>'
           : '<button class="btn btn-danger btn-sm" ' +
               'onclick="fqcCommitLive(\'reject\')">Confirm rejection</button>' +
             '<button class="btn btn-ghost btn-sm" ' +
               'onclick="fqcShowLiveOverride()">Add defect / note…</button>' +
-            (elOnly ? '<button class="btn btn-ghost btn-sm" ' +
-              'onclick="fqcShowPassOverride()">Overrule to pass…</button>' : '')
+            /* the other way round: what a reject can be overruled to, and
+               when it cannot, the button says so and why instead of being
+               absent */
+            (data.pass_route === 'el_only'
+              ? '<button class="btn btn-ghost btn-sm" onclick="fqcShowPassOverride()">' +
+                'Overrule to pass…</button>'
+              : data.pass_route === 'provisional'
+              ? '<button class="btn btn-ghost btn-sm" onclick="fqcShowPassOverride()">' +
+                'Pass — provisional…</button>'
+              : '<button class="btn btn-ghost btn-sm" disabled title="' +
+                fqcEsc(data.pass_why || 'This module cannot be passed.') +
+                '">Overrule to pass…</button>')
         )) +
       '<button class="btn btn-ghost btn-sm" onclick="fqcCancelLive()">Discard</button>' +
       '</div></div>' +
@@ -1503,15 +1815,19 @@ function wireFqcAnomalies() {
             'Proposed</label>' +
             '<div style="font-family:var(--f-mono);font-size:26px;' +
             'font-weight:700;line-height:1;color:' +
-            (canPass ? 'var(--pass)' : 'var(--fail)') + '">' +
-            (canPass ? 'PASS' : 'REJECT') + '</div></div>' +
+            (canPass ? 'var(--pass)' : e.proposed === 'reject' ? 'var(--fail)'
+              : 'var(--review)') + '">' +
+            /* no proposal at all when a source could not be read: that is not
+               a rejection, and the operator is choosing either way */
+            (canPass ? 'PASS' : e.proposed === 'reject' ? 'REJECT' : 'NO READING') +
+            '</div></div>' +
           '<div style="font-size:12px;max-width:560px"><b>Why</b><br>' +
             fqcEsc(e.why || '') +
-            (canPass ? '' : '<br><span style="color:var(--ink3)">' + (elOnly
-              ? 'It makes its wattage, so if the image does not support this ' +
-                'verdict you may overrule it — with a reason.'
-              : 'A reading below the wattage cannot be overruled — if this ' +
-                'module should make it, retest it in the Sun Simulator.') +
+            (canPass ? '' : '<br><span style="color:var(--ink3)">' + (
+              data.pass_route === 'el_only'
+                ? 'It makes its wattage, so if the image does not support this ' +
+                  'verdict you may overrule it — with a reason.'
+                : fqcEsc(data.pass_why || '')) +
               '</span>') +
           '</div>' +
         '</div></div><div id="fqcLiveOverride"></div>') +
@@ -1540,18 +1856,19 @@ function wireFqcAnomalies() {
     var host = document.getElementById('fqcLiveOverride');
     if (!host || !liveFqcHold) return;
     var e = liveFqcHold.evidence || {};
-    var codes = (typeof ELVI_CODES !== 'undefined' ? ELVI_CODES : [])
-      .filter(function (c) { return c.ng; });
-    var verdict = (e.el || '').trim();
+    /* what the EL folder said, in the list's own spelling - or nothing, when
+       it is not a name on the list */
+    var verdict = defectCanonical(e.el) || '';
     host.innerHTML =
       '<div class="card-f" style="border-top:1px solid var(--line2);' +
         'align-items:flex-start;flex-wrap:wrap;gap:10px">' +
-      '<div class="fld" style="margin:0;min-width:180px"><label>Defect</label>' +
-        '<select id="fqcLiveDefect"><option value="">— what is wrong —</option>' +
-        codes.map(function (c) {
-          return '<option' + (c.label === verdict || c.raw === verdict ?
-            ' selected' : '') + '>' + fqcEsc(c.label) + '</option>';
-        }).join('') + '<option>Other</option></select></div>' +
+      '<div class="fld defect-pick" style="margin:0;min-width:220px">' +
+        '<label>Defect</label>' +
+        '<input id="fqcLiveDefect" autocomplete="off" role="combobox" ' +
+          'aria-expanded="false" aria-controls="fqcLiveDefectList" ' +
+          'placeholder="type to search — e.g. jb" value="' + fqcEsc(verdict) + '">' +
+        '<div class="defect-list" id="fqcLiveDefectList" role="listbox" hidden>' +
+        '</div></div>' +
       /* The reason is for OVERRULING. Agreeing with a proposed rejection
          overrules nothing, so the field is not shown there - it was asking
          for a coded reason to do exactly what the evidence said. */
@@ -1572,54 +1889,93 @@ function wireFqcAnomalies() {
       '<button class="btn btn-danger self-end" ' +
         'onclick="fqcCommitLive(\'reject\')">Record rejection</button></div>';
 
-    /* "Other" says nothing on its own - the note becomes the reason. */
+    /* "Other" says nothing on its own - the note becomes the reason. That is
+       true of the coded reason and of the defect alike, so the note is
+       compulsory when either is Other. */
     var reason = document.getElementById('fqcLiveReason');
-    if (reason) {
-      reason.onchange = function () {
-        var other = /^OV-OTHER/.test(reason.value);
-        var flag = document.getElementById('fqcNoteReq');
-        flag.textContent = other ? 'required' : 'optional';
-        flag.style.color = other ? 'var(--fail)' : 'var(--ink3)';
-      };
-    }
+    var syncNote = function () {
+      var d = document.getElementById('fqcLiveDefect');
+      var other = (reason && /^OV-OTHER/.test(reason.value)) ||
+                  defectCanonical(d && d.value) === 'Other';
+      var flag = document.getElementById('fqcNoteReq');
+      flag.textContent = other ? 'required' : 'optional';
+      flag.style.color = other ? 'var(--fail)' : 'var(--ink3)';
+    };
+    defectPicker(document.getElementById('fqcLiveDefect'),
+                 document.getElementById('fqcLiveDefectList'), syncNote);
+    if (reason) reason.onchange = syncNote;
+    syncNote();
   };
-  /* Overruling an EL-only rejection into a pass. Offered only when the
-     module makes its wattage, and it always costs a coded reason: the
-     operator is saying they looked at the image and the folder name is
-     wrong. */
+  /* The form for a PASS. Three cases, one form:
+       direct       the evidence proposes a pass - "Add defect / note" on it
+       el_only      overruling an EL-only rejection - a coded reason
+       provisional  the tester is unreachable - a coded reason, and the module
+                    is held until the reading arrives
+     A defect and a note are open in every case (Other -> the note is
+     compulsory); a coded reason is asked for exactly where a decision goes
+     against, or without, the evidence. */
   window.fqcShowPassOverride = function () {
     var host = document.getElementById('fqcLiveOverride');
     if (!host || !liveFqcHold) return;
     var e = liveFqcHold.evidence || {};
+    var route = liveFqcHold.pass_route || 'direct';
+    var needReason = route !== 'direct';
+    var intro = route === 'provisional'
+      ? '<b>Provisional pass.</b> ' + fqcEsc(liveFqcHold.pass_why || '')
+      : route === 'el_only'
+      ? 'Pmax ' + fqcEsc(e.pmax) + ' W makes the ' + fqcEsc(liveFqcHold.wattage) +
+        ' W wattage. The EL reads <b>' + fqcEsc(e.el || '—') + '</b> — pass it ' +
+        'only if the image does not support that.'
+      : 'The evidence proposes a pass. Record a defect or a note against it if ' +
+        'there is one worth keeping.';
+    var reasons = (route === 'provisional'
+      ? ['OV-EVIDENCE — evidence missing, judged visually'] : [])
+      .concat(['OV-IMAGE — image reviewed, verdict wrong',
+               'OV-RETEST — retested, value differs',
+               'OV-QUALITY — quality engineer instruction',
+               'OV-OTHER — other']);
     host.innerHTML =
       '<div class="card-f" style="border-top:1px solid var(--line2);' +
         'align-items:flex-start;flex-wrap:wrap;gap:10px;' +
         'background:var(--pass-lt)">' +
       '<div style="font-size:11.5px;max-width:340px;color:var(--ink3)">' +
-        'Pmax ' + fqcEsc(e.pmax) + ' W makes the ' +
-        fqcEsc(liveFqcHold.wattage) + ' W wattage. The EL reads ' +
-        '<b>' + fqcEsc(e.el || '—') + '</b> — pass it only if the image ' +
-        'does not support that.</div>' +
-      '<div class="fld" style="margin:0;min-width:240px">' +
-        '<label>Reason (required)</label>' +
-        '<select id="fqcPassReason"><option value="">— coded reason —</option>' +
-        '<option>OV-IMAGE — image reviewed, verdict wrong</option>' +
-        '<option>OV-RETEST — retested, value differs</option>' +
-        '<option>OV-QUALITY — quality engineer instruction</option>' +
-        '<option>OV-OTHER — other</option></select></div>' +
+        intro + '</div>' +
+      '<div class="fld defect-pick" style="margin:0;min-width:220px">' +
+        '<label>Defect <span style="color:var(--ink3)">optional</span></label>' +
+        '<input id="fqcPassDefect" autocomplete="off" role="combobox" ' +
+          'aria-expanded="false" aria-controls="fqcPassDefectList" ' +
+          'placeholder="type to search — e.g. jb">' +
+        '<div class="defect-list" id="fqcPassDefectList" role="listbox" hidden>' +
+        '</div></div>' +
+      (needReason
+        ? '<div class="fld" style="margin:0;min-width:240px">' +
+            '<label>Reason (required)</label>' +
+            '<select id="fqcPassReason"><option value="">— coded reason —</option>' +
+            reasons.map(function (r) { return '<option>' + r + '</option>'; }).join('') +
+            '</select></div>' : '') +
       '<div class="fld" style="margin:0;flex:1;min-width:220px">' +
         '<label>Note / remark <span id="fqcPassNoteReq" ' +
           'style="color:var(--ink3)">optional</span></label>' +
-        '<input id="fqcPassNote" placeholder="what the image shows"></div>' +
+        '<input id="fqcPassNote" placeholder="what the image shows, or what was seen"></div>' +
       '<button class="btn btn-solar self-end" ' +
-        'onclick="fqcCommitLive(\'pass\')">Pass — grade A</button></div>';
+        'onclick="fqcCommitLive(\'pass\')">' +
+        (route === 'provisional' ? 'Pass — provisional' : 'Pass — grade A') +
+        '</button></div>';
+
+    /* "Other" says nothing on its own: the note is compulsory with a coded
+       reason of Other and with a defect of Other */
     var sel = document.getElementById('fqcPassReason');
-    sel.onchange = function () {
-      var other = /^OV-OTHER/.test(sel.value);
+    var syncNote = function () {
+      var d = document.getElementById('fqcPassDefect');
+      var other = (sel && /^OV-OTHER/.test(sel.value)) ||
+                  defectCanonical(d && d.value) === 'Other';
       var flag = document.getElementById('fqcPassNoteReq');
       flag.textContent = other ? 'required' : 'optional';
       flag.style.color = other ? 'var(--fail)' : 'var(--ink3)';
     };
+    defectPicker(document.getElementById('fqcPassDefect'),
+                 document.getElementById('fqcPassDefectList'), syncNote);
+    if (sel) sel.onchange = syncNote;
   };
 
   window.fqcCommitLive = function (outcome) {
@@ -1630,22 +1986,42 @@ function wireFqcAnomalies() {
       return el ? (el.value || '').trim() : '';
     };
     var reason = outcome === 'reject' ? g('fqcLiveReason') : g('fqcPassReason');
-    var defect = outcome === 'reject' ? g('fqcLiveDefect') : '';
     var note = outcome === 'reject' ? g('fqcLiveNote') : g('fqcPassNote');
+    var defectText = outcome === 'reject' ? g('fqcLiveDefect') : g('fqcPassDefect');
+    var defect = '';
+    if (defectText) {
+      /* only a name from the list is recorded - free text here is how the
+         old list grew "Buring" and a second spelling of Ribbon Short. Blank
+         is allowed: on a rejection the server then files it under the EL
+         verdict. */
+      defect = defectCanonical(defectText);
+      if (!defect) {
+        toast('“' + defectText + '” is not on the defect list — ' +
+              'pick one from the list, or clear the box.');
+        return;
+      }
+      if (defect === 'Other' && !note) {
+        toast('“Other” is not a defect on its own — write what it is in ' +
+              'Note / remark.');
+        return;
+      }
+    }
 
     if (outcome === 'pass' && e.proposed !== 'pass') {
-      var watt = liveFqcHold.wattage;
-      if (e.pmax == null || watt == null || e.pmax < watt) {
-        toast('A reading below the wattage cannot be overruled. Retest it in ' +
-              'the Sun Simulator.');
+      /* whether it may be passed at all, and how, is the server's rule - it
+         told the screen at lookup, and enforces it again on the save */
+      if (!liveFqcHold.pass_route) {
+        toast(liveFqcHold.pass_why || 'This module cannot be passed.');
         return;
       }
       if (!reason) {
-        /* the power is there and only the EL objects - offer the form
-           rather than refusing a click the operator meant */
+        /* a reason is what turns "override" into a recorded judgement -
+           offer the form rather than refusing a click the operator meant */
         fqcShowPassOverride();
-        toast('Passing this needs a coded reason — you are overruling the ' +
-              'EL verdict.');
+        toast('Passing this needs a coded reason — you are ' +
+              (liveFqcHold.pass_route === 'provisional'
+                ? 'passing it without the tester\'s reading.'
+                : 'overruling the EL verdict.'));
         return;
       }
     }
@@ -1679,10 +2055,14 @@ function wireFqcAnomalies() {
       evidence_token: liveFqcHold.evidence_token
     })}).then(function (d) {
       if (!d.ok) { toast(d.why); return; }
-      toast(d.serial + (d.outcome === 'pass'
+      toast(d.serial + (d.held
+        ? ' passed provisionally — held in Hold & Deviation until the ' +
+          'reading is available; if it agrees it is released to pack.'
+        : d.outcome === 'pass'
         ? ' passed — grade A, ready to pack.'
         : ' rejected — Quality decides GY or BGY.'));
       renderLiveFqcRecent(); renderLiveFqcDash();
+      if (window.iconHoldRefresh) window.iconHoldRefresh();
       if (window.iconQualityRefresh) iconQualityRefresh();
       fqcCancelLive();
     });
@@ -2043,16 +2423,28 @@ function wireFqcAnomalies() {
        "Withdraw" repeated down a spreadsheet helps nobody. */
     var skip = [];
     cells.forEach(function (th, i) {
-      if (/^actions?$/i.test(txt(th))) skip.push(i);
+      if (/^actions?$/i.test(txt(th)) ||
+          (th.getAttribute && th.getAttribute('data-noexport') !== null)) skip.push(i);
     });
     var keep = function (v, i) { return skip.indexOf(i) === -1; };
     var columns = cells.filter(keep).map(txt);
 
+    /* A screen paints for the eye and a spreadsheet is read by filters and
+       pivots. Where those differ - a customer shown once per indent, an
+       "item 2" note under the number - the cell says what the file should
+       hold with data-x, and a column or row that is display only says
+       data-noexport. Absent both, the cell's text is what it always was. */
+    var cellValue = function (td) {
+      var x = td.getAttribute ? td.getAttribute('data-x') : null;
+      return x !== null && x !== undefined ? x : txt(td);
+    };
+
     var rows = [];
     tbl.querySelectorAll('tbody tr, tfoot tr').forEach(function (tr) {
       if (tr.style.display === 'none') return;       // filtered out of view
-      if (tr.hasAttribute('data-none') || tr.hasAttribute('data-empty')) return;
-      var vals = Array.prototype.slice.call(tr.cells).filter(keep).map(txt);
+      if (tr.hasAttribute('data-none') || tr.hasAttribute('data-empty') ||
+          tr.hasAttribute('data-noexport')) return;
+      var vals = Array.prototype.slice.call(tr.cells).filter(keep).map(cellValue);
       if (vals.join('')) rows.push(vals);
     });
     return rows.length ? { title: title, columns: columns, rows: rows } : null;
@@ -3143,56 +3535,89 @@ function wireFqcAnomalies() {
     mdl.classList.add('on');
   };
 
-  function traceBoxHtml(d) {
-    var n = d.qty || 0;
-    
-    var html = '<div class="crumb">Box <b>'+fqcEsc(d.label)+'</b></div>'+
-    '<div class="grid g5" style="margin-bottom:14px">'+
-      '<div class="kpi"><label>Modules in box</label><div class="v">'+n+'</div><div class="d">capacity '+(d.capacity||36)+'</div></div>'+
-      '<div class="kpi"><label>Model</label><div class="v" style="font-size:14px">'+fqcEsc(d.model||'—')+'</div>'+
-        '<div class="d"></div></div>'+
-      '<div class="kpi k-pass"><label>Grade</label><div class="v" style="font-size:15px">'+fqcEsc(d.grade||'—')+'</div>'+
-        '<div class="d"></div></div>'+
-      '<div class="kpi k-solar"><label>Status</label><div class="v" style="font-size:15px">'+(d.open ? 'Open' : (d.dispatch && d.dispatch.challan ? 'Challaned' : 'Closed'))+'</div>'+
-        '<div class="d">'+(d.dispatch && d.dispatch.challan ? fqcEsc(d.dispatch.challan) : '')+'</div></div>'+
-      '<div class="kpi"><label>Bin</label><div class="v" style="font-size:15px">BIN-'+(d.bin_no||'?')+'</div>'+
-        '<div class="d">packed '+fqcEsc(d.pack_date||'—')+'</div></div></div>';
-        
-    html += '<div class="card"><div class="card-h"><h3>Box journey</h3></div><div class="card-b"><div class="chain">';
-    
-    html += '<div class="node '+(d.open ? 'cur' : 'done')+'"><label>Packed</label><div class="nv">'+fqcEsc(d.label)+'</div>'+
-        '<div class="nd">'+n+' modules</div>'+
-        '<div class="ns"><span class="tag t-info">'+(d.open ? 'Open' : 'Closed')+'</span></div></div>';
-        
-    if (d.dispatch && d.dispatch.challan) {
-        html += '<div class="node '+(d.dispatch.gp ? 'done' : 'cur')+'"><label>Challan</label><div class="nv">'+fqcEsc(d.dispatch.challan)+'</div>'+
-          '<div class="nd">'+fqcEsc(d.dispatch.customer||'')+'<br>'+fqcEsc(d.dispatch.ch_date||'')+'</div>'+
-          '<div class="ns"><span class="tag t-info">Issued</span></div></div>';
-          
-        if (d.dispatch.gp) {
-            html += '<div class="node cur"><label>Gate pass</label><div class="nv">'+fqcEsc(d.dispatch.gp)+'</div>'+
-              '<div class="nd">'+fqcEsc(d.dispatch.vehicle||'')+'</div>'+
-              '<div class="ns"><span class="tag t-solar">Dispatched</span></div></div>';
-        }
-    }
-    
-    html += '</div></div></div>';
-    
-    html += '<div class="card"><div class="card-h"><h3>Modules in this box</h3>'+
-      '<div class="ch-r"><span class="tag t-mute">'+n+' serials</span></div></div>'+
-      '<div class="card-b flush"><div class="tbl-wrap"><table>'+
-      '<thead><tr><th>Slot</th><th>Serial</th></tr></thead><tbody>';
-      
-    if (d.serials && d.serials.length) {
-        d.serials.forEach(function(s, i) {
-            html += '<tr><td>'+(i+1)+'</td><td class="mono">'+fqcEsc(s)+'</td></tr>';
-        });
-    } else {
-        html += '<tr><td colspan="2" style="padding:18px;color:var(--ink3)">No modules packed yet.</td></tr>';
-    }
-    
-    html += '</tbody></table></div></div>';
-    return html;
+  /* A number on a Search & Trace answer that Search can itself answer. Every
+     kind of number the system issues resolves from the database now, so they
+     all link; a legacy box label that is not an ISPL number does not. */
+  function qlink(text) {
+    return '<button class="lnk" onclick="qTry(\'' + fqcEsc(text) + '\')">' +
+           fqcEsc(text) + '</button>';
+  }
+  function boxlink(no) {
+    return no && /^ISPL/.test(no) ? qlink(no) : fqcEsc(no || 'no box recorded');
+  }
+
+  /* Invoice -> challan(s) -> boxes -> serials. */
+  function traceInvoiceHtml(d) {
+    var t = d.totals || {};
+    var inv = (d.invoices || []).filter(function (i) { return !i.superseded; })[0] ||
+              (d.invoices || [])[0];
+    var declared = t.declared_qty;
+    var shortfall = declared != null && declared !== t.serials;
+
+    var challans = (d.challans || []).map(function (c) {
+      var mods = c.boxes.reduce(function (n, b) { return n + b.serials.length; }, 0);
+      var tone = c.status === 'issued' ? 't-pass' : c.status === 'draft' ? 't-rev' : 't-fail';
+      return '<tr><td class="mono">' + (c.challan_no ? qlink(c.challan_no) : DASH) + '</td>' +
+        '<td class="mono">' + fqcEsc(c.challan_date || DASH) + '</td>' +
+        '<td>' + traceTag(c.superseded ? 'superseded' : c.status, tone) + '</td>' +
+        '<td class="mono">' + fqcEsc(c.vehicle_no || DASH) + '</td>' +
+        '<td class="num">' + c.boxes.length + '</td>' +
+        '<td class="num">' + mods + '</td></tr>';
+    }).join('');
+
+    var serials = [];
+    (d.challans || []).forEach(function (c) {
+      c.boxes.forEach(function (b) {
+        var box = b.box_no || 'no box recorded';
+        if (!b.serials.length) serials.push({ c: c, box: box, s: null });
+        b.serials.forEach(function (s) { serials.push({ c: c, box: box, s: s }); });
+      });
+    });
+    var serialRows = serials.map(function (r) {
+      var s = r.s;
+      return '<tr><td class="mono">' + (r.c.challan_no ? qlink(r.c.challan_no) : DASH) +
+        (r.c.live ? '' : ' ' + traceTag(r.c.superseded ? 'superseded' : r.c.status, 't-fail')) +
+        '</td><td class="mono">' + boxlink(r.box) + '</td>' +
+        (s ? '<td class="mono"><button class="lnk" onclick="qTry(\'' +
+             fqcEsc(s.serial) + '\')">' + fqcEsc(s.serial) + '</button></td>' +
+             '<td class="mono">' + fqcEsc(s.model || DASH) + '</td>' +
+             '<td>' + fqcEsc(s.grade || DASH) + '</td>'
+           : '<td class="mono" style="color:var(--ink3)">no serials recorded</td>' +
+             '<td>' + DASH + '</td><td>' + DASH + '</td>') + '</tr>';
+    }).join('');
+
+    return '<div class="crumb">Invoice <b>' + fqcEsc(d.invoice_no) + '</b>' +
+      (inv && inv.buyer_name ? ' · ' + fqcEsc(inv.buyer_name) : '') + '</div>' +
+    '<div class="grid g4" style="margin-bottom:14px">' +
+      '<div class="kpi"><label>Challans</label><div class="v">' + (t.challans || 0) +
+        '</div><div class="d">live, against this invoice</div></div>' +
+      '<div class="kpi"><label>Boxes</label><div class="v">' + (t.boxes || 0) +
+        '</div><div class="d">on those challans</div></div>' +
+      '<div class="kpi k-pass"><label>Serials</label><div class="v">' + (t.serials || 0) +
+        '</div><div class="d">scanned into those boxes</div></div>' +
+      '<div class="kpi' + (shortfall ? ' k-fail' : '') + '"><label>Invoice quantity</label>' +
+        '<div class="v">' + (declared == null ? DASH : declared) + '</div>' +
+        '<div class="d">' + (declared == null ? 'no quantity recorded'
+          : shortfall ? 'shipped ' + (t.serials || 0) + ' — the two differ'
+          : 'matches what shipped') + '</div></div></div>' +
+    ((d.challans || []).length ? '' :
+      '<div class="note n-info"><span>ⓘ</span><span>No challan has been raised ' +
+      'against this invoice yet.</span></div>') +
+    (challans ? '<div class="card"><div class="card-h"><h3>Challans</h3></div>' +
+      '<div class="card-b flush"><table><thead><tr><th>Challan</th><th>Date</th>' +
+      '<th>Status</th><th>Vehicle</th><th class="num">Boxes</th>' +
+      '<th class="num">Modules</th></tr></thead><tbody>' + challans +
+      '</tbody></table></div></div>' : '') +
+    (serialRows ? '<div class="card" data-itable="invoice-serials" ' +
+      'data-export="invoice-serials"><div class="card-h"><h3>Boxes and serials</h3>' +
+      '<div class="ch-r"><span class="tag t-mute" data-role="count"></span>' +
+      '<button class="btn btn-ghost btn-sm" onclick="exportNote()">Export</button>' +
+      '</div></div><div class="card-b" style="border-bottom:1px solid var(--line2)">' +
+      '<div class="fld"><label>Search</label><input data-role="search" ' +
+      'placeholder="serial, box or challan"></div></div>' +
+      '<div class="scroll"><table><thead><tr><th>Challan</th><th>Box</th>' +
+      '<th>Serial</th><th>Model</th><th>Grade</th></tr></thead><tbody>' +
+      serialRows + '</tbody></table></div></div>' : '');
   }
 
   function traceSerialHtml(d) {
@@ -3295,58 +3720,325 @@ function wireFqcAnomalies() {
   function wireSearchOrder() {
     var orig = window.doSearch;
     if (typeof orig !== 'function' || orig.__ordered) return;
+    /* v4's own doSearch is never called: past a serial it answered from a
+       fixed sample array (BATCHES, a made-up pallet, CHN-455), so a real
+       challan number came back as somebody else's example. Everything is
+       looked up now, and what is not found is said not to be. */
     var patched = function () {
       var box = document.getElementById('qBox');
       var out = document.getElementById('searchOut');
+      if (!out) return;
       var q = box ? (box.value || '').trim().toUpperCase() : '';
-      if (out && q.indexOf('ICON') === 0) {
-        out.innerHTML = '<div class="note n-info"><span>ⓘ</span><span>' +
-          'Looking up ' + fqcEsc(q) + '…</span></div>';
-        fetch('/api/trace/serial/' + encodeURIComponent(q), { cache: 'no-store' })
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            lastTrace = d.ok ? d : null;
-            out.innerHTML = d.ok ? traceSerialHtml(d)
-              : '<div class="note n-bad"><span>⚑</span><span>' +
-                fqcEsc(d.why) + '</span></div>';
-            if (window.iconTable) window.iconTable.wireAll();
-          })
-          .catch(function (e) {
-            /* never fall back to v4's example - a fabricated journey under a
-               real serial is worse than no answer at all */
-            out.innerHTML = '<div class="note n-bad"><span>⚑</span><span>' +
-              'Could not reach the server to trace ' + fqcEsc(q) + ' (' +
-              fqcEsc(e.message) + '). Nothing is shown rather than an ' +
-              'example journey.</span></div>';
-          });
-        return;
-      }
-      else if (out && q.indexOf('ISPL') === 0) {
-        out.innerHTML = '<div class="note n-info"><span>ⓘ</span><span>' +
-          'Looking up box ' + fqcEsc(q) + '…</span></div>';
-        fetch('/api/loading/box?no=' + encodeURIComponent(q), { cache: 'no-store' })
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            if (d.error) {
-              out.innerHTML = '<div class="note n-bad"><span>⚑</span><span>' +
-                fqcEsc(d.error) + '</span></div>';
-            } else {
-              out.innerHTML = traceBoxHtml(d);
-            }
-          })
-          .catch(function (e) {
-            out.innerHTML = '<div class="note n-bad"><span>⚑</span><span>' +
-              'Could not reach the server to trace ' + fqcEsc(q) + ' (' +
-              fqcEsc(e.message) + ').</span></div>';
-          });
-        return;
-      }
-      orig.apply(this, arguments);
-      try { searchPanelOrder(); } catch (e) {}
+      if (!q) { out.innerHTML = ''; return; }
+      var label = (document.getElementById('qType') || {}).value || '';
+      var auto = label === '' || label === 'Detect automatically';
+      /* a serial is ICON followed by its wattage; an invoice number reads
+         ICON/26-27/822, so the digit is what tells them apart */
+      if (label === 'Serial' || (auto && /^ICON\d/.test(q))) traceSerial(q, out);
+      else traceFind(q, TRACE_KINDS[label] || 'auto', out);
     };
     patched.__ordered = true;
     window.doSearch = patched;
   }
+
+  var TRACE_KINDS = { 'Customer': 'customer', 'Batch': 'batch', 'Box no.': 'box',
+                      'Challan': 'challan', 'Invoice': 'invoice',
+                      'Vehicle': 'vehicle' };
+
+  function traceNote(out, cls, text) {
+    out.innerHTML = '<div class="note ' + cls + '"><span>' +
+      (cls === 'n-bad' ? '⚑' : 'ⓘ') + '</span><span>' + text + '</span></div>';
+  }
+
+  function traceSerial(q, out) {
+    traceNote(out, 'n-info', 'Looking up ' + fqcEsc(q) + '…');
+    fetch('/api/trace/serial/' + encodeURIComponent(q), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        lastTrace = d.ok ? d : null;
+        if (d.ok) out.innerHTML = traceSerialHtml(d);
+        else traceNote(out, 'n-bad', fqcEsc(d.why));
+        if (window.iconTable) window.iconTable.wireAll();
+      })
+      .catch(function (e) {
+        /* never fall back to v4's example - a fabricated journey under a
+           real serial is worse than no answer at all */
+        traceNote(out, 'n-bad', 'Could not reach the server to trace ' +
+          fqcEsc(q) + ' (' + fqcEsc(e.message) + '). Nothing is shown rather ' +
+          'than an example journey.');
+      });
+  }
+
+  /* Everything but a serial. The server decides what the number is (or is
+     told, by "Look in"); the answer says which kind it is. */
+  function traceFind(q, kind, out) {
+    traceNote(out, 'n-info', 'Looking up ' + fqcEsc(q) + '…');
+    fetch('/api/trace/find?q=' + encodeURIComponent(q) + '&kind=' + kind,
+          { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { traceNote(out, 'n-bad', fqcEsc(d.why)); return; }
+        var draw = TRACE_VIEWS[d.kind];
+        out.innerHTML = draw ? draw(d) : '';
+        if (window.iconTable) window.iconTable.wireAll();
+      })
+      .catch(function (e) {
+        traceNote(out, 'n-bad', 'Could not reach the server to look up ' +
+          fqcEsc(q) + ' (' + fqcEsc(e.message) + ').');
+      });
+  }
+
+  /* ---- the answers, in v4's own card / kpi / table classes ------------- */
+  function tkpi(label, value, note, tone) {
+    return '<div class="kpi' + (tone ? ' ' + tone : '') + '"><label>' +
+      fqcEsc(label) + '</label><div class="v"' +
+      (String(value).length > 9 ? ' style="font-size:14px"' : '') + '>' +
+      fqcEsc(value == null || value === '' ? DASH : value) + '</div>' +
+      '<div class="d">' + fqcEsc(note || '') + '</div></div>';
+  }
+  function tcell(c) {
+    return typeof c === 'string' ? '<td>' + c + '</td>'
+                                 : '<td class="' + c.c + '">' + c.h + '</td>';
+  }
+  /* rows are arrays of cells: html, or {h: html, c: class}. `o.name` makes it
+     a searchable, exportable card like every other table on the page. */
+  function tcard(title, heads, rows, o) {
+    o = o || {};
+    if (!rows.length) {
+      return o.empty ? '<div class="note n-info"><span>ⓘ</span><span>' +
+        o.empty + '</span></div>' : '';
+    }
+    var live = !!o.name;
+    return '<div class="card"' + (live ? ' data-itable="' + o.name +
+        '" data-export="' + o.name + '"' : '') + '>' +
+      '<div class="card-h"><h3>' + fqcEsc(title) + '</h3><div class="ch-r">' +
+      (live ? '<span class="tag t-mute" data-role="count"></span>' : '') +
+      '<button class="btn btn-ghost btn-sm" onclick="exportNote()">Export' +
+      '</button></div></div>' +
+      (live ? '<div class="card-b" style="border-bottom:1px solid var(--line2)">' +
+        '<div class="fld"><label>Search</label><input data-role="search" ' +
+        'placeholder="' + fqcEsc(o.search || 'search') + '"></div></div>' : '') +
+      '<div class="' + (live ? 'scroll' : 'card-b flush') + '"><table><thead><tr>' +
+      heads.map(function (h) {
+        return '<th' + (/^(Boxes|Modules|Qty|Ordered)$/.test(h) ? ' class="num"' : '') +
+               '>' + fqcEsc(h) + '</th>'; }).join('') +
+      '</tr></thead><tbody>' + rows.map(function (r) {
+        return '<tr>' + r.map(tcell).join('') + '</tr>'; }).join('') +
+      '</tbody></table></div></div>';
+  }
+  function chTone(c) {
+    return c.superseded ? 't-fail' : c.status === 'issued' ? 't-pass'
+         : c.status === 'draft' ? 't-rev' : 't-fail';
+  }
+  function chStatus(c) { return traceTag(c.superseded ? 'superseded' : c.status, chTone(c)); }
+  function crumb(kind, name, more) {
+    return '<div class="crumb">' + kind + ' <b>' + fqcEsc(name) + '</b>' +
+           (more ? ' · ' + fqcEsc(more) : '') + '</div>';
+  }
+  function serialRow(r, extra) {
+    return [{ h: qlink(r.serial), c: 'mono' }, { h: fqcEsc(r.model || DASH), c: 'mono' },
+            fqcEsc(r.grade || DASH)].concat(extra || []);
+  }
+
+  var TRACE_VIEWS = {
+    invoice: traceInvoiceHtml,
+
+    /* a challan: the document, then what is on it */
+    challan: function (d) {
+      var c = d.challan, t = d.totals, rows = [];
+      d.boxes.forEach(function (b) {
+        if (!b.serials.length) rows.push([{ h: boxlink(b.box_no), c: 'mono' },
+          '<span style="color:var(--ink3)">no serials recorded</span>', DASH, DASH]);
+        b.serials.forEach(function (r) {
+          rows.push([{ h: boxlink(b.box_no), c: 'mono' }].concat(serialRow(r)));
+        });
+      });
+      var gp = d.gate_passes.map(function (g) { return fqcEsc(g.gp_no); }).join(', ');
+      var note = c.status === 'cancelled'
+        ? '<div class="note n-warn"><span>⚑</span><span>This challan was <b>cancelled</b>' +
+          (c.cancelled_reason ? ': ' + fqcEsc(c.cancelled_reason) : '') +
+          '. Its serials are back in stock.</span></div>'
+        : c.superseded ? '<div class="note n-warn"><span>⚑</span><span>This challan was ' +
+          '<b>superseded</b> by a corrected one (the same number with its own suffix). ' +
+          'It stays on record exactly as it was issued.</span></div>' : '';
+      return crumb('Challan', c.challan_no, c.buyer_name) +
+        '<div class="grid g4" style="margin-bottom:14px">' +
+          tkpi('Status', c.superseded ? 'superseded' : c.status, c.origin === 'historical' ? 'historical document' : 'issued by this system', chTone(c) === 't-pass' ? 'k-pass' : '') +
+          tkpi('Boxes', t.boxes, 'on this challan') +
+          tkpi('Modules', t.serials, c.declared_qty != null ? 'invoice declared ' + c.declared_qty : 'no invoice quantity') +
+          tkpi('Vehicle', c.vehicle_no, c.transporter || '') + '</div>' + note +
+        '<div class="card"><div class="card-h"><h3>Document</h3></div><div class="card-b flush">' +
+        '<table><tbody>' + [
+          ['Invoice', c.invoice_no ? qlink(c.invoice_no) : DASH],
+          ['Date', fqcEsc(c.challan_date)],
+          ['Vehicle', c.vehicle_no ? qlink(c.vehicle_no) : DASH],
+          ['Consignee', fqcEsc(c.consignee_name || DASH)],
+          ['Gate pass', gp || DASH]].map(function (r) {
+            return '<tr><td style="color:var(--ink3);width:160px">' + r[0] + '</td>' +
+                   '<td class="mono">' + r[1] + '</td></tr>'; }).join('') +
+        '</tbody></table></div></div>' +
+        tcard('Boxes and serials', ['Box', 'Serial', 'Model', 'Grade'], rows,
+              { name: 'challan-serials', search: 'serial or box',
+                empty: 'Nothing has been scanned onto this challan yet.' });
+    },
+
+    /* a pallet, which is its own packing list; a repacked one shows its trail */
+    box: function (d) {
+      var trail = '';
+      if (d.repacked_from.length) {
+        trail += '<div class="note n-info"><span>ⓘ</span><span>Made by <b>repacking</b>: ' +
+          d.repacked_from.map(function (b) { return boxlink(b.box_no); }).join(', ') +
+          '. The pallets it came from are retired and keep their contents.</span></div>';
+      }
+      if (d.repacked_into.length) {
+        trail += '<div class="note n-warn"><span>⚑</span><span>This pallet was <b>repacked</b> into ' +
+          d.repacked_into.map(function (b) { return boxlink(b.box_no); }).join(', ') +
+          (d.retired_reason ? ' — ' + fqcEsc(d.retired_reason) : '') +
+          '. Its number is retired, not reused.</span></div>';
+      }
+      var packed = [d.pack_shift ? 'shift ' + d.pack_shift : '',
+                    d.bin_no ? 'BIN-' + d.bin_no : ''].filter(Boolean).join(' · ');
+      return crumb('Pallet', d.box_no, d.customer || 'general stock') +
+        (d.legacy_box_no ? '<div class="hint" style="margin:-6px 0 10px">also labelled ' +
+          fqcEsc(d.legacy_box_no) + '</div>' : '') +
+        '<div class="grid g5" style="margin-bottom:14px">' +
+          tkpi('Modules', (d.qty == null ? d.serials.length : d.qty) +
+               (d.capacity ? ' / ' + d.capacity : ''), d.capacity ? 'of capacity' : '') +
+          tkpi('Model', d.model, d.wattage ? d.wattage + ' W' : '') +
+          tkpi('Grade', d.grade, '', d.grade === 'A' ? 'k-pass' : '') +
+          tkpi('Status', d.state, d.challans.length ? 'on ' + d.challans.length + ' challan(s)' : 'not on a challan') +
+          tkpi('Packed', d.pack_date, packed) + '</div>' + trail +
+        tcard('Challans', ['Challan', 'Date', 'Status', 'Invoice', 'Vehicle'],
+          d.challans.map(function (c) {
+            return [{ h: c.challan_no ? qlink(c.challan_no) : DASH, c: 'mono' },
+              { h: fqcEsc(c.challan_date), c: 'mono' }, chStatus(c),
+              { h: c.invoice_no ? qlink(c.invoice_no) : DASH, c: 'mono' },
+              { h: fqcEsc(c.vehicle_no || DASH), c: 'mono' }]; })) +
+        tcard('Modules in this pallet', ['Serial', 'Model', 'Grade', 'State'],
+          d.serials.map(function (r) { return serialRow(r, [fqcEsc(r.state || DASH)]); }),
+          { name: 'pallet-serials', search: 'serial',
+            empty: 'No modules have been packed into this pallet yet.' });
+    },
+
+    vehicle: function (d) {
+      return crumb('Vehicle', d.vehicle_no) +
+        '<div class="grid g4" style="margin-bottom:14px">' +
+          tkpi('Challans', d.challans.length, 'carried by this vehicle') +
+          tkpi('Gate passes', d.gate_passes.length, 'on record') + '</div>' +
+        tcard('Challans', ['Challan', 'Date', 'Status', 'Invoice', 'Buyer', 'Boxes', 'Qty'],
+          d.challans.map(function (c) {
+            return [{ h: c.challan_no ? qlink(c.challan_no) : DASH, c: 'mono' },
+              { h: fqcEsc(c.challan_date), c: 'mono' }, chStatus(c),
+              { h: c.invoice_no ? qlink(c.invoice_no) : DASH, c: 'mono' },
+              fqcEsc(c.buyer_name || DASH), { h: String(c.boxes), c: 'num' },
+              { h: String(c.qty), c: 'num' }]; }),
+          { name: 'vehicle-challans', search: 'challan, invoice or buyer' }) +
+        tcard('Gate passes', ['Gate pass', 'Date', 'Kind', 'Challan'],
+          d.gate_passes.map(function (g) {
+            return [{ h: fqcEsc(g.gp_no), c: 'mono' }, { h: fqcEsc(g.gp_date), c: 'mono' },
+                    fqcEsc(g.kind), { h: g.challan_no ? qlink(g.challan_no) : DASH, c: 'mono' }]; }));
+    },
+
+    batch: function (d) {
+      var n = function (k) { return d.counts[k] || 0; };
+      return crumb('Batch', d.batch_no, d.customer) +
+        '<div class="grid g5" style="margin-bottom:14px">' +
+          tkpi('Quantity', d.qty, d.seq_from + ' – ' + d.seq_to) +
+          tkpi('Model', d.model, d.wattage + ' W · ' + (d.dcr || '')) +
+          tkpi('Produced', d.date_produced, 'shift ' + d.shift) +
+          tkpi('Allocation', d.alloc_type || DASH, d.indent_no ? 'indent ' + d.indent_no : '') +
+          tkpi('Dispatched', n('dispatched'), n('packed') + ' packed · ' + n('graded') +
+               ' graded · ' + n('planned') + ' planned' +
+               (n('rejected') ? ' · ' + n('rejected') + ' rejected' : ''), 'k-pass') + '</div>' +
+        tcard('Serials in this batch', ['Serial', 'Model', 'Grade', 'State', 'Pallet'],
+          d.serials.map(function (r) {
+            return [{ h: qlink(r.serial), c: 'mono' }, { h: fqcEsc(d.model), c: 'mono' },
+              fqcEsc(r.grade || DASH), fqcEsc(r.state || DASH),
+              { h: r.box_no ? boxlink(r.box_no) : DASH, c: 'mono' }]; }),
+          { name: 'batch-serials', search: 'serial, state or pallet',
+            empty: 'No serials are recorded against this batch.' });
+    },
+
+    customer: function (d) {
+      var n = function (k) { return d.counts[k] || 0; };
+      var total = 0;
+      for (var k in d.counts) if (d.counts.hasOwnProperty(k)) total += d.counts[k];
+      return crumb('Customer', d.customer.name, d.customer.state) +
+        '<div class="grid g5" style="margin-bottom:14px">' +
+          tkpi('Serials', total, 'allocated to this customer') +
+          tkpi('Graded', n('graded'), 'ready to pack') +
+          tkpi('Packed', n('packed'), 'in pallets') +
+          tkpi('Dispatched', n('dispatched'), 'on a challan', 'k-pass') +
+          tkpi('Rejected', n('rejected') + n('hold'), 'rejected or on hold', n('rejected') ? 'k-fail' : '') +
+        '</div>' +
+        tcard('Batches', ['Batch', 'Date', 'Model', 'Qty'],
+          d.batches.map(function (b) {
+            return [{ h: qlink(b.batch_no), c: 'mono' }, { h: fqcEsc(b.date_produced), c: 'mono' },
+                    { h: fqcEsc(b.model), c: 'mono' }, { h: String(b.qty), c: 'num' }]; }),
+          { name: 'customer-batches', search: 'batch or model',
+            empty: 'Nothing has been allocated to this customer yet.' }) +
+        tcard('Challans', ['Challan', 'Date', 'Status', 'Invoice', 'Vehicle'],
+          d.challans.map(function (c) {
+            return [{ h: c.challan_no ? qlink(c.challan_no) : DASH, c: 'mono' },
+              { h: fqcEsc(c.challan_date), c: 'mono' }, chStatus(c),
+              { h: c.invoice_no ? qlink(c.invoice_no) : DASH, c: 'mono' },
+              { h: fqcEsc(c.vehicle_no || DASH), c: 'mono' }]; }),
+          { name: 'customer-challans', search: 'challan, invoice or vehicle' });
+    },
+
+    customers: function (d) {
+      return '<div class="note n-info"><span>ⓘ</span><span>' + d.matches.length +
+        ' customers match — pick one: ' + d.matches.map(function (m) {
+          return qlink(m.name); }).join(' · ') + '</span></div>';
+    }
+  };
+
+  /* Search & Trace opens empty. v4 ships qBox pre-filled with a customer name
+     and "Look in" without Invoice; both are corrected once, and the "Try:"
+     line is rebuilt from numbers in the formats this system issues - the
+     new challan and pallet (packing list) numbers and an invoice number as HO
+     prints it - not v4's CHN-455 and A044. Whether one exists on THIS
+     database is the database's to say; a number that is not on file says so. */
+  var SEARCH_HINTS = ['SAI BABUJI', 'BAT-2609-00007', 'ISPL260905/K001',
+                      'IS-05.09.2026/0001', 'CG04MM1521', 'ICON590G1202121001',
+                      'ICON/26-27/822'];
+
+  function searchScreenSetup() {
+    var box = document.getElementById('qBox');
+    var type = document.getElementById('qType');
+    if (!box || box.__setup) return;
+    box.__setup = true;
+    box.removeAttribute('value');
+    box.value = '';
+    if (type && !Array.prototype.some.call(type.options, function (o) {
+      return o.text === 'Invoice'; })) {
+      var opt = document.createElement('option');
+      opt.text = 'Invoice';
+      var challan = Array.prototype.filter.call(type.options, function (o) {
+        return o.text === 'Challan'; })[0];
+      type.add(opt, challan ? challan.index + 1 : null);
+    }
+    var lab = document.querySelector('#v-search .fld label');
+    if (lab) lab.textContent = 'Customer, batch, serial, pallet, challan, invoice or vehicle';
+    var first = document.querySelector('#v-search button.lnk[onclick^="qTry"]');
+    var line = first ? first.parentNode : null;
+    if (line) {
+      line.innerHTML = 'Try: ' + SEARCH_HINTS.map(qlink).join(' · ');
+    }
+    /* a link clicked while "Look in" is set to something else would be
+       searched as that something else */
+    var origTry = window.qTry;
+    if (typeof origTry === 'function' && !origTry.__auto) {
+      window.qTry = function (v) {
+        if (type) type.selectedIndex = 0;
+        return origTry.apply(this, arguments);
+      };
+      window.qTry.__auto = true;
+    }
+  }
+  window.iconSearchSetup = searchScreenSetup;
+  /* the box is in the page already, so it is empty before sign-in too */
+  searchScreenSetup();
 
   /* v4 ships sample rows in several tables. Where the database has nothing
      yet, say so plainly rather than leaving last month's demo numbers on
@@ -3402,6 +4094,8 @@ function wireFqcAnomalies() {
     pruneGatePass();
     pruneDemoControls();
     wireSearchOrder();
+    searchScreenSetup();
+    holdSetup();
     wirePlanChecks();
     var badge = document.createElement('span');
     badge.className = 'tb-unit';
@@ -3479,7 +4173,9 @@ function wireFqcAnomalies() {
     var view = document.getElementById('v-search');
     if (view) {
       view.querySelectorAll('.card').forEach(function (c, i) {
-        if (i > 0) c.style.display = 'none';
+        /* v4's leftover demo cards; an answer that is on screen is not one of
+           them - hiding all but its first card left half a page on return */
+        if (i > 0 && !(c.closest && c.closest('#searchOut'))) c.style.display = 'none';
       });
     }
   }
@@ -4588,6 +5284,7 @@ function wireFqcAnomalies() {
     window.__reviewFilter = filter;
     var shown = filter === 'All' ? rows
       : filter === 'Quality' ? rows.filter(function (r) { return r.type === 'quality_grade'; })
+      : filter === 'Provisional' ? rows.filter(function (r) { return r.type === 'provisional_mismatch'; })
       : rows.filter(function (r) { return r.type === 'duplicate_scan'; });
     // v-review is on TABLE_SCREENS (wireScreenTables(), above), so this
     // card was already auto-marked data-itable="flagged-entries" at sign-in
@@ -4611,6 +5308,9 @@ function wireFqcAnomalies() {
             esc(r.serial) + '\',\'GY\')">GY</button> ' +
           '<button class="btn btn-ghost btn-sm" onclick="reviewGradePrompt(\'' +
             esc(r.serial) + '\',\'BGY\')">BGY</button>';
+      } else if (r.type === 'provisional_mismatch') {
+        action = '<button class="btn btn-ghost btn-sm" onclick="reviewOpenProvisional(' +
+          r.id + ')">Resolve</button>';
       } else {
         action = '<button class="btn btn-ghost btn-sm" onclick="reviewOpenDuplicate(' +
           r.id + ')">Resolve</button>';
@@ -4641,7 +5341,12 @@ function wireFqcAnomalies() {
     if (!seg || seg.getAttribute('data-review-wired')) return;
     seg.setAttribute('data-review-wired', '1');
     var btns = Array.prototype.slice.call(seg.querySelectorAll('button'));
-    var labels = ['All', 'Quality', 'Duplicate scan'];
+    var labels = ['All', 'Quality', 'Duplicate scan', 'Provisional'];
+    while (btns.length < labels.length) {
+      var extra = document.createElement('button');
+      seg.appendChild(extra);
+      btns.push(extra);
+    }
     btns.forEach(function (b, i) {
       if (labels[i] == null) return;
       b.textContent = labels[i];
@@ -4822,6 +5527,233 @@ function wireFqcAnomalies() {
         if (window.iconRefresh) window.iconRefresh();
       });
   };
+
+  /* Quality's call when a decision made without the tester's reading and the
+     reading that later arrived disagree. Both are shown; nothing picks. */
+  window.reviewOpenProvisional = function (reviewId) {
+    var item = (window.__reviewItems || []).filter(function (r) {
+      return r.type === 'provisional_mismatch' && String(r.id) === String(reviewId); })[0];
+    if (!item) return;
+    var o = (item.evidence && item.evidence.original) || {};
+    var n = (item.evidence && item.evidence.evidence) || {};
+    var host = document.getElementById('mdlGeneric');
+    var mdl = document.getElementById('mdl');
+    if (!host || !mdl) return;
+    var esc = reviewEsc;
+    var title = document.getElementById('mdlTitle');
+    var sub = document.getElementById('mdlSub');
+    if (title) title.textContent = 'Provisional decision · ' + item.serial;
+    if (sub) sub.textContent = 'Decided without the tester — the reading has arrived and disagrees';
+    if (typeof modalMode === 'function') modalMode(true);
+
+    function side(label, r) {
+      return '<div class="card" style="margin:0;flex:1 1 0"><div class="card-h">' +
+        '<h3>' + label + '</h3></div><div class="card-b">' +
+        '<div class="lookup" style="padding:0">' +
+        '<div><label>Outcome</label><div class="lv">' + esc(r.outcome || '—') + '</div></div>' +
+        '<div><label>Pmax</label><div class="lv">' + (r.pmax == null ? 'not read' : r.pmax + ' W') +
+          (r.wattage ? ' <span style="color:var(--ink3)">of ' + r.wattage + ' W</span>' : '') + '</div></div>' +
+        '<div><label>EL/VI</label><div class="lv">' + esc(r.el_verdict || 'not read') + '</div></div>' +
+        '<div><label>Defect</label><div class="lv">' + esc(r.defect || '—') + '</div></div>' +
+        '<div><label>Reason</label><div class="lv" style="font-size:11.5px">' + esc(r.reason || '—') + '</div></div>' +
+        '<div><label>Note</label><div class="lv" style="font-size:11.5px">' + esc(r.note || '—') + '</div></div>' +
+        '<div><label>Decided by</label><div class="lv">' + esc(r.decided_by || '—') + '</div></div>' +
+        '</div></div></div>';
+    }
+
+    var actionHtml = item.locked
+      ? '<div class="note n-warn"><span>⚑</span><span>Only Quality can resolve a ' +
+        'provisional decision that the evidence disagrees with.</span></div>'
+      : '<div class="fld"><label>Why? (required)</label>' +
+        '<textarea id="revWhy" rows="3" placeholder="what makes this the right one ' +
+        'to keep — the image, the flash values"></textarea></div>' +
+        '<div class="card-f" style="flex-wrap:wrap">' +
+        '<button class="btn btn-ghost" onclick="reviewSubmitProvisional(' + item.id +
+          ',\'keep_decision\')">Keep the decision that was made</button>' +
+        '<button class="btn btn-primary" onclick="reviewSubmitProvisional(' + item.id +
+          ',\'keep_evidence\')">Keep what the evidence says</button>' +
+        '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>';
+
+    host.innerHTML =
+      '<div class="note n-info"><span>ⓘ</span><span>' + esc(item.serial) + ' was ' +
+        'decided while the tester could not be reached, and is held. The reading ' +
+        'is available now and it disagrees — shown side by side, nothing here ' +
+        'picks a side.</span></div>' +
+      '<div style="display:flex;gap:10px;margin:10px 0;flex-wrap:wrap">' +
+        side('Decision — made without the reading', o) +
+        side('Evidence — available now', n) + '</div>' + actionHtml;
+    mdl.classList.add('on');
+    var box = document.getElementById('revWhy');
+    if (box) box.focus();
+  };
+
+  window.reviewSubmitProvisional = function (reviewId, resolution) {
+    var box = document.getElementById('revWhy');
+    var why = box ? box.value.trim() : '';
+    if (!why) {
+      if (typeof toast === 'function') toast('Say why before resolving this.');
+      if (box) box.focus();
+      return;
+    }
+    api('review/resolve', { method: 'POST', body: JSON.stringify(
+      { type: 'provisional_mismatch', id: reviewId, resolution: resolution, reason: why }) })
+      .then(function (d) {
+        if (!d.ok) { if (typeof toast === 'function') toast(d.why); return; }
+        if (typeof closeModal === 'function') closeModal();
+        if (typeof toast === 'function')
+          toast('Review #' + reviewId + ' resolved: ' + d.resolution.replace(/_/g, ' ') + '.');
+        window.iconReviewRefresh();
+        window.iconHoldRefresh();
+        if (window.iconRefresh) window.iconRefresh();
+      });
+  };
+
+  /* ---- Hold & Deviation ------------------------------------------------
+   * v4 shipped this screen as a demo of holds on a material lot, a box or a
+   * batch, from a fixed array, with a form to raise more. None of that is
+   * built. What IS built is the hold that FQC itself needs: a decision made
+   * while the tester could not be reached. It is listed here until the
+   * reading is available - then it clears by itself if the reading agrees,
+   * and goes to Needs Review for Quality if it does not.
+   *
+   * The demo form is hidden rather than left beside real rows: a "Raise a
+   * hold" button that writes to a fixed array is one wrong click from a hold
+   * that looks real and freezes nothing.
+   *
+   * Reading this list is also one of the ways the system notices the tester
+   * is back (the server reconciles first), so it is polled.
+   */
+  window.__holdData = { rows: [], confirmed_this_month: 0 };
+
+  function holdWhen(iso) { return (iso || '').replace('T', ' ').slice(0, 16); }
+
+  function holdRedraw() {
+    var d = window.__holdData || { rows: [] };
+    var esc = reviewEsc;
+    var body = document.getElementById('holdRows');
+    var awaiting = d.rows.filter(function (r) { return r.status === 'awaiting'; });
+    var review = d.rows.filter(function (r) { return r.status === 'review'; });
+    var held = d.rows.filter(function (r) { return r.state === 'hold'; });
+    var set = function (id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
+    set('hkOpen', awaiting.length);
+    set('hkQty', held.length);
+    set('hkInv', review.length);
+    set('hkClosed', d.confirmed_this_month || 0);
+    set('holdBadge', d.rows.length);
+    if (!body) return;
+    body.innerHTML = d.rows.map(function (r, i) {
+      var tag = r.status === 'review'
+        ? '<span class="tag t-rev">In Needs Review</span>'
+        : '<span class="tag t-fail">Awaiting ' + esc(r.waiting_for) + '</span>';
+      return '<tr><td class="mono" style="font-weight:700">' + esc(r.serial) + '</td>' +
+        '<td><span class="tag ' + (r.outcome === 'pass' ? 't-pass' : 't-fail') + '">' +
+          esc(r.outcome) + ' · provisional</span></td>' +
+        '<td class="mono" style="font-size:11px">' + esc(r.model || '—') + '</td>' +
+        '<td>' + esc(r.customer || '—') + '</td>' +
+        '<td><span class="code">' + esc((r.reason || '—').split(' — ')[0]) + '</span></td>' +
+        '<td style="font-size:11.5px">' + esc(r.decided_by || '—') + '</td>' +
+        '<td>' + tag + '</td>' +
+        '<td><button class="btn btn-ghost btn-sm" onclick="holdOpenLive(' + i + ')">Open</button></td></tr>';
+    }).join('') || '<tr data-empty><td colspan="8"><div class="empty-state"><p>Nothing is waiting ' +
+      'for evidence.</p></div></td></tr>';
+    if (window.iconTable) window.iconTable.wireAll();
+  }
+
+  window.holdOpenLive = function (i) {
+    var r = (window.__holdData.rows || [])[i];
+    var host = document.getElementById('holdDetail');
+    if (!r || !host) return;
+    var esc = reviewEsc;
+    var cell = function (l, v, mono) {
+      return '<div><label>' + l + '</label><div class="lv' + (mono ? ' mono' : '') +
+             '" style="font-size:11.5px">' + v + '</div></div>';
+    };
+    host.innerHTML =
+      '<div class="card"><div class="card-h"><h3>' + esc(r.serial) + '</h3><div class="ch-r">' +
+        '<span class="tag t-info">' + esc(r.model || '') + '</span>' +
+        '<span class="tag t-mute">' + esc(holdWhen(r.at)) + '</span></div></div>' +
+      '<div class="card-b"><div class="lookup" style="border:1px solid var(--line);' +
+        'border-radius:var(--r);overflow:hidden;margin-bottom:12px">' +
+        cell('Decision', esc(r.outcome) + ' (provisional)') +
+        cell('Module is', esc(r.state === 'hold' ? 'held — cannot be packed' : r.state)) +
+        cell('Waiting for', esc(r.waiting_for || 'Quality')) +
+        cell('Reason', esc(r.reason || '—')) +
+        cell('Defect', esc(r.defect || '—')) +
+        cell('Decided by', esc(r.decided_by || '—')) + '</div>' +
+      '<p style="font-size:12px;margin-bottom:6px"><b>Note:</b> ' + esc(r.note || '—') + '</p>' +
+      (r.status === 'review'
+        ? '<div class="note n-warn"><span>⚑</span><span>The reading arrived and says <b>' +
+          esc(r.evidence_says) + '</b>. It is in Needs Review for Quality to decide.</span></div>'
+        : '<div class="note n-info"><span>ⓘ</span><span>Released to pack automatically once ' +
+          'the reading is available and agrees. If it does not, it goes to Needs Review.</span></div>') +
+      '</div><div class="card-f">' +
+        (r.status === 'review'
+          ? '<button class="btn btn-primary" onclick="go(\'review\', navBtn(\'review\'))">Open in Needs Review</button>'
+          : '<button class="btn btn-primary" onclick="iconHoldRefresh(true)">Check for the reading now</button>') +
+      '</div></div>';
+  };
+
+  window.iconHoldRefresh = function (say) {
+    return fetch('/api/hold', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok) return;
+        window.__holdData = d;
+        holdRedraw();
+        var rc = d.reconciled || {};
+        if (rc.confirmed || rc.flagged) {
+          if (typeof renderLiveFqcRecent === 'function') renderLiveFqcRecent();
+          if (window.iconReviewRefresh) window.iconReviewRefresh();
+          if (typeof toast === 'function') {
+            toast((rc.confirmed ? rc.confirmed + ' decision(s) confirmed by the reading — released to pack. ' : '') +
+                  (rc.flagged ? rc.flagged + ' disagreed — sent to Needs Review.' : ''));
+          }
+        } else if (say === true && typeof toast === 'function') {
+          toast(rc.waiting ? 'Still no reading for ' + rc.waiting + ' module(s).' :
+                             'Nothing is waiting for a reading.');
+        }
+      })
+      .catch(function () { /* offline: the list on screen stays as it was */ });
+  };
+
+  function holdSetup() {
+    var view = document.getElementById('v-hold');
+    if (!view || view.__live) return;
+    view.__live = true;
+    if (typeof HOLDS !== 'undefined') HOLDS.length = 0;          // v4's demo rows
+    window.renderHolds = holdRedraw;                              // and its renderer
+    var rail = view.querySelector('.rail');
+    if (rail) rail.style.display = 'none';
+    var work = view.querySelector('.work');
+    if (work) work.style.gridTemplateColumns = '1fr';
+    var note = view.querySelector('.note.n-info span:last-child');
+    if (note) note.innerHTML = 'A module whose FQC decision was made <b>without the ' +
+      'tester\u2019s reading</b> is held here and <b>cannot be packed</b>. When the reading is ' +
+      'available it is checked against the decision: if they agree the hold clears by itself ' +
+      'and the module can be packed; if not, it goes to Needs Review for Quality. ' +
+      'Holds on a material lot, a box or a batch are not built yet.';
+    var subtitle = view.querySelector('.pg p');
+    if (subtitle) subtitle.textContent = 'Decisions waiting for the tester\u2019s reading';
+    var labels = [['Awaiting reading', 'no reading yet'],
+                  ['Modules held', 'cannot be packed or shipped'],
+                  ['In Needs Review', 'the reading disagreed'],
+                  ['Confirmed this month', 'released once the reading agreed']];
+    view.querySelectorAll('.kpi').forEach(function (k, i) {
+      if (!labels[i]) return;
+      k.querySelector('label').textContent = labels[i][0];
+      k.querySelector('.d').textContent = labels[i][1];
+    });
+    var h3 = view.querySelector('.card-h h3');
+    if (h3) h3.textContent = 'Waiting for evidence';
+    var seg = view.querySelector('.card-h .seg');
+    if (seg) seg.style.display = 'none';
+    var head = view.querySelector('thead tr');
+    if (head) head.innerHTML = '<th>Module</th><th>Decision</th><th>Model</th><th>Customer</th>' +
+      '<th>Reason</th><th>Decided by</th><th>Status</th><th></th>';
+    holdRedraw();
+    window.iconHoldRefresh();
+    setInterval(window.iconHoldRefresh, 60000);
+  }
 
   /* A demo login for the role this merge added - authentication is
      designed, not built, same note v4's own login screen already carries;
@@ -8150,6 +9082,30 @@ function wireFqcAnomalies() {
                {n:'BGY', v:grades['BGY']||0, c:C.red}
              ], total.toLocaleString(), 'modules packed');
          }
+         
+         var cSet={}, mSet={}, gSet={};
+         if (d.table_fg) {
+           d.table_fg.forEach(function(r) {
+             if (r.customer_name || r.customer) cSet[r.customer_name || r.customer] = 1;
+             if (r.model) mSet[r.model] = 1;
+             if (r.grade) gSet[r.grade] = 1;
+           });
+         }
+         var updateSel = function(id, set, def, fVal) {
+           var sel = document.getElementById(id);
+           if (sel && (!fVal || fVal === def || fVal.startsWith('All'))) {
+             var cur = sel.value;
+             sel.innerHTML = '<option>' + def + '</option>' + Object.keys(set).sort().map(function(v){
+               return '<option value="' + fqcEsc(v) + '">' + fqcEsc(v) + '</option>';
+             }).join('');
+             sel.value = cur;
+             if (sel.selectedIndex < 0) sel.value = def;
+           }
+         };
+         updateSel('dpCust', cSet, 'All customers', fCust);
+         updateSel('dpModel', mSet, 'All', fModel);
+         updateSel('dpGrade', gSet, 'All', fGrade);
+         
       })
       .catch(function(err) {
          console.error("Failed to load Stock & Dispatch data: ", err);
@@ -8761,18 +9717,22 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
       box.appendChild(tbl);
     }
 
-    var bar = card.querySelector('.card-h .ch-r');
-    if (bar && !document.getElementById('peFilterFrom')) {
-      bar.insertAdjacentHTML('beforeend',
-        '<div style="display:flex;gap:5px;align-items:center">' +
-        '<input type="date" id="peFilterFrom" style="width:130px"><span>–</span>' +
-        '<input type="date" id="peFilterTo" style="width:130px"></div>' +
-        '<select id="peFilterShift"><option value="">All shifts</option>' +
-        '<option>A</option><option>B</option><option>C</option></select>' +
-        '<select id="peFilterCust"><option value="">All customers</option></select>' +
-        '<input id="peFilterQ" placeholder="Search serial / model…" style="width:150px">' +
-        '<button class="btn btn-ghost btn-sm" id="peFilterReset">Reset</button>' +
-        '<span class="tag t-mute" id="peFilterCount"></span>');
+    if (!document.getElementById('peFilterFrom')) {
+      var head = card.querySelector('.card-h');
+      if (head) {
+        head.insertAdjacentHTML('afterend',
+          '<div class="card-b" style="border-bottom:1px solid var(--line);padding-bottom:16px">' +
+          '<div class="grid" style="grid-template-columns: 1fr 1fr 1fr 1.5fr 1.5fr auto; align-items: end; gap: 12px;">' +
+          '<div class="fld"><label>FROM</label><input type="date" id="peFilterFrom"></div>' +
+          '<div class="fld"><label>TO</label><input type="date" id="peFilterTo"></div>' +
+          '<div class="fld"><label>SHIFT</label><select id="peFilterShift"><option value="">All shifts</option><option>A</option><option>B</option><option>C</option></select></div>' +
+          '<div class="fld"><label>CUSTOMER</label><select id="peFilterCust"><option value="">All customers</option></select></div>' +
+          '<div class="fld"><label>SEARCH</label><input id="peFilterQ" placeholder="serial / model…"></div>' +
+          '<div style="display:flex;gap:8px;padding-bottom:2px">' +
+          '<button class="btn btn-ghost" id="peFilterReset">Reset</button>' +
+          '<span class="tag t-mute" id="peFilterCount" style="align-self:center;margin-bottom:0"></span>' +
+          '</div></div></div>');
+      }
 
       var refetch = function() { window.renderPE(); };
       document.getElementById('peFilterFrom').onchange = refetch;
@@ -8854,6 +9814,20 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
         custSel.innerHTML = '<option value="">All customers</option>' +
           names.map(function(n) {
             return '<option' + (n === current ? ' selected' : '') + '>' + fqcEsc(n) + '</option>';
+          }).join('');
+      }
+
+      var shiftSel = document.getElementById('peFilterShift');
+      if (shiftSel) {
+        var currentS = shiftSel.value, seenS = {}, namesS = [];
+        data.forEach(function(r) {
+          if (r.shift && !seenS[r.shift]) { seenS[r.shift] = true; namesS.push(r.shift); }
+        });
+        if (currentS && !seenS[currentS]) namesS.push(currentS);
+        namesS.sort();
+        shiftSel.innerHTML = '<option value="">All shifts</option>' +
+          namesS.map(function(n) {
+            return '<option' + (n === currentS ? ' selected' : '') + '>' + fqcEsc(n) + '</option>';
           }).join('');
       }
 
@@ -8980,7 +9954,13 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
     // openEvent() below to tag a newly opened event with the current
     // shift, so the id stays; only the onchange-triggers-refetch behavior
     // is removed, in favor of the dedicated filter bar below.
-    var filterFlds = view.querySelectorAll('.filters .fld');
+    var setupBar = view.querySelector('.filters');
+    var filterFlds = setupBar ? setupBar.querySelectorAll('.fld') : [];
+    if (setupBar && setupBar.className === 'filters') {
+      setupBar.className = 'card';
+      setupBar.style.marginBottom = '16px';
+      setupBar.innerHTML = '<div class="card-b"><div class="grid g5" style="align-items:start">' + setupBar.innerHTML + '</div></div>';
+    }
     if (filterFlds[0]) {
       var dateInp = filterFlds[0].querySelector('input');
       if (dateInp && !dateInp.id) {
@@ -9019,13 +9999,18 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
     var today = new Date().toISOString().slice(0, 10);
 
     var bar = document.createElement('div');
-    bar.className = 'filters';
+    bar.className = 'card-b';
+    bar.style.borderBottom = '1px solid var(--line)';
+    bar.style.paddingBottom = '16px';
+    bar.style.marginBottom = '16px';
     bar.innerHTML =
-      '<div class="fld"><label>Date from</label><input type="date" id="loFilterFrom" value="' + today + '"></div>' +
-      '<div class="fld"><label>Date to</label><input type="date" id="loFilterTo" value="' + today + '"></div>' +
-      '<div class="fld"><label>Shift</label><select id="loFilterShift"><option value="">All shifts</option>' +
+      '<div class="grid" style="grid-template-columns: 1fr 1fr 1fr auto; align-items: end; gap: 12px;">' +
+      '<div class="fld"><label>DATE FROM</label><input type="date" id="loFilterFrom" value="' + today + '"></div>' +
+      '<div class="fld"><label>DATE TO</label><input type="date" id="loFilterTo" value="' + today + '"></div>' +
+      '<div class="fld"><label>SHIFT</label><select id="loFilterShift"><option value="">All shifts</option>' +
       '<option>A</option><option>B</option><option>C</option></select></div>' +
-      '<div class="sp"><button class="btn btn-ghost" id="loFilterReset">Reset</button></div>';
+      '<div style="display:flex;gap:8px;padding-bottom:2px">' +
+      '<button class="btn btn-ghost" id="loFilterReset">Reset</button></div></div>';
     o1.insertBefore(bar, firstCard);
 
     var refetch = function () { window.loFetchAndRender(); };
@@ -9098,6 +10083,21 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
       .then(function (r) { return r.json(); })
       .then(function (d) {
         var rows = d.events || [];
+        
+        var shiftSel = document.getElementById('loFilterShift');
+        if (shiftSel) {
+          var current = shiftSel.value, seen = {}, names = [];
+          rows.forEach(function(r) {
+            if (r.shift && !seen[r.shift]) { seen[r.shift] = true; names.push(r.shift); }
+          });
+          if (current && !seen[current]) names.push(current);
+          names.sort();
+          shiftSel.innerHTML = '<option value="">All shifts</option>' +
+            names.map(function(n) {
+              return '<option' + (n === current ? ' selected' : '') + '>' + fqcEsc(n) + '</option>';
+            }).join('');
+        }
+
         if (typeof EVENTS === 'undefined') return;
         EVENTS.length = 0;
         rows.forEach(function (r) { EVENTS.push(r); });

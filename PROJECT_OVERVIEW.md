@@ -207,13 +207,25 @@ del icontrace.db                   start clean
 python icon_invoice_parser.py --selftest
 python test_box_number.py          32 tests · box numbering, grade letters
 python test_evidence.py            26 tests · two lines of SS and EL, NC vs NA
-python test_fqc.py                 49 tests · pass/reject, and what a record may hold
+python test_fqc.py                 57 tests · pass/reject, and what a record may hold
 python test_indent.py               7 tests · one number, and an edit that cannot empty it
 python test_packing.py             33 tests · the gate that keeps a reject off a truck
 python test_repack.py              29 tests · a printed box number is never edited
 python test_styles.py               9 tests · the stylesheet reaches v4's page
 python test_challan.py             50 tests · quantity is boxes ticked, never the invoice
 python test_loading.py              10 tests · print/excel refuse until every pallet is confirmed
+```
+
+Three more drive the real page in headless Chromium, because what they check —
+a header v4 owns, a type-ahead, what an Export button posts — only exists once
+the page is running. `ui_harness.py` starts the app on a throwaway database;
+they need `pip install playwright` and `playwright install chromium`, not Node:
+
+```
+python test_fqc_override.py          9 tests · override both ways; a decision made without the tester is held
+python test_fqc_screen.py          10 tests · the defect list (44 + Other), and what Recent gradings shows
+python test_search_invoice.py      16 tests · Search & Trace opens empty; every number the system issues is found
+python test_indent_export.py        4 tests · one row per indent item, through /api/export/xlsx
 ```
 
 The JS tests read their functions out of `icon_live.js`, so they test what

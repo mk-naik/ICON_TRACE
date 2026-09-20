@@ -631,7 +631,14 @@ CREATE TABLE IF NOT EXISTS fqc_record (
   -- at the time, and the audit needs it. Superseded rows are excluded from
   -- every count, so a retested module is one module and not two.
   superseded_by INTEGER NULL,         -- the fqc_id that replaced this
-  superseded_at TEXT NULL
+  superseded_at TEXT NULL,
+
+  -- Which build of the serial this decision was made on. Snapshotted here for
+  -- the same reason the evidence is: a module re-serialed later must not make
+  -- last week's decision read as if it graded the new build. NULL on rows
+  -- written before the column existed - every one of those graded build 1,
+  -- the only build FQC could reach.
+  build_instance INTEGER NULL
 ) ;
 
 -- Needs Review, one table for every type of item it holds - a type column,

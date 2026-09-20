@@ -121,7 +121,8 @@ def _migrate(cx, text):
                        ("note", "TEXT"), ("quality_grade", "TEXT"),
                        ("quality_note", "TEXT"), ("quality_by", "TEXT"),
                        ("quality_at", "TEXT"),
-                       ("superseded_by", "INTEGER"), ("superseded_at", "TEXT")):
+                       ("superseded_by", "INTEGER"), ("superseded_at", "TEXT"),
+                       ("build_instance", "INTEGER")):
         if name not in cols("fqc_record"):
             cx.execute("ALTER TABLE fqc_record ADD COLUMN %s %s" % (name, decl))
 

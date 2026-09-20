@@ -732,7 +732,8 @@ def serials_for(cur, alloc_id=None, state=None, limit=500):
 # ==========================================================================
 
 def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
-               defect=None, note=None, supersede=True, update_serial=True):
+               defect=None, note=None, supersede=True, update_serial=True,
+               build_instance=1, hold=False):
     """Snapshot the evidence onto the record. A later re-import must never
     be able to rewrite why a module was judged.
 
@@ -748,17 +749,29 @@ def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
     source, but it must not silently replace the record packing already
     acted on, or move a serial that is sitting in a real box, until a person
     resolves which of the two stands.
+
+    `build_instance` is the build of the serial being judged, snapshotted on
+    the record. It defaults to 1 because get_serial() and set_serial() only
+    ever reach build 1 - so that is what a decision made here is a decision
+    ON. When FQC learns to grade a re-serialed build, this is the one
+    argument its caller has to pass.
+
+    `hold` is a PASS made without all the evidence (the tester was
+    unreachable). It is recorded, but the module is not graded and not
+    packable: state 'hold', no grade, until the reading arrives and agrees
+    (see app._reconcile_provisional). The record carries no grade either -
+    the grade is what the evidence has not yet confirmed.
     """
     outcome = (outcome or "").strip().lower()
     if outcome not in ("pass", "reject"):
         raise ValueError("outcome must be 'pass' or 'reject', not %r" % outcome)
-    grade = "A" if outcome == "pass" else None
+    grade = "A" if outcome == "pass" and not hold else None
     rec = {"serial": serial, "outcome": outcome, "grade": grade, "mode": mode,
            "ss_pmax": evidence.get("pmax"), "ss_state": evidence.get("ss_state"),
            "el_verdict": evidence.get("el"), "el_state": evidence.get("el_state"),
            "proposed": evidence.get("proposed"),
            "defect": defect, "reason": reason, "note": note,
-           "decided_by": decided_by,
+           "decided_by": decided_by, "build_instance": build_instance,
            "at": datetime.datetime.now().isoformat(timespec="seconds")}
     if cur is None:
         _demo["fqc"].append(rec)
@@ -779,9 +792,12 @@ def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
                         (new_id, rec["at"], serial, new_id))
         rec["fqc_id"] = new_id
     if update_serial:
-        set_serial(cur, serial,
-                   state="graded" if outcome == "pass" else "rejected",
-                   grade=grade)
+        if hold and outcome == "pass":
+            set_serial(cur, serial, state="hold", grade=None)
+        else:
+            set_serial(cur, serial,
+                       state="graded" if outcome == "pass" else "rejected",
+                       grade=grade)
     return rec
 
 
@@ -884,6 +900,32 @@ def quality_pending(cur, n=200):
     return cur.fetchall()
 
 
+def provisional_pending(cur, n=500):
+    """Live FQC decisions made without all the evidence, and not yet
+    reconciled - the modules Hold & Deviation lists.
+
+    A held PASS has state 'hold'; a provisional REJECT is already 'rejected'
+    and stays so. Once Quality has graded a rejected module (or it moved on)
+    it is not waiting for anything, and a decision that has been flagged to
+    Needs Review is Needs Review's, not this list's.
+    """
+    if cur is None:
+        return []
+    cur.execute("""
+        SELECT f.*, s.model AS model, s.wattage AS wattage,
+               s.customer AS customer, s.state AS state
+        FROM fqc_record f
+        JOIN serial s ON s.serial = f.serial
+                     AND s.build_instance = COALESCE(f.build_instance, 1)
+        WHERE f.mode = 'provisional' AND f.superseded_by IS NULL
+          AND s.state IN ('hold', 'rejected')
+          AND NOT EXISTS (SELECT 1 FROM review_item r
+                          WHERE r.type = 'provisional_mismatch'
+                            AND r.fqc_id = f.fqc_id)
+        ORDER BY f.fqc_id DESC LIMIT %s""", (n,))
+    return cur.fetchall()
+
+
 def fqc_recent(cur, n=25, include_superseded=False, filters=None):
     """The live decisions, newest first.
 
@@ -925,14 +967,22 @@ def fqc_recent(cur, n=25, include_superseded=False, filters=None):
                 
     args.append(n)
     
+    # The join follows the build the record was made on, not build 1: a
+    # re-serialed module's row would otherwise come back with no model and no
+    # customer at all. NULL is a record from before the column existed, and
+    # every one of those graded build 1.
     cur.execute(
         "SELECT f.*, s.model AS model, s.wattage AS wattage, "
         "s.customer AS customer, s.shift AS pack_shift "
         "FROM fqc_record f "
-        "LEFT JOIN serial s ON s.serial = f.serial AND s.build_instance = 1 "
+        "LEFT JOIN serial s ON s.serial = f.serial "
+        "AND s.build_instance = COALESCE(f.build_instance, 1) "
         "WHERE %s "
         "ORDER BY f.fqc_id DESC LIMIT %%s" % (" AND ".join(where)), tuple(args))
-    return cur.fetchall()
+    rows = cur.fetchall()
+    for r in rows:
+        r["build_instance"] = r.get("build_instance") or 1
+    return rows
 
 
 def fqc_history(cur, serial):

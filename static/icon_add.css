@@ -158,3 +158,25 @@ a.nav-i{text-decoration:none}
   background: #EEF2F6;
   color: var(--ink3);
 }
+
+/* Defect type-ahead (FQC, recording a rejection). A plain <select> of 44 names
+   cannot be searched, and a <datalist> filters differently in every browser -
+   the rule here is substring-anywhere, so the list is drawn by our own code. */
+/* fixed, placed from the input's own box by the picker: the panels this sits
+   in clip anything that hangs outside them, and an absolutely positioned list
+   showed as a one-pixel sliver under the field */
+.defect-list {
+  position: fixed; z-index: 400;
+  max-height: 240px; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r); box-shadow: 0 6px 18px rgba(14, 26, 43, .16);
+}
+.defect-list[hidden] { display: none; }
+.defect-list .dl-opt, .defect-list .dl-none {
+  display: block; width: 100%; text-align: left; padding: 6px 10px;
+  border: 0; background: none; font: inherit; color: var(--ink);
+}
+.defect-list .dl-opt { cursor: pointer; }
+.defect-list .dl-opt.on, .defect-list .dl-opt:hover { background: var(--solar-lt); }
+.defect-list .dl-opt b { color: var(--solar); }
+.defect-list .dl-none { color: var(--ink3); }

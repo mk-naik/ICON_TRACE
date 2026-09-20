@@ -171,6 +171,16 @@ A new screen gets both for free.
       came from v4's `demoVendor()` — a plausible make beside a real serial.
       It now reads `allocation_material`, and a make nobody recorded says
       **not recorded** instead of borrowing one.
+- [x] **Opens empty**, and **an invoice number is a search**: Invoice ->
+      challan(s) -> boxes -> serials, from the database. Round 10.
+- [x] **Every number the system issues is a real search now** - serial,
+      pallet / packing list (`ISPL260905/K001`), the new challan
+      (`IS-05.09.2026/0001`, and `(MA)` as its own document), invoice
+      (`ICON/26-27/822`), batch, vehicle, customer - all from the database,
+      and v4's sample-data views are never called. Round 10 follow-up.
+      **Not built:** a repacking-list *number* - the system has none; a repack
+      retires the source pallets and mints new ISPL numbers, and the pallet
+      view shows that trail both ways.
 - [ ] Box / Serial Journey — every title clickable, linking into Search.
 - [ ] Reassignment history — only the original allocation is shown, because
       nothing else is recorded yet. Needs a customer-assignment table before
@@ -213,6 +223,9 @@ A new screen gets both for free.
       that after Planning ran: the button went on offering an edit it would
       then refuse, until the page was reloaded.
 
+- [x] **Export.** One row per indent item - indent, customer, item, cell
+      type, ordered, dispatched, remaining - through the same `/api/export/xlsx`
+      every other screen uses. Round 10.
 - [x] Items not lines; one item with **+ Add item**.
 - [x] Customer type-to-suggest.
 - [x] Lot name, optional.
@@ -291,6 +304,7 @@ A new screen gets both for free.
 - [ ] Ticking "material changed part-way" with nothing filled blocks the save.
 - [ ] Multiple changes per range (currently one).
 - [ ] Remove second verification.
+- [x] **Filter styling.** Update the Recent Production Entries filter bar to match the layout of the dashboards (e.g. Production Dashboard), using stacked `.fld` elements with labels (From, To, Shift, Customer, Model) in a `.grid`, instead of the current compact inline format.
 - [x] Recent Production Entries: real date-range/shift/customer filters,
       a Reset, a search box and a scrolling card - see Round 9 below. The
       Export button itself still just toasts (`exportNote()`); a real
@@ -337,6 +351,8 @@ top of a landing/form split matching Production Entry's own pattern.
       filter bar and Reset were added in Round 9, below - v4's Date/
       Shift fields at the top stay shift SETUP only now (read by
       `calcLoss()`/`openEvent()`), not filters.
+- [x] **Filter styling.** The event list filter bar has been updated to use the stacked `.fld` / `.grid` layout, and the top shift setup row has been styled into a neat `.card-b` summary trail, precisely mirroring Production Entry's standard layouts.
+- [x] **Dynamic filters.** The Shift dropdown in both Loss of Production and Production Entry now dynamically populates its options based directly on the fetched data showing in the UI, matching the Customer dropdown logic.
 - [x] The "Closed events this shift" card is this screen's own recent-
       items list. No search/filter wiring was added to it directly -
       `'loss'` is already in `TABLE_SCREENS`, so `wireScreenTables()` (run
@@ -412,6 +428,28 @@ Python + 71 JS.
 ## 9. FQC Entry
 
 - [ ] Recent & Grading: search, filter, result, scroll, export.
+- [x] **One defect list, the 44, searchable.** A rejection is filed under a
+      name from Mukesh's list, found by typing any part of it (`jb` finds
+      every name with JB in it, not only those that start with it). It
+      replaces the old twelve-entry list everywhere - see Round 10.
+- [x] **Recent gradings** shows Customer (after Model) and keeps Proposed;
+      it has no Disposition and no Bld column (Bld stays on the record - FQC
+      needs it - it is just not listed here). Round 10 and its follow-up.
+- [x] **"Other" is on the defect list, and its note is compulsory** - in the
+      form and on the server, like a coded reason of OV-OTHER. Follow-up.
+- [x] **The proposal can be overridden, both ways, and a panel never just
+      lacks the option.** Proposed pass -> reject (defect from the list, coded
+      reason, Other -> note); proposed reject -> pass when the EL is the only
+      objection, or when the tester is unreachable (provisional, held). A
+      reading below the wattage still cannot be overruled - the button is
+      there, disabled, and says why. A defect and a note can be added to a
+      pass. Round 10, second follow-up.
+- [x] **A decision made without the tester is held, then reconciled.**
+      Provisional pass -> state `hold`, listed in Hold & Deviation, not
+      packable; reading arrives and agrees -> confirmed and released by
+      itself; disagrees -> Needs Review for Quality. Round 10, second
+      follow-up. (Hold & Deviation is otherwise still v4's demo of material /
+      box / batch holds - hidden, not built.)
 
 ## 10. Packing Log
 
@@ -1252,9 +1290,13 @@ Mukesh's answers, 4 Sep:
 ### Routes in — designed, still to build
 
 - [ ] `NA` queued rather than only shown
-- [ ] Provisional grade disagrees when evidence arrives
+- [x] Provisional grade disagrees when evidence arrives - a
+      `provisional_mismatch` item in Needs Review; agreement releases it by
+      itself (Round 10, second follow-up)
 - [ ] Evidence mismatch on sync
-- [ ] Provisional never confirmed
+- [~] Provisional never confirmed - it stays on the Hold & Deviation list,
+      with no expiry (Mukesh: a hold stays until somebody decides). No alert
+      yet for one that has waited too long.
 - [x] Grade change on a packed module forces the box open — built as
       "keep the rescanned one" in §19b's duplicate-scan resolution, via the
       real `_repack()` removal path, not a second one.
@@ -1896,3 +1938,305 @@ then checking `.main`'s position with the mouse elsewhere; no toast
 present immediately after sign-in. Verified live against the exact
 screenshot reported - Production Entry, sidebar hovered, at the same
 narrow width - confirming zero overlap.
+
+**Round 10 — FQC's defect list and Recent gradings, the indent export, and
+Search & Trace that opens empty and finds invoices.**
+
+Four requests, in the priority order they were given. Two of the premises
+turned out not to match the code, and are recorded here as findings, not
+worked around.
+
+**1. FQC.**
+
+**What was wrong.**
+- The defect field was a plain `<select>` of eleven names built from v4's
+  `ELVI_CODES` (plus a hard-coded "Other"): not searchable, with the raw
+  folder spellings behind it ("Buring", a double-spaced "Ribbon  Short"), and
+  a second copy of the same list in Admin's defect-code table.
+- Recent gradings: Bld was the literal `1` on every row; Customer was fetched
+  and only stuffed into a hidden span; Disposition was a column that was
+  always a dash; the empty-state row spanned a hard-coded 11.
+
+**Findings that changed the fix.**
+- **`build_instance` did not exist to wire.** `/api/fqc/recent` never returned
+  it, `fqc_record` had no such column, and `db.fqc_recent` joined `serial` on
+  `build_instance = 1` - so a build 2 module would have come back with no
+  model and no customer either, not just the wrong Bld.
+- **Disposition does not show `r.proposed`.** The column that redisplays
+  `r.proposed` is **Proposed**; Disposition was a hard-coded dash. Disposition
+  was removed, as named; **Proposed was left**, because it is the one place an
+  override reads as a difference. If Proposed was the one meant, it is a
+  one-line change in `fqcRecentHead()`/`fqcRecentRow()`.
+
+**What changed.**
+- `FQC_DEFECTS` in `icon_live.js` is the 44, verbatim and in order. v4's
+  `ELVI_CODES` is rewritten **in place** from it (the OK entry stays - v4 reads
+  `ELVI_CODES[0]` as the clean verdict; the four codes `GRADE_RULES` names keep
+  theirs), so the reject form, the Recent gradings Defect filter and Admin's
+  table cannot disagree. That filter had only ever shown "All" - the boot
+  payload never carried `defects` - and now lists the 44.
+- The reject form's defect is a type-ahead: substring anywhere,
+  case-insensitive, arrow keys + Enter, Escape closes the list **without**
+  discarding the module (the document's own Esc handler would have). Only a
+  name from the list is recorded, in the list's spelling; anything else is
+  refused with a reason; blank is still allowed and still falls back to the EL
+  verdict server-side. The list is drawn `position:fixed` from the input's
+  box - it first shipped as an absolute list and the reject panel clipped it
+  to a sliver, which a DOM test cannot see and a screenshot did.
+- Recent gradings: `fqcRecentHead()` reshapes v4's `<thead>` (Customer after
+  Model, Disposition gone) and returns the column count the empty-state row
+  spans, **read from the header**, so it cannot go stale again. Numerically it
+  is still 11 (one column in, one out).
+- `fqc_record.build_instance` (migration in `store.py`, column in
+  `schema_sqlite.sql`), written by `db.record_fqc(build_instance=1)`, and
+  `db.fqc_recent` joins the serial on the **record's** build. A record from
+  before the column (NULL) reads 1, which is true: FQC could only reach build 1.
+
+**Not done, on purpose.** FQC still grades build 1 only - `db.get_serial` and
+`set_serial` pin `build_instance=1` - and nothing in the app creates a build 2
+yet. Bld will read 2 the day something re-serials and passes
+`build_instance=2`; the test does exactly that. Also: `GRADE_RULES.forceBGY`
+(v4's Admin rule text) still names `DF-NOPOWER` and `DF-BURN`, which are no
+longer on the list - display-only, live grading does not read it. And the
+44 is enforced by the form, not by `/api/fqc`, which still files an EL folder
+verdict such as "No Power" as the defect when the operator names none.
+
+**2. Indent export.**
+
+**What was wrong.** The header's "Export table" carried `data-role="export"`
+but sits outside the card that `data-itable` wires, so nothing listened: it did
+nothing. Wiring it to the generic export is not enough either - read straight
+off the screen, the indent cell holds "item 2", the customer is blank on an
+indent's second item, and KW/Status/Due/the action buttons come along.
+
+**What changed.** The button calls `exportNote()` - the same `/api/export/xlsx`
+path as every other screen, rows read off what is showing, so a filter is
+honoured. `exportTable()` learned two optional attributes: `data-x` on a cell
+(what the file should hold, where it differs from what is painted) and
+`data-noexport` on a `<th>` or `<tr>`. The indent list uses them: seven
+columns - Indent, Customer, Item, Cell type, Ordered, Dispatched, Remaining -
+one row per item, customer and indent number on every row, an indent with no
+item left out. The screen itself is unchanged apart from "Cell" -> "Cell type".
+
+**3. Search & Trace.**
+
+**Findings.** *(The five formats below were fixed in the follow-up.)*
+**Invoice was not built** - not in `qType`, no route. And `qType`
+is decorative in v4: `doSearch()` never reads it. **Only `ICON...` serials and
+`ISPL...` boxes were ever answered from the database**; customer, batch, box
+(`A044`), challan (`CHN-455`) and vehicle are answered by v4's built-in sample
+arrays (`BATCHES` and the fixed views) - fabricated content under a real-looking
+query. Those five are **still that way** (see section 2); the "Try:" examples
+for them were kept as asked.
+
+**What changed.**
+- `/api/trace/invoice/<no>`: invoice -> challan(s) -> boxes -> serials. Matches
+  the invoice number case-insensitively, on the invoice row **and** on the
+  challan's own text (a paper challan can carry a number that was never
+  uploaded). A cancelled or superseded challan is listed and marked, and not
+  counted as shipped; the invoice's declared quantity sits beside what shipped.
+- `doSearch()`: "Look in: Invoice" is honoured; with Detect automatically a
+  query that is not `ICON`/`ISPL` is looked up as an invoice first (there is
+  no invoice-number shape to sniff) and handed to v4 only on a miss. A failed
+  lookup shows an error, never v4's example.
+- `#qBox` starts empty - cleared when the live layer loads, so it is empty
+  before sign-in too, and the `value` attribute is gone so a reset cannot
+  restore it. The "Try:" line is the six formats as given, plus the **newest
+  real invoice on file**; with none on file it offers none, because the
+  invoice-number format is not documented anywhere and an invented one would
+  find nothing.
+
+**Which tests prove it.** Three new files, real Chromium against a throwaway
+database (`ui_harness.py`; needs Playwright, not Node), each test naming the
+rule it defends:
+- `test_fqc_screen.py` (9): `jb` returns exactly the five names containing JB
+  in any case and `crack` finds names it does not start; the seven old-only
+  terms appear in no selector (picker, Defect filter, v4's array); the list is
+  reachable and clickable, keyboard-pickable, and Escape keeps the module;
+  free text refused, list spelling recorded; Customer is the real customer
+  right after Model; a build 2 module reads Bld 2 with its own build's
+  model/customer and a pre-column record reads 1; FQC stamps the build it
+  graded; no Disposition, and the empty row spans the header.
+- `test_search_invoice.py` (11): the walk, a slash in the number, a
+  text-only challan, a miss, an invoice with no challan; qBox empty at load
+  and after sign-in; Invoice in Look in; the hint line with and without an
+  invoice; typing an invoice number, and clicking its hint, shows challans,
+  boxes and serials; a miss shows nothing else.
+- `test_indent_export.py` (4): what the page posts (one row per item,
+  seven columns, customer filled, empty indent out), a filter is honoured, the
+  workbook that comes back has numbers as numbers, the screen is unchanged.
+
+Each was **mutation-checked**: the behaviour broken on purpose (Bld back to a
+literal, prefix-only match, old list left in `ELVI_CODES`, join pinned to build
+1, colspan hard-coded, a cancelled challan counted, the clipped dropdown, the
+export button back to the dead handler, `data-x` ignored) and the matching test
+went red each time. One search test timed out once on its first run and did not
+recur in nine more; the wait now says what was on screen if it does.
+
+Full suite: **every file at or above where it started.** Two failures already
+existed and fail identically on the untouched code: `test_fqc.py` "the module
+journey says what happened at FQC, not 'None'" (1), and `test_fqc_dashboard.js`
+under Windows Script Host (16: `console` is undefined there, plus a customer-code
+assertion). `test_trace.js` briefly broke - it evals a slice of `icon_live.js`
+under ES3 and my first placement put `.catch()` inside it - and was fixed by
+moving the new search-setup code below `wireSearchOrder()`.
+
+**Round 10, follow-up.** Reported directly after the first pass: "Other" was
+missing from the defect list, Bld should not be in Recent FQC, the invoice
+format is `ICON/26-27/822`, and Search should use the new challan, packing
+list and repacking list formats and stop keeping v4's. Proposed stays.
+
+**1. "Other" - and its note.**
+- `Other` is the 45th name on the list (the 44, verbatim, then Other). The
+  note is compulsory when it is chosen: the label under the form flips to
+  *required*, `fqcCommitLive` refuses without one, and **the server refuses it
+  too** (`_other_needs_note`, on `/api/fqc`, the older `/fqc` form, and an
+  Other that arrives via the EL folder name). A blank note is not a note.
+- The old "Other" had been removed with the old list; the test that asserted it
+  appeared nowhere now asserts it is offered, and defends the note rule.
+
+**2. Bld is not a column in Recent FQC.** Header and rows drop it. What stays:
+`fqc_record.build_instance`, `record_fqc(build_instance=)`, the API field, and
+the Model/Customer join following the record's build - FQC needs the build; the
+list just does not show it. The tests that said "Bld reads 2" now say the record
+is build 2 and Recent shows that build's model and customer.
+
+**3. Search & Trace, in the formats the system issues.**
+
+**What was wrong.** Past a serial, v4's `doSearch()` answered from sample arrays
+(so `CHN-455`, `A044`, `BAT-2602-00019` opened fabricated pages), and **my own
+first pass read the `ICON` prefix as "this is a serial", so an invoice number
+`ICON/26-27/822` would have gone to the serial lookup.** A serial is `ICON` and
+then its wattage; the digit is what tells them apart.
+
+**What changed.**
+- One server entry point, `/api/trace/find?q=&kind=`, decides from the number's
+  own shape (or from "Look in") and returns which kind it found:
+  **challan** `IS-05.09.2026/0001` (a `(MA)` suffix is a different document),
+  **pallet / packing list** `ISPL260905/K001` (or a legacy label; a wrong letter
+  is a transcription error, said so), **invoice** (any shape - looked up),
+  **batch** `BAT-2609-00007`, **vehicle** (spaces and hyphens ignored),
+  **customer** (name or alias; several matches asks which).
+- Pallet: modules, the challan(s) it is on, and the **repack trail both ways**
+  (made from / repacked into, with the reason) from `box_lineage`. Challan:
+  invoice, vehicle, consignee, gate pass, boxes and serials; a cancelled or
+  superseded challan says so. Every number on an answer is a link, so the trail
+  is walked by clicking: invoice -> challan -> pallet -> module.
+- v4's `doSearch()` is no longer called. What is not recorded says so; nothing
+  falls through to a sample.
+- "Look in" is honoured for every kind (it was decorative), and following a
+  link puts it back to Detect automatically.
+- The "Try:" line: `SAI BABUJI` - `BAT-2609-00007` - `ISPL260905/K001` -
+  `IS-05.09.2026/0001` - `CG04MM1521` - `ICON590G1202121001` -
+  `ICON/26-27/822`. Static numbers in the real formats; whether one is on a
+  given database is the database's to say. The earlier "newest real invoice"
+  fetch is gone.
+
+**Bug the tests caught in my own query.** A repacked serial sits in a retired
+pallet and a live one, and the batch listing joined both - the module appeared
+twice and was counted twice. Only the live pallet is joined now.
+
+**Which tests prove it.** `test_search_invoice.py` grew from 11 to 16: every
+kind through the API (challan incl. `(MA)` and gate pass, pallet incl. repack
+trail and letter mismatch, vehicle typed loosely, batch counts, customer and an
+ambiguous name, invoice incl. text-only challan); v4's `CHN-455`,
+`BAT-2602-00019`, `BOX-2608-00031`, `RPK-2608-00008` are "not recorded" on an
+empty and on a full database; on screen every hint opens the right kind of
+answer, `ICON/26-27/822` is an invoice, the click-through works, "Look in" is
+honoured, and no v4 sample text appears. `test_fqc_screen.py` is 10 (Other; no
+Bld). Mutation-checked again - serial-by-prefix, v4's `CHN-455` back on the
+line, the challan suffix ignored, the server or the form accepting Other with
+no note, Bld put back - each went red. Full suite at or above where it started;
+the same two failures as before, unchanged.
+
+**Not done - waiting on a decision.** *Override in both directions.* Checked
+against git first: the pass override was **never removed** - it has been
+conditional on the EL being the only objection since it was first written
+(`5e6aff1`), and the server refuses a pass on a short or missing reading
+(DATA_LAYER section 3). Wanting it for every reject reverses that written rule,
+so it is asked, not assumed.
+
+**Round 10, second follow-up.** Reported directly, and answered when asked:
+"there is no way to change the proposed decision". Checked against git first -
+**nothing was removed**. The pass override has been conditional on the EL being
+the only objection since it was first written (`5e6aff1`); a reject on a short
+reading or with no evidence never had one, by a written rule (DATA_LAYER
+section 3). Asked which cases to open up, the answer was: keep the rule for a
+short reading but **show why**; for **NC** (the tester unreachable) allow the
+override, **hold** the module in Hold & Deviation, release it **automatically**
+when the reading agrees, and send it to **Needs Review for Quality** when it
+does not; and allow a **defect + note on a pass**.
+
+**What changed.**
+- One function decides how a pass may be recorded, `_pass_route()`: `direct`,
+  `el_only`, `provisional`, or none (short reading, BAD, NA) - asked by the
+  lookup to draw the panel and by `/api/fqc` to enforce it, so the two cannot
+  disagree. The lookup returns `pass_route` and `pass_why`.
+- Panel: a proposed pass shows *Pass - grade A / Add defect-note / Reject / Discard*;
+  a proposed reject shows *Confirm rejection / Add defect-note* and, by route,
+  *Overrule to pass* (EL-only), *Pass - provisional* (NC), or the same button
+  **disabled with the reason** (short reading). With no reading the proposal
+  reads NO READING, not REJECT - the server proposes nothing then.
+- The pass form is one form for all three routes: optional defect (the list,
+  Other -> note), a coded reason wherever the decision goes against or without
+  the evidence, a note (compulsory with `OV-OTHER` or a defect of Other - now
+  enforced on the server for a pass as well as a rejection).
+- Provisional pass: `record_fqc(hold=True)` - `mode='provisional'`, serial
+  state `hold`, no grade (on the serial or the record); Packing refuses it
+  with "on hold - waiting for the tester's reading". The Recent row reads
+  *Held*, not A.
+- `_reconcile_provisional()`: for each provisional decision still waiting, read
+  the evidence again. Complete and agreeing -> a NEW confirmed record
+  supersedes the provisional one and the module is graded (packable). Complete
+  and disagreeing -> the evidence's record is snapshotted beside the decision,
+  a `provisional_mismatch` review item is raised, the module stays held.
+  Still absent -> nothing. Run under a lock (two requests would raise one item
+  twice), whenever `/api/hold` or `/api/review` is read; the screen polls it.
+- Needs Review gains the type; Quality (or Admin) keeps the decision or the
+  evidence with a reason, and the other record is superseded, not deleted. A
+  module in Needs Review is not re-judged at the FQC desk.
+- Hold & Deviation shows the real list (module, decision, waiting for, reason,
+  status), KPIs, and *Check for the reading now*. v4's demo holds and its
+  *Raise a hold* form are hidden - a button that writes to a fixed array is one
+  wrong click from a hold that freezes nothing.
+- Search: an answer stays whole when the screen is left and re-entered
+  (`clearSearch()` hid every card but the first inside it).
+
+**Tests.** `test_fqc.py` 49 -> 57 (the route rules, held pass not packable,
+agree / wait / disagree / resolve either way / Quality only / a reject
+reconciled both ways / BAD and NA never pass / the lookup's route) and the new
+`test_fqc_override.py` (9, in a real browser: the buttons on every proposal, the
+disabled override and its reason, EL-only overrule with Other-needs-note, a
+defect and note on a pass, the provisional pass through to the Hold list, release
+on agreement, Needs Review resolution through the popup). Mutation-checked with
+reversible single-span edits: override button removed, a provisional pass not
+held, packing not refusing a hold, reconcile never confirming, a short reading
+passable - each went red. Full suite at or above where it started, same two
+failures.
+
+**Not done.** No alert for a provisional decision that has waited too long
+(there is no expiry, by decision). Holds on a material lot, a box or a batch
+remain unbuilt. A provisional decision that Quality has already graded is no
+longer reconciled. And a note on the workflow: while this was being tested
+`icon_live.js` was edited by someone else at the same time (shift filters for
+
+## Round 15 — Dynamic Dashboard Filters and Future Date Restriction
+
+**What was wrong:**
+Every dashboard screen (Production, Management, FQC, Packing Log, Stock & Dispatch) passed testing against clean scenarios but failed in realistic usage because the dropdown filters for Customer, Model, Shift, etc., were hardcoded as either empty or static options (e.g., `<option>All customers</option>`). They were never populated from actual data. If a user actually tried to select a customer, the UI could not provide valid options, and the backend SQL queries for Production dashboard crashed due to missing JOINs when a customer filter was applied. Additionally, `<input type="date">` elements allowed users to select future dates, which is logically invalid for historical tracking.
+
+**Exact root cause:**
+1. FQC Dashboard and Packing Log relied on `fDashCust` / `pkCust` etc., but they were either hardcoded or missing dynamic population loops based on the returned dataset `d.rows`.
+2. Production Dashboard (`/api/prod/dashboard`) incorrectly appended `(b.customer = ? OR i.customer_name = ?)` to its SQL `WHERE` clause without ever performing `JOIN box b` or `JOIN indent i`, causing SQL errors on realistic databases.
+3. `<input type="date">` elements did not have the `max` attribute set to restrict future date selection.
+
+**What changed:**
+- Reverted `/api/prod/dashboard` in `app.py` to correctly filter on `s.customer` (which is present in the `serial` table) instead of the invalid `box`/`indent` references. Added SQL queries to return distinct `customers` and `models` explicitly.
+- Modified FQC Dashboard (`renderLiveFqcDash`), Packing Dashboard (`renderPackLog`), and Stock Dashboard (`renderStock`) in `icon_live.js` to iterate over their respective `rows` / `table_fg` sets, building unique dictionaries of shifts, customers, models, and grades, and correctly injecting them into the respective `<select>` elements.
+- Injected a global fix inside the `rerender()` loop of `icon_live.js` that applies `max="CURRENT_DATE"` to all `<input type="date">` elements dynamically.
+
+**Which test proves it:**
+- Dashboard fixes verified via Playwright integration testing on a local port 8090 instance seeded with realistic mock DB data (`test.db`). Confirmed that dropdowns populate with correct options specific to the underlying dataset.
+Production Entry and Loss of Production); those edits are intact, and the
+mutation runs were switched from whole-file restores to reversible one-span
+edits so nothing of theirs can be overwritten.
