@@ -9,7 +9,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # Config Overrides for testing
-MAX_FAILS = int(os.environ.get("ICON_AUTH_MAX_FAILS", "5"))
+MAX_FAILS = int(os.environ.get("ICON_AUTH_MAX_FAILS", "10"))
 LOCK_SECONDS = int(os.environ.get("ICON_AUTH_LOCK_SECONDS", "300"))
 LOGIN_TIMING_FLOOR_MS = 350
 NTP_SERVER = os.environ.get("ICON_NTP_SERVER", "pool.ntp.org")
@@ -233,9 +233,6 @@ def _login_impl(cur, login_id, credential, ip=None, now=None):
         log_event(cur, login_id, "login_fail", ip, "unknown ID", t)
         return {"ok": False, "reason": GENERIC_FAIL}
 
-    if u["locked_until"] > t:
-        log_event(cur, login_id, "login_fail", ip, "locked", t)
-        return {"ok": False, "reason": GENERIC_FAIL}
     if not u["active"]:
         log_event(cur, login_id, "login_fail", ip, "inactive", t)
         return {"ok": False, "reason": GENERIC_FAIL}
@@ -251,8 +248,10 @@ def _login_impl(cur, login_id, credential, ip=None, now=None):
             method = "recovery"
         else:
             method = "password"
+            
     success = False
     detail = None
+    state_updates = []
     
     if method == "totp":
         if rank < 2:
@@ -262,7 +261,7 @@ def _login_impl(cur, login_id, credential, ip=None, now=None):
                 secret = decrypt_secret(u["totp_secret_enc"])
                 ok, step = verify_totp(secret, credential, u["totp_last_step"], t)
                 if ok:
-                    cur.execute("UPDATE app_user SET totp_last_step=%s, failed_count=0 WHERE user_id=%s", (step, u["user_id"]))
+                    state_updates.append(("UPDATE app_user SET totp_last_step=%s WHERE user_id=%s", (step, u["user_id"])))
                     success = True
                 else:
                     detail = "wrong code or replayed"
@@ -278,10 +277,9 @@ def _login_impl(cur, login_id, credential, ip=None, now=None):
                         (u["user_id"], hash_token(credential)))
             rc = cur.fetchone()
             if rc:
-                cur.execute("UPDATE auth_recovery_code SET used_at=%s WHERE code_id=%s", (t, rc["code_id"]))
-                cur.execute("UPDATE app_user SET must_reenrol=1, failed_count=0 WHERE user_id=%s", (u["user_id"],))
+                state_updates.append(("UPDATE auth_recovery_code SET used_at=%s WHERE code_id=%s", (t, rc["code_id"])))
+                state_updates.append(("UPDATE app_user SET must_reenrol=1 WHERE user_id=%s", (u["user_id"],)))
                 success = True
-                log_event(cur, login_id, "recovery_used", ip, None, t)
             else:
                 detail = "wrong recovery code"
 
@@ -294,20 +292,35 @@ def _login_impl(cur, login_id, credential, ip=None, now=None):
                         (u["user_id"], t))
             bw = cur.fetchone()
             if bw and check_pw(u["pw_hash"], credential):
-                cur.execute("UPDATE auth_backup_window SET used_at=%s WHERE window_id=%s", (t, bw["window_id"]))
-                cur.execute("UPDATE app_user SET failed_count=0 WHERE user_id=%s", (u["user_id"],))
+                state_updates.append(("UPDATE auth_backup_window SET used_at=%s WHERE window_id=%s", (t, bw["window_id"])))
                 success = True
-                log_event(cur, login_id, "backup_window_used", ip, None, t)
             else:
                 detail = "wrong password or no window"
         else:
             if check_pw(u["pw_hash"], credential):
-                cur.execute("UPDATE app_user SET failed_count=0 WHERE user_id=%s", (u["user_id"],))
                 success = True
             else:
                 detail = "wrong password"
 
+    if not success:
+        fails = u["failed_count"] + 1
+        delay = 2 if fails == 1 else (4 if fails == 2 else 8)
+        time.sleep(delay)
+
+    is_locked = u["locked_until"] > t
+    if is_locked:
+        if success:
+            rem = int((u["locked_until"] - t) // 60) + 1
+            log_event(cur, login_id, "login_fail", ip, "locked (but valid credentials)", t)
+            return {"ok": False, "reason": f"This ID is locked for another {rem} minutes"}
+        else:
+            log_event(cur, login_id, "login_fail", ip, "locked", t)
+            return {"ok": False, "reason": GENERIC_FAIL}
+
     if success:
+        for sql, params in state_updates:
+            cur.execute(sql, params)
+        cur.execute("UPDATE app_user SET failed_count=0, locked_until=0 WHERE user_id=%s", (u["user_id"],))
         log_event(cur, login_id, "login_ok", ip, method, t)
         must_reenrol = True if method == "recovery" else bool(u["must_reenrol"])
         return {"ok": True, "user_id": u["user_id"], "role": u["role"], 

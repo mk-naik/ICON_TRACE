@@ -105,13 +105,32 @@ def index():
             return redirect("/enrol")
     
     body = """
-    <form method="POST" action="/login">
+    <form method="POST" action="/login" id="loginForm">
         <label>Login ID:</label>
-        <input type="text" name="login_id" required>
+        <input type="text" name="login_id" id="login_id" required>
         <label>Password or authenticator code:</label>
         <input type="password" name="credential" required>
         <button type="submit">Sign In</button>
     </form>
+    <div id="counterMsg" style="color:red; font-weight:bold; margin-top:10px;"></div>
+    <script>
+        const form = document.getElementById("loginForm");
+        const loginId = document.getElementById("login_id");
+        form.addEventListener("submit", () => {
+            sessionStorage.setItem("last_login_id", loginId.value);
+        });
+        const urlParams = new URLSearchParams(window.location.search);
+        const err = urlParams.get("err");
+        const lastId = sessionStorage.getItem("last_login_id");
+        if (err && lastId) {
+            let fails = parseInt(sessionStorage.getItem("fails_" + lastId) || "0", 10);
+            if (err.includes("not accepted") || err.includes("locked")) {
+                fails += 1;
+                sessionStorage.setItem("fails_" + lastId, fails);
+                document.getElementById("counterMsg").textContent = "Failed attempts for " + lastId + ": " + fails;
+            }
+        }
+    </script>
     """
     err = request.args.get("err")
     if err:
@@ -317,9 +336,16 @@ def admin():
         users = icon_auth.list_users(cur, session["login_id"])
     
     users_html = "<table border=1 cellpadding=5 style='width:100%; border-collapse:collapse; margin-bottom:20px;'>"
-    users_html += "<tr><th>ID</th><th>Name</th><th>Role</th><th>Active</th><th>Locked Until</th></tr>"
+    users_html += "<tr><th>ID</th><th>Name</th><th>Role</th><th>Active</th><th>Locked Until</th><th>Action</th></tr>"
+    import time
+    t = int(time.time())
     for u in users:
-        users_html += f"<tr><td>{u['login_id']}</td><td>{u['display_name']}</td><td>{u['role']}</td><td>{u['active']}</td><td>{u['locked_until']}</td></tr>"
+        locked_text = str(u['locked_until'])
+        action_html = ""
+        if u['locked_until'] > t:
+            locked_text = f"<span style='color:red;'>LOCKED (until {u['locked_until']})</span>"
+            action_html = f"<form method='POST' style='margin:0;'><input type='hidden' name='action' value='unlock'><input type='hidden' name='target' value='{u['login_id']}'><button type='submit' style='padding:2px 5px; margin:0;'>Unlock</button></form>"
+        users_html += f"<tr><td>{u['login_id']}</td><td>{u['display_name']}</td><td>{u['role']}</td><td>{u['active']}</td><td>{locked_text}</td><td>{action_html}</td></tr>"
     users_html += "</table>"
 
     body = f"""
