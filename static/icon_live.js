@@ -9506,7 +9506,7 @@ window.gpSetKind = function(k) {
                 '<div class="fld"><label>Quantity</label>' +
                 '<input id="gpQty" type="number" min="1"></div>' +
                 '<div class="fld" id="gpRetWrap" style="display:none"><label>Expected return</label>' +
-                '<input type="date" id="gpExpectedRet"></div>' +
+                '<input type="date" id="gpExpectedRet" data-future="1"></div>' +
                 '<div class="fld" id="gpLoadingStateWrap" style="display:none; grid-column:1/-1">' +
                 '<span id="gpLoadingState" class="tag"></span></div>';
 detailsCard.insertAdjacentHTML('afterbegin', injectHtml);

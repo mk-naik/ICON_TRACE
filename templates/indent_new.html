@@ -32,7 +32,7 @@
       <div class="why">Icon's own words from the Jan-2025 SRS. Borosil is make
         to order; AGNI is make to stock.</div></div>
     <div class="fld"><label>Delivery by (real date)</label>
-      <input name="delivery_by" type="date" value="{{ form.delivery_by or '' }}"></div>
+      <input name="delivery_by" type="date" value="{{ form.delivery_by or '' }}" data-future="1"></div>
     <div class="fld"><label>Delivery as written</label>
       <input name="delivery_text" value="{{ form.delivery_text or '' }}" placeholder="NEXT WEEK">
       <div class="why">Kept for the record. A real date goes beside it —
