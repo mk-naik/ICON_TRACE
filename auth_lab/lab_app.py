@@ -37,13 +37,7 @@ def _set_cookie(resp, data):
 def _clear_cookie(resp):
     resp.delete_cookie("auth_session")
 
-def render_layout(title, body):
-    # Fetch clock status
-    clock = icon_auth.clock_status()
-    banner = ""
-    if clock["status"] == "drift":
-        banner = '<div style="background:red;color:white;padding:10px;text-align:center;">ERROR: Clock drift exceeds 20s. Please check system time.</div>'
-
+def render_layout(title, body, banner=""):
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -103,7 +97,12 @@ def index():
     if err:
         body = f'<div class="error">{err}</div>' + body
     
-    return render_layout("Sign In", body)
+    clock = icon_auth.clock_status()
+    banner = ""
+    if clock["status"] == "drift":
+        banner = '<div style="background:red;color:white;padding:10px;text-align:center;">ERROR: Clock drift exceeds 20s. Please check system time.</div>'
+
+    return render_layout("Sign In", body, banner=banner)
 
 @app.route("/login", methods=["POST"])
 def login():
