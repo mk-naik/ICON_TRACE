@@ -83,7 +83,12 @@ def render_layout(title, body):
 def index():
     session = _get_cookie()
     if session:
-        return redirect("/me")
+        if session.get("stage") == "ok":
+            return redirect("/me")
+        elif session.get("stage") == "change_password":
+            return redirect("/change-password")
+        elif session.get("stage") == "enrol":
+            return redirect("/enrol")
     
     body = """
     <form method="POST" action="/login">
@@ -118,10 +123,14 @@ def login():
         }
         if res["must_change_pw"]:
             session_data["stage"] = "change_password"
+            target = "/change-password"
         elif res["must_reenrol"]:
             session_data["stage"] = "enrol"
+            target = "/enrol"
+        else:
+            target = "/me"
 
-        resp = make_response(redirect("/change-password" if res["must_change_pw"] else ("/enrol" if res["must_reenrol"] else "/me")))
+        resp = make_response(redirect(target))
         _set_cookie(resp, session_data)
         return resp
 
@@ -165,25 +174,15 @@ def change_password():
 
 @app.route("/enrol", methods=["GET", "POST"])
 def enrol():
+    session = _get_cookie()
     token = request.args.get("token") or request.form.get("token")
-    if not token:
-        # Check if in session and trying to reenrol, but no token? 
-        # A token is required. If they just logged in with recovery, they need a token to enrol, wait!
-        # "Signing in with [recovery] sets must_reenrol - the session may only reach the enrol page."
-        # If they reach /enrol without a token, they can't enrol? Wait, the instructions say:
-        # "Admin has no recovery codes: a lost phone means a Super Admin issues a new enrolment token."
-        # If a Super Admin signs in with recovery, they might not have a token. 
-        # Wait, if they sign in with recovery, they have must_reenrol = 1. They need an enrolment token?
-        # But wait, Super Admin can generate their own token? 
-        # If they are stuck, maybe they can generate one? No, they don't have access to the app.
-        # Actually, maybe they just enter the new TOTP?
-        # Re-enroling might just generate a pending secret right here! 
-        # BUT the prompt says: "Enrolment is reached through a ONE-TIME TOKEN".
-        # Let's assume they need a token in the URL.
-        pass
+    login_id = request.args.get("login_id") or request.form.get("login_id", "")
+    
+    if session and session.get("stage") == "enrol":
+        login_id = session["login_id"]
+        token = None
 
     if request.method == "POST":
-        login_id = request.form.get("login_id")
         code = request.form.get("code")
         with store.conn() as (cx, cur):
             res = icon_auth.enrol_commit(cur, login_id, token, code, ip=request.remote_addr)
@@ -195,11 +194,14 @@ def enrol():
                     body += "<br>".join(res)
                     body += "</div>"
                 body += "<br><a href='/'>Go to login</a>"
+                if session and session.get("stage") == "enrol":
+                    resp = make_response(render_layout("Enrolment Complete", body))
+                    _clear_cookie(resp)
+                    return resp
                 return render_layout("Enrolment Complete", body)
             else:
                 return render_layout("Enrol", "<div class='error'>Invalid code or token.</div>")
 
-    login_id = request.args.get("login_id", "")
     with store.conn() as (cx, cur):
         res = icon_auth.enrol_begin(cur, login_id, token, ip=request.remote_addr)
         if not res:
@@ -211,7 +213,7 @@ def enrol():
         <div>{qr_svg}</div>
         <p>Or enter this secret manually: <strong>{res["secret"]}</strong></p>
         <form method="POST">
-            <input type="hidden" name="token" value="{token}">
+            <input type="hidden" name="token" value="{token or ''}">
             <input type="hidden" name="login_id" value="{login_id}">
             <label>Enter the 6-digit code to confirm:</label>
             <input type="text" name="code" required autocomplete="off">

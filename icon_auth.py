@@ -381,15 +381,20 @@ def issue_enrol_token(cur, actor_login_id, target_login_id, now=None):
     log_event(cur, target_login_id, "enrol_token_issued", None, f"by {actor_login_id}", t)
     return token
 
-def enrol_begin(cur, login_id, token, ip=None, now=None):
+def enrol_begin(cur, login_id, token=None, ip=None, now=None):
     t = _now(now)
     u = _get_user(cur, login_id)
     if not u: return None
     
-    cur.execute("SELECT token_id FROM auth_enrol_token WHERE user_id=%s AND token_hash=%s AND used_at IS NULL AND expires_at > %s",
-                (u["user_id"], hash_token(token), t))
-    tk = cur.fetchone()
-    if not tk: return None
+    if token:
+        cur.execute("SELECT token_id FROM auth_enrol_token WHERE user_id=%s AND token_hash=%s AND used_at IS NULL AND expires_at > %s",
+                    (u["user_id"], hash_token(token), t))
+        tk = cur.fetchone()
+        if not tk: return None
+    elif u["must_reenrol"]:
+        pass
+    else:
+        return None
 
     secret = pyotp.random_base32()
     enc = encrypt_secret(secret)
@@ -400,22 +405,27 @@ def enrol_begin(cur, login_id, token, ip=None, now=None):
     url = totp.provisioning_uri(name=login_id, issuer_name="ICON TRACE")
     return {"secret": secret, "url": url}
 
-def enrol_commit(cur, login_id, token, code, ip=None, now=None):
+def enrol_commit(cur, login_id, token=None, code=None, ip=None, now=None):
     t = _now(now)
     u = _get_user(cur, login_id)
     if not u: return False
     
-    cur.execute("SELECT token_id FROM auth_enrol_token WHERE user_id=%s AND token_hash=%s AND used_at IS NULL AND expires_at > %s",
-                (u["user_id"], hash_token(token), t))
-    tk = cur.fetchone()
-    if not tk: return False
+    tk = None
+    if token:
+        cur.execute("SELECT token_id FROM auth_enrol_token WHERE user_id=%s AND token_hash=%s AND used_at IS NULL AND expires_at > %s",
+                    (u["user_id"], hash_token(token), t))
+        tk = cur.fetchone()
+        if not tk: return False
+    elif not u["must_reenrol"]:
+        return False
 
     if not u["totp_pending_enc"]: return False
     secret = decrypt_secret(u["totp_pending_enc"])
     ok, step = verify_totp(secret, code, 0, t)
     if not ok: return False
     
-    cur.execute("UPDATE auth_enrol_token SET used_at=%s WHERE token_id=%s", (t, tk["token_id"]))
+    if tk:
+        cur.execute("UPDATE auth_enrol_token SET used_at=%s WHERE token_id=%s", (t, tk["token_id"]))
     cur.execute("UPDATE app_user SET totp_secret_enc=%s, totp_pending_enc=NULL, totp_last_step=%s, must_reenrol=0 WHERE user_id=%s",
                 (encrypt_secret(secret), step, u["user_id"]))
     log_event(cur, login_id, "enrol_ok", ip, None, t)
