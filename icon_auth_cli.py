@@ -18,6 +18,9 @@ def main():
         usage()
         
     cmd = sys.argv[1]
+    host = os.environ.get("ICON_HOST", "127.0.0.1")
+    port = os.environ.get("ICON_PORT", "8091")
+    base_url = f"http://{host}:{port}"
     
     with store.conn() as (cx, cur):
         icon_auth.ensure_schema(cur)
@@ -38,7 +41,7 @@ def main():
                 token = icon_auth.create_superadmin(cur, login_id, name)
                 print(f"Created Super Admin: {login_id}")
                 print(f"Enrolment Token: {token}")
-                print(f"Enrol URL: /enrol?login_id={login_id}&token={token}")
+                print(f"Enrol URL: {base_url}/enrol?login_id={login_id}&token={token}")
             except Exception as e:
                 print(f"Error: {e}")
 
@@ -51,7 +54,7 @@ def main():
                 token = icon_auth.create_admin(cur, "cli", login_id, name)
                 print(f"Created Admin: {login_id}")
                 print(f"Enrolment Token: {token}")
-                print(f"Enrol URL: /enrol?login_id={login_id}&token={token}")
+                print(f"Enrol URL: {base_url}/enrol?login_id={login_id}&token={token}")
             except Exception as e:
                 print(f"Error: {e}")
                 
@@ -63,7 +66,7 @@ def main():
                 token = icon_auth.reset_totp(cur, "cli", login_id)
                 print(f"Reset TOTP for: {login_id}")
                 print(f"New Enrolment Token: {token}")
-                print(f"Enrol URL: /enrol?login_id={login_id}&token={token}")
+                print(f"Enrol URL: {base_url}/enrol?login_id={login_id}&token={token}")
             except Exception as e:
                 print(f"Error: {e}")
                 

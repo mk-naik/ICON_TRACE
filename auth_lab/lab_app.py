@@ -302,8 +302,12 @@ def admin():
                     icon_auth.unlock_user(cur, session["login_id"], target, ip=request.remote_addr)
                     msg = "User unlocked."
                 elif action == "issue_token":
-                    token = icon_auth.issue_enrol_token(cur, session["login_id"], target, ip=request.remote_addr)
+                    token = icon_auth.issue_enrol_token(cur, session["login_id"], target)
                     msg = f"Token issued. URL: /enrol?login_id={target}&token={token}"
+                elif action == "create_admin":
+                    name = request.form.get("display_name")
+                    token = icon_auth.create_admin(cur, session["login_id"], target, name)
+                    msg = f"Admin created. Enrolment URL: /enrol?login_id={target}&token={token}"
                 elif action == "open_window":
                     icon_auth.open_backup_window(cur, session["login_id"], target, ip=request.remote_addr)
                     msg = "Backup window opened for 30 minutes."
@@ -341,6 +345,16 @@ def admin():
             <input type="text" name="display_name" placeholder="Display Name" required>
             <input type="text" name="role" placeholder="Role (e.g. FQC Operator)" required>
             <input type="password" name="temp_pw" placeholder="Temp Password" required>
+            <button type="submit">Create</button>
+        </form>
+    </div>
+    
+    <div class="box">
+        <h3>Create Admin (Super Admin Only)</h3>
+        <form method="POST">
+            <input type="hidden" name="action" value="create_admin">
+            <input type="text" name="target" placeholder="Login ID" required>
+            <input type="text" name="display_name" placeholder="Display Name" required>
             <button type="submit">Create</button>
         </form>
     </div>
@@ -393,5 +407,9 @@ if __name__ == "__main__":
     from waitress import serve
     import logging
     logging.basicConfig(level=logging.INFO)
+    
+    with store.conn() as (cx, cur):
+        icon_auth.ensure_schema(cur)
+        
     print("Serving lab on http://127.0.0.1:8091")
     serve(app, host="127.0.0.1", port=8091)
