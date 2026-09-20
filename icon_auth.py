@@ -161,7 +161,7 @@ def check_password_policy(pw, login_id, display_name):
     return None
 
 def hash_pw(pw):
-    return generate_password_hash(pw, method="pbkdf2:sha256:600000")
+    return generate_password_hash(pw, method="pbkdf2:sha512:500000")
 
 def check_pw(pw_hash, pw):
     if not pw_hash: return False
