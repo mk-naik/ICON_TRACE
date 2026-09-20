@@ -362,7 +362,7 @@ def create_superadmin(cur, login_id, display_name, now=None):
     t = _now(now)
     cur.execute("INSERT INTO app_user (login_id, display_name, role, created_at, created_by) VALUES (%s, %s, %s, %s, %s)",
                 (login_id, display_name, "Super Admin", t, "cli"))
-    return issue_enrol_token(cur, "cli", login_id, now)
+    return _issue_enrol_token_impl(cur, "cli", login_id, t)
 
 def issue_enrol_token(cur, actor_login_id, target_login_id, now=None):
     t = _now(now)
@@ -379,11 +379,15 @@ def issue_enrol_token(cur, actor_login_id, target_login_id, now=None):
     target_rank = get_rank(u["role"])
     
     if target_rank < 2: raise AuthError("Operators do not use TOTP.")
-        
+    return _issue_enrol_token_impl(cur, actor_login_id, target_login_id, t, u["user_id"])
+
+def _issue_enrol_token_impl(cur, actor_login_id, target_login_id, t, user_id=None):
+    if not user_id:
+        user_id = _get_user(cur, target_login_id)["user_id"]
     token = secrets.token_hex(16)
-    cur.execute("UPDATE auth_enrol_token SET expires_at=%s WHERE user_id=%s AND used_at IS NULL", (t, u["user_id"]))
+    cur.execute("UPDATE auth_enrol_token SET expires_at=%s WHERE user_id=%s AND used_at IS NULL", (t, user_id))
     cur.execute("INSERT INTO auth_enrol_token (user_id, token_hash, expires_at) VALUES (%s, %s, %s)",
-                (u["user_id"], hash_token(token), t + 900))
+                (user_id, hash_token(token), t + 900))
     log_event(cur, target_login_id, "enrol_token_issued", None, f"by {actor_login_id}", t)
     return token
 
@@ -509,6 +513,26 @@ def set_temp_password(cur, actor_login_id, target_login_id, temp_pw, ip=None, no
     must_change = 1 if get_rank(u["role"]) < 2 else 0
     cur.execute("UPDATE app_user SET pw_hash=%s, must_change_pw=%s, failed_count=0, locked_until=0 WHERE user_id=%s", (hash_pw(temp_pw), must_change, u["user_id"]))
     log_event(cur, target_login_id, "password_set", ip, f"temp by {actor_login_id}", t)
+
+def create_admin(cur, actor_login_id, target_login_id, display_name, ip=None, now=None):
+    t = _now(now)
+    actor = None
+    if actor_login_id != "cli":
+        actor = _get_user(cur, actor_login_id)
+        if not actor: raise AuthError("Actor not found.")
+        actor_rank = get_rank(actor["role"])
+        if actor_rank < 2:
+            raise AuthError("Not found.") # Following the pattern of hiding existence/rejecting
+    else:
+        actor_rank = 3
+        
+    if _get_user(cur, target_login_id):
+        raise AuthError("ID already exists.")
+        
+    cur.execute("INSERT INTO app_user (login_id, display_name, role, created_at, created_by) VALUES (%s, %s, %s, %s, %s)",
+                (target_login_id, display_name, "Admin", t, actor_login_id))
+    log_event(cur, target_login_id, "admin_created", ip, f"by {actor_login_id}", t)
+    return _issue_enrol_token_impl(cur, actor_login_id, target_login_id, t)
 
 def create_operator(cur, actor_login_id, target_login_id, display_name, role, temp_pw, ip=None, now=None):
     t = _now(now)

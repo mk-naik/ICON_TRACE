@@ -5,7 +5,9 @@ import icon_auth
 
 def usage():
     print("Usage:")
+    print("  python icon_auth_cli.py init-key")
     print("  python icon_auth_cli.py create-superadmin <login_id> \"<name>\"")
+    print("  python icon_auth_cli.py create-admin <login_id> \"<name>\"")
     print("  python icon_auth_cli.py reset-totp <login_id>")
     print("  python icon_auth_cli.py unlock <login_id>")
     print("  python icon_auth_cli.py list")
@@ -20,7 +22,14 @@ def main():
     with store.conn() as (cx, cur):
         icon_auth.ensure_schema(cur)
         
-        if cmd == "create-superadmin":
+        if cmd == "init-key":
+            try:
+                icon_auth.create_key()
+                print("Key initialized.")
+            except Exception as e:
+                print(f"Error: {e}")
+                
+        elif cmd == "create-superadmin":
             if len(sys.argv) != 4:
                 usage()
             login_id = sys.argv[2]
@@ -28,6 +37,19 @@ def main():
             try:
                 token = icon_auth.create_superadmin(cur, login_id, name)
                 print(f"Created Super Admin: {login_id}")
+                print(f"Enrolment Token: {token}")
+                print(f"Enrol URL: /enrol?login_id={login_id}&token={token}")
+            except Exception as e:
+                print(f"Error: {e}")
+
+        elif cmd == "create-admin":
+            if len(sys.argv) != 4:
+                usage()
+            login_id = sys.argv[2]
+            name = sys.argv[3]
+            try:
+                token = icon_auth.create_admin(cur, "cli", login_id, name)
+                print(f"Created Admin: {login_id}")
                 print(f"Enrolment Token: {token}")
                 print(f"Enrol URL: /enrol?login_id={login_id}&token={token}")
             except Exception as e:

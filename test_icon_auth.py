@@ -479,3 +479,28 @@ def test_14_cli(db_env):
     res = subprocess.run([sys.executable, cli, "list"], env=env, capture_output=True, text=True)
     assert "sa2" in res.stdout
     assert "Super One" in res.stdout
+
+def test_14b_create_admin(db_env):
+    now = 100000
+    with store.conn() as (cx, cur):
+        # Operator cannot create admin
+        icon_auth.set_temp_password(cur, "super1", "op1", "Pass1234!", now=now)
+        with pytest.raises(icon_auth.AuthError, match="Not found."):
+            icon_auth.create_admin(cur, "op1", "admin3", "Admin Three", now=now)
+            
+        # Admin can create admin
+        token = icon_auth.create_admin(cur, "admin1", "admin4", "Admin Four", now=now)
+        assert len(token) == 32 # 16 hex bytes
+        
+        # User is created
+        cur.execute("SELECT role FROM app_user WHERE login_id='admin4'")
+        row = cur.fetchone()
+        assert row["role"] == "Admin"
+        
+        # Super admin can create admin
+        token2 = icon_auth.create_admin(cur, "super1", "admin5", "Admin Five", now=now)
+        assert len(token2) == 32
+        
+        # Already exists
+        with pytest.raises(icon_auth.AuthError, match="ID already exists"):
+            icon_auth.create_admin(cur, "admin1", "admin4", "Admin Four", now=now)
