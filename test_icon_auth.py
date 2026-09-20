@@ -65,6 +65,8 @@ def db_env():
 
 def test_1_password_policy(db_env):
     assert icon_auth.check_password_policy("short", "user", "name") == "Password must be at least 8 characters."
+    assert icon_auth.check_password_policy("123456", "user", "name") == "Please choose a password that is not 6 digits and does not look like a recovery code (ABCD-1234)."
+    assert icon_auth.check_password_policy("1234-5678", "user", "name") == "Please choose a password that is not 6 digits and does not look like a recovery code (ABCD-1234)."
     assert icon_auth.check_password_policy("a"*129, "user", "name") == "Password must be at most 128 characters."
     assert icon_auth.check_password_policy("useruser", "useruser", "name") == "Password cannot be your ID or name."
     assert icon_auth.check_password_policy("iconsolar", "user", "name") == "Password is too common."
@@ -207,7 +209,22 @@ def test_7_roles(db_env):
         # Super Admin password NEVER works
         r = icon_auth.login(cur, "super1", "SuperSecret123!", now=now)
         assert not r["ok"]
+
+        # An operator with password "1234-5678" or "123456" can sign in (legacy/forced injection)
+        cur.execute("INSERT INTO app_user (login_id, display_name, role, created_at, created_by, pw_hash) VALUES (%s, %s, %s, %s, %s, %s)",
+                    ("op2", "Op Two", "FQC Operator", 100000, "admin1", icon_auth.hash_pw("1234-5678")))
+        cur.execute("INSERT INTO app_user (login_id, display_name, role, created_at, created_by, pw_hash) VALUES (%s, %s, %s, %s, %s, %s)",
+                    ("op3", "Op Three", "FQC Operator", 100000, "admin1", icon_auth.hash_pw("123456")))
         
+        r = icon_auth.login(cur, "op2", "1234-5678", now=now)
+        assert r["ok"]
+        r = icon_auth.login(cur, "op3", "123456", now=now)
+        assert r["ok"]
+
+        # Admin's 6-digit password is still not accepted as a login outside a window
+        cur.execute("UPDATE app_user SET pw_hash=%s WHERE login_id='admin1'", (icon_auth.hash_pw("123456"),))
+        r = icon_auth.login(cur, "admin1", "123456", now=now)
+        assert not r["ok"]
         # Admin cannot open window for SA
         with pytest.raises(icon_auth.AuthError):
             icon_auth.open_backup_window(cur, "admin1", "super1", now=now)

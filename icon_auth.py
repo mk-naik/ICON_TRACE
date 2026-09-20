@@ -139,6 +139,10 @@ def log_event(cur, login_id, event, ip=None, detail=None, now=None):
 GENERIC_FAIL = "That ID or password/code was not accepted, or the ID is temporarily locked."
 
 def check_password_policy(pw, login_id, display_name):
+    if len(pw) == 6 and pw.isdigit():
+        return "Please choose a password that is not 6 digits and does not look like a recovery code (ABCD-1234)."
+    if len(pw) == 9 and pw[4] == "-":
+        return "Please choose a password that is not 6 digits and does not look like a recovery code (ABCD-1234)."
     if len(pw) < 8: return "Password must be at least 8 characters."
     if len(pw) > 128: return "Password must be at most 128 characters."
     pw_l = pw.lower()
@@ -219,15 +223,17 @@ def login(cur, login_id, credential, ip=None, now=None):
         log_event(cur, login_id, "login_fail", ip, "inactive", t)
         return {"ok": False, "reason": GENERIC_FAIL}
 
-    method = None
-    if len(credential) == 6 and credential.isdigit():
-        method = "totp"
-    elif len(credential) == 9 and credential[4] == "-":
-        method = "recovery"
-    else:
-        method = "password"
-
     rank = get_rank(u["role"])
+    method = None
+    if rank == 1:
+        method = "password"
+    else:
+        if len(credential) == 6 and credential.isdigit():
+            method = "totp"
+        elif len(credential) == 9 and credential[4] == "-":
+            method = "recovery"
+        else:
+            method = "password"
     success = False
     detail = None
     
