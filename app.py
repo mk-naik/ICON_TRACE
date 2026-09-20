@@ -2306,8 +2306,12 @@ def gatepass_print(gp_no):
     print dialog opens - who prints how many is the operator's call."""
     with store.conn() as (cx, cur):
         gp = store.one(cur, "SELECT * FROM gatepass WHERE gp_no=%s", (gp_no,))
-    if not gp:
-        abort(404)
+        if not gp:
+            abort(404)
+        # Present only on a NEW standalone gate pass - a historical or
+        # module-linked row has none, and the template falls back to
+        # gp.description/qty exactly as it always has for those.
+        items = [dict(r) for r in db.gatepass_items(cur, gp["gp_id"])]
     if gp["kind"] == "RGP":
         copies = ["Copy 1 of 3 — creator", "Copy 2 of 3 — gate",
                   "Copy 3 of 3 — recipient, returned on receipt"]
@@ -2315,7 +2319,8 @@ def gatepass_print(gp_no):
         copies = ["Copy 1 of 3 — creator", "Copy 2 of 3 — gate",
                   "Copy 3 of 3 — gate"]
     qr = bc.qr_svg(bc.gp_qr_payload(gp_no))
-    return render_template("gatepass_print.html", gp=gp, copies=copies, qr=qr)
+    return render_template("gatepass_print.html", gp=gp, items=items,
+                           copies=copies, qr=qr)
 
 
 @app.route("/challan/<int:fy>/<int:seq>/ftr")
@@ -6258,11 +6263,71 @@ def too_big(e):
     return redirect(url_for("invoice_upload")), 413
 
 
+_GP_UNITS = ("Nos", "Kg", "Set")
+
+
+def _validate_gp_items(raw):
+    """Shared by create and edit - one validation, not one per route.
+    Returns (items, why); items is None when why is set."""
+    items = []
+    for n, it in enumerate(raw or [], start=1):
+        desc = str((it or {}).get("description") or "").strip()
+        unit = str((it or {}).get("unit") or "").strip()
+        remark = str((it or {}).get("remark") or "").strip() or None
+        if not desc:
+            return None, "Item %d: description is required." % n
+        if unit not in _GP_UNITS:
+            return None, "Item %d: unit must be one of %s." % (n, ", ".join(_GP_UNITS))
+        try:
+            qty = int((it or {}).get("qty"))
+            if float((it or {}).get("qty")) != qty or qty < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            return None, "Item %d: quantity must be a whole number of at least 1." % n
+        items.append({"description": desc, "unit": unit, "qty": qty, "remark": remark})
+    return items, None
+
+
+def _clamp_gp_date_range():
+    """Neither end of the range may be later than today - a real
+    constraint, not a convention the picker merely suggests: the <input
+    type=date> the client renders carries max=today too, but a filter is
+    read here regardless of how it arrived, the same as every other
+    refusal in this API not trusting the button state alone."""
+    today = datetime.date.today().isoformat()
+    d_from = (request.args.get("from") or "").strip()
+    d_to = (request.args.get("to") or "").strip()
+    for label, v in (("from", d_from), ("to", d_to)):
+        if v and v > today:
+            return None, None, ("%s cannot be later than today (%s)."
+                                % (label, today))
+    return d_from or None, d_to or None, None
+
+
 @app.route("/api/gatepasses", methods=["GET"])
 def api_gatepasses():
+    d_from, d_to, why = _clamp_gp_date_range()
+    if why:
+        return jsonify({"ok": False, "why": why}), 400
+    q = (request.args.get("q") or "").strip() or None
+    customer = (request.args.get("customer") or "").strip() or None
     with store.conn() as (cx, cur):
-        rows = [dict(r) for r in db.gatepasses(cur)]
-    return jsonify(rows)
+        rows = db.gatepasses_list(cur, q=q, date_from=d_from, date_to=d_to,
+                                  customer=customer)
+        customers_ = db.gatepass_customers(cur)
+    return jsonify({"rows": rows, "customers": customers_})
+
+
+@app.route("/api/gatepass/<int:gatepass_id>", methods=["GET"])
+def api_gatepass_get(gatepass_id):
+    with store.conn() as (cx, cur):
+        gp = store.one(cur, "SELECT * FROM gatepass WHERE gp_id=%s", (gatepass_id,))
+        if not gp:
+            return jsonify({"ok": False, "why": "No such gate pass."}), 404
+        gp = dict(gp)
+        gp["items"] = [dict(r) for r in db.gatepass_items(cur, gatepass_id)]
+    return jsonify({"ok": True, "gatepass": gp})
+
 
 @app.route("/api/gatepass", methods=["POST"])
 @_sync_guard
@@ -6274,6 +6339,15 @@ def api_gatepass():
         ch_id = int(ch_id_raw) if ch_id_raw else None
     except ValueError:
         ch_id = None
+
+    # Multi-item support is the STANDALONE path only - a module gate pass's
+    # "items" are its boxes, already represented on the challan it links
+    # to, so items sent alongside a real challan_id are simply not read.
+    items = None
+    if not ch_id and body.get("items"):
+        items, why = _validate_gp_items(body.get("items"))
+        if why:
+            return jsonify({"ok": False, "why": why}), 400
 
     with store.conn() as (cx, cur):
         # Keyed on ch_id being present - a fact resolved against the real
@@ -6315,16 +6389,86 @@ def api_gatepass():
             "party": str(body.get("party") or "").strip(),
             "delivery_address": str(body.get("delivery_address") or "").strip(),
             "vehicle_no": str(body.get("vehicle_no") or "").strip(),
-            "description": str(body.get("description") or "").strip(),
-            "qty": body.get("qty") or None,
+            # A new multi-item standalone pass carries its real content in
+            # gatepass_item instead - these two stay NULL for it rather
+            # than holding a stale summary that could drift from the
+            # lines actually printed.
+            "description": None if items else str(body.get("description") or "").strip(),
+            "qty": None if items else (body.get("qty") or None),
             "expected_return": body.get("expected_return") or None,
             "challan_no": ch_no or None,
             "challan_id": ch_id
         }
         gid = db.create_gatepass(cur, rec, actor())
-        db.audit(cur, actor(), "gatepass.issue", "gatepass", no, rec)
-        
+        if items:
+            db.set_gatepass_items(cur, gid, items)
+        db.audit(cur, actor(), "gatepass.issue", "gatepass", no,
+                 dict(rec, items=items))
+
     return jsonify({"ok": True, "gatepass_id": gid, "gp_no": no})
+
+
+@app.route("/api/gatepass/<int:gatepass_id>", methods=["PUT"])
+@_sync_guard
+def api_gatepass_update(gatepass_id):
+    """Standalone only. A module-linked gate pass is the automatic output
+    of a completed Loading Verification - editing it would mean editing
+    the challan, which already has its own real edit (supersede) mechanism
+    elsewhere; this route refuses one outright rather than silently
+    rewriting a document that stands for a challan it did not create.
+
+    Mutated in place, not superseded like a challan edit: a gate pass
+    carries no invoice-reconciliation stakes (no GST filing, no e-Way Bill
+    reads it) the way a challan does, so there is no external record that
+    could disagree with it after a correction. What a challan-style
+    supersede exists to prevent - a document already relied on elsewhere
+    quietly changing underneath that reliance - does not apply here. The
+    audit trail still records the change, so a correction is traceable
+    even though the row itself is not kept.
+    """
+    body = request.get_json(force=True) or {}
+    with store.conn() as (cx, cur):
+        gp = store.one(cur, "SELECT * FROM gatepass WHERE gp_id=%s", (gatepass_id,))
+        if not gp:
+            return jsonify({"ok": False, "why": "No such gate pass."}), 404
+        if gp.get("challan_id"):
+            return jsonify({"ok": False, "why":
+                "%s is linked to a challan - edit the challan instead. A "
+                "module-linked gate pass is never editable on its own."
+                % gp["gp_no"]}), 400
+
+        items, why = _validate_gp_items(body.get("items"))
+        if why:
+            return jsonify({"ok": False, "why": why}), 400
+        if not items:
+            return jsonify({"ok": False, "why":
+                "At least one item is required."}), 400
+
+        before = dict(gp)
+        kind = str(body.get("kind") or gp["kind"] or "NRGP").strip()
+        fields = {
+            "kind": kind,
+            "party": str(body.get("party") or "").strip(),
+            "delivery_address": str(body.get("delivery_address") or "").strip(),
+            "vehicle_no": str(body.get("vehicle_no") or "").strip(),
+            "description": None,
+            "qty": None,
+            "expected_return": body.get("expected_return") or None if kind == "RGP" else None,
+        }
+        if not fields["party"]:
+            return jsonify({"ok": False, "why":
+                "Party / destination is required."}), 400
+        cur.execute(
+            "UPDATE gatepass SET kind=%s, party=%s, delivery_address=%s, "
+            "vehicle_no=%s, description=%s, qty=%s, expected_return=%s "
+            "WHERE gp_id=%s",
+            (fields["kind"], fields["party"], fields["delivery_address"],
+             fields["vehicle_no"], fields["description"], fields["qty"],
+             fields["expected_return"], gatepass_id))
+        db.set_gatepass_items(cur, gatepass_id, items)
+        db.audit(cur, actor(), "gatepass.edit", "gatepass", gp["gp_no"],
+                 {"before": before, "after": fields, "items": items})
+    return jsonify({"ok": True, "gp_no": gp["gp_no"]})
 
 
 if __name__ == "__main__":

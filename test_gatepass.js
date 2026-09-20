@@ -150,7 +150,7 @@ var window = (typeof global !== 'undefined') ? global : this;
 
 /* ---- the code under test ------------------------------------------------ */
 var H = here();
-var src = readFile(H.dir + 'static' + H.sep + 'icon_live.js');
+var src = readFile(H.dir + H.sep + 'static' + H.sep + 'icon_live.js');
 var from = src.indexOf('  function gpFldFor(label) {');
 var to = src.indexOf('  function wireGp() {');
 if (from < 0 || to < 0 || to < from) {
@@ -177,6 +177,14 @@ function api(path, opts) {
 }
 var GO_CALLS = [];
 function go(view) { GO_CALLS.push(view); }
+// gpCollectItems() itself lives near wireGp(), far outside this extracted
+// range - pulling it in would drag wireGp()'s DOM-construction code along
+// with it. issueGP() calls it typeof-guarded (so a real page missing this
+// exact source layout degrades to "no items" instead of throwing); this
+// stub plays the part of the real function for that guarded call, the
+// same way toast/api/go stand in for their real selves here.
+var GP_ITEMS_STUB = [{ description: 'Test item', unit: 'Nos', qty: 1, remark: null }];
+function gpCollectItems() { return GP_ITEMS_STUB.slice(); }
 // JScript's eval() cannot parse .catch( via dot notation - catch is
 // reserved and old engines refuse it as a property name there, even
 // though it is a normal method call at runtime. Same workaround
@@ -195,6 +203,8 @@ function resetIssueGpDom() {
   DOM = {};
   toasts = []; API_CALLS = []; GO_CALLS = [];
   window._gpChallanReady = null;
+  window.__gpEditing = null;
+  GP_ITEMS_STUB = [{ description: 'Test item', unit: 'Nos', qty: 1, remark: null }];
   ['gpBtn', 'gpChallanSelV4', 'gpNRGP', 'gpRGP', 'gpParty', 'gpVehicle',
    'gpAddr', 'gpDesc', 'gpQty', 'gpExpectedRet', 'gpIsSolar',
    'gpLoadingState', 'gpLoadingStateWrap'].forEach(function (id) { el(id); });
@@ -394,6 +404,58 @@ test('standalone mode (module checkbox off) never consults '
   window.issueGP();
   assert(API_CALLS.length === 1, 'standalone Issue was blocked: ' + JSON.stringify(toasts));
   assert(API_CALLS[0].body.is_solar === false, API_CALLS[0].body);
+});
+
+/* ---- multi-item support: standalone only --------------------------------
+   gpCollectItems() itself (the grid's own add/drop/collect logic) is
+   tested directly, against the real function, in test_gatepass_items.js.
+   This is only the boundary issueGP() owns: which mode sends items at
+   all, and what blocks Issue when there are none. */
+
+test('a standalone Issue carries the item grid\'s own items in the payload, '
+    + 'not the old single description/qty fields', function () {
+  resetIssueGpDom();
+  el('gpIsSolar').checked = false;
+  GP_ITEMS_STUB = [{ description: 'Laptop for repair', unit: 'Nos', qty: 1, remark: 'urgent' },
+                   { description: 'Spare cable', unit: 'Set', qty: 2, remark: null }];
+  window.issueGP();
+  assert(API_CALLS.length === 1, API_CALLS);
+  var body = API_CALLS[0].body;
+  assert(body.items && body.items.length === 2, body);
+  assert(body.items[0].description === 'Laptop for repair', body.items[0]);
+  assert(body.items[1].qty === 2, body.items[1]);
+});
+
+test('a standalone Issue with no items in the grid is refused before any '
+    + 'request - the grid replaced description/qty, so an empty grid is an '
+    + 'empty gate pass', function () {
+  resetIssueGpDom();
+  el('gpIsSolar').checked = false;
+  GP_ITEMS_STUB = [];
+  window.issueGP();
+  assert(API_CALLS.length === 0, 'a POST was sent with no items: ' + JSON.stringify(API_CALLS));
+  assert(toasts.length === 1 && toasts[0].toLowerCase().indexOf('item') !== -1, toasts);
+});
+
+test('a module-mode Issue never sends an items key at all - the boxes are '
+    + 'its items, already on the challan', function () {
+  resetIssueGpDom();
+  el('gpIsSolar').checked = true;
+  window._gpChallanReady = true;
+  GP_ITEMS_STUB = [{ description: 'should never be sent', unit: 'Nos', qty: 9, remark: null }];
+  window.issueGP();
+  assert(API_CALLS.length === 1, API_CALLS);
+  assert(!('items' in API_CALLS[0].body), API_CALLS[0].body);
+});
+
+test('editing an existing standalone gate pass PUTs to its own id instead '
+    + 'of POSTing a new one', function () {
+  resetIssueGpDom();
+  el('gpIsSolar').checked = false;
+  window.__gpEditing = 42;
+  window.issueGP();
+  assert(API_CALLS.length === 1, API_CALLS);
+  assert(API_CALLS[0].path === 'gatepass/42', API_CALLS[0].path);
 });
 
 

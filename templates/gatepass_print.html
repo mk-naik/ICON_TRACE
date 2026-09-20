@@ -65,18 +65,29 @@
     {% endif %}
   </table>
 
+  {% set total_qty = items|sum(attribute='qty') if items else (gp.qty or 0) %}
   <table style="margin-top:-1px">
     <thead><tr><th style="width:12mm">Sl</th><th>Material description</th>
       <th style="width:18mm">UOM</th><th style="width:22mm">Qty</th>
       <th style="width:22mm">NRGP/RGP</th><th style="width:34mm">Remarks</th></tr></thead>
     <tbody>
-      <tr><td style="text-align:center">1</td><td>{{ gp.description or '' }}</td>
-        <td style="text-align:center">NOS</td>
-        <td style="text-align:center">{{ gp.qty or '' }}</td>
-        <td style="text-align:center"><b>{{ gp.kind }}</b></td><td></td></tr>
-      {% for _ in range(4) %}<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>{% endfor %}
+      {% if items %}
+        {% for it in items %}
+        <tr><td style="text-align:center">{{ loop.index }}</td><td>{{ it.description }}</td>
+          <td style="text-align:center">{{ it.unit|upper }}</td>
+          <td style="text-align:center">{{ it.qty }}</td>
+          <td style="text-align:center"><b>{{ gp.kind }}</b></td>
+          <td>{{ it.remark or '' }}</td></tr>
+        {% endfor %}
+      {% else %}
+        <tr><td style="text-align:center">1</td><td>{{ gp.description or '' }}</td>
+          <td style="text-align:center">NOS</td>
+          <td style="text-align:center">{{ gp.qty or '' }}</td>
+          <td style="text-align:center"><b>{{ gp.kind }}</b></td><td></td></tr>
+      {% endif %}
+      {% for _ in range([5 - (items|length if items else 1), 0]|max) %}<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>{% endfor %}
       <tr><td colspan="3" style="text-align:right"><b>Total</b></td>
-        <td style="text-align:center"><b>{{ gp.qty or '' }}</b></td><td></td><td></td></tr>
+        <td style="text-align:center"><b>{{ total_qty }}</b></td><td></td><td></td></tr>
     </tbody>
   </table>
 

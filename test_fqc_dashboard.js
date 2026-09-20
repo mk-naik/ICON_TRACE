@@ -282,7 +282,7 @@ function fetch(url) {
 
 /* ---- the code under test, read out of the file that ships --------------- */
 var H = here();
-var srcFull = readFile(H.dir + 'static' + H.sep + 'icon_live.js');
+var srcFull = readFile(H.dir + H.sep + 'static' + H.sep + 'icon_live.js');
 var from = srcFull.indexOf('  function fqcDashFilters()');
 var to = srcFull.indexOf('/* END fqc dashboard');
 if (from < 0 || to < 0 || to < from) {

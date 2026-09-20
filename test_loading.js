@@ -145,7 +145,7 @@ function fetch(url, opts) {
 
 /* ---- the code under test ---------------------------------------------- */
 var H = here();
-var src = readFile(H.dir + 'static' + H.sep + 'icon_live.js');
+var src = readFile(H.dir + H.sep + 'static' + H.sep + 'icon_live.js');
 var from = src.indexOf('  var ldRows = [], ldBusy');
 var to = src.indexOf('  /* END loading');
 if (from < 0 || to < 0 || to < from) {
