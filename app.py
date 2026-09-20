@@ -48,8 +48,54 @@ os.makedirs(STORE, exist_ok=True)
 
 app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True   # template edits need only a reload
-app.secret_key = os.environ.get("ICON_SECRET") or secrets.token_hex(32)
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
+
+
+def _load_secret_key():
+    """Resolve the Flask session key, in priority order:
+
+    1. ICON_SECRET environment variable — set this in production and it always
+       wins; the file is ignored.
+    2. <dir of icontrace.db>/.icon_secret — 32 hex bytes, created on first run
+       with O_CREAT|O_EXCL so two concurrent processes never race.  File mode
+       0600 is attempted; Windows ignores chmod but the file is otherwise only
+       accessible to the account that created it.
+    3. Random fallback if the folder is not writable — sessions drop on every
+       restart; a loud warning is logged.
+
+    Returns (key_str, source_label) where source_label is one of:
+      "env"          — from the environment variable
+      "file:<path>"  — read from (or created at) .icon_secret
+      "random"       — fallback; key will change on next restart
+    """
+    import logging as _logging
+    _log = _logging.getLogger("icontrace")
+
+    env_key = os.environ.get("ICON_SECRET", "").strip()
+    if env_key:
+        return env_key, "env"
+
+    secret_path = os.path.join(os.path.dirname(store.DB_PATH), ".icon_secret")
+    try:
+        # Atomic create: raises FileExistsError if another process won the race
+        fd = os.open(secret_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        key = secrets.token_hex(32)
+        os.write(fd, key.encode())
+        os.close(fd)
+        return key, "file:" + secret_path
+    except FileExistsError:
+        with open(secret_path, "r") as fh:
+            return fh.read().strip(), "file:" + secret_path
+    except OSError as exc:
+        key = secrets.token_hex(32)
+        _log.warning(
+            "Cannot write %s (%s) — sessions will drop on every restart. "
+            "Make the folder writable or set ICON_SECRET.", secret_path, exc)
+        return key, "random"
+
+
+_SECRET_KEY, SECRET_SOURCE = _load_secret_key()
+app.secret_key = _SECRET_KEY
 
 
 def safe_remove(path):

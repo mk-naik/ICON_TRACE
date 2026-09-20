@@ -60,9 +60,14 @@ if __name__ == "__main__":
             log.error("MySQL unreachable: %s", e)
             sys.exit(1)
 
-    if not os.environ.get("ICON_SECRET"):
-        log.warning("ICON_SECRET is not set - a random key was generated, so "
-                    "sessions drop on every restart. Set a fixed value.")
+    from app import SECRET_SOURCE, BOOT_CODE_BUILD  # noqa: F401 (imported for side-effects too)
+    if SECRET_SOURCE == "random":
+        log.warning("Session key is RANDOM — sessions drop on every restart. "
+                    "Set ICON_SECRET or make the DB folder writable.")
+    elif SECRET_SOURCE.startswith("file:"):
+        log.info("Session key loaded from %s", SECRET_SOURCE[5:])
+    else:
+        log.info("Session key: %s", SECRET_SOURCE)
 
     # Report QR capability now rather than letting an operator discover it
     # mid-upload. QR is best-effort: it carries no quantity, so the parser
