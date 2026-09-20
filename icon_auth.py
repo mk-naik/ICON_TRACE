@@ -468,6 +468,56 @@ def enrol_commit(cur, login_id, token=None, code=None, ip=None, now=None):
         log_event(cur, login_id, "recovery_generated", ip, None, t)
     return recovery_codes
 
+def update_user(cur, actor_login_id, target_login_id, display_name=None, role=None, ip=None, now=None):
+    t = _now(now)
+    actor = _get_user(cur, actor_login_id) if actor_login_id != "cli" else {"role": "Super Admin"}
+    if not actor: raise AuthError("Actor not found.")
+    u = _get_user(cur, target_login_id)
+    _require_can_act_on(actor, u)
+    
+    if get_rank(actor["role"]) < 2:
+        raise AuthError("Not authorized.")
+        
+    updates = []
+    args = []
+    details = []
+    
+    if display_name and display_name != u["display_name"]:
+        updates.append("display_name=%s")
+        args.append(display_name)
+        details.append(f"Name changed to '{display_name}'")
+        
+    if role and role != u["role"]:
+        if get_rank(role) > get_rank(actor["role"]):
+            raise AuthError("Cannot grant a role higher than your own.")
+        updates.append("role=%s")
+        args.append(role)
+        details.append(f"Role changed to '{role}'")
+        
+    if not updates:
+        return
+        
+    args.append(u["user_id"])
+    query = "UPDATE app_user SET " + ", ".join(updates) + " WHERE user_id=%s"
+    cur.execute(query, tuple(args))
+    log_event(cur, target_login_id, "user_updated", ip, ", ".join(details) + f" by {actor_login_id}", t)
+
+def deactivate_user(cur, actor_login_id, target_login_id, ip=None, now=None):
+    t = _now(now)
+    actor = _get_user(cur, actor_login_id) if actor_login_id != "cli" else {"role": "Super Admin"}
+    if not actor: raise AuthError("Actor not found.")
+    u = _get_user(cur, target_login_id)
+    _require_can_act_on(actor, u)
+    
+    if get_rank(actor["role"]) < 2:
+        raise AuthError("Not authorized.")
+        
+    if u["login_id"] == actor_login_id:
+        raise AuthError("Cannot deactivate yourself.")
+        
+    cur.execute("UPDATE app_user SET active=0 WHERE user_id=%s", (u["user_id"],))
+    log_event(cur, target_login_id, "deactivated", ip, f"by {actor_login_id}", t)
+
 def unlock_user(cur, actor_login_id, target_login_id, ip=None, now=None):
     t = _now(now)
     actor = _get_user(cur, actor_login_id) if actor_login_id != "cli" else {"role": "Super Admin"}

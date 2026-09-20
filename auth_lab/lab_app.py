@@ -328,6 +328,14 @@ def admin():
                 elif action == "open_window":
                     icon_auth.open_backup_window(cur, session["login_id"], target, ip=request.remote_addr)
                     msg = "Backup window opened for 30 minutes."
+                elif action == "update_user":
+                    name = request.form.get("display_name")
+                    role = request.form.get("role")
+                    icon_auth.update_user(cur, session["login_id"], target, display_name=name, role=role, ip=request.remote_addr)
+                    msg = "User updated."
+                elif action == "deactivate_user":
+                    icon_auth.deactivate_user(cur, session["login_id"], target, ip=request.remote_addr)
+                    msg = "User deactivated."
                 elif action == "reset_totp":
                     token = icon_auth.reset_totp(cur, session["login_id"], target, ip=request.remote_addr)
                     enrol_url = f"/enrol?login_id={target}&token={token}"
@@ -368,6 +376,26 @@ def admin():
         </form>
     </div>
     
+    <div class="box">
+        <h3>Update User</h3>
+        <form method="POST">
+            <input type="hidden" name="action" value="update_user">
+            <input type="text" name="target" placeholder="Login ID" required>
+            <input type="text" name="display_name" placeholder="New Display Name (Optional)">
+            <input type="text" name="role" placeholder="New Role (Optional)">
+            <button type="submit">Update</button>
+        </form>
+    </div>
+    
+    <div class="box">
+        <h3>Deactivate User</h3>
+        <form method="POST" onsubmit="return confirm('Are you sure you want to deactivate this user?');">
+            <input type="hidden" name="action" value="deactivate_user">
+            <input type="text" name="target" placeholder="Login ID" required>
+            <button type="submit" style="background-color: #be3325; color: white;">Deactivate</button>
+        </form>
+    </div>
+
     <div class="box">
         <h3>Create Admin (Super Admin Only)</h3>
         <form method="POST">
