@@ -66,11 +66,17 @@ def _load_app(tmp, env_overrides=None):
     for k in list(os.environ):
         if k not in env:
             del os.environ[k]
+    # Purge cached modules so we truly load from the new tmp copy
+    for m in list(sys.modules):
+        if m in ("app", "store", "db") or m.startswith("icon_"):
+            sys.modules.pop(m)
+
     if tmp not in sys.path:
         sys.path.insert(0, tmp)
     name = "app_t_%s" % os.path.basename(tmp)
     spec = importlib.util.spec_from_file_location(name, os.path.join(tmp, "app.py"))
     mod = importlib.util.module_from_spec(spec)
+    sys.modules["app"] = mod
     spec.loader.exec_module(mod)
     if tmp in sys.path:
         sys.path.remove(tmp)
@@ -171,6 +177,11 @@ def _D_healthz_fields_and_server_stale():
         assert d["server_stale"] is False, "server_stale must be False at boot"
         # Py change -> stale
         py = os.path.join(tmp, "icon_serial.py")
+        import stat as _st, time as _time
+        _orig_mtime = os.stat(py).st_mtime
+        with open(py, "rb") as fh:
+            _orig_bytes = fh.read()
+        
         with open(py, "a", encoding="utf-8") as fh:
             fh.write("\n# healthz-py-marker\n")
         time.sleep(0.05)
@@ -178,12 +189,8 @@ def _D_healthz_fields_and_server_stale():
         d2 = json.loads(client.get("/healthz").data)
         assert d2["server_stale"] is True, "server_stale must be True after py change"
         # Restore py, touch JS -> stale stays False
-        import stat as _st, time as _time
-        with open(py, "r", encoding="utf-8") as fh:
-            _pytxt = fh.read()
-        _orig_mtime = os.stat(py).st_mtime
-        with open(py, "w", encoding="utf-8") as fh:
-            fh.write(_pytxt.replace("\n# healthz-py-marker\n", ""))
+        with open(py, "wb") as fh:
+            fh.write(_orig_bytes)
         # Restore original mtime so BOOT_CODE_BUILD matches again
         os.utime(py, (_orig_mtime, _orig_mtime))
         mod._build_cache_clear()
@@ -269,7 +276,6 @@ def _F_secret_unwritable_folder_gives_random():
     try:
         tmp = _copy_tree(REPO, tmp)
         os.makedirs(ro)
-        os.chmod(ro, stat.S_IREAD | stat.S_IEXEC)
         warnings_seen = []
         class Cap(logging.Handler):
             def emit(self, r):
@@ -278,16 +284,61 @@ def _F_secret_unwritable_folder_gives_random():
         logger = logging.getLogger("icontrace")
         cap = Cap()
         logger.addHandler(cap)
-        mod = _load_app(tmp, {"ICON_DB_FILE": os.path.join(ro, "t.db")})
+        import unittest.mock
+        with unittest.mock.patch('os.open', side_effect=PermissionError("mock unwritable")):
+            mod = _load_app(tmp, {"ICON_DB_FILE": os.path.join(ro, "t.db")})
         logger.removeHandler(cap)
-        assert mod.SECRET_SOURCE == "random"
+        assert mod.SECRET_SOURCE == "random", "Expected 'random', got %r" % mod.SECRET_SOURCE
         assert any("random" in w.lower() or "restart" in w.lower()
                    for w in warnings_seen), "Warning must mention random/restart"
     finally:
-        try:
-            os.chmod(ro, stat.S_IRWXU)
-        except Exception:
-            pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@test
+@test
+def _F_secret_empty_short_and_race():
+    import time
+    tmp = tempfile.mkdtemp(prefix="icon_F_race_")
+    try:
+        tmp = _copy_tree(REPO, tmp)
+        secret_path = os.path.join(tmp, ".icon_secret")
+        
+        # Test 1: Empty file
+        open(secret_path, "w").write("")
+        mod1 = _load_app(tmp)
+        assert len(mod1.app.secret_key) == 64
+        
+        # Test 2: 5-character file
+        open(secret_path, "w").write("12345")
+        mod2 = _load_app(tmp)
+        assert len(mod2.app.secret_key) == 64
+        assert mod2.app.secret_key != "12345"
+        
+        # Test 3: Race test (8 subprocesses)
+        os.unlink(secret_path)
+        script = (
+            "import sys, os; os.environ['ICON_DB_FILE']=%r; sys.path.insert(0, %r); "
+            "import importlib.util; "
+            "s=importlib.util.spec_from_file_location('a',%r); "
+            "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+            "print(m.app.secret_key)"
+        ) % (os.path.join(tmp, "test.db"), tmp, os.path.join(tmp, "app.py"))
+        
+        procs = []
+        for _ in range(8):
+            p = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True)
+            procs.append(p)
+            
+        keys = []
+        for p in procs:
+            p.wait(timeout=30)
+            keys.append(p.stdout.read().strip())
+            
+        assert len(keys) == 8
+        assert len(set(keys)) == 1, "All 8 subprocesses must get the exact same key, got: %r" % keys
+        assert len(keys[0]) == 64
+    finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -401,6 +452,7 @@ if __name__ == "__main__":
     _F_secret_file_created_and_reused()
     _F_secret_subprocess_same_key()
     _F_secret_unwritable_folder_gives_random()
+    _F_secret_empty_short_and_race()
     _F_git_check_ignore()
     _G_reset_disabled_by_default_403()
     _G_reset_enabled_with_1_wipes()
