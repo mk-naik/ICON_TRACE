@@ -25,3 +25,4 @@ storage/
 # Session key — persisted to disk so restarts don't invalidate sessions.
 # Never commit this; it is equivalent to a password.
 .icon_secret
+.icon_totp_key

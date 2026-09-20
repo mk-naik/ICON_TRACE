@@ -33,12 +33,10 @@ def _now(now=None):
 
 # Ensure we use O_CREAT | O_EXCL for the key
 def _get_key_path():
-    db_file = os.environ.get("ICON_DB_FILE", "icontrace.db")
-    if os.path.isabs(db_file):
-        return os.path.join(os.path.dirname(db_file), ".icon_totp_key")
-    return os.path.join(os.path.dirname(os.path.abspath(db_file)), ".icon_totp_key")
+    import store
+    return os.path.join(os.path.dirname(os.path.abspath(store.DB_PATH)), ".icon_totp_key")
 
-def _load_or_create_key():
+def create_key():
     p = _get_key_path()
     try:
         fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -49,16 +47,24 @@ def _load_or_create_key():
             os.close(fd)
         return key
     except FileExistsError:
+        raise Exception(f"Key file already exists at {p}")
+
+def load_key():
+    p = _get_key_path()
+    for _ in range(3):
         try:
             with open(p, "rb") as f:
-                return f.read().strip()
+                key = f.read().strip()
+                if len(key) == 44:
+                    return key
+                else:
+                    raise KeyMissing(f"Invalid key length in {p}. Run 'python icon_auth_cli.py init-key' to restore.")
         except FileNotFoundError:
-            raise KeyMissing("Key file missing during read.")
+            time.sleep(0.1)
+    raise KeyMissing(f"Key file missing at {p}. Run 'python icon_auth_cli.py init-key' to restore.")
 
 def get_fernet():
-    key = _load_or_create_key()
-    if not key:
-        raise KeyMissing("Key is empty.")
+    key = load_key()
     try:
         return Fernet(key)
     except Exception as e:

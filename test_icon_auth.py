@@ -34,6 +34,7 @@ def db_env():
         os.remove(key_path)
 
     store.DB_PATH = path
+    icon_auth.create_key()
     
     with store.conn() as (cx, cur):
         icon_auth.ensure_schema(cur)
@@ -348,6 +349,40 @@ def test_10_at_rest(db_env):
         row = cur.fetchone()
         if row:
             assert res["secret"] != row["totp_secret_enc"]
+
+def test_10b_key_handling(db_env):
+    now = 100000
+    with store.conn() as (cx, cur):
+        token = icon_auth.issue_enrol_token(cur, "cli", "super1", now=now)
+        res = icon_auth.enrol_begin(cur, "super1", token, now=now)
+        secret = res["secret"]
+        icon_auth.enrol_commit(cur, "super1", token, pyotp.TOTP(secret).at(now), now=now)
+
+    key_path = icon_auth._get_key_path()
+    assert os.path.exists(key_path)
+    assert os.path.dirname(os.path.abspath(key_path)) == os.path.dirname(os.path.abspath(store.DB_PATH))
+
+    # delete key -> sign-in refused, no new file, clear log line
+    os.remove(key_path)
+    with store.conn() as (cx, cur):
+        r = icon_auth.login(cur, "super1", pyotp.TOTP(secret).at(now+30), ip="1.2.3.4", now=now+30)
+        assert not r["ok"]
+        assert not os.path.exists(key_path)
+        
+        cur.execute("SELECT detail FROM auth_event WHERE login_id='super1' ORDER BY event_id DESC LIMIT 1")
+        detail = cur.fetchone()["detail"]
+        assert "KeyMissing" in detail
+
+    # Empty and short files raise KeyMissing
+    with open(key_path, "wb") as f:
+        f.write(b"")
+    with pytest.raises(icon_auth.KeyMissing):
+        icon_auth.load_key()
+        
+    with open(key_path, "wb") as f:
+        f.write(b"shortkey")
+    with pytest.raises(icon_auth.KeyMissing):
+        icon_auth.load_key()
 
 def test_11_clock(db_env):
     # Fake UDP server
