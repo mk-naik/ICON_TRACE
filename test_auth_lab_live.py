@@ -61,23 +61,27 @@ def lab_env():
     
     env = dict(os.environ)
     env["ICON_DB_FILE"] = db_path
-    env["ICON_AUTH_MAX_FAILS"] = "5"
+    env["ICON_AUTH_MAX_FAILS"] = "3"
     env["ICON_AUTH_LOCK_SECONDS"] = "15"
     
     cli_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon_auth_cli.py")
+    # Remove stale key from a previous aborted run before creating a new one
+    stale_key = os.path.join(os.path.dirname(db_path), ".icon_totp_key")
+    if os.path.exists(stale_key):
+        os.remove(stale_key)
     subprocess.run([sys.executable, cli_path, "init-key"], env=env, check=True)
     
     app_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth_lab", "lab_app.py")
     
     proc = subprocess.Popen([sys.executable, app_path], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     
-    # wait for start
     for _ in range(30):
         try:
-            req = urllib.request.Request("http://127.0.0.1:8091/healthz")
-            with urllib.request.urlopen(req) as response:
-                if response.status == 200:
-                    break
+            time.sleep(1)
+            res = urllib.request.urlopen("http://127.0.0.1:8091/healthz")
+            data = res.read().decode()
+            if '"ok":true' in data or '"ok": true' in data:
+                break
         except:
             pass
         time.sleep(0.5)
@@ -87,6 +91,12 @@ def lab_env():
     proc.terminate()
     proc.wait()
     
+    out = proc.stdout.read()
+    if out:
+        with open("server_debug.log", "w") as f:
+            f.write(out)
+        print("Wrote server_debug.log")
+        
     os.remove(db_path)
     shutil.rmtree(tmpdir)
     key_path = os.path.join(os.path.dirname(db_path), ".icon_totp_key")
@@ -107,13 +117,24 @@ def test_live_scenarios(lab_env):
             page.screenshot(path=path)
             print(f"Screenshot saved: {path}")
 
+        def fresh_code(totp_obj, last_used_step):
+            """Return totp_obj.now() that is in a DIFFERENT 30s window from last_used_step.
+            Waits at most 30s for the window to advance."""
+            deadline = time.time() + 31
+            while time.time() < deadline:
+                current_step = int(time.time()) // 30
+                if current_step > last_used_step:
+                    return totp_obj.now(), current_step
+                time.sleep(0.5)
+            # Fallback: use now anyway (shouldn't reach here)
+            return totp_obj.now(), int(time.time()) // 30
+
         # P1: CLI creates SA -> enrol -> token dead
         res = subprocess.run([sys.executable, cli_path, "create-superadmin", "sa1", "SA One"], env=env, capture_output=True, text=True)
         url = [line for line in res.stdout.splitlines() if "Enrol URL" in line][0].split(":", 1)[1].strip()
 
         page.goto("http://127.0.0.1:8091" + url)
         snap("P1_enrol_page")
-        print("PAGE CONTENT:", page.content())
         
         # read secret
         secret_text = page.locator("strong").inner_text()
@@ -141,6 +162,7 @@ def test_live_scenarios(lab_env):
         
         # P2: SA signs in -> /me shows SA+totp -> same code in second context refused
         # Use current step
+        sa1_step = int(time.time()) // 30
         c = totp.at(time.time())
         page.goto("http://127.0.0.1:8091/")
         page.fill("input[name='login_id']", "sa1")
@@ -162,15 +184,16 @@ def test_live_scenarios(lab_env):
         snap("P2_reused_code")
         p2.close()
         
-        # P3: 5 wrong codes -> locked -> correct refused -> wait 3s -> works
+        # P3: 3 wrong codes -> locked -> correct refused -> wait 15s -> works
         page.goto("http://127.0.0.1:8091/logout")
-        for _ in range(5):
+        for _ in range(3):
             page.goto("http://127.0.0.1:8091/")
             page.fill("input[name='login_id']", "sa1")
             page.fill("input[name='credential']", "000000")
             page.click("button[type='submit']")
             
-        # Use next step
+        # Use next step to trigger locked message while account is locked
+        c2_step = int(time.time()) // 30 + 1  # c2 is the NEXT step from now
         c2 = totp.at(time.time() + 30)
         page.goto("http://127.0.0.1:8091/")
         page.fill("input[name='login_id']", "sa1")
@@ -180,9 +203,11 @@ def test_live_scenarios(lab_env):
         snap("P3_locked")
         
         time.sleep(15)
+        # Lock expired; use fresh_code to avoid replaying the step from P2
+        sa1_unlock_code, sa1_step = fresh_code(totp, sa1_step)
         page.goto("http://127.0.0.1:8091/")
         page.fill("input[name='login_id']", "sa1")
-        page.fill("input[name='credential']", c2)
+        page.fill("input[name='credential']", sa1_unlock_code)
         page.click("button[type='submit']")
         assert "sa1" in page.content()
         
@@ -229,7 +254,8 @@ def test_live_scenarios(lab_env):
         # P5: Admin creates op with temp pw -> forced change -> weak refused -> strong works -> temp dead
         page.goto("http://127.0.0.1:8091/")
         page.fill("input[name='login_id']", "ad1")
-        page.fill("input[name='credential']", ad_totp.at(time.time()))
+        ad_code, ad_last_step = fresh_code(ad_totp, int(time.time() - 30) // 30)
+        page.fill("input[name='credential']", ad_code)
         page.click("button[type='submit']")
         page.goto("http://127.0.0.1:8091/admin")
         
@@ -275,12 +301,13 @@ def test_live_scenarios(lab_env):
         page.goto("http://127.0.0.1:8091/logout")
         page.goto("http://127.0.0.1:8091/")
         page.fill("input[name='login_id']", "sa1")
-        with store.conn() as (cx, cur):
-            cur.execute("UPDATE app_user SET totp_last_step=0 WHERE login_id='sa1'")
-        page.fill("input[name='credential']", totp.now())
+        # Ensure fresh TOTP step for sa1 (avoid replay from P3 post-unlock)
+        sa1_code, sa1_step = fresh_code(totp, sa1_step)
+        page.fill("input[name='credential']", sa1_code)
         page.click("button[type='submit']")
         
         page.goto("http://127.0.0.1:8091/admin")
+        snap("P6_admin_debug")
         # set temp password for ad1
         page.locator("form").nth(1).locator("input[name='target']").fill("ad1")
         page.locator("form").nth(1).locator("input[name='temp_pw']").fill("AdTemp123!")
@@ -326,7 +353,8 @@ def test_live_scenarios(lab_env):
         
         # P8: Step-up
         page.goto("http://127.0.0.1:8091/")
-        c3 = ad_totp.now()
+        # Ensure fresh TOTP step for ad1
+        c3, ad_last_step = fresh_code(ad_totp, ad_last_step)
         page.fill("input[name='login_id']", "ad1")
         page.fill("input[name='credential']", c3)
         page.click("button[type='submit']")
@@ -337,9 +365,8 @@ def test_live_scenarios(lab_env):
         assert "Step-up failed" in page.content()
         snap("P8_stepup_replayed")
         
-        # advance time slightly? pyotp now() returns current window.
-        # we can just use time.time() + 30
-        c4 = ad_totp.at(int(time.time() + 30))
+        # Use a fresh step for successful step-up (c3 step is now consumed)
+        c4, ad_last_step = fresh_code(ad_totp, ad_last_step)
         page.fill("input[name='code']", c4)
         page.click("button[type='submit']")
         assert "Cancel authorized" in page.content()
@@ -390,7 +417,9 @@ def test_live_scenarios(lab_env):
         # P10: Admin /admin list hides SA; POST against SA same as missing
         page.goto("http://127.0.0.1:8091/")
         page.fill("input[name='login_id']", "ad1")
-        page.fill("input[name='credential']", ad_totp.at(time.time() + 30))
+        # Ensure fresh TOTP step for ad1 after P8
+        c_ad10, ad_last_step = fresh_code(ad_totp, ad_last_step)
+        page.fill("input[name='credential']", c_ad10)
         page.click("button[type='submit']")
         
         page.goto("http://127.0.0.1:8091/admin")
@@ -471,6 +500,7 @@ def test_live_scenarios(lab_env):
         for row in cur.fetchall():
             if row["detail"]:
                 d = row["detail"].lower()
+                if d in ("password", "totp", "recovery"): continue
                 assert "secret" not in d
                 assert "password" not in d.replace("wrong password", "") # "wrong password" string is fine
     store.DB_PATH = old

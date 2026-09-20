@@ -105,32 +105,13 @@ def index():
             return redirect("/enrol")
     
     body = """
-    <form method="POST" action="/login" id="loginForm">
+    <form method="POST" action="/login">
         <label>Login ID:</label>
         <input type="text" name="login_id" id="login_id" required>
         <label>Password or authenticator code:</label>
         <input type="password" name="credential" required>
         <button type="submit">Sign In</button>
     </form>
-    <div id="counterMsg" style="color:red; font-weight:bold; margin-top:10px;"></div>
-    <script>
-        const form = document.getElementById("loginForm");
-        const loginId = document.getElementById("login_id");
-        form.addEventListener("submit", () => {
-            sessionStorage.setItem("last_login_id", loginId.value);
-        });
-        const urlParams = new URLSearchParams(window.location.search);
-        const err = urlParams.get("err");
-        const lastId = sessionStorage.getItem("last_login_id");
-        if (err && lastId) {
-            let fails = parseInt(sessionStorage.getItem("fails_" + lastId) || "0", 10);
-            if (err.includes("not accepted") || err.includes("locked")) {
-                fails += 1;
-                sessionStorage.setItem("fails_" + lastId, fails);
-                document.getElementById("counterMsg").textContent = "Failed attempts for " + lastId + ": " + fails;
-            }
-        }
-    </script>
     """
     err = request.args.get("err")
     if err:

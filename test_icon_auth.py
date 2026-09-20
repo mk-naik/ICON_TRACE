@@ -191,6 +191,7 @@ def test_4_enrolment(db_env):
 
 def test_5_lockout(db_env):
     now = 100000
+    icon_auth.MAX_FAILS = 5
     with store.conn() as (cx, cur):
         for i in range(5):
             r = icon_auth.login(cur, "op1", "wrong", now=now)
@@ -214,6 +215,7 @@ def test_5_lockout(db_env):
 
 def test_6_identical_errors(db_env):
     now = 100000
+    icon_auth.MAX_FAILS = 5
     with store.conn() as (cx, cur):
         r1 = icon_auth.login(cur, "unknown", "pass", now=now)
         r2 = icon_auth.login(cur, "op1", "wrong", now=now)

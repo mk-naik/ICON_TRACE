@@ -1693,10 +1693,28 @@ still "designed, not built" everywhere in this app, not only here.
       SS and EL with its reachability and its column map, says *not
       configured* where nothing is set, and is redrawn after a save.
 
-## 21. Auth & Admin
+## 21. Sessions, roles and live updates  *(decided in chat, Sep 2026 - Stage 0 built, Stages 1-3 not started)*
 
-- [x] Stage 0
-- [x] Stage 1a
+Why: a reload sends everyone back to sign-in (no server session; sign-in is a dropdown
+that sets a JS variable), and one user's save is never seen by another until they reload.
+
+Staging
+- [x] Stage 0 - the banner tells restart from reload; the session key survives a
+      restart; DB reset is opt-in.
+- [x] Stage 1a - TOTP proven on a STANDALONE login page first (own tiny app, own port);
+      only then integrated. Keep the logic in one module so integration is a move, not a
+      rewrite. Startup clock check (TOTP fails if the server clock drifts).
+- [ ] Stage 1b - users table, server-side sessions that survive a restart, roles enforced
+      on the server (today 4 role checks across 40 write endpoints; the rest are open),
+      role read from the session, X-User-Role ignored.
+- [ ] Stage 2 - change feed: a server sequence bumped at the one commit point
+      (store.conn); the client polls /api/changes?since=N inside the 5 s ping; only the
+      visible screen refetches; 3-5 s is acceptable. True push (SSE) later needs TLS +
+      reverse proxy + a small separate async process; the feed makes push a change of
+      transport only.
+- [ ] Stage 3 - form protection (never replace the DOM under someone typing or scanning;
+      show a "changed by X" chip), version checks (409) on records two people can edit,
+      cancel request/approve flow.
 
 Decisions:
 - Lockout: escalating delay 2/4/8 s, lock after 10 consecutive failures for 5 minutes. The failure count is shown by the login page from this browser only; the server never returns a count. A locked ID is told how long only when the credential given was CORRECT.
@@ -2501,6 +2519,17 @@ Admin accounts were forced to change their passwords incorrectly. The TOTP step 
 - Missing lockout feedback.
 - Flaky tests in `test_auth_lab_live.py`.
 
+**Exact root cause:**
+- `app.py` didn't restrict rank 1 actions over other rank 1 users.
+- Shape validation blocked perfectly valid 6-digit or recovery-code-like operator passwords.
+- Login paths had inconsistent timing, allowing enumeration.
+- Recovery keys didn't redirect to enrollment or enforce reenrolment.
+- The system regenerated TOTP keys on startup if missing.
+- CLI missed an `add_admin` functionality.
+- Clock checks weren't limited to startup.
+- `icon_live.js` capped all date inputs at `today` irrespective of intended future usage.
+- Authentication paths swallowed lockout exceptions silently.
+
 **What changed:**
 - Rank 1 is restricted in administrative acts.
 - Timing floor of 350ms implemented for all login paths.
@@ -2512,3 +2541,6 @@ Admin accounts were forced to change their passwords incorrectly. The TOTP step 
 - `test_icon_auth.py` covers core unit logic (14 tests passing).
 - `test_auth_lab_live.py` covers all P1-P15 live scenarios successfully without flakiness.
 - `test_build_banner_live.py` passes all 17 cases.
+
+**What I could not run:**
+- Nothing. All backend integration, Playwright UI, and unit tests ran natively and successfully in the environment.

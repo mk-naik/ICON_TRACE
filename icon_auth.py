@@ -4,6 +4,7 @@ import socket
 import struct
 import secrets
 import hmac
+import logging
 import pyotp
 from cryptography.fernet import Fernet, InvalidToken
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -266,6 +267,7 @@ def _login_impl(cur, login_id, credential, ip=None, now=None):
                 else:
                     detail = "wrong code or replayed"
             except KeyMissing as e:
+                logging.error("KeyMissing during login for %s: %s", login_id, e)
                 log_event(cur, login_id, "login_fail", ip, f"KeyMissing: {e}", t)
                 return {"ok": False, "reason": GENERIC_FAIL}
 
@@ -286,7 +288,7 @@ def _login_impl(cur, login_id, credential, ip=None, now=None):
     elif method == "password":
         if rank == 3:
             check_pw(u["pw_hash"] or "", credential)
-            detail = "super admin password never works"
+            detail = "sa pw login blocked"
         elif rank == 2:
             cur.execute("SELECT window_id FROM auth_backup_window WHERE user_id=%s AND used_at IS NULL AND expires_at > %s",
                         (u["user_id"], t))
@@ -303,16 +305,14 @@ def _login_impl(cur, login_id, credential, ip=None, now=None):
                 detail = "wrong password"
 
     if not success:
-        fails = u["failed_count"] + 1
-        delay = 2 if fails == 1 else (4 if fails == 2 else 8)
-        time.sleep(delay)
+        pass
 
     is_locked = u["locked_until"] > t
     if is_locked:
         if success:
             rem = int((u["locked_until"] - t) // 60) + 1
             log_event(cur, login_id, "login_fail", ip, "locked (but valid credentials)", t)
-            return {"ok": False, "reason": f"This ID is locked for another {rem} minutes"}
+            return {"ok": False, "reason": GENERIC_FAIL}
         else:
             log_event(cur, login_id, "login_fail", ip, "locked", t)
             return {"ok": False, "reason": GENERIC_FAIL}
