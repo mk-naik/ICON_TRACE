@@ -6066,8 +6066,13 @@ function wireFqcAnomalies() {
         /* v4 initialises USER = {name:'', role:'Admin'} before anyone signs
            in, so the sign-in screen would count as an Admin without the name
            check below.  signedIn is true only once a real user has picked a
-           name from the dropdown. */
-        var signedIn = (typeof USER !== 'undefined' && USER && !!USER.name);
+           name from the dropdown. 
+           v4's signOut() does not reset USER.name, it only hides #app. To prevent
+           stale banners showing on the sign-in screen after a sign-out, we must
+           also require that #app has the "on" class. */
+        var _appEl = document.getElementById('app');
+        var signedIn = (typeof USER !== 'undefined' && USER && !!USER.name &&
+                        _appEl && _appEl.classList.contains('on'));
         var isAdmin  = signedIn &&
                        (USER.role === 'Admin' || USER.role === 'Super Admin');
 
