@@ -229,6 +229,10 @@ def build_id():
 BOOT_CODE_BUILD = code_build()
 STARTED_AT = datetime.datetime.now().strftime("%d-%m-%Y %I:%M:%S %p")
 
+# Reset guard: POST /api/db/reset is disabled by default; set ICON_ALLOW_RESET=1
+# (or true/yes, case-insensitive) to enable it.  Requires a restart to take effect.
+_RESET_ENABLED = os.environ.get("ICON_ALLOW_RESET", "").strip().lower() in ("1", "true", "yes")
+
 
 @app.after_request
 def no_store(resp):
@@ -4414,13 +4418,24 @@ def api_boot():
 
 @app.route("/api/db/stats")
 def api_db_stats():
-    return jsonify(store.stats())
+    out = store.stats()
+    out["_reset_enabled"] = _RESET_ENABLED
+    return jsonify(out)
 
 
 @app.route("/api/db/reset", methods=["POST"])
 def api_db_reset():
-    """Delete the database file. The whole point of SQLite here - test data
-    is thrown away rather than migrated."""
+    """Delete the database file. Disabled unless ICON_ALLOW_RESET=1 is set.
+
+    The whole point of SQLite here — test data is thrown away rather than
+    migrated — but in a production deployment an accidental reset is
+    catastrophic. ICON_ALLOW_RESET=1 must be set explicitly to enable this
+    endpoint; a restart is required for the flag to take effect.
+    """
+    if not _RESET_ENABLED:
+        return jsonify({"ok": False,
+                        "why": "Database reset is disabled on this server. "
+                               "Set ICON_ALLOW_RESET=1 and restart to enable it."}), 403
     store.wipe()
     return jsonify({"ok": True, "stats": store.stats()})
 

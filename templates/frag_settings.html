@@ -70,7 +70,12 @@
     to drop before production.</p>
   <div id="s_stats" class="hint mono" style="margin-top:8px"></div>
 </div>
-<div class="card-f"><button class="btn btn-ghost" onclick="dbReset()">Delete all data and start clean</button></div></div>
+<div class="card-f">
+  <button class="btn btn-ghost" id="s_resetBtn" onclick="dbReset()">
+    Delete all data and start clean
+  </button>
+  <span class="sp hint" id="s_resetMsg" style="color:var(--review)"></span>
+</div></div>
 
 <script>
 (function(){
@@ -104,9 +109,18 @@
   window.dbReset=function(){
     if(!confirm('Delete every record and start from an empty database?')) return;
     fetch('/api/db/reset',{method:'POST'}).then(function(r){return r.json();})
-     .then(function(){ if(typeof toast==='function') toast('Database cleared.');
+     .then(function(d){
+       if(!d.ok){
+         var msg=d.why||'Reset refused by the server.';
+         if(typeof toast==='function') toast(msg);
+         document.getElementById('s_resetMsg').textContent=msg;
+         return;
+       }
+       document.getElementById('s_resetMsg').textContent='';
+       if(typeof toast==='function') toast('Database cleared.');
        if(window.iconRefresh) iconRefresh();
-       if(window.iconLoadView) iconLoadView('settings','/view/settings'); });
+       if(window.iconLoadView) iconLoadView('settings','/view/settings');
+     });
   };
   fetch('/api/db/stats',{cache:'no-store'}).then(function(r){return r.json();})
    .then(function(d){
@@ -115,6 +129,13 @@
      document.getElementById('s_stats').textContent=Object.keys(d)
        .filter(function(k){return k[0]!=='_'&&d[k];})
        .map(function(k){return k+' '+d[k];}).join('  ·  ') || 'empty';
+     var btn=document.getElementById('s_resetBtn');
+     if(btn && d._reset_enabled===false){
+       btn.disabled=true;
+       btn.title='Database reset is disabled on this server (ICON_ALLOW_RESET not set).';
+       document.getElementById('s_resetMsg').textContent=
+         'Reset is disabled. Set ICON_ALLOW_RESET=1 and restart to enable it.';
+     }
    });
 })();
 </script>
