@@ -76,20 +76,47 @@ def _load_secret_key():
         return env_key, "env"
 
     secret_path = os.path.join(os.path.dirname(store.DB_PATH), ".icon_secret")
+    import time
+    for _ in range(5):
+        try:
+            fd = os.open(secret_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                key = secrets.token_hex(32)
+                os.write(fd, key.encode())
+                return key, "file:" + secret_path
+            finally:
+                os.close(fd)
+        except FileExistsError:
+            try:
+                with open(secret_path, "r") as fh:
+                    key = fh.read().strip()
+                if len(key) >= 32:
+                    return key, "file:" + secret_path
+            except OSError:
+                pass
+            time.sleep(0.1)
+        except OSError as exc:
+            key = secrets.token_hex(32)
+            _log.warning(
+                "Cannot write %s (%s) - sessions will drop on every restart. "
+                "Make the folder writable or set ICON_SECRET.", secret_path, exc)
+            return key, "random"
+
+    # If we get here, the file existed but was invalid/empty for 0.5s. Replace atomically.
     try:
-        # Atomic create: raises FileExistsError if another process won the race
-        fd = os.open(secret_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        import tempfile
         key = secrets.token_hex(32)
-        os.write(fd, key.encode())
-        os.close(fd)
+        fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(secret_path), prefix=".icon_secret_tmp")
+        try:
+            os.write(fd, key.encode())
+        finally:
+            os.close(fd)
+        os.replace(tmp_path, secret_path)
         return key, "file:" + secret_path
-    except FileExistsError:
-        with open(secret_path, "r") as fh:
-            return fh.read().strip(), "file:" + secret_path
     except OSError as exc:
         key = secrets.token_hex(32)
         _log.warning(
-            "Cannot write %s (%s) — sessions will drop on every restart. "
+            "Cannot write %s (%s) - sessions will drop on every restart. "
             "Make the folder writable or set ICON_SECRET.", secret_path, exc)
         return key, "random"
 
