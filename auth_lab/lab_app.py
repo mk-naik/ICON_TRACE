@@ -16,8 +16,28 @@ from flask import Flask, request, redirect, make_response, render_template_strin
 import json
 from werkzeug.security import generate_password_hash
 
+import os
+
 app = Flask(__name__)
-app.secret_key = "lab_secret_key"
+
+def _get_or_create_secret():
+    db_file = os.environ.get("ICON_DB_FILE", "icontrace.db")
+    if os.path.isabs(db_file):
+        secret_path = os.path.join(os.path.dirname(db_file), ".icon_secret")
+    else:
+        secret_path = os.path.join(os.path.dirname(os.path.abspath(db_file)), ".icon_secret")
+    
+    if os.path.exists(secret_path):
+        with open(secret_path, "r") as f:
+            return f.read().strip()
+    else:
+        import secrets
+        key = secrets.token_hex(32)
+        with open(secret_path, "w") as f:
+            f.write(key)
+        return key
+
+app.secret_key = _get_or_create_secret()
 
 def _get_cookie():
     from itsdangerous import URLSafeSerializer
