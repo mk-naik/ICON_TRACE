@@ -25,7 +25,7 @@ Design rules enforced here, not just documented:
 Run:  python serve.py
 """
 
-import os, io, json, time, hashlib, datetime, secrets, traceback, functools
+import os, io, json, time, hashlib, datetime, secrets, traceback, functools, glob, threading
 from flask import (Flask, render_template, request, redirect, url_for,
                    session, flash, jsonify, send_file, abort)
 
@@ -47,6 +47,7 @@ STORE = os.path.join(BASE, "storage", "invoices")
 os.makedirs(STORE, exist_ok=True)
 
 app = Flask(__name__)
+app.config["TEMPLATES_AUTO_RELOAD"] = True   # template edits need only a reload
 app.secret_key = os.environ.get("ICON_SECRET") or secrets.token_hex(32)
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
@@ -83,37 +84,103 @@ def sweep_temp(older_than_minutes=60):
                 pass
 
 
-BUILD_FILES = ("app.py", "db.py", "store.py", "icon_live.js", "icon_table.js",
-               "icon_trace.html", "icon.css", "icon_invoice_parser.py",
-               "icon_box_number.py", "icon_evidence.py", "icon_models.py",
-               "icon_customers.py", "icon_ftr.py", "icon_barcode.py")
+# ---------------------------------------------------------------------------
+# Build hashes — two groups, two meanings.
+#
+# RESTART group: every top-level *.py that a Waitress process imports once at
+# startup. Editing any of these requires a server restart; a page reload is
+# not enough.  test_*.py, ui_harness.py, check_db.py and original_app.py are
+# excluded — they are never imported by a running server.
+#
+# RELOAD group: browser-facing files. A page reload picks these up immediately
+# because the browser re-fetches them; TEMPLATES_AUTO_RELOAD above means
+# Flask re-reads templates on every request too.
+# ---------------------------------------------------------------------------
+_RESTART_FILES = sorted(
+    p for p in glob.glob(os.path.join(BASE, '*.py'))
+    if os.path.basename(p) not in
+       {'ui_harness.py', 'check_db.py', 'original_app.py'}
+    and not os.path.basename(p).startswith('test_')
+)
+
+_RELOAD_FILES = [
+    os.path.join(BASE, 'static', 'icon_live.js'),
+    os.path.join(BASE, 'static', 'icon_table.js'),
+    os.path.join(BASE, 'static', 'icon_offline.js'),
+    os.path.join(BASE, 'static', 'icon.css'),
+    os.path.join(BASE, 'static', 'icon_add.css'),
+    os.path.join(BASE, 'templates', 'icon_trace.html'),
+] + sorted(glob.glob(os.path.join(BASE, 'templates', 'frag_*.html')))
+
+_build_lock = threading.Lock()
+_build_cache = {}   # {key: (hash_str, expiry_monotonic)}
+BUILD_TTL = 2.0     # seconds; stat() every response is expensive at scale
 
 
-def build_id():
-    """A short hash of the source. The page carries the id it was served
-    with; if the server later reports a different one, the page in the
-    browser is stale and says so.
-
-    This exists because the HTML was being cached by the browser with no
-    warning: old screens kept appearing after the code changed, and nothing
-    on screen said the page was not the one on disk.
-    """
+def _hash_files(paths):
+    """SHA-256 of (mtime, size) for each path; missing files are silently skipped."""
     h = hashlib.sha256()
-    for name in BUILD_FILES:
-        for folder in (BASE, os.path.join(BASE, "static"),
-                       os.path.join(BASE, "templates")):
-            p = os.path.join(folder, name)
-            if os.path.exists(p):
-                h.update(str(os.path.getmtime(p)).encode())
-                h.update(str(os.path.getsize(p)).encode())
-                break
+    for p in paths:
+        try:
+            st = os.stat(p)
+            h.update(str(st.st_mtime).encode())
+            h.update(str(st.st_size).encode())
+        except OSError:
+            pass
     return h.hexdigest()[:10]
 
 
-# What the files hashed to when THIS process imported them. Compared against
-# a live build_id(), it is the difference between "your page is old" and
-# "the running server is old" - which are fixed by different people.
-BOOT_BUILD = build_id()
+def _cached_hash(key, paths):
+    now = time.monotonic()
+    with _build_lock:
+        entry = _build_cache.get(key)
+        if entry and now < entry[1]:
+            return entry[0]
+        val = _hash_files(paths)
+        _build_cache[key] = (val, now + BUILD_TTL)
+        return val
+
+
+def _build_cache_clear():
+    """Invalidate the build-hash cache. Used by tests to force a re-stat."""
+    with _build_lock:
+        _build_cache.clear()
+
+
+def code_build():
+    """Hash of the RESTART group (Python sources).
+
+    Changes when any *.py file the server imports is edited on disk. Because
+    Waitress imports the app exactly once, a change here means the running
+    process is behind the files and must be restarted — only an admin can do
+    that, so only admins see the restart banner.
+    """
+    return _cached_hash('code', _RESTART_FILES)
+
+
+def asset_build():
+    """Hash of the RELOAD group (browser assets and templates).
+
+    Changes when JS, CSS or template files change. A page reload is enough
+    to pick them up; any signed-in user can do that.
+    """
+    return _cached_hash('asset', _RELOAD_FILES)
+
+
+def build_id():
+    """Returns the asset build hash.
+
+    Every existing caller (X-Icon-Build response header, ?b= service-worker
+    cache-bust query, /api/boot payload) means 'which page generation' and
+    continues to work unchanged.  build_id() == asset_build().
+    """
+    return asset_build()
+
+
+# Snapshot of the RESTART group taken when this process started.
+# code_build() != BOOT_CODE_BUILD means the Python on disk has changed since
+# import and the server must be restarted — fixed by an admin, not a reload.
+BOOT_CODE_BUILD = code_build()
 STARTED_AT = datetime.datetime.now().strftime("%d-%m-%Y %I:%M:%S %p")
 
 
@@ -6216,23 +6283,26 @@ def export_csv(what):
 def healthz():
     """Two different kinds of out-of-date, told apart.
 
-    build_id() hashes the files ON DISK when it is called, so it changes the
-    moment anything is saved. It says nothing about the code this process is
-    running: Waitress imports the app once at startup and never again.
+    build (asset_build): hash of JS, CSS and templates on disk right now.
+    The page carries the asset hash it was served with; if the server reports
+    a different one, the browser's copy is stale and a reload fixes it.
 
-    So the page comparing its build to build_id() could only ever say "the
-    files changed" — and it said "the server is running newer code", which
-    was the opposite of true. The page reloads and picks up new JS and CSS,
-    while the Python it is talking to is whatever was imported at start.
+    code_build: hash of Python sources on disk right now.
+    boot_code_build: that same hash as it was when this process started.
+    If code_build != boot_code_build the running Python is behind the files on
+    disk; Waitress will not pick that up without a restart. Only an admin can
+    restart it, so server_stale is only shown to admins.
 
-    BOOT_BUILD is what the files hashed to when this process imported them.
-    live != boot means the PROCESS is behind and must be restarted; that is
-    an admin's job, so only an admin is told.
+    TEMPLATES_AUTO_RELOAD is True, so template edits are served immediately on
+    the next request — they are part of the RELOAD group, not RESTART.
     """
-    live = build_id()
-    return jsonify({"ok": True, "db": db.MODE, "build": live,
-                    "boot_build": BOOT_BUILD,
-                    "server_stale": live != BOOT_BUILD,
+    live_asset = asset_build()
+    live_code  = code_build()
+    return jsonify({"ok": True, "db": db.MODE,
+                    "build": live_asset,
+                    "code_build": live_code,
+                    "boot_code_build": BOOT_CODE_BUILD,
+                    "server_stale": live_code != BOOT_CODE_BUILD,
                     "started": STARTED_AT,
                     "store": os.path.basename(store.DB_PATH),
                     "time": datetime.datetime.now().strftime("%d-%m-%Y %I:%M:%S %p")})
