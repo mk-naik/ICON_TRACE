@@ -212,7 +212,21 @@ def enrol():
                     body += "<p>Save these recovery codes NOW. They will not be shown again.</p><div class='codes'>"
                     body += "<br>".join(res)
                     body += "</div>"
-                body += "<br><a href='/'>Go to login</a>"
+                body += """
+                <div id="close-btn-container" style="display:none; margin-top:20px;">
+                    <button onclick="window.close()" style="padding:10px;">Close Window and Return to Admin</button>
+                </div>
+                <div id="login-link-container" style="display:none; margin-top:20px;">
+                    <a href="/">Go to login</a>
+                </div>
+                <script>
+                    if (window.opener) {
+                        document.getElementById('close-btn-container').style.display = 'block';
+                    } else {
+                        document.getElementById('login-link-container').style.display = 'block';
+                    }
+                </script>
+                """
                 if session and session.get("stage") == "enrol":
                     resp = make_response(render_layout("Enrolment Complete", body))
                     _clear_cookie(resp)
@@ -283,6 +297,7 @@ def admin():
     if icon_auth.get_rank(session["role"]) < 2: return "Unauthorized", 403
 
     msg = ""
+    enrol_url = ""
     if request.method == "POST":
         action = request.form.get("action")
         target = request.form.get("target")
@@ -303,17 +318,20 @@ def admin():
                     msg = "User unlocked."
                 elif action == "issue_token":
                     token = icon_auth.issue_enrol_token(cur, session["login_id"], target)
-                    msg = f"Token issued. URL: /enrol?login_id={target}&token={token}"
+                    enrol_url = f"/enrol?login_id={target}&token={token}"
+                    msg = f"Token issued. URL: {enrol_url}"
                 elif action == "create_admin":
                     name = request.form.get("display_name")
                     token = icon_auth.create_admin(cur, session["login_id"], target, name)
-                    msg = f"Admin created. Enrolment URL: /enrol?login_id={target}&token={token}"
+                    enrol_url = f"/enrol?login_id={target}&token={token}"
+                    msg = f"Admin created. Enrolment URL: {enrol_url}"
                 elif action == "open_window":
                     icon_auth.open_backup_window(cur, session["login_id"], target, ip=request.remote_addr)
                     msg = "Backup window opened for 30 minutes."
                 elif action == "reset_totp":
                     token = icon_auth.reset_totp(cur, session["login_id"], target, ip=request.remote_addr)
-                    msg = f"TOTP Reset. New URL: /enrol?login_id={target}&token={token}"
+                    enrol_url = f"/enrol?login_id={target}&token={token}"
+                    msg = f"TOTP Reset. New URL: {enrol_url}"
             except icon_auth.AuthError as e:
                 msg = f"Error: {e}"
 
@@ -335,6 +353,7 @@ def admin():
 
     body = f"""
     {f"<div class='error' style='color:green;'>{msg}</div>" if msg else ""}
+    {f"<script>window.open('{enrol_url}', '_blank');</script>" if enrol_url else ""}
     {users_html}
     
     <div class="box">
