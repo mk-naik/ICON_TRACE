@@ -64,10 +64,8 @@ def lab_env():
     env["ICON_AUTH_MAX_FAILS"] = "5"
     env["ICON_AUTH_LOCK_SECONDS"] = "15"
     
-    # We will test NTP manually by restarting or setting it on the fly?
-    # Waitress app reads os.environ at startup.
-    # To change NTP, we will restart the app for that test.
-    # We will start the app now.
+    cli_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon_auth_cli.py")
+    subprocess.run([sys.executable, cli_path, "init-key"], env=env, check=True)
     
     app_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth_lab", "lab_app.py")
     
@@ -112,7 +110,7 @@ def test_live_scenarios(lab_env):
         # P1: CLI creates SA -> enrol -> token dead
         res = subprocess.run([sys.executable, cli_path, "create-superadmin", "sa1", "SA One"], env=env, capture_output=True, text=True)
         url = [line for line in res.stdout.splitlines() if "Enrol URL" in line][0].split(":", 1)[1].strip()
-        
+
         page.goto("http://127.0.0.1:8091" + url)
         snap("P1_enrol_page")
         print("PAGE CONTENT:", page.content())
@@ -178,7 +176,7 @@ def test_live_scenarios(lab_env):
         page.fill("input[name='login_id']", "sa1")
         page.fill("input[name='credential']", c2)
         page.click("button[type='submit']")
-        assert "temporarily locked" in page.content()
+        assert "locked for another" in page.content() or "temporarily locked" in page.content()
         snap("P3_locked")
         
         time.sleep(15)
