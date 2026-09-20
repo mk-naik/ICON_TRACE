@@ -133,7 +133,7 @@ def test_live_scenarios(lab_env):
         res = subprocess.run([sys.executable, cli_path, "create-superadmin", "sa1", "SA One"], env=env, capture_output=True, text=True)
         url = [line for line in res.stdout.splitlines() if "Enrol URL" in line][0].split(":", 1)[1].strip()
 
-        page.goto("http://127.0.0.1:8091" + url)
+        page.goto(url)
         snap("P1_enrol_page")
         
         # read secret
@@ -155,7 +155,7 @@ def test_live_scenarios(lab_env):
         snap("P1_reload_no_codes")
         
         # token dead
-        page.goto("http://127.0.0.1:8091" + url)
+        page.goto(url)
         assert "Invalid or expired token" in page.content()
         
         page.goto("http://127.0.0.1:8091/logout")
@@ -244,7 +244,7 @@ def test_live_scenarios(lab_env):
         res = subprocess.run([sys.executable, cli_path, "reset-totp", "ad1"], env=env, capture_output=True, text=True)
         url = [line for line in res.stdout.splitlines() if "Enrol URL" in line][0].split(":", 1)[1].strip()
         
-        page.goto("http://127.0.0.1:8091" + url)
+        page.goto(url)
         ad_secret = page.locator("strong").inner_text()
         ad_totp = pyotp.TOTP(ad_secret)
         page.fill("input[name='code']", ad_totp.at(time.time() - 30))
@@ -309,14 +309,16 @@ def test_live_scenarios(lab_env):
         page.goto("http://127.0.0.1:8091/admin")
         snap("P6_admin_debug")
         # set temp password for ad1
-        page.locator("form").nth(1).locator("input[name='target']").fill("ad1")
-        page.locator("form").nth(1).locator("input[name='temp_pw']").fill("AdTemp123!")
-        page.locator("form").nth(1).locator("button").click()
+        pw_form = page.locator("form:has(input[name='action'][value='set_pw'])")
+        pw_form.locator("input[name='target']").fill("ad1")
+        pw_form.locator("input[name='temp_pw']").fill("AdTemp123!")
+        pw_form.locator("button").click()
         assert "Temporary password set" in page.content()
         
-        # open backup window
-        page.locator("form").nth(4).locator("input[name='target']").fill("ad1")
-        page.locator("form").nth(4).locator("button").click()
+        # sa1 opens backup window for ad1
+        win_form = page.locator("form:has(input[name='action'][value='open_window'])")
+        win_form.locator("input[name='target']").fill("ad1")
+        win_form.locator("button").click()
         assert "Backup window opened" in page.content()
         snap("P6_backup_window_opened")
         
@@ -426,9 +428,10 @@ def test_live_scenarios(lab_env):
         assert "sa1" not in page.content()
         assert "sa2" not in page.content()
         snap("P10_admin_list")
-        
-        page.locator("form").nth(2).locator("input[name='target']").fill("sa1")
-        page.locator("form").nth(2).locator("button").click()
+        # Unlock sa1
+        ul_form = page.locator("form:has(input[name='action'][value='unlock'])")
+        ul_form.locator("input[name='target']").fill("sa1")
+        ul_form.locator("button").click()
         assert "Not found" in page.content()
         snap("P10_admin_post_sa")
         
