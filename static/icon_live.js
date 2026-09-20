@@ -406,7 +406,11 @@
     document.querySelectorAll('input[type="date"]').forEach(function(el) {
       var d = new Date();
       var localDate = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-      el.setAttribute('max', localDate);
+      if (el.getAttribute('data-future') === '1' || el.getAttribute('name') === 'produced_on') {
+        el.setAttribute('min', localDate);
+      } else {
+        el.setAttribute('max', localDate);
+      }
     });
     if (typeof window.iconTable !== 'undefined') window.iconTable.wireAll();
     /* before wireResets(), so the Reset it injects gets wired this pass */
