@@ -11,6 +11,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 # Config Overrides for testing
 MAX_FAILS = int(os.environ.get("ICON_AUTH_MAX_FAILS", "5"))
 LOCK_SECONDS = int(os.environ.get("ICON_AUTH_LOCK_SECONDS", "300"))
+LOGIN_TIMING_FLOOR_MS = 350
 NTP_SERVER = os.environ.get("ICON_NTP_SERVER", "pool.ntp.org")
 
 # Roles rank
@@ -209,6 +210,16 @@ def list_users(cur, actor_login_id):
     return users
 
 def login(cur, login_id, credential, ip=None, now=None):
+    start_ts = time.time()
+    try:
+        return _login_impl(cur, login_id, credential, ip, now)
+    finally:
+        elapsed = time.time() - start_ts
+        floor = LOGIN_TIMING_FLOOR_MS / 1000.0
+        if elapsed < floor:
+            time.sleep(floor - elapsed)
+
+def _login_impl(cur, login_id, credential, ip=None, now=None):
     t = _now(now)
     u = _get_user(cur, login_id)
     if not u:

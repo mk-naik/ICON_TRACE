@@ -116,6 +116,50 @@ def test_3_totp_replay(db_env):
     ok3, step3 = icon_auth.verify_totp(secret, old_code, step, now)
     assert not ok3
 
+def test_3b_timing(db_env):
+    # Test that unknown-ID, known-locked, known-wrong-password, and known-wrong-code take similar time
+    import time
+    import statistics
+    
+    # We will use the default 350ms floor so it covers pbkdf2 hashing overhead
+    icon_auth.LOGIN_TIMING_FLOOR_MS = 350
+    
+    now = 100000
+    with store.conn() as (cx, cur):
+        # Ensure we have a password user
+        icon_auth.set_temp_password(cur, "super1", "op1", "SomePass123!", now=now)
+        
+        # And an enrolled TOTP user (admin1)
+        t_hex = icon_auth.issue_enrol_token(cur, "super1", "admin1", now=now)
+        r = icon_auth.enrol_begin(cur, "admin1", t_hex, now=now)
+        import pyotp
+        totp = pyotp.TOTP(r["secret"])
+        icon_auth.enrol_commit(cur, "admin1", t_hex, totp.at(now), now=now)
+        
+        # Lock super1 manually for the test
+        cur.execute("UPDATE app_user SET locked_until=%s WHERE login_id='super1'", (now + 1000,))
+        
+        def measure(login_id, cred):
+            times = []
+            for _ in range(7):
+                t0 = time.time()
+                icon_auth.login(cur, login_id, cred, now=now)
+                t1 = time.time()
+                times.append(t1 - t0)
+            return statistics.median(times)
+            
+        m_unknown = measure("nobody_here", "WrongPass123!")
+        m_locked = measure("super1", "WrongPass123!")
+        m_wrong_pw = measure("op1", "WrongPass123!")
+        m_wrong_code = measure("admin1", "123456")
+        
+        # All medians should be within 40% of the maximum median
+        results = [m_unknown, m_locked, m_wrong_pw, m_wrong_code]
+        max_m = max(results)
+        
+        for m in results:
+            assert m >= max_m * 0.60, f"Timing leaked! {results}"
+
 def test_4_enrolment(db_env):
     now = 100000
     with store.conn() as (cx, cur):
