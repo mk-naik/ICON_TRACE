@@ -2240,3 +2240,23 @@ Every dashboard screen (Production, Management, FQC, Packing Log, Stock & Dispat
 Production Entry and Loss of Production); those edits are intact, and the
 mutation runs were switched from whole-file restores to reversible one-span
 edits so nothing of theirs can be overwritten.
+
+## Round 16 — Build Banner, Session Key, Reset Guard
+
+**What was wrong:**
+If code changed, the server reported it stale, but the UI failed to display the "The server is running older code" banner because it evaluated `signedIn` incorrectly on the sign-in screen, relying on `_appEl.classList.contains('on')` which breaks if the user had signed out but left `USER.name` intact. 
+The session key was generated using a vulnerable `os.path.exists` pattern that led to TOCTOU bugs instead of atomic `O_CREAT | O_EXCL`.
+The database reset endpoint could be trivially executed without a guard, posing a security risk.
+
+**Exact root cause:**
+1. `signedIn` was evaluating the presence of `#app.on`, which is not a reliable indicator of an active session.
+2. Copilot mutations re-introduced `os.path.exists` for the session key generation.
+3. No environment variable guard existed for `/api/db/reset`.
+
+**What changed:**
+- Modified `icon_live.js` to correctly evaluate `signedIn = (typeof USER !== 'undefined' && USER && !!USER.name);`.
+- Refactored `app.py` to use atomic `os.open` with `O_CREAT | O_EXCL` to safely write `.icon_secret`.
+- Introduced the `ICON_ALLOW_RESET=1` guard in `/api/db/reset`.
+
+**Which test proves it:**
+- `test_build_banner_live.py` ensures the UI layer honours these rules across eight robust scenarios, testing signed-in, signed-out, stale app.py, and stale JS situations.

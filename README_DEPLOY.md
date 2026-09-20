@@ -297,3 +297,12 @@ they work, so offline is testable now. **On the plant LAN there is no offline
 until TLS is in place** — the app detects this and says so in the console and
 on the chip rather than letting an operator believe a screen will survive an
 outage when it will not.
+
+
+## Live Tests
+To run the live tests, install Playwright and run the script:
+`ash
+pip install playwright
+python -m playwright install chromium
+python test_build_banner_live.py
+`
