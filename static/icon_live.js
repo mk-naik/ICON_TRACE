@@ -973,15 +973,18 @@ function wireFqcAnomalies() {
     // Inject Close button into Create Challan view
     var chAct = document.querySelector('#v-challan .pg-act');
     if (chAct && !document.getElementById('chCloseBtn')) {
+        chAct.style.display = 'flex';
+        chAct.style.alignItems = 'center';
         var btn = document.createElement('button');
         btn.id = 'chCloseBtn';
         btn.className = 'btn btn-ghost';
-        btn.textContent = 'Close';
+        btn.innerHTML = '&#10005; Close';
+        btn.style.marginLeft = '8px';
         btn.onclick = function() { 
             if (typeof go === 'function') go('challan-list', document.querySelector('[data-view="challan-list"]')); 
         };
-        // Prepend so it sits on the left of the tags and looks right
-        chAct.insertBefore(btn, chAct.firstChild);
+        // Append so it sits on the right of the tags like in other screens
+        chAct.appendChild(btn);
     }
 
     /* Not window.dispApply() here: at this point in the file it is still
