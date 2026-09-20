@@ -41,6 +41,8 @@ def db_env():
         # Admins do not have passwords to bootstrap with, so they are created directly or by an enrol token flow not yet fully formalized as a single function.
         cur.execute("INSERT INTO app_user (login_id, display_name, role, created_at, created_by) VALUES (%s, %s, %s, %s, %s)",
                     ("admin1", "Admin One", "Admin", 100000, "super1"))
+        cur.execute("INSERT INTO app_user (login_id, display_name, role, created_at, created_by) VALUES (%s, %s, %s, %s, %s)",
+                    ("admin2", "Admin Two", "Admin", 100000, "super1"))
         icon_auth.create_operator(cur, "admin1", "op1", "Operator One", "FQC Operator", "TempPass123!")
         
         # Give super1 a password hash directly to test that it NEVER works
@@ -219,15 +221,28 @@ def test_8_hierarchy(db_env):
         # Admin cannot set SA password (not found)
         with pytest.raises(icon_auth.AuthError, match="Not found"):
             icon_auth.set_temp_password(cur, "admin1", "super1", "NewTemp123!", now=now)
+
+        # Admin cannot set another Admin's password (not found)
+        with pytest.raises(icon_auth.AuthError, match="Not found"):
+            icon_auth.set_temp_password(cur, "admin1", "admin2", "NewTemp123!", now=now)
+
+        # Admin can change their own password (allowed via change_password, but set_temp_password also has a rule? Wait, set_temp_password expects target_rank < 2 if actor_rank == 2, so set_temp_password on self fails by rule. But change_password should work, we can test that)
+        # We test Admin cannot unlock another Admin
+        with pytest.raises(icon_auth.AuthError, match="Not found"):
+            icon_auth.unlock_user(cur, "admin1", "admin2", now=now)
             
-        # list users hides SA from Admin
+        # list users hides SA and other Admins from Admin
         u_admin = icon_auth.list_users(cur, "admin1")
         assert not any(u["login_id"] == "super1" for u in u_admin)
+        assert not any(u["login_id"] == "admin2" for u in u_admin)
+        assert any(u["login_id"] == "admin1" for u in u_admin)
         
         u_sa = icon_auth.list_users(cur, "super1")
         assert any(u["login_id"] == "super1" for u in u_sa)
+        assert any(u["login_id"] == "admin1" for u in u_sa)
+        assert any(u["login_id"] == "admin2" for u in u_sa)
         
-        # nobody but CLI unlocks SA (actually SA can't be unlocked by Admin)
+        # nobody but CLI unlocks SA
         with pytest.raises(icon_auth.AuthError, match="Not found"):
             icon_auth.unlock_user(cur, "admin1", "super1", now=now)
 

@@ -176,6 +176,19 @@ def _get_user(cur, login_id):
     cur.execute("SELECT * FROM app_user WHERE login_id=%s COLLATE NOCASE", (login_id,))
     return cur.fetchone()
 
+def _require_can_act_on(actor, target):
+    """
+    An Admin may act on rank 1 only, or themselves.
+    If the rule is violated, raise AuthError("Not found.") to hide the existence of higher IDs.
+    """
+    if not target:
+        raise AuthError("Not found.")
+    if actor and type(actor) is dict:
+        actor_rank = get_rank(actor["role"])
+        target_rank = get_rank(target["role"])
+        if actor_rank == 2 and target_rank >= 2 and actor["login_id"] != target["login_id"]:
+            raise AuthError("Not found.")
+
 def list_users(cur, actor_login_id):
     if actor_login_id == "cli":
         actor_rank = 3
@@ -185,8 +198,10 @@ def list_users(cur, actor_login_id):
         actor_rank = get_rank(actor["role"])
     cur.execute("SELECT login_id, display_name, role, active, locked_until FROM app_user ORDER BY created_at")
     users = cur.fetchall()
-    if actor_rank < 3:
-        users = [u for u in users if get_rank(u["role"]) < 3]
+    if actor_rank == 2:
+        users = [u for u in users if get_rank(u["role"]) == 1 or u["login_id"] == actor_login_id]
+    elif actor_rank < 2:
+        users = [u for u in users if u["login_id"] == actor_login_id]
     return users
 
 def login(cur, login_id, credential, ip=None, now=None):
@@ -337,12 +352,10 @@ def issue_enrol_token(cur, actor_login_id, target_login_id, now=None):
         actor_rank = 3
     
     u = _get_user(cur, target_login_id)
-    if not u: raise AuthError("Target not found.")
+    _require_can_act_on(actor, u)
     target_rank = get_rank(u["role"])
     
     if target_rank < 2: raise AuthError("Operators do not use TOTP.")
-    if actor_rank < 3 and target_rank >= actor_rank:
-        raise AuthError("Not found.") # Hierarchy check
         
     token = secrets.token_hex(16)
     cur.execute("UPDATE auth_enrol_token SET expires_at=%s WHERE user_id=%s AND used_at IS NULL", (t, u["user_id"]))
@@ -410,10 +423,8 @@ def unlock_user(cur, actor_login_id, target_login_id, ip=None, now=None):
     actor = _get_user(cur, actor_login_id) if actor_login_id != "cli" else {"role": "Super Admin"}
     if not actor: raise AuthError("Actor not found.")
     u = _get_user(cur, target_login_id)
-    if not u: raise AuthError("Target not found.")
+    _require_can_act_on(actor, u)
     
-    if get_rank(actor["role"]) < 3 and get_rank(u["role"]) >= 3:
-        raise AuthError("Not found.")
     if get_rank(actor["role"]) < 2:
         raise AuthError("Not authorized.")
         
@@ -427,7 +438,7 @@ def reset_totp(cur, actor_login_id, target_login_id, ip=None, now=None):
     if get_rank(actor["role"]) < 3: raise AuthError("Only Super Admin can reset TOTP.")
     
     u = _get_user(cur, target_login_id)
-    if not u: raise AuthError("Target not found.")
+    _require_can_act_on(actor, u)
     if get_rank(u["role"]) < 2: raise AuthError("Role does not use TOTP.")
     
     cur.execute("UPDATE app_user SET totp_secret_enc=NULL, must_reenrol=1 WHERE user_id=%s", (u["user_id"],))
@@ -441,7 +452,7 @@ def open_backup_window(cur, actor_login_id, target_login_id, ip=None, now=None):
     if not actor or get_rank(actor["role"]) < 3: raise AuthError("Only Super Admin can open backup windows.")
     
     u = _get_user(cur, target_login_id)
-    if not u: raise AuthError("Target not found.")
+    _require_can_act_on(actor, u)
     if get_rank(u["role"]) != 2: raise AuthError("Backup windows are only for Admins.")
     
     cur.execute("INSERT INTO auth_backup_window (user_id, opened_by, opened_at, expires_at) VALUES (%s, %s, %s, %s)",
@@ -454,11 +465,8 @@ def set_temp_password(cur, actor_login_id, target_login_id, temp_pw, ip=None, no
     if not actor or get_rank(actor["role"]) < 2: raise AuthError("Only Admins can set temp passwords.")
     
     u = _get_user(cur, target_login_id)
-    if not u:
-        raise AuthError("Target not found.")
+    _require_can_act_on(actor, u)
         
-    if get_rank(actor["role"]) < 3 and get_rank(u["role"]) >= 3:
-        raise AuthError("Not found.")
     if get_rank(u["role"]) >= 3:
         raise AuthError("Super Admins do not have passwords.")
     
