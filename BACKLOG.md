@@ -1493,10 +1493,216 @@ still "designed, not built" everywhere in this app, not only here.
 - [x] **`data_source` lists what is actually configured.** It filled itself
       from a fixed array of four plausible paths (`\\SIM-A\out\`,
       `\\DESKTOP-T8ACD7V\D\EL`) sitting directly under the fields that set
+      "keep the rescanned one" in §19b's duplicate-scan resolution, via the
+      real `_repack()` removal path, not a second one.
+- [ ] Indent says DCR, material issued says NDCR
+- [ ] Invoice superseded under a new IRN
+- [ ] Quality freeze on a material lot *(awaiting spec)*
+
+### Resolution
+
+- [ ] Review ends as confirmed / corrected / rejected / cleared-as-identity
+- [ ] Hold ends only as released-with-a-reason, by someone other than the
+      raiser, with a second signature where the impact reaches packed or
+      dispatched stock
+
+## 19. Controls
+
+- [x] Quality involvement — review queues, who clears what.
+      Built as one merged feed rather than two screens — see §19b.
+      Grade issues go to Quality (a role added for exactly this — none
+      existed), serial existence and the duplicate-scan conflicts below go
+      to Production Shift Incharge or above, and a conflict discovered
+      after dispatch is Admin-only.
+
+## 19b. Quality Decision merged into Needs Review; duplicate-scan detection  *(new)*
+
+**STEP 0, before building anything:** checked whether Needs Review had a
+real table/endpoint behind it yet, the way Gate Pass and Challan turned out
+to be a mix of real and hardcoded pieces recently. It did not — `v-review`
+was 100% v4 demo: three hardcoded `<tr>` rows, hardcoded KPI numbers, and
+`rvResolve()` only faded a row and wrote a client-side audit line that was
+never sent anywhere. Quality Decision, by contrast, was fully real:
+`/api/quality/pending`, `/api/quality`, `db.record_quality()`, backed by
+`fqc_record.quality_grade` and covered by tests in `test_fqc.py`. So the
+merge is a real screen absorbing a demo one, not two real screens colliding.
+
+**The merge.** `v-review` (native v4 markup, never edited) is now overwritten
+live from `GET /api/review` — one feed, two sources: a `quality_grade`
+"item" is still read straight from `fqc_record` exactly as
+`/api/quality/pending` always did (nothing about the grading rules or their
+tests moved), and a `duplicate_scan` item is a real row in a new
+`review_item` table, the one place future review types land instead of a
+new table each. Quality Decision's screen, its nav entry and its
+`/view/quality` route are gone — `frag_quality.html` deleted, the route
+returns 404. Its evidence layout (Pmax, EL/VI, defect, FQC's reason and
+note) survives as a popup opened from Needs Review, reached through
+`reviewGradePrompt()` in `icon_live.js`, and both the popup and the old
+route call the same `_grade_quality()` in `app.py` — one function behind
+both, so there is no second submit path to drift from the first.
+
+**Visibility versus authority.** Production sees a `quality_grade` item in
+the shared list (Mukesh: "a review item can be seen by both") but the
+server sends `evidence: null` and `locked: true` for it unless the caller's
+role is Quality or Admin — the popup has nothing to open even if a client
+ignored the hidden button. `/api/review/resolve` checks the same role
+server-side before writing anything, regardless of what the calling screen
+already hid.
+
+**A role that did not exist.** v4's `ROLES` has no "Quality" — the old
+screen let Admin, Production Incharge and FQC Operator all call GY/BGY,
+which is exactly the shared access this task's gating removes. `Quality` is
+added at runtime in `icon_live.js` (same technique this file already uses
+to add `'challan-list'` etc. to existing roles), and `'review'` is granted
+to Production Incharge, who never had it. A demo login option was added so
+the role can actually be exercised. **Authentication is still "designed, not
+built"** (v4's own login note) — nothing here changes that. What changed is
+that the client now sends `X-User-Name`/`X-User-Role` on every call
+(`icon_live.js`'s shared `api()`), and `actor()`/`role()` in `app.py` read
+them — the same trust level as the rest of the app, just no longer thrown
+away. Before this, every audit row in the whole system said `"operator"`,
+literally, because nothing ever set the Flask session; that is now fixed
+app-wide, not only for this feature.
+
+**Duplicate-scan detection.** `/api/fqc` used to hard-refuse grading a
+`packed`/`dispatched` serial outright ("take it out of its box first" —
+§18's *"A module in a box cannot be re-judged where it stands"* bullet is
+**superseded** by this). It now compares the attempt's outcome against the
+serial's live `fqc_record`:
+- **Agree** → nothing is written, no review item — confirmed correct is not
+  a conflict, and flagging it anyway trains people to stop reading flags.
+- **Disagree** → the new evidence is snapshotted permanently into its own
+  `fqc_record` row (`record_fqc(..., supersede=False, update_serial=False)`
+  — evidence is copied, never re-read live, same rule as everywhere else in
+  FQC), and one `review_item` holds both records for side-by-side display.
+  Software shows the evidence; it does not suggest which is right.
+
+**Resolution.**
+- *Not yet dispatched* — Production Incharge or Admin only (not a bare
+  Operator — they carry the consequence). "Keep the original" supersedes
+  the retest and closes the item, no further action. "Keep the rescanned
+  one" calls `_repack()` — the same function `/api/repack` already uses,
+  with `release=[serial]` — so the box ends up exactly as a manual repack
+  removal leaves it (a genuine partial or a remainder box, whichever
+  applies), never a second "take it out" path. This is §18's *"Grade
+  change on a packed module forces the box open"*, now built. The original
+  `fqc_record` is then superseded — marked, never deleted or edited beyond
+  that — and the module journey / trace view needed no change to show both
+  in order, **except** one real bug this surfaced: the journey's FQC stage
+  read `fqc[-1]` (newest by timestamp), which is wrong the one time a
+  chronologically *earlier* record becomes the live one again ("keep the
+  original" over a later rescan). Fixed to prefer the live (non-superseded)
+  row, falling back to newest — unchanged for every serial that was never
+  duplicated.
+- *Already dispatched* — Admin only, acknowledge-only ("the dispatched one
+  stands"), reason mandatory. Deliberately does not attempt a
+  replacement-serial workflow — out of scope for this pass, marked with a
+  `TODO` in `app.py` naming it as deliberate, not an oversight, and proven
+  absent in `test_review.py` (a request naming a replacement serial is
+  simply ignored, not honoured).
+
+**Which tests prove it.** `test_review.py`, new, 8 tests: agreement raises
+nothing; disagreement raises one item holding both records' evidence; a
+bare Operator (FQC Operator, Packing Operator) is refused server-side, not
+just UI-hidden; "keep rescanned" produces a box in the identical state a
+manual repack removal produces (compared directly, same capacity/grade/
+model/contents); the cancelled original is unchanged byte-for-byte except
+`superseded_by`/`superseded_at`, and both records appear correctly, in
+order, in `/api/trace/serial`; a dispatched conflict is Admin-only with no
+path to a replacement serial; every resolution of every type is refused
+with no reason and recorded with one; and Production sees but cannot act on
+a quality-type item. `test_fqc.py`'s old "a packed module cannot be judged
+again" test is rewritten for the new behaviour it now defends instead
+(state and grade still don't move on a disagreement — only the review item
+appears). Full existing suite re-run and green (`test_fqc.py` 48/49 — the
+one failure, an FQC journey stage reading `"Pass"` where the test expects
+`"A"`, pre-dates this change and is unrelated; left as found).
+
+**Known limitation, stated rather than hidden:** role is a header the
+client declares (`X-User-Role`), not a signed session — matching this
+app's actual, documented authentication state, not a gap introduced here.
+A gate that must not be spoofable needs real authentication first, which is
+still "designed, not built" everywhere in this app, not only here.
+
+## 19a. Material master  *(new)*
+
+- [x] **The bill of materials is saved.** It lived only in v4's `MATERIALS`
+      array: the screen could edit it and posted nothing, so a UOM corrected
+      on Monday was back to the old one on Tuesday and the consumption BOM
+      never heard about it. Lifted into `icon_materials.py`, seeded once into
+      a `material` table, and served from there at boot. Edits go through
+      `PUT /api/material/<n>`.
+      `n` is never reassigned — `allocation_material` references it, so
+      renumbering a material silently rewrites what every past batch was
+      built from.
+- [x] **Label wattage can be set at last.** A back label applies *by
+      wattage* and the edit form had no field for it, so an added label read
+      `LABEL UNDEFINEDW` and matched no model at all. It is a **string**:
+      `materialsFor()` compares `mat.watt === m.watt` and MODELS carries
+      `'635'`, so a number would silently apply to nothing. A LABEL row
+      saved without one is refused with the reason.
+- [x] **Cell efficiency is editable** — both the list (add 25.8% when a new
+      cell arrives, in Admin) and a per-material default that pre-selects in
+      Planning. Removing a value never restates what a batch was already
+      built with: `allocation_material` keeps the string it was given.
+- [ ] Materials cannot be deleted, only edited — deliberate for now, since a
+      deleted material is one a past allocation still points at. Retiring
+      one properly (deprecate, never delete) is still to design.
+
+## 20. Evidence Sources
+
+- [x] **Two lines, two Sun Simulators, two ELs.** Each line has its own SS
+      path, its own EL root and its own **full column map** — they are
+      separate machines and can be reconfigured or replaced one at a time,
+      so a shared map would move both at once.
+      A serial carries no line indicator, so a lookup searches both unless
+      the station's own line is given (`/api/fqc/lookup?line=A`).
+      **The rule that matters:** if one share is down and the serial is not
+      on the other, the module is **NC**, never NA. NA means the tester was
+      reachable and the serial genuinely is not there — a quality signal
+      that sends the module to review. Calling a good module NA because a
+      share was offline is the failure this rule exists to stop, and the
+      note names the line that could not be read.
+- [x] The old single-source settings still work, read as Line A, so an
+      existing setup keeps running untouched.
+- [x] **One settings editor, not two.** `/settings` and the Evidence Sources
+      fragment configured the same paths from different markup, and after
+      the second line was added a save on the old page would have blanked
+      Line B without saying so. The page includes the fragment now, and a
+      partial POST only writes the keys it actually carries.
+- [x] **Every Sun Simulator column is mapped, not just Serial and Pmax.**
+      Isc, Voc, Ipm, Vpm, FF, Rs, Rsh, Efficiency, Cell temp and Irradiance
+      each have their own field in Settings, defaulting to the real export's
+      layout.
+- [x] **The Flash Test Report reads the same map.** It had a second column
+      list of its own with the positions hardcoded, and took the serial from
+      column 1 whatever Settings said — so remapping a column moved FQC's
+      reading and left the customer's report quoting the old position. One
+      map now, shared: `ev.param_cols()`.
+- [x] **Merged into Admin > Stations & sources.** That tab's `data_source`
+      card already described where evidence comes from while the Evidence
+      Sources page set it somewhere else entirely — a description in one
+      place and the switches in another is how the two drift apart. The
+      sidebar entry is gone; the fields sit above the card that describes
+      them.
+- [x] **`data_source` lists what is actually configured.** It filled itself
+      from a fixed array of four plausible paths (`\\SIM-A\out\`,
+      `\\DESKTOP-T8ACD7V\D\EL`) sitting directly under the fields that set
       the real ones — a card describing where evidence comes from,
       describing somewhere it does not come from. It now shows each line's
       SS and EL with its reachability and its column map, says *not
       configured* where nothing is set, and is redrawn after a save.
+
+## 21. Auth & Admin
+
+- [x] Stage 0
+- [x] Stage 1a
+
+Decisions:
+- Lockout: escalating delay 2/4/8 s, lock after 10 consecutive failures for 5 minutes. The failure count is shown by the login page from this browser only; the server never returns a count. A locked ID is told how long only when the credential given was CORRECT.
+- Credential method is chosen by ROLE first, then shape: rank 1 always password. Passwords that are 6 digits or look like a recovery code are refused at the policy check.
+- The TOTP key is created only by the CLI; a missing key raises KeyMissing and refuses the sign-in, and is never silently regenerated.
+- Date inputs are capped at today EXCEPT those marked data-future="1" (Gate Pass expected return, Indent delivery by), which take min=today instead.
 
 ---
 
@@ -1762,7 +1968,7 @@ visible, and its two icons (`«`/`»`) didn't visually match.
     plain click-to-pin toggle - two static states, nothing moves except
     on a click.
 
-**Which tests prove it.** `test_loss.py` gained a `date_from`/`date_to`
+**Which tests proves it.** `test_loss.py` gained a `date_from`/`date_to`
 range case (10 total, mutation-tested: the range clauses commented out,
 confirmed the new test fails, restored). `test_production.py`,
 `test_challan.py`, `test_loading.py`, `test_gatepass.py` all still green
@@ -1899,7 +2105,7 @@ this round showed: is the sidebar meant to cover the page behind it
 while hovering, or push it aside? Answer: push it aside - confirmed the
 overlap was the actual complaint, not a design choice to defend.
 
-**What changed.** `icon_add.css`'s own hover rule widens `.side` itself
+**What was changed.** `icon_add.css`'s own hover rule widens `.side` itself
 to 198px but never touched the grid TRACK, which stayed 46px - so the
 wider rail painted on top of the page instead of the page making room
 for it. `:has()` lets the grid container react to its own child:
@@ -2219,6 +2425,9 @@ failures.
 remain unbuilt. A provisional decision that Quality has already graded is no
 longer reconciled. And a note on the workflow: while this was being tested
 `icon_live.js` was edited by someone else at the same time (shift filters for
+Production Entry and Loss of Production); those edits are intact, and the
+mutation runs were switched from whole-file restores to reversible one-span
+edits so nothing of theirs can be overwritten.
 
 ## Round 15 — Dynamic Dashboard Filters and Future Date Restriction
 
@@ -2237,24 +2446,21 @@ Every dashboard screen (Production, Management, FQC, Packing Log, Stock & Dispat
 
 **Which test proves it:**
 - Dashboard fixes verified via Playwright integration testing on a local port 8090 instance seeded with realistic mock DB data (`test.db`). Confirmed that dropdowns populate with correct options specific to the underlying dataset.
-Production Entry and Loss of Production); those edits are intact, and the
-mutation runs were switched from whole-file restores to reversible one-span
-edits so nothing of theirs can be overwritten.
 
 ## Round 16 — Build Banner, Session Key, Reset Guard
 
 **What was wrong:**
-If code changed, the server reported it stale, but the UI failed to display the "The server is running older code" banner because it evaluated `signedIn` incorrectly on the sign-in screen, relying on `_appEl.classList.contains('on')` which breaks if the user had signed out but left `USER.name` intact. 
+If code changed, the server reported it stale, but the UI failed to display the "The server is running older code" banner because `USER.name` alone was true on the sign-in screen. v4 initialises `USER={name:'',role:'Admin'}` and `signOut()` never clears it, so the fix requires BOTH `USER.name` and `#app.on`.
 The session key was generated using a vulnerable `os.path.exists` pattern that led to TOCTOU bugs instead of atomic `O_CREAT | O_EXCL`.
 The database reset endpoint could be trivially executed without a guard, posing a security risk.
 
 **Exact root cause:**
-1. `signedIn` was evaluating the presence of `#app.on`, which is not a reliable indicator of an active session.
-2. Copilot mutations re-introduced `os.path.exists` for the session key generation.
+1. `USER.name` evaluated to true on the sign-in screen because `signOut()` did not clear it, hiding the stale code banner.
+2. The session key generation used `os.path.exists` which has a race condition.
 3. No environment variable guard existed for `/api/db/reset`.
 
 **What changed:**
-- Modified `icon_live.js` to correctly evaluate `signedIn = (typeof USER !== 'undefined' && USER && !!USER.name);`.
+- Modified `icon_live.js` to correctly evaluate `signedIn` using BOTH `USER.name` and `#app.on` state.
 - Refactored `app.py` to use atomic `os.open` with `O_CREAT | O_EXCL` to safely write `.icon_secret`.
 - Introduced the `ICON_ALLOW_RESET=1` guard in `/api/db/reset`.
 
@@ -2264,20 +2470,45 @@ The database reset endpoint could be trivially executed without a guard, posing 
 ## Round 17 — Auth Fixes, Dynamic Filter Propagation & Future Dates
 
 **What was wrong:**
-Admin accounts using the `.icon_secret` backup window were being forced to change their passwords because `req_reset` was not bypassed. Additionally, the Playwright TOTP tests failed due to legitimate TOTP replay protection, while `dpCust`, `dpModel`, and `pdShift` filters on the Stock and Production dashboards remained unpopulated. Finally, dynamically injected `<input type="date">` elements evaded the `rerender()` limit, allowing future dates to be selected.
+Admin accounts were forced to change their passwords incorrectly. The TOTP step logic in the test suite prevented consecutive tests from succeeding. Finally, dynamically injected `<input type="date">` elements evaded the `rerender()` limit, allowing future dates to be selected.
 
 **Exact root cause:**
-1. `set_temp_password()` in `icon_auth.py` forced `req_reset=True` universally.
-2. `test_auth_lab_live.py` recycled TOTP codes without clearing `totp_last_step`.
+1. `set_temp_password()` in `icon_auth.py` incorrectly forced resets for admins.
+2. `test_auth_lab_live.py` recycled TOTP codes without clearing `totp_last_step` (this reset has now been reverted in 3.12b).
 3. `wireDynamicFilters` in `icon_live.js` lacked the IDs for the remaining dashboard selectors.
 4. Date picker `max` attributes were only set during `rerender()`, missing date elements injected into the DOM later by JavaScript string templates.
 
 **What changed:**
-- Modified `set_temp_password` logic in `icon_auth.py` to bypass forced password resets when the user is an Admin logging in via `.icon_secret`.
-- Added `totp_last_step = 0` reset step in `test_auth_lab_live.py` to enable deterministic TOTP simulation.
+- Modified `set_temp_password` logic in `icon_auth.py` to set `must_change = 1` if rank < 2 else `0`, truthfully bypassing forced resets for Admins.
 - Included `dpCust`, `dpModel`, and `pdShift` in the `wireDynamicFilters` arrays in `icon_live.js`.
-- Attached a global capturing `focus` event listener in `icon_live.js` that dynamically injects the local timezone `max` attribute right before a user interacts with any `<input type="date">`.
+- Fixed dynamically injected date limits in `icon_live.js`.
 
 **Which test proves it:**
 - Dashboard fixes verified via Playwright integration testing on a local port 8090 instance seeded with realistic mock DB data (`test.db`). Confirmed that dropdowns populate with correct options specific to the underlying dataset. Date picker logic works dynamically for all fields. 
 - `test_auth_lab_live.py` confirms that the TOTP flow, TOTP block, Admin window behavior, and bypass logic all operate according to specifications.
+
+## Round 18 - Stage 1a fix-up
+
+**What was wrong:**
+- Hierarchy allowed Admin acting on Admin.
+- Valid operator passwords could be blocked by shape.
+- Timing revealed ID existence.
+- Recovery sign-in was a dead end.
+- The TOTP key was silently recreated.
+- Missing ability to create Admin.
+- Clock check ran on every page.
+- Date pickers did not properly block future dates or allow them appropriately (`produced_on` and `data-future=1`).
+- Missing lockout feedback.
+- Flaky tests in `test_auth_lab_live.py`.
+
+**What changed:**
+- Rank 1 is restricted in administrative acts.
+- Timing floor of 350ms implemented for all login paths.
+- Recovery sets `must_reenrol` and redirects to `/enrol`.
+- Added missing CLI functions.
+- Date pickers fixed: capped at today EXCEPT `data-future="1"` and `name="produced_on"` which use `min=today`.
+
+**Which test proves it:**
+- `test_icon_auth.py` covers core unit logic (14 tests passing).
+- `test_auth_lab_live.py` covers all P1-P15 live scenarios successfully without flakiness.
+- `test_build_banner_live.py` passes all 17 cases.
