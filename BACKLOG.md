@@ -2260,3 +2260,24 @@ The database reset endpoint could be trivially executed without a guard, posing 
 
 **Which test proves it:**
 - `test_build_banner_live.py` ensures the UI layer honours these rules across eight robust scenarios, testing signed-in, signed-out, stale app.py, and stale JS situations.
+
+## Round 17 — Auth Fixes, Dynamic Filter Propagation & Future Dates
+
+**What was wrong:**
+Admin accounts using the `.icon_secret` backup window were being forced to change their passwords because `req_reset` was not bypassed. Additionally, the Playwright TOTP tests failed due to legitimate TOTP replay protection, while `dpCust`, `dpModel`, and `pdShift` filters on the Stock and Production dashboards remained unpopulated. Finally, dynamically injected `<input type="date">` elements evaded the `rerender()` limit, allowing future dates to be selected.
+
+**Exact root cause:**
+1. `set_temp_password()` in `icon_auth.py` forced `req_reset=True` universally.
+2. `test_auth_lab_live.py` recycled TOTP codes without clearing `totp_last_step`.
+3. `wireDynamicFilters` in `icon_live.js` lacked the IDs for the remaining dashboard selectors.
+4. Date picker `max` attributes were only set during `rerender()`, missing date elements injected into the DOM later by JavaScript string templates.
+
+**What changed:**
+- Modified `set_temp_password` logic in `icon_auth.py` to bypass forced password resets when the user is an Admin logging in via `.icon_secret`.
+- Added `totp_last_step = 0` reset step in `test_auth_lab_live.py` to enable deterministic TOTP simulation.
+- Included `dpCust`, `dpModel`, and `pdShift` in the `wireDynamicFilters` arrays in `icon_live.js`.
+- Attached a global capturing `focus` event listener in `icon_live.js` that dynamically injects the local timezone `max` attribute right before a user interacts with any `<input type="date">`.
+
+**Which test proves it:**
+- Dashboard fixes verified via Playwright integration testing on a local port 8090 instance seeded with realistic mock DB data (`test.db`). Confirmed that dropdowns populate with correct options specific to the underlying dataset. Date picker logic works dynamically for all fields. 
+- `test_auth_lab_live.py` confirms that the TOTP flow, TOTP block, Admin window behavior, and bypass logic all operate according to specifications.

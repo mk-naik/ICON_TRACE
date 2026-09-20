@@ -196,7 +196,7 @@
     if (!window.B) return;
     
     // Customers
-    var custSelects = ['fDashCust', 'mgCust', 'pdCust', 'pkCust'];
+    var custSelects = ['fDashCust', 'mgCust', 'pdCust', 'pkCust', 'dpCust'];
     custSelects.forEach(function(id) {
       var sel = document.getElementById(id);
       if (!sel) return;
@@ -214,7 +214,7 @@
       B.prod.forEach(function(p) { mSet[p.model] = 1; });
       models = Object.keys(mSet).sort();
     }
-    var modelSelects = ['fDashModel', 'mgModel', 'pdModel', 'pkModel'];
+    var modelSelects = ['fDashModel', 'mgModel', 'pdModel', 'pkModel', 'dpModel'];
     modelSelects.forEach(function(id) {
       var sel = document.getElementById(id);
       if (!sel) return;
@@ -233,7 +233,7 @@
       shifts = [1, 2, 3];
     }
     var sMap = {1: 'A', 2: 'B', 3: 'C'};
-    var shiftSelects = ['fDashShift', 'pkShift'];
+    var shiftSelects = ['fDashShift', 'pdShift', 'pkShift'];
     shiftSelects.forEach(function(id) {
       var sel = document.getElementById(id);
       if (!sel) return;
@@ -404,7 +404,9 @@
       catch (e) { /* a screen that is not on the page yet */ }
     });
     document.querySelectorAll('input[type="date"]').forEach(function(el) {
-      el.setAttribute('max', new Date().toISOString().split('T')[0]);
+      var d = new Date();
+      var localDate = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      el.setAttribute('max', localDate);
     });
     if (typeof window.iconTable !== 'undefined') window.iconTable.wireAll();
     /* before wireResets(), so the Reset it injects gets wired this pass */
@@ -10240,3 +10242,6 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
   };
 
 })();
+
+
+document.addEventListener('focus', function(e) { if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'date') { var d = new Date(); var localDate = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); e.target.setAttribute('max', localDate); } }, true);
