@@ -1416,6 +1416,85 @@ JS, `test_repack.py` 29 Python + 27 JS, unchanged. The two pre-existing,
 unrelated Node failures Round 8 surfaced (`test_fqc_dashboard.js`,
 `test_packing.js`) are unchanged in count and still out of scope here.
 
+### Round 10 — the create page gets its own view, instead of more hiding on v4's
+
+Three visible problems, reported against the running "New Gate Pass" page,
+all traced to one root cause confirmed directly, before any code changed:
+this page was still v4's native `v-gp` section (`icon_trace.html` ~line
+1940, `<h2>Gate Pass</h2><p>Issued against a challan</p>`) patched at
+runtime, not a view built for what this page does now. `pruneGatePass()`
+was confirmed still running and still doing exactly the runtime hiding the
+screenshots showed - blanking the "Loading verification" card's body and
+appending a note, while its `<h3>` header stayed visible, because hiding a
+card's body is not the same as the card not existing.
+
+**Why the native `v-gp` couldn't just be deleted.** Read before touching
+anything: v4's own `initAll()` (`icon_trace.html` ~6574) calls `renderLoad()`
+unconditionally at every sign-in, and `renderLoad()` (~5126) touches
+`#ldTag`/`#ldList`/`#ldMsg`/`#gpBy`/`#gpBtn` with no null checks -
+`initAll()` also sets `#gpBy` directly. None of these five ids can vanish
+from the DOM without every sign-in throwing. So the native `v-gp` stays,
+permanently orphaned (no code path calls bare `go('gp')` any more - the
+only way in is `go('gp-new')`), carrying those five ids for v4's own native
+code to find, and nothing else. `pruneGatePass()` is left exactly as it
+was for this reason - it still defends a view that still needs to exist,
+even though no navigation reaches it.
+
+**The new view.** `gpInjectCreateView()` builds `<section id="v-gp-new">`
+the same way `gpInjectListView()` builds `v-gp-list` and
+`v-loadsession` was already built - injected into `.main`, not patched
+from existing markup. Header reads "New Gate Pass" / "Materials leaving
+the plant with no challan behind them" (edit mode: "Edit Gate Pass" /
+"Nothing changes until you save") - no mention of a challan anywhere.
+Layout is two genuinely different things, not one rail doing both jobs:
+the main column (`.wmain`) holds the real form - Type toggle, Party,
+Delivery address, Vehicle, Expected return (shown only for RGP), and the
+Items card with the multi-item grid; the rail holds a read-only Summary
+card - Prepared-by as plain text (not an input), the live item
+count/total-qty/kind line - and the Issue/Clear buttons beneath it, not
+mixed into the form. `gpFldFor()`, `gpHideUnwiredFields()` and
+`gpHidePreviewCard()` - the runtime-hiding functions this same page used
+to lean on - are deleted outright, not left unused; confirmed by grep to
+have zero remaining callers.
+
+**A live bug this caught.** Toggling NRGP/RGP updated the form correctly
+but left the summary's kind indicator on the old value until the next item
+edit happened to redraw it - `gpSetKind()` never called
+`gpItemsSummary()`. Fixed by one call at the end of `gpSetKind()`. Caught
+because the task's own instruction to verify in a real browser rather than
+by reading source was followed literally: a screenshot taken mid-session
+showed "1 item · NRGP" after clicking RGP, which the source read alone
+would not have surfaced. `test_gatepass_screen.py` now toggles Type live
+and asserts the indicator actually changes, so this doesn't come back
+silently.
+
+**Which tests prove it.** `test_gatepass_screen.py` (Playwright, real
+browser, real running page) rewritten for the new view id and updated
+markup, 4/4: the header/subtitle never say "issued against a challan"; no
+`<h3>` on `v-gp-new` reads "Gate pass preview" or "Loading verification" -
+not merely hidden, absent; every visible `<select>` on the page is the
+item grid's own unit dropdown, never a challan selector; form fields
+(`#gpParty`, `#gpItemsBody`) are genuinely visible, in the main content
+area; the summary's item count and kind indicator both update live as
+rows are added, removed, and Type is toggled; Clear form returns to one
+blank row with the party field empty. `test_gatepass.js` was rewritten
+down to its 4 tests that still apply (`issueGP()`'s payload shape,
+party/items validation, edit-PUTs-to-its-own-id) - the 7 tests exercising
+`gpFldFor`/`gpHideUnwiredFields` were removed outright, not kept passing
+against deleted code. Full existing suite re-run and green: `test_gatepass.py`
+11/11, `test_gatepass_multiitem.py` 9/9, `test_loading.py` 14/14,
+`test_challan.py` 55/55, plus the JS suites for all three (35/24/27,
+unchanged) and `test_gatepass_landing.js` 6/6 (untouched by this round,
+confirmed still passing). The pre-existing, unrelated failures already on
+this branch - one `test_fqc.py` case, `test_fqc_dashboard.js` (2),
+`test_packing.js` (18), and `test_js.js`'s own syntax error - are
+unchanged in count, confirmed via `git stash` to reproduce identically
+without this round's changes, and out of scope here.
+
+Landing page, module gate pass auto-generation (`api_loading_submit`,
+Round 9), the multi-item backend, the print route, and Loading
+Verification itself were not touched this round.
+
 ## 18. Hold & Needs Review  *(decided, not yet built)*
 
 Mukesh's answers, 4 Sep:

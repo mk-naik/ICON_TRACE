@@ -13,14 +13,17 @@ THE RULES THIS FILE DEFENDS
      itself, not by reading gpRenderListRow()'s source.
 
   2. THE CREATE PAGE IS STANDALONE ONLY, IN THE ACTUAL DOM. No module
-     checkbox, no reachable challan selector, no live preview panel -
+     checkbox, no reachable challan selector, no live preview panel, no
+     leftover Loading verification card, and a header that describes a
+     standalone gate pass rather than one issued against a challan -
      checked against the rendered page, because a function that no longer
      builds this markup is not the same claim as the markup not being
      there.
 
-  3. THE SUMMARY TRAIL IS REAL. Adding and removing item rows updates the
-     on-screen item count, live, in the browser - not assumed from a
-     previous commit message.
+  3. THE SUMMARY TRAIL IS REAL. Adding and removing item rows, and
+     toggling NRGP/RGP, updates the on-screen item count and kind
+     indicator, live, in the browser - not assumed from a previous
+     commit message.
 
 These run in a real browser against a throwaway database, because what a
 person actually sees - a rendered button, a hidden field, a live count -
@@ -174,8 +177,8 @@ def t_edit_only_on_standalone_row():
         pg.click("#gpLTableBody button:has-text('Edit')")
         pg.wait_for_timeout(600)
         on_form = pg.evaluate(
-            "document.getElementById('v-gp') && "
-            "document.getElementById('v-gp').classList.contains('on')")
+            "document.getElementById('v-gp-new') && "
+            "document.getElementById('v-gp-new').classList.contains('on')")
         assert on_form, "clicking Edit did not open the create form"
         party_val = pg.eval_on_selector("#gpParty", "e => e.value")
         assert party_val == "Edit Target Vendor", party_val
@@ -186,7 +189,9 @@ def t_edit_only_on_standalone_row():
 # --------------------------------------------------------------------------
 
 @test("the New Gate Pass page has no module checkbox, no reachable "
-     "challan selector, and no visible preview panel anywhere in its DOM")
+     "challan selector, no preview panel, and no leftover Loading "
+     "verification card anywhere in its DOM - and its header describes "
+     "a standalone gate pass, not a challan-linked one")
 def t_create_page_has_no_module_ui():
     c = base()
     with H.browser() as b:
@@ -199,11 +204,11 @@ def t_create_page_has_no_module_ui():
         has_checkbox = pg.evaluate("!!document.getElementById('gpIsSolar')")
         assert not has_checkbox, "#gpIsSolar still exists in the DOM"
 
-        # the native "Against challan" select is not visibly reachable -
-        # hidden via gpHideUnwiredFields(), the same as the other three
-        # fields v4 shipped that nothing here reads
+        # the native "Against challan" select does not exist on this view at
+        # all - v-gp-new is a purpose-built view, not v4's native v-gp, so
+        # there is nothing here to hide in the first place
         visible_selects = pg.eval_on_selector_all(
-            "#v-gp select",
+            "#v-gp-new select",
             "els => els.filter(e => e.offsetParent !== null).map(e => e.id || e.className)")
         assert "gpChallanSelV4" not in visible_selects, \
             "a challan selector is visible on the create page: %s" % visible_selects
@@ -211,27 +216,34 @@ def t_create_page_has_no_module_ui():
         # confirming the challan selector's ABSENCE is not just an empty page
         assert all(sel == "gpi_unit" for sel in visible_selects), visible_selects
 
-        # no live document preview
-        preview_visible = pg.evaluate("""() => {
-          const h = Array.from(document.querySelectorAll('#v-gp h3'))
-            .find(x => x.textContent.trim() === 'Gate pass preview');
-          if (!h) return false;
-          const card = h.closest('.card');
-          return card ? card.offsetParent !== null : false;
-        }""")
-        assert not preview_visible, "the Gate pass preview panel is visible"
+        # no live document preview, and no leftover "Loading verification"
+        # card either - v-gp-new has no heading matching either one
+        stray_headings = pg.eval_on_selector_all(
+            "#v-gp-new h3", "els => els.map(e => e.textContent.trim())")
+        assert "Gate pass preview" not in stray_headings, stray_headings
+        assert "Loading verification" not in stray_headings, stray_headings
 
         # and the real, standalone-only UI is what's actually there
-        assert pg.eval_on_selector("#gpItemsWrap", "e => e.offsetParent !== null")
+        assert pg.eval_on_selector("#gpItemsBody", "e => e.offsetParent !== null")
         assert pg.eval_on_selector("#gpParty", "e => e.offsetParent !== null")
+
+        # the header describes a standalone gate pass, not the old
+        # module-linked flow
+        header_text = pg.eval_on_selector("#gpNewTitle", "e => e.textContent")
+        sub_text = pg.eval_on_selector("#gpNewSubtitle", "e => e.textContent")
+        combined = (header_text + " " + sub_text).lower()
+        assert "issued against a challan" not in combined, \
+            "the create page still describes itself as issued against a " \
+            "challan: %r / %r" % (header_text, sub_text)
 
 
 # --------------------------------------------------------------------------
 # 3 - the summary trail is real, live
 # --------------------------------------------------------------------------
 
-@test("the summary trail's item count updates live as rows are added and "
-     "removed, in the actual browser")
+@test("the summary trail's item count and RGP/NRGP indicator update live "
+     "as rows are added, removed and the Type is toggled, in the actual "
+     "browser")
 def t_summary_trail_updates_live():
     c = base()
     with H.browser() as b:
@@ -242,8 +254,8 @@ def t_summary_trail_updates_live():
         summary = lambda: pg.eval_on_selector("#gpItemsSummary", "e => e.textContent")
         assert summary().startswith("1 item"), summary()
 
-        pg.click("#gpItemsWrap >> text=+ Add item")
-        pg.click("#gpItemsWrap >> text=+ Add item")
+        pg.click("#v-gp-new >> text=+ Add item")
+        pg.click("#v-gp-new >> text=+ Add item")
         pg.wait_for_timeout(200)
         assert summary().startswith("3 items"), summary()
         rows = pg.eval_on_selector_all(".gp_item_row", "els => els.length")
@@ -252,6 +264,15 @@ def t_summary_trail_updates_live():
         pg.click(".gp_item_row:last-child >> text=Remove this item")
         pg.wait_for_timeout(200)
         assert summary().startswith("2 items"), summary()
+
+        # the RGP/NRGP indicator in the summary is live too, not just the
+        # count - caught failing once (toggling Type left the summary
+        # showing the old kind until the next item edit)
+        assert summary().endswith("NRGP"), summary()
+        pg.click("#gpRGP")
+        pg.wait_for_timeout(200)
+        assert not summary().endswith("NRGP"), \
+            "toggling Type did not update the summary's kind indicator: %r" % summary()
 
         # Clear form takes it back to exactly one, blank. #gpClearBtn is a
         # real id (not a text locator) precisely because "Clear form" is
