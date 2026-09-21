@@ -1163,6 +1163,338 @@ stay locked if the operator unchecks and rechecks the box mid-edit, and
 whether a second gate pass against an already-gate-passed challan should
 warn, were not raised and were not touched.
 
+### Round 8 — landing list, multi-item standalone, edit
+
+Rebuilt properly: a landing list in front of the single-page form, real
+line items for a standalone gate pass instead of one description/qty
+pair, and an edit for the standalone case. `gpIsSolar`, the RGP/NRGP
+toggle, the challan dropdown and the loading-completion gate are all
+reused exactly as they were — nothing in that logic changed, only what
+now calls into it.
+
+**Confirmed before building on it, as asked:** the challan dropdown
+(`gpChallanSelV4`, populated from `/api/challans` into
+`window._gpLiveChallans`) still works correctly. What did **not** still
+work: the Challan List → "Create gate pass" cross-link. `clCreateGatePass`
+had two competing definitions - the second silently shadowed the first,
+setting `gpPendingChallanId` (a variable only the dead legacy `/gatepass`
+Jinja-form code path ever reads) and looking up the nav button via
+`[data-view="gp"]`, an attribute that exists nowhere in v4's markup (nav
+buttons carry `data-v`). The pre-selection therefore never reached the
+real dropdown. Fixed to one definition, setting `window._gpPreselectChallanId`
+(what `wireGp()` actually reads) and calling `go('gp')` with no button so
+it lands on the create form directly rather than the new landing list.
+
+**Landing list** (`v-gp-list`, injected exactly like Loading Verification's
+own landing list): one feed from `GET /api/gatepasses` - module-linked and
+standalone rows together, never merged client-side from two calls. Columns:
+gp_no, date, kind, party/destination, item count, linked challan, a derived
+status (`Out` / `Returned` / `Issued` - there is no return/close workflow
+built yet, so `Returned` exists only for the column the print template
+already had, not for a screen that sets it). Filters: From/To (both carry
+`max=today` on the `<input>` itself and are re-clamped server-side - a real
+constraint, not a picker convention), search, and a customer dropdown
+built from the parties actually on file (there is no separate customer
+master for gate passes the way challans have one). Reset puts all four
+back to today/blank/blank/all. Row actions: Print (the existing route,
+untouched), and Edit - **only ever present for a standalone row**;
+`gpRenderListRow()` never emits one when `challan_id` is set, and
+`PUT /api/gatepass/<id>` refuses one server-side regardless, the same
+"not just a hidden button" discipline as everywhere else in this app.
+
+**The create/edit page** (`v-gp`, still the same view wireGp() has always
+owned - never replaced) now has a Close button top-right back to the
+list, and a Clear form button, matching Loading Verification's own
+session-page pattern. **Multi-item support is standalone only** - a
+module gate pass's items are its boxes, already represented correctly, so
+checking "solar modules" hides the item grid and shows the untouched
+single desc/qty fields; unchecking does the reverse. The grid itself is
+Indent's own `<template>`-clone/add/drop pattern (`indAddItem` /
+`indDrop` in `frag_indent_form.html`), copied exactly:
+`gpAddItem`/`gpDropItem`/`gpCollectItems`, one row per Sl · description ·
+unit (Nos/Kg/Set, a real `<select>`, validated server-side too) · qty ·
+remark, the reference document's own columns. A row with no description
+or no positive quantity is simply not sent. `issueGP()` now sends `items`
+for a standalone submission and refuses with none at all - the grid
+replaced description/qty, so an empty grid is an empty gate pass.
+
+A real bug in `wireGp()` itself, found while wiring the grid in: the
+"Against challan" `<select>` was looked up (`detailsCard.querySelector
+('select')`) *after* the item grid's own HTML (with its own
+`<select class="gpi_unit">`, Nos/Kg/Set) was already inserted ahead of it
+in the DOM - so that query could return the wrong select once a second
+one existed in the same card. Fixed by capturing the native challan
+select once, before anything new is injected, so which one this finds
+can never depend on what gets added to the card afterward. Caught in a
+real DOM (jsdom against the running app), not by reading the code -
+`getElementById('gpChallanSelV4')` silently returning null was the
+symptom the assertion actually caught.
+
+**Also found and fixed while making this real:** `issueGP()`'s success
+handler never checked `r.ok` - `api()` *resolves* a refusal body (it only
+rejects on a network failure), so a 400 with a `why` would have shown a
+false "issued" toast and navigated away anyway. Now checked before either
+happens, for both create and the new edit path.
+
+**A real new table, not more columns on `gatepass`:** `gatepass_item`
+(description, unit, qty, remark). `gatepass.description`/`qty` are
+untouched for the historical/module case - never migrated, never read
+when a row has lines in the new table - so nothing that printed correctly
+before this stops printing correctly now. The print route reads
+`gatepass_item` when present and falls back to the single-field row
+otherwise; the item table's own row count grows with the items instead of
+staying fixed at one plus four blanks.
+
+**Edit, decided plainly rather than copied by reflex:** in place, not
+superseded like a challan edit. A challan supersedes because a printed,
+already-relied-on document (an e-Way Bill, an invoice reconciliation)
+could otherwise silently disagree with the database after a correction -
+a gate pass has no such external reader. The audit trail
+(`gatepass.edit`, before/after) still records what changed, so a
+correction stays traceable without needing a second numbered series for
+a document nothing outside this system cross-checks. A module-linked
+gate pass is never editable at all - edit the challan instead, which
+already has its own real edit elsewhere.
+
+**A pre-existing, unrelated bug this surfaced rather than caused:** six
+JS test files (`test_challan.js`, `test_fqc_dashboard.js`,
+`test_gatepass.js`, `test_loading.js`, `test_packing.js`, `test_repack.js`)
+built their own source path as `H.dir + 'static' + H.sep + 'icon_live.js'`
+- missing the separator between `H.dir` and `'static'`, unlike the three
+files that got it right (`test_trace.js`, `test_export.js`,
+`test_screens.js`, which insert `loc.sep` there too). Under Node on this
+machine that is `ENOENT`, immediately, for the whole file - every test in
+all six has been unable to run via Node at all, silently, until now.
+Fixed (one separator, six files); running them again this way surfaced
+two more failures pre-dating this work entirely (`test_fqc_dashboard.js`
+2, `test_packing.js` 18, both `packHold is not defined`-shaped) -
+confirmed pre-existing via `git stash` against unmodified `icon_live.js`,
+left exactly as found: unrelated to Gate Pass and out of scope for this
+pass.
+
+**Which tests prove it.** `test_gatepass_multiitem.py`, new, 9 tests: the
+landing list merges both kinds into one feed; the date filter refuses a
+future date on both ends; a 3-item standalone create persists all 3 rows
+correctly linked (and `gatepass.description`/`qty` stay NULL for it); bad
+items (empty description, an unlisted unit, a non-positive qty) are
+refused before any write; a module-linked gate pass's PUT is refused
+server-side; a standalone edit mutates the same row in place (same
+`gp_id`, same `gp_no`, no second row) and its new items replace the old;
+editing with no items is refused; printing an old single-field gate pass
+still renders (no crash on an empty `gatepass_item`); printing a new
+multi-item one shows every row. `test_gatepass_landing.js`, new, 6 tests,
+unit-test `gpRenderListRow()` directly: no Edit action ever renders for a
+challan-linked row; a standalone row's Edit calls `gpBeginEdit` with its
+own id; the item count column; the old-shape fallback; markup cannot
+inject through it. `test_gatepass.js` grew by 4 (16, was 12): a standalone
+Issue carries the grid's own items, not `gpDesc`/`gpQty`; an empty grid is
+refused client-side before any request; module mode never sends an
+`items` key at all; editing PUTs to the gate pass's own id. Full existing
+suite re-run and green — `test_gatepass.py` 11/11, `test_challan.py`
+55/50 Python + 35 JS, `test_loading.py` 10 Python + 24 JS, `test_packing.py`
+33 Python (JS pre-existing failure noted above, untouched), `test_repack.py`
+29 Python + 27 JS, unchanged. Verified live in a real DOM (jsdom against
+the running app, installed as a throwaway tool and removed afterward,
+same as this project's own stated practice) — the landing list redirect,
+the date picker's `max` attribute, add/remove/clear on the item grid, the
+module/standalone toggle preserving grid contents across a round trip,
+issue → back to the list → edit → save → the list reflecting the change,
+and the challan cross-link actually reaching the real dropdown.
+
+### Round 9 — the actual missing piece, and stripping the create page down
+
+**Confirmed directly, as asked, before writing anything:** `api_loading_submit()`
+promoted every box to `'loaded'` and wrote its audit entry, and that was
+all - no `gatepass` row was ever inserted. Every module gate pass in the
+system up to this point existed only because a person had separately
+opened the create page, checked "solar modules", picked the challan and
+pressed Issue. "Managed like print" was not yet true, because the record
+print reads didn't exist yet either unless someone had done that by hand.
+
+**1 — the auto-generation.** In `api_loading_submit()`, in the same
+transaction as the existing promote-and-audit: draw a real `gp_no` with
+`db.draw_gp_seq`/`db.render_gp_no` (the same functions every other gate
+pass uses, no special case), `kind='NRGP'` (modules leaving for a customer
+do not come back), and `party`/`vehicle_no`/`description`/`qty` pulled
+straight from the challan row - the same fields the old manual "select a
+challan" flow used to populate. Guarded against a duplicate by checking
+for an existing `gatepass.challan_id` match first, in the same
+transaction - safe to call more than once per challan, proven by a test
+that submits twice and counts the rows, not assumed from Loading
+Verification's own submit already being idempotent everywhere else in
+that route.
+
+Since a real gate pass now exists the moment loading is submitted, the
+existing "locked by a real gate pass" rule (`gp_count_for_challan`,
+already enforced on edit-draft/edit-save/cancel) now correctly fires on
+any challan whose loading has been submitted - it could not before, since
+nothing ever created the row that check looks for. One existing test
+(`test_loading.py`'s edit-resets-loading-status) exercised editing a
+*fully submitted* challan, which is no longer a real scenario; changed to
+exercise the edit while the challan is only confirmed (`'saved'`, no gate
+pass yet - still genuinely editable), and a new test locks in the
+correct new refusal explicitly rather than leaving it as a silent side
+effect nobody wrote down.
+
+The old manual path (`POST /api/gatepass` with `is_solar`/`challan_id`)
+still exists - kept for the historical-challan case, which predates
+Loading Verification entirely and is never submitted through it - but now
+refuses outright if a gate pass already exists for that `challan_id`,
+rather than silently minting a second number for one shipment. Two
+existing tests that called this manually *after* `load_all()` (which now
+auto-creates the real one) were exercising exactly that duplicate path;
+rewritten to assert the refusal instead of a second success, and
+`test_gatepass_multiitem.py`'s own `module_gatepass()` helper no longer
+POSTs manually at all - it submits loading and reads the row loading
+submit already wrote.
+
+**2 — the create page, stripped to what a standalone gate pass actually
+needs.** `gpIsSolar`, the whole `gpToggleSolarMode()` branch, the native
+"Against challan" select's wiring, and the entire "Gate pass preview"
+card are gone from this page - a person never creates a module gate pass
+here any more, full stop, so there is nothing left for a checkbox to
+switch between. `gpDesc`/`gpQty` (the module path's own single fields)
+are gone too; the item grid is now simply always what this page shows.
+v4's native preview card and "Against challan" field cannot be removed
+from `icon_trace.html`, so both are hidden the same way the three other
+dead fields already were (`gpHideUnwiredFields()`, now four labels, not
+three) and hidden outright (`gpHidePreviewCard()`) respectively - the
+markup exists in the file, it is simply never shown.
+
+Since a module gate pass is no longer created by hand at all, the Challan
+List's own "Create gate pass" button and `clCreateGatePass()` had nothing
+left to open - removed, along with the legacy Jinja-form challan-selector
+code (`gpPendingChallanId`, `gpChallansLoaded`, `gpLoadChallans`,
+`gpInjectChallanSelector`) that only that dead cross-link ever fed, and
+was confirmed dead again (inert on the real page, per Round 8's own
+finding) rather than assumed still dead.
+
+Six of `test_gatepass.js`'s existing tests exercised exactly the branch
+being deleted (the checkbox reveal/lock, the client-side loading gate,
+posting `is_solar`+`challan_id`, standalone "never consults
+`_gpChallanReady`") - removed, not rewritten to pass against code that no
+longer exists, and replaced with tests for what `issueGP()` actually does
+now: always builds a standalone payload from the item grid, and never
+sends `is_solar` or `challan_id` at all.
+
+**3 — the landing page, re-verified rather than assumed fixed.** Booted a
+real server, seeded one module-linked and one standalone gate pass, and
+looked at the actual rendered page in Chromium (screenshot included in
+this session, not committed) - both rows showed a real, visible, clickable
+Print link, and the standalone row alone showed a real, visible, clickable
+Edit button, exactly as `gpRenderListRow()`'s source already claimed.
+**It already worked.** The most likely explanation for what Mukesh saw is
+a stale server process or a cached page predating the commit that built
+this screen (Round 8) - not a code defect; this pass did not change
+`gpRenderListRow()` at all. `test_gatepass_screen.py` is new, using
+Playwright (installed fresh this session - not previously on this
+machine, following the exact setup `ui_harness.py`'s other three
+consumers already document) to prove this against the running page and
+guard against it silently regressing: every row's Print link is checked
+for `offsetParent !== null` (genuinely visible, not just present in the
+DOM) and clicked-through by `href`; the module row is confirmed to have
+no Edit `<button>` anywhere in its row, not merely an unchecked one;
+Edit is clicked and confirmed to actually open the create form pre-filled.
+The same file proves Part 2's DOM-absence claims directly (`#gpIsSolar`
+does not exist; no visible `<select>` on the page resolves to
+`gpChallanSelV4`; the preview card's `offsetParent` is null) and the
+summary trail's item count live, in the browser, through Add/Remove/Clear.
+
+**Which tests prove it.** `test_loading.py` grew by 3: submitting a fully
+loaded challan creates exactly one `gatepass` row with a real `gp_no`;
+submitting the same challan again (twice, for good measure) does not
+create a second one; the created row's party/vehicle/qty match the
+challan's own data. Plus one more locking in the new edit-refusal
+explicitly. `test_gatepass.py`'s module-mode-succeeds test rewritten to
+assert the auto-creation and the now-correct duplicate refusal.
+`test_gatepass.js` down to 11 (six module-mode tests removed, four
+standalone-only ones added/kept). `test_gatepass_screen.py`, new, 4
+Playwright tests, all against a real running page. Full existing suite
+re-run and green - `test_gatepass.py` 11/11, `test_gatepass_multiitem.py`
+9/9, `test_challan.py` 55 Python + 35 JS, `test_loading.py` 14 Python + 24
+JS, `test_repack.py` 29 Python + 27 JS, unchanged. The two pre-existing,
+unrelated Node failures Round 8 surfaced (`test_fqc_dashboard.js`,
+`test_packing.js`) are unchanged in count and still out of scope here.
+
+### Round 10 — the create page gets its own view, instead of more hiding on v4's
+
+Three visible problems, reported against the running "New Gate Pass" page,
+all traced to one root cause confirmed directly, before any code changed:
+this page was still v4's native `v-gp` section (`icon_trace.html` ~line
+1940, `<h2>Gate Pass</h2><p>Issued against a challan</p>`) patched at
+runtime, not a view built for what this page does now. `pruneGatePass()`
+was confirmed still running and still doing exactly the runtime hiding the
+screenshots showed - blanking the "Loading verification" card's body and
+appending a note, while its `<h3>` header stayed visible, because hiding a
+card's body is not the same as the card not existing.
+
+**Why the native `v-gp` couldn't just be deleted.** Read before touching
+anything: v4's own `initAll()` (`icon_trace.html` ~6574) calls `renderLoad()`
+unconditionally at every sign-in, and `renderLoad()` (~5126) touches
+`#ldTag`/`#ldList`/`#ldMsg`/`#gpBy`/`#gpBtn` with no null checks -
+`initAll()` also sets `#gpBy` directly. None of these five ids can vanish
+from the DOM without every sign-in throwing. So the native `v-gp` stays,
+permanently orphaned (no code path calls bare `go('gp')` any more - the
+only way in is `go('gp-new')`), carrying those five ids for v4's own native
+code to find, and nothing else. `pruneGatePass()` is left exactly as it
+was for this reason - it still defends a view that still needs to exist,
+even though no navigation reaches it.
+
+**The new view.** `gpInjectCreateView()` builds `<section id="v-gp-new">`
+the same way `gpInjectListView()` builds `v-gp-list` and
+`v-loadsession` was already built - injected into `.main`, not patched
+from existing markup. Header reads "New Gate Pass" / "Materials leaving
+the plant with no challan behind them" (edit mode: "Edit Gate Pass" /
+"Nothing changes until you save") - no mention of a challan anywhere.
+Layout is two genuinely different things, not one rail doing both jobs:
+the main column (`.wmain`) holds the real form - Type toggle, Party,
+Delivery address, Vehicle, Expected return (shown only for RGP), and the
+Items card with the multi-item grid; the rail holds a read-only Summary
+card - Prepared-by as plain text (not an input), the live item
+count/total-qty/kind line - and the Issue/Clear buttons beneath it, not
+mixed into the form. `gpFldFor()`, `gpHideUnwiredFields()` and
+`gpHidePreviewCard()` - the runtime-hiding functions this same page used
+to lean on - are deleted outright, not left unused; confirmed by grep to
+have zero remaining callers.
+
+**A live bug this caught.** Toggling NRGP/RGP updated the form correctly
+but left the summary's kind indicator on the old value until the next item
+edit happened to redraw it - `gpSetKind()` never called
+`gpItemsSummary()`. Fixed by one call at the end of `gpSetKind()`. Caught
+because the task's own instruction to verify in a real browser rather than
+by reading source was followed literally: a screenshot taken mid-session
+showed "1 item · NRGP" after clicking RGP, which the source read alone
+would not have surfaced. `test_gatepass_screen.py` now toggles Type live
+and asserts the indicator actually changes, so this doesn't come back
+silently.
+
+**Which tests prove it.** `test_gatepass_screen.py` (Playwright, real
+browser, real running page) rewritten for the new view id and updated
+markup, 4/4: the header/subtitle never say "issued against a challan"; no
+`<h3>` on `v-gp-new` reads "Gate pass preview" or "Loading verification" -
+not merely hidden, absent; every visible `<select>` on the page is the
+item grid's own unit dropdown, never a challan selector; form fields
+(`#gpParty`, `#gpItemsBody`) are genuinely visible, in the main content
+area; the summary's item count and kind indicator both update live as
+rows are added, removed, and Type is toggled; Clear form returns to one
+blank row with the party field empty. `test_gatepass.js` was rewritten
+down to its 4 tests that still apply (`issueGP()`'s payload shape,
+party/items validation, edit-PUTs-to-its-own-id) - the 7 tests exercising
+`gpFldFor`/`gpHideUnwiredFields` were removed outright, not kept passing
+against deleted code. Full existing suite re-run and green: `test_gatepass.py`
+11/11, `test_gatepass_multiitem.py` 9/9, `test_loading.py` 14/14,
+`test_challan.py` 55/55, plus the JS suites for all three (35/24/27,
+unchanged) and `test_gatepass_landing.js` 6/6 (untouched by this round,
+confirmed still passing). The pre-existing, unrelated failures already on
+this branch - one `test_fqc.py` case, `test_fqc_dashboard.js` (2),
+`test_packing.js` (18), and `test_js.js`'s own syntax error - are
+unchanged in count, confirmed via `git stash` to reproduce identically
+without this round's changes, and out of scope here.
+
+Landing page, module gate pass auto-generation (`api_loading_submit`,
+Round 9), the multi-item backend, the print route, and Loading
+Verification itself were not touched this round.
+
 ## 18. Hold & Needs Review  *(decided, not yet built)*
 
 Mukesh's answers, 4 Sep:

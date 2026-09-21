@@ -171,22 +171,25 @@ def t_module_mode_refused_incomplete():
     assert gp_count() == 0, "a refused gate pass still wrote a row"
 
 
-@test("a module-mode gate pass against a fully-loaded challan succeeds, "
-     "and the number resolves back to a real record")
+@test("loading a fully-loaded challan auto-creates its gate pass - a "
+     "person no longer POSTs this manually, and a manual attempt against "
+     "the same challan afterward is refused as a duplicate, not a second "
+     "real record")
 def t_module_mode_succeeds_when_loaded():
     c = setup()
     b1 = packed_box(c, [10, 11])
     inv = make_invoice(qty=2, invoice_no="INV-GP-2")
     chid = issue(c, [b1], inv)
-    load_all(c, chid)
+    load_all(c, chid)               # this is what actually creates it now
+    assert gp_count() == 1, "loading submit did not auto-create the gate pass"
 
     r = c.post("/api/gatepass", json={"is_solar": True, "challan_id": chid,
                                       "kind": "NRGP", "party": "AGNI",
                                       "description": "Modules"})
-    assert r.status_code == 200, r.get_json()
-    d = r.get_json()
-    assert d["ok"] and d["gp_no"]
-    assert gp_count() == 1
+    assert r.status_code == 400, \
+        "a second gate pass was created for a challan that already has one"
+    assert "already has a gate pass" in r.get_json()["why"], r.get_json()
+    assert gp_count() == 1, "the duplicate attempt still wrote a second row"
 
 
 @test("a real bug this file was written to catch: omitting is_solar (or "

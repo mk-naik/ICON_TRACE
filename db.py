@@ -1044,6 +1044,88 @@ def gatepasses(cur, n=25):
     return cur.fetchall()
 
 
+def set_gatepass_items(cur, gatepass_id, items):
+    """Replace every line on this gate pass with exactly what was sent -
+    used by both create (nothing to replace yet) and edit. Delete-then-
+    reinsert, the same shape /api/indent/<no> PUT already uses for its own
+    items: an edit that changes one row's quantity is not asked to describe
+    itself as a diff against what was there before."""
+    if cur is None:
+        return
+    cur.execute("DELETE FROM gatepass_item WHERE gatepass_id=%s", (gatepass_id,))
+    for it in items:
+        _store.insert(cur, "gatepass_item", {
+            "gatepass_id": gatepass_id,
+            "description": it["description"],
+            "unit": it["unit"],
+            "qty": it["qty"],
+            "remark": it.get("remark") or None,
+        })
+
+
+def gatepass_items(cur, gatepass_id):
+    if cur is None:
+        return []
+    return _store.rows(cur, "SELECT * FROM gatepass_item WHERE gatepass_id=%s "
+                           "ORDER BY gatepass_item_id", (gatepass_id,))
+
+
+def gatepass_status(gp):
+    """Derived, never stored - the same reasoning the box letter and the
+    challan number already follow (store what changes, render what does
+    not). There is no return/close workflow built yet (return_date is
+    written by nothing today), so this is only ever 'Out' or 'Issued' in
+    practice - the 'Returned' branch exists for the column the print
+    template already has, not for a screen that sets it."""
+    if gp.get("kind") == "RGP":
+        return "Returned" if gp.get("return_date") else "Out"
+    return "Issued"
+
+
+def gatepasses_list(cur, q=None, date_from=None, date_to=None, customer=None, n=500):
+    """The landing list: module-linked and standalone gate passes together,
+    one feed, newest first - never two separate queries the screen has to
+    merge itself."""
+    if cur is None:
+        return []
+    sql = ("SELECT g.*, "
+           "(SELECT COUNT(*) FROM gatepass_item gi WHERE gi.gatepass_id=g.gp_id) "
+           "AS item_count FROM gatepass g WHERE 1=1")
+    params = []
+    if date_from:
+        sql += " AND g.gp_date >= %s"; params.append(date_from)
+    if date_to:
+        sql += " AND g.gp_date <= %s"; params.append(date_to)
+    if customer:
+        sql += " AND g.party = %s"; params.append(customer)
+    if q:
+        lq = "%" + q + "%"
+        sql += (" AND (g.party LIKE %s OR g.gp_no LIKE %s OR g.challan_no LIKE %s "
+                "OR g.description LIKE %s)")
+        params.extend([lq, lq, lq, lq])
+    sql += " ORDER BY g.gp_id DESC LIMIT %s"
+    params.append(n)
+    cur.execute(sql, params)
+    rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        r["status"] = gatepass_status(r)
+    return rows
+
+
+def gatepass_customers(cur):
+    """Every party a gate pass has actually gone out to - there is no
+    separate customer master for gate passes the way challans have one
+    (party is free text, pre-filled from the challan's buyer for module
+    mode), so the filter dropdown is built from what is really on file
+    rather than a fabricated list."""
+    if cur is None:
+        return []
+    rows = _store.rows(cur, "SELECT DISTINCT party FROM gatepass "
+                           "WHERE party IS NOT NULL AND party<>'' "
+                           "ORDER BY party")
+    return [r["party"] for r in rows]
+
+
 def challans_list(cur, q=None, status=None, fy=None, n=200):
     """Challan list for the landing screen.
 
