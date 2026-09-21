@@ -113,17 +113,20 @@ def load_all(c, challan_id):
         assert r.status_code == 200, r.get_json()
     r = c.post("/api/loading/%d/submit" % challan_id, json={})
     assert r.status_code == 200, r.get_json()
+    return r.get_json()
 
 
 def module_gatepass(c, box_ids, invoice_no, qty):
+    """Submitting Loading Verification is what creates a module gate pass
+    now - nobody POSTs /api/gatepass with is_solar for this any more."""
     inv = make_invoice(qty, invoice_no)
     chid = issue(c, box_ids, inv)
-    load_all(c, chid)
-    r = c.post("/api/gatepass", json={"is_solar": True, "challan_id": chid,
-                                      "kind": "NRGP", "party": AGNI_NAME,
-                                      "description": "Modules"})
-    assert r.status_code == 200, r.get_json()
-    return r.get_json()
+    submitted = load_all(c, chid)
+    with store.conn() as (cx, cur):
+        row = store.one(cur, "SELECT * FROM gatepass WHERE challan_id=%s", (chid,))
+    assert row, "loading submit did not auto-create the gate pass"
+    return {"gp_no": row["gp_no"], "gatepass_id": row["gp_id"],
+           "challan_id": chid}
 
 
 THREE_ITEMS = [

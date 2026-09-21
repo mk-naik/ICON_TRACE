@@ -1,13 +1,19 @@
-/* ICON TRACE - tests for Gate Pass's dead-field cleanup.
+/* ICON TRACE - tests for Gate Pass's dead-field cleanup, and for issueGP()
+ * itself now that the create page is standalone only.
  *
  * v4 shipped the "Issue details" card with a Gate pass no. input PRE-FILLED
  * with a literal placeholder ("GP-2608-0031" - the real number is only
- * known once the server assigns it on submit), plus Delivery order no. and
- * Container no. fields issueGP() never reads. wireGp() injects the real
- * fields (Type, Party/destination, Material going out, ...) ABOVE them,
- * leaving the fake ones sitting there unconnected to anything real - added
- * beside, not replaced. gpHideUnwiredFields() is what removes them from
- * view instead.
+ * known once the server assigns it on submit), a Delivery order no. and a
+ * Container no. field issueGP() never reads, and an "Against challan"
+ * select. wireGp() injects the real fields (Type, Party/destination, the
+ * item grid, ...) ABOVE them; gpHideUnwiredFields() hides all four of the
+ * unwired ones rather than leaving them sitting there looking real.
+ *
+ * A module gate pass is never created from this page any more - Loading
+ * Verification's own submit creates one automatically (api_loading_submit,
+ * tested in test_loading.py). There is no module checkbox, no challan
+ * selector reachable here, and no live document preview - issueGP() always
+ * builds a standalone payload from the item grid.
  *
  *     node test_gatepass.js
  *     cscript //Nologo //E:JScript test_gatepass.js
@@ -196,32 +202,26 @@ var tests = [], passed = 0, failed = 0;
 function test(name, fn) { tests.push([name, fn]); }
 function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); }
 
-/* a realistic populated Issue details card, module mode already checked
-   and a challan already selected - the state issueGP() actually runs
-   against, not an empty form */
+/* a realistic populated Issue details card - the state issueGP() actually
+   runs against, not an empty form */
 function resetIssueGpDom() {
   DOM = {};
   toasts = []; API_CALLS = []; GO_CALLS = [];
-  window._gpChallanReady = null;
   window.__gpEditing = null;
   GP_ITEMS_STUB = [{ description: 'Test item', unit: 'Nos', qty: 1, remark: null }];
-  ['gpBtn', 'gpChallanSelV4', 'gpNRGP', 'gpRGP', 'gpParty', 'gpVehicle',
-   'gpAddr', 'gpDesc', 'gpQty', 'gpExpectedRet', 'gpIsSolar',
-   'gpLoadingState', 'gpLoadingStateWrap'].forEach(function (id) { el(id); });
+  ['gpBtn', 'gpNRGP', 'gpRGP', 'gpParty', 'gpVehicle', 'gpAddr',
+   'gpExpectedRet'].forEach(function (id) { el(id); });
   el('gpNRGP').classList.add('on');
-  el('gpParty').value = 'AGNI GREEN POWER LIMITED (MZ)';
-  el('gpDesc').value = 'ISEN630-G12R modules';
-  el('gpQty').value = '2';
-  el('gpChallanSelV4').value = '9';
+  el('gpParty').value = 'Repair Vendor Pvt Ltd';
 }
 
 /* the real "Issue details" card, exactly as v4 renders it, with wireGp()'s
-   own injected fields (Type, Party / destination, ...) mixed in ahead of
-   them - a realistic populated card, not an empty one */
+   own injected fields (Type, Party / destination, the item grid, ...)
+   mixed in ahead of them - a realistic populated card, not an empty one */
 function realCard() {
   return {
     flds: [
-      fld('Type'), fld('Party / destination'), fld('Material going out'),
+      fld('Type'), fld('Party / destination'),
       fld('Against challan'), fld('Gate pass no.', { value: 'GP-2608-0031' }),
       fld('Delivery order no.', { placeholder: 'PS26812-0007' }),
       fld('Container no.', { placeholder: 'Optional' }),
@@ -233,8 +233,9 @@ function realCard() {
   };
 }
 
-test('gpHideUnwiredFields hides exactly the three unconnected fields, '
-    + 'leaving the real and still-meaningful ones alone', function () {
+test('gpHideUnwiredFields hides exactly the four unconnected fields '
+    + '(including "Against challan", now that a module gate pass is never '
+    + 'created from this page), leaving the real ones alone', function () {
   var c = realCard();
   DOM['v-gp'] = gpView(c.flds, c.notes, c.btns);
   gpHideUnwiredFields();
@@ -243,8 +244,8 @@ test('gpHideUnwiredFields hides exactly the three unconnected fields, '
   assert(byLabel['Gate pass no.'].style.display === 'none', 'Gate pass no. still shown');
   assert(byLabel['Delivery order no.'].style.display === 'none', 'Delivery order no. still shown');
   assert(byLabel['Container no.'].style.display === 'none', 'Container no. still shown');
-  ['Type', 'Party / destination', 'Material going out', 'Against challan',
-   'Prepared by'].forEach(function (label) {
+  assert(byLabel['Against challan'].style.display === 'none', 'Against challan still shown');
+  ['Type', 'Party / destination', 'Prepared by'].forEach(function (label) {
     assert(byLabel[label].style.display !== 'none', label + ' was hidden too');
   });
 });
@@ -300,7 +301,7 @@ test('gpFldFor matches a field by its label prefix, not a substring '
   var c = realCard();
   DOM['v-gp'] = gpView(c.flds, c.notes, c.btns);
   var f = gpFldFor('Container no.');
-  assert(f === c.flds[6], 'did not find the Container no. field');
+  assert(f === c.flds[5], 'did not find the Container no. field');
   assert(gpFldFor('nonexistent field') === null);
 });
 
@@ -326,96 +327,24 @@ test('running gpHideUnwiredFields twice (every wireGp() call re-runs it) '
 });
 
 
-/* ---- module mode: the checkbox, the challan-derived lock, and the ------
-   client-side Issue gate. The server enforces the real rule regardless
-   (test_gatepass.py's bypass tests prove that); this is what stops the
-   operator from finding out only after clicking Issue. */
+/* ---- issueGP(): standalone only, always -------------------------------
+   There is no module mode left to branch on - a module gate pass is
+   created by Loading Verification's own submit now (test_loading.py),
+   never from this page. issueGP() always builds a standalone payload
+   from the item grid. gpCollectItems() itself (the grid's own
+   add/drop/collect logic) is tested directly, against the real function,
+   in test_gatepass_items.js; this is the boundary issueGP() owns. */
 
-test('checking module mode reveals the challan selector and locks the '
-    + 'challan-derived fields - unchecking it restores today\'s editable '
-    + 'standalone flow, nothing left locked or stale', function () {
+test('Issue is refused client-side with no party at all', function () {
   resetIssueGpDom();
-  var chFld = { style: {} };
-  el('gpChallanSelV4')._closestFld = chFld;
-  el('gpIsSolar').checked = true;
-  window.gpToggleSolarMode();
-  assert(chFld.style.display === 'block', 'challan field did not reveal');
-  assert(el('gpParty').readOnly === true, 'Party was not locked');
-  assert(el('gpVehicle').readOnly === true, 'Vehicle was not locked');
-  assert(el('gpDesc').readOnly === true, 'Description was not locked');
-  assert(el('gpQty').readOnly === true, 'Quantity was not locked');
-
-  el('gpIsSolar').checked = false;
-  window.gpToggleSolarMode();
-  assert(chFld.style.display === 'none', 'challan field did not hide again');
-  assert(el('gpParty').readOnly === false, 'Party stayed locked after unchecking');
-  assert(el('gpVehicle').readOnly === false, 'Vehicle stayed locked after unchecking');
-  assert(el('gpDesc').readOnly === false, 'Description stayed locked after unchecking');
-  assert(el('gpQty').readOnly === false, 'Quantity stayed locked after unchecking');
-  assert(el('gpChallanSelV4').value === '', 'the old challan selection survived unchecking');
-  assert(window._gpChallanReady === null, '_gpChallanReady was not reset on uncheck');
-});
-
-test('Issue refuses client-side when module mode is checked but the '
-    + 'selected challan is not yet fully loaded - the operator finds out '
-    + 'without submitting, not from a refused POST', function () {
-  resetIssueGpDom();
-  el('gpIsSolar').checked = true;
-  window._gpChallanReady = false;
-  el('gpLoadingState').textContent = '0 of 3 pallets loaded';
-  window.issueGP();
-  assert(API_CALLS.length === 0, 'a POST was sent despite the incomplete challan: ' +
-        JSON.stringify(API_CALLS));
-  assert(toasts.length === 1, toasts);
-  assert(toasts[0].indexOf('0 of 3') !== -1, toasts[0]);
-});
-
-test('Issue refuses client-side when module mode is checked but no '
-    + 'challan has been selected at all', function () {
-  resetIssueGpDom();
-  el('gpIsSolar').checked = true;
-  el('gpChallanSelV4').value = '';
-  window._gpChallanReady = null;
+  el('gpParty').value = '';
   window.issueGP();
   assert(API_CALLS.length === 0, API_CALLS);
-  assert(toasts.length === 1 && toasts[0].toLowerCase().indexOf('select a challan') !== -1,
-        toasts);
+  assert(toasts.length === 1 && toasts[0].toLowerCase().indexOf('party') !== -1, toasts);
 });
 
-test('Issue proceeds and posts is_solar + the real challan_id once the '
-    + 'selected challan is fully loaded', function () {
+test('an Issue carries the item grid\'s own items in the payload', function () {
   resetIssueGpDom();
-  el('gpIsSolar').checked = true;
-  window._gpChallanReady = true;
-  window.issueGP();
-  assert(API_CALLS.length === 1, 'no POST was sent for a ready challan: ' + JSON.stringify(API_CALLS));
-  var call = API_CALLS[0];
-  assert(call.path === 'gatepass', call.path);
-  assert(call.body.is_solar === true, call.body);
-  assert(call.body.challan_id === 9, call.body);
-});
-
-test('standalone mode (module checkbox off) never consults '
-    + '_gpChallanReady at all - today\'s flow is untouched', function () {
-  resetIssueGpDom();
-  el('gpIsSolar').checked = false;
-  el('gpChallanSelV4').value = '';
-  window._gpChallanReady = null;
-  window.issueGP();
-  assert(API_CALLS.length === 1, 'standalone Issue was blocked: ' + JSON.stringify(toasts));
-  assert(API_CALLS[0].body.is_solar === false, API_CALLS[0].body);
-});
-
-/* ---- multi-item support: standalone only --------------------------------
-   gpCollectItems() itself (the grid's own add/drop/collect logic) is
-   tested directly, against the real function, in test_gatepass_items.js.
-   This is only the boundary issueGP() owns: which mode sends items at
-   all, and what blocks Issue when there are none. */
-
-test('a standalone Issue carries the item grid\'s own items in the payload, '
-    + 'not the old single description/qty fields', function () {
-  resetIssueGpDom();
-  el('gpIsSolar').checked = false;
   GP_ITEMS_STUB = [{ description: 'Laptop for repair', unit: 'Nos', qty: 1, remark: 'urgent' },
                    { description: 'Spare cable', unit: 'Set', qty: 2, remark: null }];
   window.issueGP();
@@ -424,34 +353,23 @@ test('a standalone Issue carries the item grid\'s own items in the payload, '
   assert(body.items && body.items.length === 2, body);
   assert(body.items[0].description === 'Laptop for repair', body.items[0]);
   assert(body.items[1].qty === 2, body.items[1]);
+  assert(!('is_solar' in body), 'issueGP still sends a field from the removed module branch: ' + JSON.stringify(body));
+  assert(!('challan_id' in body), 'issueGP still sends a field from the removed module branch: ' + JSON.stringify(body));
 });
 
-test('a standalone Issue with no items in the grid is refused before any '
-    + 'request - the grid replaced description/qty, so an empty grid is an '
+test('an Issue with no items in the grid is refused before any request - '
+    + 'the grid is the only source of items now, so an empty grid is an '
     + 'empty gate pass', function () {
   resetIssueGpDom();
-  el('gpIsSolar').checked = false;
   GP_ITEMS_STUB = [];
   window.issueGP();
   assert(API_CALLS.length === 0, 'a POST was sent with no items: ' + JSON.stringify(API_CALLS));
   assert(toasts.length === 1 && toasts[0].toLowerCase().indexOf('item') !== -1, toasts);
 });
 
-test('a module-mode Issue never sends an items key at all - the boxes are '
-    + 'its items, already on the challan', function () {
-  resetIssueGpDom();
-  el('gpIsSolar').checked = true;
-  window._gpChallanReady = true;
-  GP_ITEMS_STUB = [{ description: 'should never be sent', unit: 'Nos', qty: 9, remark: null }];
-  window.issueGP();
-  assert(API_CALLS.length === 1, API_CALLS);
-  assert(!('items' in API_CALLS[0].body), API_CALLS[0].body);
-});
-
 test('editing an existing standalone gate pass PUTs to its own id instead '
     + 'of POSTing a new one', function () {
   resetIssueGpDom();
-  el('gpIsSolar').checked = false;
   window.__gpEditing = 42;
   window.issueGP();
   assert(API_CALLS.length === 1, API_CALLS);

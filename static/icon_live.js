@@ -7945,14 +7945,15 @@ function wireFqcAnomalies() {
           'onclick="clCancelChallan(' + ch.challan_id + ')" ' +
           'title="Cancel this issued challan — serials revert to packed">Cancel</button> ';
       }
-      /* Gate pass and loading are always available on issued challans,
-         even after the first gate pass locks editing (split loads). */
+      /* Loading is always available on issued challans, even after a
+         gate pass locks editing (split loads). There is no "Create gate
+         pass" action here any more - submitting Loading Verification is
+         what creates one now (api_loading_submit), automatically, from
+         the challan's own data; nothing is left for a person to create
+         manually, so there is nothing left for this screen to open. */
       actions += '<button class="btn btn-ghost btn-sm" ' +
         'onclick="clVerifyLoading(' + ch.challan_id + ')" ' +
         'title="Open Loading Verification with these boxes">Verify loading</button> ';
-      actions += '<button class="btn btn-ghost btn-sm" ' +
-        'onclick="clCreateGatePass(' + ch.challan_id + ')" ' +
-        'title="Create a gate pass for this challan">Create gate pass</button> ';
     }
 
     var boxRows = (d.boxes || []).map(function (b) {
@@ -8084,22 +8085,6 @@ function wireFqcAnomalies() {
     }
   };
 
-  window.clCreateGatePass = function (id) {
-    /* Straight to the create form, not the Gate Pass landing list - go()
-       without a nav-i button bypasses the list redirect below (the same
-       way "Verify one pallet's contents" reaches v-loadver directly), and
-       wireGp() reads _gpPreselectChallanId once the form is on screen.
-       This was two competing definitions before - the second one silently
-       shadowed this fix, setting a variable (gpPendingChallanId) only the
-       DEAD legacy Jinja-form code path ever read, and looking up a nav
-       button via 'data-view', an attribute that does not exist anywhere in
-       v4's markup (nav buttons carry data-v) - so the cross-link never
-       actually pre-selected anything. */
-    clCloseDetail();
-    window._gpPreselectChallanId = id;
-    if (typeof go === 'function') go('gp');
-  };
-
   /* Load wiring for the challan list screen when navigated to */
   function wireChList() {
     var view = document.getElementById('v-challan-list');
@@ -8110,89 +8095,6 @@ function wireFqcAnomalies() {
     } else {
       clLoad();
     }
-  }
-
-  /* ---- Gate Pass: challan selector ---------------------------------------
-   *
-   * Replace the free-text challan_no field with a live selector of issued
-   * challans.  Gate pass creation should be reachable regardless of whether
-   * the challan is locked for editing (split loads).
-   */
-  var gpPendingChallanId = null;
-
-  function gpChallansLoaded(challans) {
-    var sel = document.getElementById('gpChallanSel');
-    if (!sel) return;
-    var keep = sel.value;
-    sel.innerHTML = '<option value="">— no challan —</option>' +
-      challans.map(function (ch) {
-        return '<option value="' + ch.challan_id + '">' +
-          fqcEsc(ch.challan_no || ('IS-' + ch.seq)) + ' · ' +
-          fqcEsc(ch.buyer_name || '—') + ' · ' + (ch.qty || 0) + ' nos' +
-          '</option>';
-      }).join('');
-    /* Restore selection or apply pending pre-fill from clCreateGatePass */
-    if (gpPendingChallanId) {
-      sel.value = String(gpPendingChallanId);
-      gpPendingChallanId = null;
-    } else if (keep) {
-      sel.value = keep;
-    }
-  }
-
-  function gpLoadChallans() {
-    fetch('/api/challans/issued', { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
-      .then(function (d) { gpChallansLoaded(d.challans || []); })
-      .catch(function () {});
-  }
-
-  /* Inject a challan selector into the Gate Pass form if not already there.
-     The existing form has a plain-text "challan_no" input; we insert a
-     <select> above it (keyed to challan_id) and keep the text field hidden
-     so the legacy template's POST path still works. */
-  function gpInjectChallanSelector() {
-    if (document.getElementById('gpChallanSel')) return;
-    /* Find the legacy challan_no text field.  Gate Pass is a legacy Jinja
-       template (not a v4 view), so we look inside <form> elements. */
-    var forms = document.querySelectorAll('form');
-    var targetInput = null;
-    for (var fi = 0; fi < forms.length; fi++) {
-      var inp = forms[fi].querySelector('[name="challan_no"]');
-      if (inp) { targetInput = inp; break; }
-    }
-    if (!targetInput) return;
-    /* Hide the text field; insert a select above it */
-    targetInput.style.display = 'none';
-    var wrap = document.createElement('div');
-    wrap.style.cssText = 'margin-bottom:6px';
-    wrap.innerHTML =
-      '<label style="font-size:11px;color:var(--ink3);display:block;margin-bottom:2px">Challan (optional)</label>' +
-      '<select id="gpChallanSel" style="width:100%;height:32px;border:1px solid var(--bd);border-radius:4px;font-size:12px">' +
-        '<option value="">— no challan —</option>' +
-      '</select>';
-    targetInput.parentNode.insertBefore(wrap, targetInput);
-    /* On submit: write the selected challan_id into a hidden field and
-       the rendered number into the legacy text field */
-    targetInput.parentNode.querySelector('form') &&
-    (function (form) {
-      form.addEventListener('submit', function () {
-        var sel = document.getElementById('gpChallanSel');
-        if (!sel || !sel.value) return;
-        /* Write the challan_no rendered label into the hidden legacy field */
-        var opt = sel.options[sel.selectedIndex];
-        if (opt && opt.value) {
-          targetInput.value = opt.text.split(' · ')[0];   /* the rendered no */
-          /* Also set challan_id via a hidden input */
-          var hid = document.createElement('input');
-          hid.type = 'hidden';
-          hid.name = 'challan_id';
-          hid.value = opt.value;
-          form.appendChild(hid);
-        }
-      });
-    })(targetInput.closest('form'));
-    gpLoadChallans();
   }
 
   /* ---- Invoice selector: exclude live-challan invoices -------------------
@@ -8722,10 +8624,10 @@ function wireFqcAnomalies() {
       // data-v="gp" (never edited) and still says go('gp', this) - that is
       // patched here to open the landing list instead, and ONLY when a
       // real nav-i button drove it. Every internal caller that wants the
-      // create form directly (clCreateGatePass, gpBeginEdit, the list's
-      // own "New Gate Pass" button) calls go('gp') with no button and is
-      // therefore never redirected - v-gp itself, and everything wireGp()
-      // wires into it, is completely unchanged by this.
+      // create form directly (gpBeginEdit, the list's own "New Gate Pass"
+      // button) calls go('gp') with no button and is therefore never
+      // redirected - v-gp itself, and everything wireGp() wires into it,
+      // is completely unchanged by this.
       if (view === 'gp' && btn && btn.classList && btn.classList.contains('nav-i')) {
         view = 'gp-list';
         arguments[0] = view;
@@ -8773,7 +8675,6 @@ function wireFqcAnomalies() {
   /* Pre-wire on load if either screen is already active */
   try { clInjectView(); } catch (e) {}
   try { ldInjectView(); } catch (e) {}
-  try { gpInjectChallanSelector(); } catch (e) {}
 
   /* ---- Stock & Dispatch dashboard KPIs ----------------------------------- */
   function clAddDashKpis() {
@@ -9132,70 +9033,42 @@ function wireFqcAnomalies() {
   /* Gate Pass, as v4 originally built it, has no path for a gate pass that
      is not tied to a challan - "Against challan" is required, the preview
      is one specific challan's contents, and the only free-text fields are
-     Delivery order no. and Container no. But a gate pass covers modules AND
-     every other material leaving the plant - a laptop sent for repair, cell
-     stock moved to Unit-1 - neither of which has a challan at all. Real
-     party/vehicle/description fields are injected below (wireGp), always
-     usable; a challan pre-fills them as a convenience, never locks them. */
+     Delivery order no. and Container no. That whole shape was for a
+     module gate pass, and a person never creates one of those here any
+     more (Loading Verification's own submit does, automatically - see
+     api_loading_submit). This page is standalone only now: a laptop sent
+     for repair, cell stock moved to Unit-1, anything leaving the plant
+     with no challan behind it at all. Real party/vehicle fields and the
+     item grid are injected below (wireGp). */
   window.issueGP = function() {
       var btn = document.getElementById('gpBtn');
-      var sel = document.getElementById('gpChallanSelV4');
       var typeNRGP = document.getElementById('gpNRGP') && document.getElementById('gpNRGP').classList.contains('on') ? 'NRGP' : 'RGP';
 
-      var chId = sel && sel.value ? parseInt(sel.value, 10) : null;
       var party = (document.getElementById('gpParty') || {}).value || '';
       var vehicle = (document.getElementById('gpVehicle') || {}).value || '';
       var addr = (document.getElementById('gpAddr') || {}).value || '';
-      var desc = (document.getElementById('gpDesc') || {}).value || '';
-      var qtyRaw = (document.getElementById('gpQty') || {}).value || '';
       var expectedRet = document.getElementById('gpExpectedRet') ? document.getElementById('gpExpectedRet').value : '';
 
-      var isSolar = document.getElementById('gpIsSolar') && document.getElementById('gpIsSolar').checked;
-      // Multi-item support is standalone only - a module gate pass's
-      // "items" are its boxes, already on the challan it links to.
       // typeof-guarded: gpCollectItems is defined outside the marker range
       // test_gatepass.js extracts issueGP from, so a harness that stubs
-      // only this function and gpToggleSolarMode never sees it declared.
-      var items = (!isSolar && typeof gpCollectItems === 'function') ? gpCollectItems() : [];
+      // only this function never sees it declared.
+      var items = (typeof gpCollectItems === 'function') ? gpCollectItems() : [];
       var editing = window.__gpEditing;
 
       var payload = {
-          is_solar: isSolar,
           kind: typeNRGP,
           party: party.trim(),
           delivery_address: addr.trim(),
           vehicle_no: vehicle.trim(),
-          description: desc.trim(),
-          qty: qtyRaw ? parseInt(qtyRaw, 10) : null,
-          challan_id: chId,
+          items: items,
           expected_return: typeNRGP === 'RGP' ? expectedRet : null
       };
-      if (!isSolar) payload.items = items;
 
       if (!payload.party) {
           toast('Party / destination is required.');
           return;
       }
-      if (isSolar) {
-          if (!payload.description) {
-              toast('Say what material is going out.');
-              return;
-          }
-          if (!chId) { toast('Select a challan first.'); return; }
-          // The server enforces this regardless (POST /api/gatepass
-          // refuses any challan-linked gate pass whose loading is
-          // incomplete, keyed on challan_id itself - see api_gatepass).
-          // This is only so the operator finds out before submitting,
-          // not instead of the real rule - Issue is already disabled
-          // while this is false, but a disabled attribute is a hint, not
-          // where the rule lives.
-          if (window._gpChallanReady !== true) {
-              var lState = document.getElementById('gpLoadingState');
-              toast((lState && lState.textContent.trim()) ||
-                'Loading verification is not complete for this challan yet.');
-              return;
-          }
-      } else if (!items.length) {
+      if (!items.length) {
           toast('Add at least one item.');
           return;
       }
@@ -9223,57 +9096,6 @@ function wireFqcAnomalies() {
             btn.textContent = editing ? 'Save changes' : 'Issue gate pass';
             toast((err && err.why) || (err && err.message) || 'Could not save.');
         });
-  };
-
-  
-  window.gpToggleSolarMode = function() {
-      var isSolar = document.getElementById('gpIsSolar').checked;
-      var selWrap = document.getElementById('gpChallanSelV4') ? document.getElementById('gpChallanSelV4').closest('.fld') : null;
-      var partyEl = document.getElementById('gpParty');
-      var vehEl = document.getElementById('gpVehicle');
-      var descEl = document.getElementById('gpDesc');
-      var qtyEl = document.getElementById('gpQty');
-      var lWrap = document.getElementById('gpLoadingStateWrap');
-      var btn = document.getElementById('gpBtn');
-      var sel = document.getElementById('gpChallanSelV4');
-      // Standalone's multi-item grid replaces gpDesc/gpQty entirely - the
-      // module path's own single fields (auto-filled from the challan,
-      // read-only) are unaffected either way.
-      var singleWrap = document.getElementById('gpSingleWrap');
-      var itemsWrap = document.getElementById('gpItemsWrap');
-
-      if (isSolar) {
-          if (selWrap) selWrap.style.display = 'block';
-          partyEl.readOnly = true;
-          vehEl.readOnly = true;
-          descEl.readOnly = true;
-          qtyEl.readOnly = true;
-          partyEl.classList.add('ro');
-          vehEl.classList.add('ro');
-          descEl.classList.add('ro');
-          qtyEl.classList.add('ro');
-          if (singleWrap) singleWrap.style.display = '';
-          if (itemsWrap) itemsWrap.style.display = 'none';
-
-          if (sel && sel.onchange) sel.onchange(); // Trigger evaluation
-      } else {
-          if (selWrap) selWrap.style.display = 'none';
-          partyEl.readOnly = false;
-          vehEl.readOnly = false;
-          descEl.readOnly = false;
-          qtyEl.readOnly = false;
-          partyEl.classList.remove('ro');
-          vehEl.classList.remove('ro');
-          descEl.classList.remove('ro');
-          qtyEl.classList.remove('ro');
-          if (lWrap) lWrap.style.display = 'none';
-          if (btn) btn.disabled = false;
-          if (sel) sel.value = '';
-          if (singleWrap) singleWrap.style.display = 'none';
-          if (itemsWrap) itemsWrap.style.display = '';
-          window._gpChallanReady = null;
-          gpRenderPreview(null);
-      }
   };
 
 window.gpSetKind = function(k) {
@@ -9315,7 +9137,12 @@ window.gpSetKind = function(k) {
   // number as the document ref to resolve - a ref that never existed
   // server-side, so clicking them already failed with a toast naming it.
   function gpHideUnwiredFields() {
-    ['Gate pass no.', 'Delivery order no.', 'Container no.'].forEach(function (label) {
+    // "Against challan" joins the other three here now: a module gate
+    // pass is never created from this page any more (Loading
+    // Verification's own submit creates it automatically), so v4's
+    // native select has nothing left to do and nothing wires it any more.
+    ['Gate pass no.', 'Delivery order no.', 'Container no.',
+     'Against challan'].forEach(function (label) {
       var f = gpFldFor(label);
       if (!f) return;
       f.style.display = 'none';
@@ -9348,151 +9175,17 @@ window.gpSetKind = function(k) {
     });
   }
 
-  // The "Gate pass preview" card (the left-hand mock document) was never
-  // wired at all - v4's own SAI BABUJI / CHN-455 / A044-A045 sample data
-  // sat there permanently regardless of which real challan the operator
-  // picked in "Against challan". Rebuilt once, with real ids, so it can
-  // be filled from the selected challan's actual detail bundle instead.
-  function gpRebuildPreviewCard(vGp) {
+  // The "Gate pass preview" card (the left-hand mock document) used to be
+  // rebuilt live from whichever challan was selected. There is no live
+  // document preview on this page any more - a person is creating a
+  // standalone gate pass, not watching a specific challan's contents
+  // assemble, and a module gate pass (the only kind this ever previewed)
+  // is not created here at all now. v4's card cannot be removed from
+  // icon_trace.html, so it is hidden outright rather than left showing
+  // stale demo content nothing here populates any more.
+  function gpHidePreviewCard(vGp) {
     var card = vGp.querySelector('.work > .card');
-    var body = card && card.querySelector('.card-b > div');
-    if (!body || document.getElementById('gpPrevParty')) return;
-    var header = body.querySelector('div');   // the letterhead block, kept as-is
-    var note = body.querySelector('.note.n-warn');
-    body.innerHTML =
-      (header ? header.outerHTML : '') +
-      '<div class="grid g2" style="gap:9px;font-size:11.5px">' +
-        '<div><b>Party</b><br><span id="gpPrevParty">Select a challan to preview</span><br>' +
-          '<span id="gpPrevGstinPan" style="color:var(--ink3)"></span></div>' +
-        '<div><b>Challan no.</b> <span class="mono" id="gpPrevChallanNo">—</span><br>' +
-          '<b>Date</b> <span class="mono" id="gpPrevDate">—</span><br>' +
-          '<b>Vehicle</b> <span class="mono" id="gpPrevVehicle">—</span></div></div>' +
-      '<table style="margin-top:12px;border:1px solid var(--line)">' +
-        '<thead><tr><th>Sl</th><th>Item</th><th>Box no.</th><th>Unit</th>' +
-          '<th style="text-align:right">Qty</th></tr></thead>' +
-        '<tbody id="gpPrevBoxRows"></tbody>' +
-        '<tfoot><tr><td colspan="3">Total boxes <span id="gpPrevTotalBoxes">0</span></td>' +
-          '<td>Nos</td><td class="num" id="gpPrevTotalQty">0</td></tr></tfoot></table>' +
-      // Rebuilt explicitly rather than regex-edited from the original's
-      // outerHTML - a text-pattern match against v4's exact demo wording
-      // ("Suresh Patel" ... "Performed") is exactly the kind of thing
-      // that silently stops matching (and silently keeps showing the old
-      // fake content) the moment that wording drifts even slightly.
-      '<div class="grid g4" style="margin-top:18px;font-size:10px">' +
-        '<div style="border:1px solid var(--line);border-radius:2px;padding:8px">' +
-          '<div style="font-size:8.5px;font-weight:700;color:var(--ink3);' +
-            'text-transform:uppercase;letter-spacing:.6px">Packed by · Team 1</div>' +
-          '<div style="font-weight:700;font-size:11px;margin-top:3px;color:var(--ink3)">not recorded here</div>' +
-          '<div class="mono" style="color:var(--ink3);font-size:9px">see the box’s own record</div>' +
-          '<div style="margin-top:4px"><span class="tag t-mute" style="font-size:8px">—</span></div></div>' +
-        '<div style="border:1px solid var(--line);border-radius:2px;padding:8px">' +
-          '<div style="font-size:8.5px;font-weight:700;color:var(--ink3);' +
-            'text-transform:uppercase;letter-spacing:.6px">Prepared by · Team 2</div>' +
-          '<div style="font-weight:700;font-size:11px;margin-top:3px;color:var(--ink3)">not recorded here</div>' +
-          '<div class="mono" style="color:var(--ink3);font-size:9px">see the box’s own record</div>' +
-          '<div style="margin-top:4px"><span class="tag t-mute" style="font-size:8px">—</span></div></div>' +
-        '<div style="border:1px solid var(--solar);border-radius:2px;padding:8px;background:var(--solar-lt)">' +
-          '<div style="font-size:8.5px;font-weight:700;color:var(--solar);' +
-            'text-transform:uppercase;letter-spacing:.6px">Loaded by · Team 3</div>' +
-          '<div style="font-weight:700;font-size:11px;margin-top:3px;color:var(--ink3)" ' +
-            'id="gpPrevLoadedBy">awaiting scan</div>' +
-          '<div class="mono" style="color:var(--ink3);font-size:9px">verify boxes on vehicle</div>' +
-          '<div style="margin-top:4px"><span class="tag t-rev" id="gpPrevLoadedTag" ' +
-            'style="font-size:8px">Pending</span></div></div>' +
-        '<div style="border:1px solid var(--line);border-radius:2px;padding:8px">' +
-          '<div style="font-size:8.5px;font-weight:700;color:var(--ink3);' +
-            'text-transform:uppercase;letter-spacing:.6px">Security &amp; driver</div>' +
-          '<div style="height:22px;border-bottom:1px solid var(--line);margin-top:4px"></div>' +
-          '<div style="color:var(--ink3);font-size:9px;margin-top:3px">signed at gate</div></div>' +
-      '</div>' +
-      (note ? note.outerHTML : '');
-  }
-
-  function gpFmtDate(iso) {
-    if (!iso) return '—';
-    var m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
-    return m ? (m[3] + '-' + m[2] + '-' + m[1]) : iso;
-  }
-
-  // Real box_id-level loading status, not v4's frozen "awaiting scan" -
-  // the same three-state aggregate Loading Verification's own landing
-  // list already computes, so this card agrees with that screen instead
-  // of contradicting it.
-  function gpLoadedAgg(boxes) {
-    if (!boxes || !boxes.length) return null;
-    var loaded = boxes.filter(function (b) { return b.loading_status === 'loaded'; }).length;
-    var started = boxes.filter(function (b) { return b.loading_status !== 'pending'; }).length;
-    if (loaded === boxes.length) return 'loaded';
-    if (started > 0) return 'in_progress';
-    return 'pending';
-  }
-
-  function gpRenderPreview(bundle) {
-    var party = document.getElementById('gpPrevParty');
-    if (!party) return;   // the card was never built (view not on screen)
-    var gstinPan = document.getElementById('gpPrevGstinPan');
-    var chNo = document.getElementById('gpPrevChallanNo');
-    var date = document.getElementById('gpPrevDate');
-    var veh = document.getElementById('gpPrevVehicle');
-    var rows = document.getElementById('gpPrevBoxRows');
-    var totalBoxes = document.getElementById('gpPrevTotalBoxes');
-    var totalQty = document.getElementById('gpPrevTotalQty');
-    var loadedBy = document.getElementById('gpPrevLoadedBy');
-    var loadedTag = document.getElementById('gpPrevLoadedTag');
-
-    if (!bundle) {
-      party.textContent = 'Select a challan to preview';
-      if (gstinPan) gstinPan.textContent = '';
-      if (chNo) chNo.textContent = '—';
-      if (date) date.textContent = '—';
-      if (veh) veh.textContent = '—';
-      if (rows) rows.innerHTML = '<tr><td colspan="5" style="text-align:center;' +
-        'color:var(--ink3);padding:10px">No challan selected yet</td></tr>';
-      if (totalBoxes) totalBoxes.textContent = '0';
-      if (totalQty) totalQty.textContent = '0';
-      return;
-    }
-
-    var ch = bundle.challan || {};
-    var boxes = bundle.boxes || [];
-    party.textContent = ch.buyer_name || 'General Stock';
-    if (gstinPan) {
-      var gstin = ch.buyer_gstin || '';
-      var pan = gstin.length >= 12 ? gstin.slice(2, 12) : '';
-      gstinPan.textContent = gstin ? ('GSTIN ' + gstin + (pan ? ' · PAN ' + pan : '')) : '';
-    }
-    if (chNo) chNo.textContent = ch.challan_no || '—';
-    if (date) date.textContent = gpFmtDate(ch.challan_date);
-    if (veh) veh.textContent = ch.vehicle_no || '—';
-    if (rows) {
-      rows.innerHTML = boxes.length ? boxes.map(function (b, i) {
-        return '<tr><td>' + (i + 1) + '</td><td class="mono">' + fqcEsc(ch.model || '—') +
-          '</td><td class="mono">' + fqcEsc(b.box_no || '—') + '</td><td>Nos</td>' +
-          '<td class="num">' + (b.qty || 0) + '</td></tr>';
-      }).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--ink3);' +
-        'padding:10px">No boxes on this challan</td></tr>';
-    }
-    if (totalBoxes) totalBoxes.textContent = String(boxes.length);
-    if (totalQty) totalQty.textContent = String(boxes.reduce(function (s, b) {
-      return s + (b.qty || 0);
-    }, 0));
-
-    if (loadedBy && loadedTag) {
-      var agg = gpLoadedAgg(boxes);
-      if (agg === 'loaded') {
-        loadedBy.textContent = 'Loaded';
-        loadedTag.className = 'tag t-pass'; loadedTag.style.fontSize = '8px';
-        loadedTag.textContent = 'Confirmed';
-      } else if (agg === 'in_progress') {
-        loadedBy.textContent = 'In progress';
-        loadedTag.className = 'tag t-rev'; loadedTag.style.fontSize = '8px';
-        loadedTag.textContent = 'Partial';
-      } else {
-        loadedBy.textContent = 'awaiting scan';
-        loadedTag.className = 'tag t-rev'; loadedTag.style.fontSize = '8px';
-        loadedTag.textContent = 'Pending';
-      }
-    }
+    if (card) card.style.display = 'none';
   }
 
   /* ---- Gate Pass: the landing list -----------------------------------
@@ -9752,8 +9445,6 @@ window.gpSetKind = function(k) {
   };
 
   function gpFillEditForm(gp) {
-    var solarBox = document.getElementById('gpIsSolar');
-    if (solarBox) { solarBox.checked = false; window.gpToggleSolarMode(); }
     var set = function (id, v) { var e = document.getElementById(id); if (e) e.value = v || ''; };
     set('gpParty', gp.party);
     set('gpAddr', gp.delivery_address);
@@ -9789,27 +9480,19 @@ window.gpSetKind = function(k) {
       var vGp = document.getElementById('v-gp');
       if (!vGp) return;
 
-      // Inject UI if not present
+      // Inject UI if not present. Standalone only now - a module gate
+      // pass is never created here (Loading Verification's own submit
+      // creates it automatically), so there is no checkbox, no challan
+      // selector and no live preview on this page at all any more.
       if (!document.getElementById('gpKindSeg')) {
           var detailsCard = vGp.querySelector('.rail .card-b');
           if (detailsCard) {
-              // Captured BEFORE anything is injected: v4's native "Against
-              // challan" select is the only one here at this point. The
-              // item grid's own <select class="gpi_unit"> (Nos/Kg/Set,
-              // inside the <template> injected below) would otherwise be
-              // "the first select in this card" once inserted first -
-              // querying for it only now, ahead of insertAdjacentHTML,
-              // means which select this finds can never depend on how
-              // many others get added here later.
-              var nativeChallanSelect = detailsCard.querySelector('select');
-              // Type toggle, real Party/Vehicle/Description/Qty fields, and
-              // Expected Return. Party and Description are the two things
-              // v4's original markup never had a field for at all - without
-              // them a non-challan gate pass (equipment, materials, cell
-              // stock between units) could not be issued through this
-              // screen no matter what the challan dropdown was set to.
+              // Type toggle, real Party/Vehicle/Address fields, the item
+              // grid, and Expected Return. Party is the one thing v4's
+              // original markup never had a field for at all - without it
+              // a non-challan gate pass (equipment, materials, cell stock
+              // between units) could not be issued through this screen.
               var injectHtml =
-                '<div class="fld"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="gpIsSolar" onchange="window.gpToggleSolarMode()"> This gate pass is for solar modules</label></div>' +
                 '<div class="fld" id="gpTypeWrap"><label>Type</label>' +
                 '<div class="seg" id="gpKindSeg">' +
                 '<button class="on" id="gpNRGP" onclick="gpSetKind(\'NRGP\')">NRGP</button>' +
@@ -9820,21 +9503,10 @@ window.gpSetKind = function(k) {
                 '<input id="gpAddr"></div>' +
                 '<div class="fld"><label>Vehicle / by hand</label>' +
                 '<input id="gpVehicle" placeholder="e.g. BY HAND, or a vehicle no."></div>' +
-                // gpDesc/gpQty: the module path's own fields (auto-filled
-                // from the challan, read-only) - unchanged. Standalone
-                // does not use them any more; gpToggleSolarMode() shows
-                // this wrap or the item grid below, never both.
-                '<div id="gpSingleWrap">' +
-                '<div class="fld req"><label>Material going out</label>' +
-                '<input id="gpDesc" placeholder="e.g. CORE I5-14400 PROCESSOR SET"></div>' +
-                '<div class="fld"><label>Quantity</label>' +
-                '<input id="gpQty" type="number" min="1"></div>' +
-                '</div>' +
-                // Multi-item support, standalone only. Only the address
-                // field sits outside this grid, per Mukesh directly - the
-                // reference document's own columns are Sl | Material
-                // description | UOM | Qty | Remarks.
-                '<div id="gpItemsWrap" style="display:none">' +
+                // The reference document's own columns are Sl | Material
+                // description | UOM | Qty | Remarks - only address sits
+                // outside this grid, per Mukesh directly.
+                '<div id="gpItemsWrap">' +
                 '<label style="font-weight:600;font-size:12px;display:block;margin-bottom:6px">Items</label>' +
                 '<div id="gpItemsBody"></div>' +
                 '<button type="button" class="btn btn-sm" onclick="gpAddItem()">+ Add item</button>' +
@@ -9854,101 +9526,12 @@ window.gpSetKind = function(k) {
                 '<button type="button" class="btn btn-sm btn-ghost" onclick="gpDropItem(this)">Remove this item</button></div>' +
                 '</div></template>' +
                 '<div class="fld" id="gpRetWrap" style="display:none"><label>Expected return</label>' +
-                '<input type="date" id="gpExpectedRet"></div>' +
-                '<div class="fld" id="gpLoadingStateWrap" style="display:none; grid-column:1/-1">' +
-                '<span id="gpLoadingState" class="tag"></span></div>';
-detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
+                '<input type="date" id="gpExpectedRet"></div>';
+              detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
               gpAddItem();
-
-              // Replace placeholder select - a CONVENIENCE, never a
-              // requirement. Choosing a challan pre-fills party/vehicle/qty
-              // if the operator has not already typed their own; it never
-              // locks the fields and never gates the Issue button.
-              gpRebuildPreviewCard(vGp);
-
-              var selFld = nativeChallanSelect;
-              if (selFld) {
-                  selFld.id = 'gpChallanSelV4';
-                  var reqLabel = selFld.closest('.fld');
-                  if (reqLabel) reqLabel.classList.remove('req');
-                  selFld.onchange = function() {
-                      var chId = this.value ? parseInt(this.value, 10) : null;
-                      window._gpChallanReady = null;
-                      if (!chId) {
-                          gpRenderPreview(null);
-                          if (document.getElementById('gpIsSolar') && document.getElementById('gpIsSolar').checked) {
-                              document.getElementById('gpParty').value = '';
-                              document.getElementById('gpVehicle').value = '';
-                              document.getElementById('gpQty').value = '';
-                              document.getElementById('gpDesc').value = '';
-                              document.getElementById('gpBtn').disabled = true;
-                              document.getElementById('gpLoadingStateWrap').style.display = 'none';
-                          }
-                          return;
-                      }
-                      fetch('/api/challan/' + chId, { cache: 'no-store' })
-                        .then(function(r) { return r.json(); })
-                        .then(function(bundle) {
-                            if (!bundle || bundle.error) return;
-                            var ch = bundle.challan || {};
-                            var partyEl = document.getElementById('gpParty');
-                            var vehEl = document.getElementById('gpVehicle');
-                            var qtyEl = document.getElementById('gpQty');
-                            var descEl = document.getElementById('gpDesc');
-                            var isSolar = document.getElementById('gpIsSolar') && document.getElementById('gpIsSolar').checked;
-
-                            var cname = ch.buyer_name || '';
-                            var cveh = ch.vehicle_no || '';
-                            var cqty = ch.qty || '';
-                            var cdesc = ch.model ? (ch.model + ' modules') : 'Modules against ' + (ch.challan_no || 'challan');
-
-                            if (isSolar) {
-                                partyEl.value = cname;
-                                vehEl.value = cveh;
-                                qtyEl.value = cqty;
-                                descEl.value = cdesc;
-
-                                // ch.loading_agg / loading_why / loading_n_*
-                                // come straight from the server
-                                // (_loading_agg_status / _loading_incomplete,
-                                // the same functions Loading Verification's
-                                // own list and the print/excel refusal
-                                // already call) - not recomputed here from
-                                // bundle.boxes, so this can never drift from
-                                // what the server will actually enforce.
-                                var lWrap = document.getElementById('gpLoadingStateWrap');
-                                var lState = document.getElementById('gpLoadingState');
-                                lWrap.style.display = 'block';
-                                window._gpChallanReady = ch.loading_agg === 'loaded';
-
-                                if (ch.loading_agg === 'loaded') {
-                                    lState.className = 'tag t-pass';
-                                    lState.textContent = '✔ ' + ch.loading_n_loaded + ' of ' +
-                                      ch.loading_n_total + ' pallets loaded';
-                                    document.getElementById('gpBtn').disabled = false;
-                                } else {
-                                    lState.className = 'tag t-fail';
-                                    lState.textContent = ch.loading_why ||
-                                      ((ch.loading_n_loaded || 0) + ' of ' + (ch.loading_n_total || 0) +
-                                       ' pallets loaded — not ready');
-                                    document.getElementById('gpBtn').disabled = true;
-                                }
-                            } else {
-                                if (partyEl && !partyEl.value) partyEl.value = cname;
-                                if (vehEl && !vehEl.value) vehEl.value = cveh;
-                                if (qtyEl && !qtyEl.value) qtyEl.value = cqty;
-                                if (descEl && !descEl.value) descEl.value = cdesc;
-                            }
-
-                            gpRenderPreview(bundle);
-                        })
-                        .catch(function() {});
-                  };
-
-              }
+              gpHidePreviewCard(vGp);
           }
       }
-      gpRenderPreview(null);
 
       // A real page now, not a card of fields left as they were - close
       // button top-right, back to the landing list, same pattern as
@@ -9971,7 +9554,6 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
         railActs.appendChild(clr);
       }
 
-      if (document.getElementById('gpIsSolar')) { document.getElementById('gpIsSolar').checked = false; window.gpToggleSolarMode(); }
       // Every fresh visit starts from one blank item row - an edit
       // (gpBeginEdit, called right after go('gp') returns) overwrites this
       // immediately afterward with the real rows.
@@ -9984,32 +9566,6 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
 
       document.getElementById('gpBtn').disabled = false;
       if (document.getElementById('gpBy')) document.getElementById('gpBy').value = USER ? USER.name : '';
-
-      fetch('/api/challans?status=issued', { cache: 'no-store' })
-        .then(function(r) { return r.json(); })
-        .then(function(body) {
-            // api_challans_list() returns {"challans": [...]}, not a bare
-            // array - this was treating the wrapper object itself as the
-            // array and calling .forEach on it, which throws and (since
-            // nothing downstream catches it) leaves _gpLiveChallans unset.
-            var rows = (body && body.challans) || [];
-            window._gpLiveChallans = rows;
-            var sel = document.getElementById('gpChallanSelV4');
-            if (!sel) return;
-            var html = '<option value="">— select challan —</option>';
-            rows.forEach(function(r) {
-                var cname = r.customer_name || r.buyer_name || '';
-                html += '<option value="' + r.challan_id + '">' + fqcEsc(r.challan_no) + ' · ' + fqcEsc(cname) + ' · ' + (r.box_count||0) + ' boxes</option>';
-            });
-            sel.innerHTML = html;
-
-            // Handle cross-link preselection
-            if (window._gpPreselectChallanId) {
-                sel.value = window._gpPreselectChallanId;
-                sel.onchange(); // trigger pre-fill
-                window._gpPreselectChallanId = null;
-            }
-        });
   }
 
   console.log('[ICON TRACE] live layer active \u00B7 build', B.build,

@@ -137,6 +137,12 @@ def statuses_of(chid):
     return {r["box_no"]: r["loading_status"] for r in rows}
 
 
+def gatepasses_for(chid):
+    with store.conn() as (cx, cur):
+        return [dict(r) for r in store.rows(
+            cur, "SELECT * FROM gatepass WHERE challan_id=%s", (chid,))]
+
+
 # --------------------------------------------------------------------------
 # the scan / confirm session
 # --------------------------------------------------------------------------
@@ -241,6 +247,85 @@ def t_submit_promotes_atomically():
 
 
 # --------------------------------------------------------------------------
+# submit auto-generates the module gate pass - it did not exist as a
+# record at all before this: api_loading_submit() promoted boxes and
+# wrote an audit entry, but no one ever inserted a gatepass row.
+# --------------------------------------------------------------------------
+
+@test("submitting a fully-loaded challan creates exactly one gatepass "
+     "row, linked to it, with a real drawn gp_no")
+def t_submit_creates_gatepass():
+    c = setup()
+    b = packed_box(c, [70, 71])
+    inv = make_invoice(qty=2, invoice_no="INV-LOAD-GP1")
+    chid = make_issued_challan(c, [b], inv)
+    box_no = box_no_of(chid)
+
+    assert gatepasses_for(chid) == [], "a gate pass existed before submission"
+    c.post("/api/loading/%d/confirm" % chid, json={"box_no": box_no})
+    r = c.post("/api/loading/%d/submit" % chid, json={})
+    assert r.status_code == 200, r.get_json()
+
+    gps = gatepasses_for(chid)
+    assert len(gps) == 1, gps
+    gp = gps[0]
+    assert gp["gp_no"], "no gate pass number was drawn"
+    assert gp["gp_no"].startswith("ISGP"), \
+        "not drawn from the real numbering function: %r" % gp["gp_no"]
+    assert gp["kind"] == "NRGP", gp
+    assert gp["challan_id"] == chid, gp
+
+
+@test("submitting an already-submitted challan again does not create a "
+     "second gatepass row - safe to call at most once per challan")
+def t_resubmit_does_not_duplicate_gatepass():
+    c = setup()
+    b = packed_box(c, [72, 73])
+    inv = make_invoice(qty=2, invoice_no="INV-LOAD-GP2")
+    chid = make_issued_challan(c, [b], inv)
+    box_no = box_no_of(chid)
+    c.post("/api/loading/%d/confirm" % chid, json={"box_no": box_no})
+    c.post("/api/loading/%d/submit" % chid, json={})
+    first = gatepasses_for(chid)
+    assert len(first) == 1, first
+
+    r2 = c.post("/api/loading/%d/submit" % chid, json={})
+    assert r2.status_code == 200, r2.get_json()
+    r3 = c.post("/api/loading/%d/submit" % chid, json={})
+    assert r3.status_code == 200, r3.get_json()
+
+    second = gatepasses_for(chid)
+    assert len(second) == 1, "resubmitting created another gate pass: %s" % second
+    assert second[0]["gp_id"] == first[0]["gp_id"], \
+        "the gate pass row's identity changed across a resubmit"
+
+
+@test("the auto-created gate pass's party, vehicle and quantity come from "
+     "the challan's own data - the same fields the old manual "
+     "select-a-challan flow used to pull")
+def t_gatepass_matches_challan_data():
+    c = setup()
+    b = packed_box(c, [74, 75])
+    inv = make_invoice(qty=2, invoice_no="INV-LOAD-GP3")
+    r0 = c.post("/api/challan", json={"action": "create", "boxes": [b],
+                                      "invoice_id": inv,
+                                      "vehicle_no": "CG04GP0001"})
+    assert r0.status_code == 200, r0.get_json()
+    chid = r0.get_json()["challan_id"]
+    with store.conn() as (cx, cur):
+        ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s", (chid,))
+    box_no = box_no_of(chid)
+    c.post("/api/loading/%d/confirm" % chid, json={"box_no": box_no})
+    c.post("/api/loading/%d/submit" % chid, json={})
+
+    gp = gatepasses_for(chid)[0]
+    assert gp["party"] == ch["buyer_name"], (gp, dict(ch))
+    assert gp["vehicle_no"] == "CG04GP0001", gp
+    assert gp["qty"] == ch["qty"], (gp, dict(ch))
+    assert ch["model"] in (gp["description"] or ""), gp
+
+
+# --------------------------------------------------------------------------
 # the print/excel gate
 # --------------------------------------------------------------------------
 
@@ -285,9 +370,14 @@ def t_edit_resets_loading_status():
     inv = make_invoice(qty=2, invoice_no="INV-LOAD-EDIT")
     chid = make_issued_challan(c, [b1], inv)
     box_no = box_no_of(chid)
+    # Confirmed, not submitted: submitting now writes a real gate pass,
+    # which locks the challan from being edited at all (the same check
+    # every other challan mutation route already enforces) - a genuinely
+    # different, and correct, refusal covered separately below. This test
+    # is about the reset itself, so it exercises the edit while the
+    # challan is still actually editable.
     c.post("/api/loading/%d/confirm" % chid, json={"box_no": box_no})
-    c.post("/api/loading/%d/submit" % chid, json={})
-    assert statuses_of(chid)[box_no] == "loaded"
+    assert statuses_of(chid)[box_no] == "saved"
 
     r = c.post("/api/challan/%d/edit-save" % chid,
               json={"boxes": [b2], "invoice_id": inv})
@@ -299,13 +389,33 @@ def t_edit_resets_loading_status():
     assert list(new_status.values())[0] == "pending", \
         "the edited challan's pallet did not start clean: %s" % new_status
     # and the new document is correctly gated again, unrelated to the old
-    # session's completion
+    # session's progress
     with store.conn() as (cx, cur):
         row = store.one(cur, "SELECT fy, seq FROM challan WHERE challan_id=%s",
                         (new_id,))
     r2 = c.get("/challan/%d/%d/print" % (row["fy"], row["seq"]))
     assert r2.status_code == 400, \
         "a freshly edited challan printed without its own verification"
+
+
+@test("a challan whose loading has been submitted - and so has a real "
+     "gate pass now - can no longer be edited at all, locked the same "
+     "way any other gate-pass-referenced challan already is")
+def t_submitted_challan_locked_from_edit():
+    c = setup()
+    b = packed_box(c, [76, 77])
+    inv = make_invoice(qty=2, invoice_no="INV-LOAD-LOCK")
+    chid = make_issued_challan(c, [b], inv)
+    box_no = box_no_of(chid)
+    c.post("/api/loading/%d/confirm" % chid, json={"box_no": box_no})
+    c.post("/api/loading/%d/submit" % chid, json={})
+    assert len(gatepasses_for(chid)) == 1
+
+    r = c.post("/api/challan/%d/edit-save" % chid,
+              json={"boxes": [b], "invoice_id": inv})
+    assert r.status_code == 400, \
+        "a challan with a real gate pass on it was edited anyway"
+    assert "gate pass" in r.get_json()["why"].lower(), r.get_json()
 
 
 # --------------------------------------------------------------------------

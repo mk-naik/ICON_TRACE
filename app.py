@@ -1248,9 +1248,17 @@ def api_loading_confirm(challan_id):
 def api_loading_submit(challan_id):
     """Refuses unless every pallet has been confirmed; promotes every one
     of them to 'loaded' together, in one transaction - a partial promotion
-    would let some of the shipment print as verified when it was not."""
+    would let some of the shipment print as verified when it was not.
+
+    This is also where the module gate pass actually comes into being. A
+    person never manually creates one for a challan any more (see the
+    Gate Pass create page) - Loading Verification finishing IS the event
+    that says the modules left the gate, so this is where the record is
+    written, once, from the challan's own data: the same party, vehicle
+    and item summary the old manual "select a challan" flow used to pull.
+    """
     with store.conn() as (cx, cur):
-        ch = store.one(cur, "SELECT challan_id FROM challan WHERE challan_id=%s",
+        ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
                        (challan_id,))
         if not ch:
             return jsonify({"ok": False, "why": "No such challan."}), 404
@@ -1267,7 +1275,40 @@ def api_loading_submit(challan_id):
                     "WHERE challan_id=%s", (challan_id,))
         db.audit(cur, actor(), "loading.submit", "challan", challan_id,
                  {"boxes": len(boxes)})
-    return jsonify({"ok": True, "loaded": len(boxes)})
+
+        # Safe to call more than once per challan (a resubmit is a no-op
+        # everywhere else in this route too) - checked in the same
+        # transaction the row is written in, not assumed from the caller
+        # never doing it twice.
+        gp_no = None
+        existing = store.one(cur, "SELECT gp_no FROM gatepass WHERE "
+                                  "challan_id=%s", (challan_id,))
+        if existing:
+            gp_no = existing["gp_no"]
+        else:
+            d = datetime.date.today()
+            seq = db.draw_gp_seq(cur, d)
+            gp_no = db.render_gp_no(d, seq)
+            try:
+                cdate = datetime.date.fromisoformat(ch["challan_date"])
+                ch_no = db.render_challan_no(cdate, ch["seq"], ch.get("suffix"))
+            except (TypeError, ValueError):
+                ch_no = None
+            rec = {
+                "gp_no": gp_no, "gp_date": d.isoformat(), "kind": "NRGP",
+                "party": ch.get("buyer_name") or "",
+                "delivery_address": "",
+                "vehicle_no": ch.get("vehicle_no") or "",
+                "description": (ch["model"] + " modules") if ch.get("model")
+                    else ("Modules against " + (ch_no or "challan")),
+                "qty": ch.get("qty"),
+                "expected_return": None,
+                "challan_no": ch_no,
+                "challan_id": challan_id,
+            }
+            db.create_gatepass(cur, rec, actor())
+            db.audit(cur, actor(), "gatepass.issue", "gatepass", gp_no, rec)
+    return jsonify({"ok": True, "loaded": len(boxes), "gp_no": gp_no})
 
 
 @app.route("/api/challan/boxes")
@@ -6372,6 +6413,19 @@ def api_gatepass():
                 why = _loading_incomplete(boxes)
                 if why:
                     return jsonify({"ok": False, "why": why}), 400
+            # Loading Verification's own submit is what actually creates a
+            # module gate pass now (api_loading_submit) - a person never
+            # does this manually any more. This route still exists (kept
+            # for the historical-challan case, which predates Loading
+            # Verification entirely and so is never submitted through it),
+            # but it must not be a second way to the same challan ending
+            # up with two gate pass numbers for one shipment.
+            dupe = store.one(cur, "SELECT gp_no FROM gatepass WHERE "
+                                  "challan_id=%s", (ch_id,))
+            if dupe:
+                return jsonify({"ok": False, "why":
+                    "%s already has a gate pass: %s." % (ch_row.get("challan_no")
+                    or ("challan #%d" % ch_id), dupe["gp_no"])}), 400
 
         seq = db.draw_gp_seq(cur, d)
         no = db.render_gp_no(d, seq)
