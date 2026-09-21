@@ -24,25 +24,16 @@ mapping column rather than something we derive.
 """
 
 # code, wattage, family, cells, cells/string, strings, produced
-#
-# Every `produced` flag below is True for now, on Mukesh's direct call: the
-# back-label-authorised range still ends at 635 Wp (see the comment on the
-# G12R block), but nothing in that range should show as unavailable in
-# Planning while that gets sorted out. ISEN652-G12R was added the same way
-# ISEN630-G12R once had to be - a real wattage Planning needed that the
-# master didn't have yet - not because 652 is back-label authorised.
 _SEED = [
     # G12R - back label authorises 600 to 635 Wp in 5 W steps
-    ("ISEN600-G12R", 600, "G12R", 132, 22, 6, True),
-    ("ISEN605-G12R", 605, "G12R", 132, 22, 6, True),
+    ("ISEN600-G12R", 600, "G12R", 132, 22, 6, False),
+    ("ISEN605-G12R", 605, "G12R", 132, 22, 6, False),
     ("ISEN610-G12R", 610, "G12R", 132, 22, 6, True),
-    ("ISEN615-G12R", 615, "G12R", 132, 22, 6, True),
+    ("ISEN615-G12R", 615, "G12R", 132, 22, 6, False),
     ("ISEN620-G12R", 620, "G12R", 132, 22, 6, True),
     ("ISEN625-G12R", 625, "G12R", 132, 22, 6, True),
     ("ISEN630-G12R", 630, "G12R", 132, 22, 6, True),
-    ("ISEN635-G12R", 635, "G12R", 132, 22, 6, True),
-    # not back-label authorised yet - added so Planning stops refusing it
-    ("ISEN652-G12R", 652, "G12R", 132, 22, 6, True),
+    ("ISEN635-G12R", 635, "G12R", 132, 22, 6, False),
     # G2X
     ("ISEN590-G2X", 590, "G2X", 144, 24, 6, True),
     ("ISEN600-G2X", 600, "G2X", 144, 24, 6, True),
