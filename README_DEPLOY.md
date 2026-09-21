@@ -301,8 +301,15 @@ outage when it will not.
 
 ## Live Tests
 To run the live tests, install Playwright and run the script:
-`ash
+``ash
 pip install playwright
 python -m playwright install chromium
 python test_build_banner_live.py
 `
+
+### Authentication and TOTP Requirements
+- **Dependencies**: pip install pyotp cryptography qrcode pytest playwright
+- **TOTP Key Backup**: .icon_totp_key MUST be backed up SEPARATELY from database backups. The encryption protects the database contents; if the key is lost, every TOTP user will have to re-enrol.
+- **NTP Server**: Optional overrides can be provided via ICON_NTP_SERVER.
+- **QR Code**: The qrcode package is REQUIRED for the enrolment QR code generation.
+- **Lab Run**: For the two-window lab run, ICON_DB_FILE must be set in BOTH windows.

@@ -381,8 +381,3 @@ thrown away rather than migrated.
 
 `GET /api/db/stats` returns row counts per table and the file size — the
 quickest way to confirm a save actually landed.
-T h e   / a p i / d b / r e s e t   e n d p o i n t   n o w   r e q u i r e s   I C O N _ A L L O W _ R E S E T = 1   i n   t h e   e n v i r o n m e n t .   I f   i t   i s   d i s a b l e d ,   t h e   e n d p o i n t   r e t u r n s   4 0 3   F o r b i d d e n   w i t h o u t   t o u c h i n g   t h e   d a t a b a s e ,   a n d   t h e   U I   d i s a b l e s   t h e   R e s e t   b u t t o n   i n   S e t t i n g s . 
- 
- 
-
-The /api/db/reset endpoint now requires ICON_ALLOW_RESET=1 in the environment. If it is disabled, the endpoint returns 403 Forbidden without touching the database, and the UI disables the Reset button in Settings.

@@ -265,3 +265,16 @@ which fields appear where, filter bars, sort order, print styling.
 the quantity rules, evidence reading, the parsers, the offline outbox, or the
 schema. Those have rules that are not visible in the markup, and getting one
 subtly wrong produces a system that looks right and is not.
+
+## 9. Authentication
+- **Backend logic**: icon_auth.py
+- **Command Line Tool**: icon_auth_cli.py (run python icon_auth_cli.py for usage)
+- **Lab UI**: uth_lab/
+- **Tests**:
+  - 	est_icon_auth.py (17 tests)
+  - 	est_auth_lab_live.py (13 tests)
+  - 	est_repo_hygiene.py (3 tests)
+- **Running the lab**:
+  Use two terminals. In both, set ICON_DB_FILE=lab.db (or another path).
+  Terminal 1: python auth_lab/lab_app.py
+  Terminal 2: python icon_auth_cli.py ...
