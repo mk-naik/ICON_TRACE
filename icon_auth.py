@@ -173,8 +173,17 @@ def check_password_policy(pw, login_id, display_name):
 def hash_pw(pw):
     return generate_password_hash(pw, method="pbkdf2:sha512:500000")
 
+_DUMMY_PW_HASH = None
+def _get_dummy_hash():
+    global _DUMMY_PW_HASH
+    if _DUMMY_PW_HASH is None:
+        _DUMMY_PW_HASH = hash_pw("dummy")
+    return _DUMMY_PW_HASH
+
 def check_pw(pw_hash, pw):
-    if not pw_hash: return False
+    if not pw_hash:
+        check_password_hash(_get_dummy_hash(), pw)
+        return False
     return check_password_hash(pw_hash, pw)
 
 def hash_token(token):
@@ -239,7 +248,7 @@ def _login_impl(cur, login_id, credential, ip=None, now=None):
     t = _now(now)
     u = _get_user(cur, login_id)
     if not u:
-        check_pw(hash_pw("dummy"), credential)
+        check_pw(None, credential)
         log_event(cur, login_id, "login_fail", ip, "unknown ID", t)
         return {"ok": False, "reason": GENERIC_FAIL}
 
