@@ -136,6 +136,15 @@ CREATE TABLE IF NOT EXISTS auth_event (
 """
 
 def ensure_schema(cur):
+    cur.execute("""
+CREATE TABLE IF NOT EXISTS auth_attempt (
+    login_key TEXT PRIMARY KEY,
+    fails INTEGER NOT NULL DEFAULT 0,
+    next_ok_at INTEGER NOT NULL DEFAULT 0,
+    last_at INTEGER NOT NULL
+);
+    """)
+
     for stmt in AUTH_SCHEMA.strip().split(";"):
         if stmt.strip():
             cur.execute(stmt)
@@ -490,6 +499,8 @@ def update_user(cur, actor_login_id, target_login_id, display_name=None, role=No
     if role and role != u["role"]:
         if get_rank(role) > get_rank(actor["role"]):
             raise AuthError("Cannot grant a role higher than your own.")
+        if get_rank(actor["role"]) == 2 and get_rank(role) > 1:
+            raise AuthError("Admins can only grant operator roles.")
         updates.append("role=%s")
         args.append(role)
         details.append(f"Role changed to '{role}'")
