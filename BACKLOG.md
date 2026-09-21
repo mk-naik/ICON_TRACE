@@ -2572,3 +2572,46 @@ Every dashboard screen (Production, Management, FQC, Packing Log, Stock & Dispat
 Production Entry and Loss of Production); those edits are intact, and the
 mutation runs were switched from whole-file restores to reversible one-span
 edits so nothing of theirs can be overwritten.
+
+## Round 16 — 652W G12R refused in Planning; all models made producible for now
+
+Mukesh reported a 652W G12R serial refused in Planning with v4's own
+message, "652W G12R is not produced at Unit-2" - `derive()` (native to
+`icon_trace.html`, never edited) matches a scanned serial's wattage+type
+against the `MODELS` array, which is replaced at boot with the real master
+from `icon_models.py`. That master had no entry at 652 W at all - the G12R
+seed only ever covered the back-label-authorised 600-635 Wp range in 5 W
+steps - so the match failed the same way `ISEN630-G12R` once did before it
+was added (documented in `icon_models.py`'s own header).
+
+**Confirmed before changing anything:** `derive()` doesn't consult the
+`produced` flag at all - it only checks whether a `{watt, tc}` pair exists
+in `MODELS`. So the fix has two independent parts, per Mukesh's own
+instruction to fix the specific case *and* make every module producible
+for now:
+
+1. Added `ISEN652-G12R` to `icon_models.py`'s `_SEED` (652 W, G12R, same
+   cell layout as the rest of that family) - the same fix `ISEN630-G12R`
+   got when this exact gap bit before. Flagged in a comment as *not*
+   back-label-authorised, so this doesn't get mistaken for a compliance
+   decision later.
+2. Flipped every model's `produced` flag to `True` (four G12R rows were
+   `False`: 600, 605, 615, 635) - `produced` doesn't gate `derive()`, but
+   it does drive the dimmed/"not produced" styling `MODELS.filter(m =>
+   m.produced)` renders elsewhere, and Mukesh's instruction was to make
+   all of them producible, not just unblock the one that was reported.
+
+Nothing outside `icon_models.py` changed - no template, no `icon_live.js`,
+no schema. The master feeds both the backend (serial generation via
+`icon_serial.py`) and the client (`MODELS`, replaced at boot in
+`icon_live.js`'s `applyBoot()`), so one edit reaches both.
+
+**Which test proves it.** Checked live in a running browser (Planning
+view), not just read from source: `derive('ICON652R1291910001')` now
+returns `ok: true, model: 'ISEN652-G12R'`, and the four previously-`False`
+G12R wattages (600/605/615/635) resolve the same way. Full existing suite
+re-run for regressions - `test_production.py`, `test_box_number.py`,
+`test_packing.py`, `test_repack.py`, `test_indent.py`,
+`test_search_invoice.py` all green; the one pre-existing, unrelated
+`test_fqc.py` failure is unchanged (confirmed via `git stash` in the prior
+session's Gate Pass round already tracked this same failure).
