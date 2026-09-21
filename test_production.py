@@ -5,12 +5,19 @@ ICON TRACE - tests for Production Entry.
 
 THE RULE THIS FILE DEFENDS
 
-    A production entry can only claim a range of serials that are all
-    genuinely 'planned' - not yet produced, not skipped, not already
-    recorded under an earlier entry. The range is validated by its real,
-    parsed sequence numbers (never by comparing the serial strings
-    themselves), and every serial the range covers moves to 'produced'
-    together, or none of them do.
+    A production entry can claim any range of serials that were genuinely
+    planned and not skipped - not, any more, only ones still literally in
+    state 'planned'. FQC can legitimately reach a module before its shift's
+    paperwork is filed (a module cannot be graded at all unless it was
+    made), so a serial FQC already graded/rejected is proof of production,
+    not a conflict with recording it. The one real conflict is a serial
+    already recorded under an EARLIER production entry, tracked by its own
+    `prod_entry_id` column - independent of `state`, which FQC and packing
+    keep moving long after production entry's own job here is done. The
+    range is validated by its real, parsed sequence numbers (never by
+    comparing the serial strings themselves); every serial still 'planned'
+    in it moves to 'produced' together, while one FQC already graded stays
+    exactly where FQC left it.
 
 Each test names the rule it defends, so a failure says which decision broke.
 """
@@ -105,27 +112,70 @@ def t_end_serial_not_found():
     assert entry_count() == 0
 
 
-@test("a range containing an already-produced serial is refused entirely "
-     "- partial recording is not an option")
+@test("a range overlapping a serial already recorded under an earlier "
+     "production entry is refused entirely - partial recording is not an "
+     "option")
 def t_already_produced_in_range_refused():
     c = setup()
     with store.conn() as (cx, cur):
         serials = plan_serials(cur, 5)
-        cur.execute("UPDATE serial SET state='produced' WHERE serial=%s", (serials[2],))
+    # a real prior entry, the only thing that actually marks a serial
+    # recorded - not a hand-set state, which FQC can also set on its own
+    r0 = c.post("/api/prodentry", json={
+        "date": "2026-09-17", "shift": "A", "incharge": "TEST INCHARGE",
+        "start_serial": serials[2], "end_serial": serials[2]})
+    assert r0.get_json()["ok"], r0.get_json()
     r = c.post("/api/prodentry", json={
         "date": "2026-09-17", "shift": "A", "incharge": "TEST INCHARGE",
         "start_serial": serials[0], "end_serial": serials[4]})
     assert r.status_code == 400, r.get_json()
-    assert "already produced" in r.get_json()["why"].lower(), r.get_json()
-    assert entry_count() == 0
+    assert "already recorded" in r.get_json()["why"].lower(), r.get_json()
+    assert entry_count() == 1
     with store.conn() as (cx, cur):
-        # the one serial that WAS already produced stays that way - refusing
+        # the one serial that WAS already recorded stays that way - refusing
         # the request must not also silently "fix" what it found
         row = store.one(cur, "SELECT state FROM serial WHERE serial=%s", (serials[2],))
         assert row["state"] == "produced"
         # and the ones either side of it are untouched, still planned
         row0 = store.one(cur, "SELECT state FROM serial WHERE serial=%s", (serials[0],))
         assert row0["state"] == "planned"
+
+
+@test("a serial FQC already graded before the shift's paperwork was filed "
+     "does not block the entry, and is not regressed back to 'produced'")
+def t_fqc_ahead_of_paperwork_does_not_block_or_regress():
+    """The practical sequence is Indent -> Planning -> Production Entry ->
+    FQC, but a module physically reaches the FQC station whenever it reaches
+    it - often before the shift-end paperwork is filed for the batch it was
+    part of. A module cannot be graded at all unless it was made, so a
+    serial FQC already touched is proof it was produced, not a conflict with
+    recording that it was."""
+    c = setup()
+    with store.conn() as (cx, cur):
+        serials = plan_serials(cur, 5)
+        # FQC reached one of these first - graded/rejected, never through
+        # Production Entry, so prod_entry_id is still NULL
+        cur.execute("UPDATE serial SET state='rejected' WHERE serial=%s",
+                   (serials[2],))
+    r = c.post("/api/prodentry", json={
+        "date": "2026-09-17", "shift": "A", "incharge": "TEST INCHARGE",
+        "start_serial": serials[0], "end_serial": serials[4]})
+    assert r.get_json()["ok"], r.get_json()
+    assert r.get_json()["qty"] == 5, r.get_json()
+    assert entry_count() == 1
+    with store.conn() as (cx, cur):
+        # FQC's own decision is not overwritten by the paperwork catching up
+        rejected = store.one(cur, "SELECT state, prod_entry_id FROM serial "
+                                  "WHERE serial=%s", (serials[2],))
+        assert rejected["state"] == "rejected", rejected
+        # but it IS now recorded, same as its four siblings - a second entry
+        # covering it must still be refused as a duplicate
+        assert rejected["prod_entry_id"], rejected
+        for s in (serials[0], serials[1], serials[3], serials[4]):
+            row = store.one(cur, "SELECT state, prod_entry_id FROM serial "
+                                 "WHERE serial=%s", (s,))
+            assert row["state"] == "produced", (s, row)
+            assert row["prod_entry_id"], (s, row)
 
 
 @test("start greater than end is refused before anything is queried "
