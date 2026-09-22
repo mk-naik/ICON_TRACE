@@ -1,17 +1,13 @@
-/* ICON TRACE - tests for issueGP(), now that the create page is standalone
- * only, on its own purpose-built view.
+/* ICON TRACE - tests for Gate Pass's dead-field cleanup.
  *
- * A module gate pass is never created from this page any more - Loading
- * Verification's own submit creates one automatically (api_loading_submit,
- * tested in test_loading.py). There is no module checkbox, no challan
- * selector, and no live document preview anywhere on this page at all -
- * gpFldFor()/gpHideUnwiredFields()/gpHidePreviewCard() (the runtime hiding
- * that used to neutralize v4's leftover fields on the reused v-gp) are
- * gone with them, not carried forward unused. The page is now its own
- * injected view (v-gp-new, built by gpInjectCreateView() exactly like
- * Loading Verification's v-loadsession), covered live in a real browser
- * by test_gatepass_screen.py. issueGP() always builds a standalone
- * payload from the item grid.
+ * v4 shipped the "Issue details" card with a Gate pass no. input PRE-FILLED
+ * with a literal placeholder ("GP-2608-0031" - the real number is only
+ * known once the server assigns it on submit), plus Delivery order no. and
+ * Container no. fields issueGP() never reads. wireGp() injects the real
+ * fields (Type, Party/destination, Material going out, ...) ABOVE them,
+ * leaving the fake ones sitting there unconnected to anything real - added
+ * beside, not replaced. gpHideUnwiredFields() is what removes them from
+ * view instead.
  *
  *     node test_gatepass.js
  *     cscript //Nologo //E:JScript test_gatepass.js
@@ -70,6 +66,67 @@ function readFile(path) {
   return require('fs').readFileSync(path, 'utf8');
 }
 
+/* ---- a just-enough DOM: real v4 markup is '.rail .card-b .fld' elements
+   carrying one <label> each, found by label text - not a selector engine.
+   An input models the real attribute-vs-property split: setting .value
+   (a plain field here, same as the DOM's live property) does NOT touch
+   _attrValue (what outerHTML/innerHTML actually serializes) - only
+   removeAttribute/setAttribute do. This is the exact distinction that
+   let a real bug through once already: gpHideUnwiredFields() cleared
+   .value and the field still rendered with value="GP-2608-0031". */
+function fldInput(opts) {
+  opts = opts || {};
+  var attrs = { value: opts.value || null, placeholder: opts.placeholder || null };
+  return {
+    value: opts.value || '',
+    removeAttribute: function (name) {
+      if (Object.prototype.hasOwnProperty.call(attrs, name)) attrs[name] = null;
+    },
+    setAttribute: function (name, v) {
+      if (Object.prototype.hasOwnProperty.call(attrs, name)) attrs[name] = v;
+    },
+    // what innerHTML would actually serialize - independent of .value,
+    // the live property, exactly like the real DOM
+    serialized: function () {
+      return [attrs.value, attrs.placeholder].filter(function (v) {
+        return v !== null && v !== undefined;
+      }).join(' ');
+    }
+  };
+}
+function fld(labelText, inputOpts) {
+  var label = { textContent: labelText };
+  var input = inputOpts ? fldInput(inputOpts) : null;
+  return {
+    style: {},
+    querySelector: function (sel) {
+      if (sel === 'label') return label;
+      if (sel === 'input') return input;
+      return null;
+    }
+  };
+}
+function note(text) {
+  return { textContent: text, style: {} };
+}
+function btn(onclick) {
+  var oc = onclick;
+  return {
+    getAttribute: function (name) { return name === 'onclick' ? oc : null; },
+    setAttribute: function (name, v) { if (name === 'onclick') oc = v; }
+  };
+}
+function gpView(flds, notes, btns) {
+  return {
+    querySelectorAll: function (sel) {
+      if (sel === '.rail .card-b .fld') return flds || [];
+      if (sel === '.rail .card-b .note.n-warn') return notes || [];
+      if (sel.indexOf('button[onclick*=') === 0) return btns || [];
+      return [];
+    }
+  };
+}
+
 var DOM = {};
 function el(id) { if (!DOM[id]) DOM[id] = new El(id); return DOM[id]; }
 function El(tag) {
@@ -93,13 +150,22 @@ var window = (typeof global !== 'undefined') ? global : this;
 
 /* ---- the code under test ------------------------------------------------ */
 var H = here();
-var src = readFile(H.dir + H.sep + 'static' + H.sep + 'icon_live.js');
+var src = readFile(H.dir + 'static' + H.sep + 'icon_live.js');
+var from = src.indexOf('  function gpFldFor(label) {');
+var to = src.indexOf('  function wireGp() {');
+if (from < 0 || to < 0 || to < from) {
+  echo('CANNOT RUN: icon_live.js no longer has gpFldFor/gpHideUnwiredFields ' +
+       'between those two markers.');
+  if (WSH) WScript.Quit(1); else process.exit(1);
+}
+eval(src.substring(from, to));
 
-/* ---- issueGP() / gpSetKind(): what a standalone Issue actually sends --- */
+/* ---- issueGP() / gpToggleSolarMode(): the module-mode gate itself ------ */
 var from2 = src.indexOf('  window.issueGP = function() {');
 var to2 = src.indexOf('window.gpSetKind = function(k) {');
 if (from2 < 0 || to2 < 0 || to2 < from2) {
-  echo('CANNOT RUN: icon_live.js no longer has issueGP between those two markers.');
+  echo('CANNOT RUN: icon_live.js no longer has issueGP/gpToggleSolarMode ' +
+       'between those two markers.');
   if (WSH) WScript.Quit(1); else process.exit(1);
 }
 var toasts = [];
@@ -111,14 +177,6 @@ function api(path, opts) {
 }
 var GO_CALLS = [];
 function go(view) { GO_CALLS.push(view); }
-// gpCollectItems() itself lives near wireGp(), far outside this extracted
-// range - pulling it in would drag wireGp()'s DOM-construction code along
-// with it. issueGP() calls it typeof-guarded (so a real page missing this
-// exact source layout degrades to "no items" instead of throwing); this
-// stub plays the part of the real function for that guarded call, the
-// same way toast/api/go stand in for their real selves here.
-var GP_ITEMS_STUB = [{ description: 'Test item', unit: 'Nos', qty: 1, remark: null }];
-function gpCollectItems() { return GP_ITEMS_STUB.slice(); }
 // JScript's eval() cannot parse .catch( via dot notation - catch is
 // reserved and old engines refuse it as a property name there, even
 // though it is a normal method call at runtime. Same workaround
@@ -130,58 +188,212 @@ var tests = [], passed = 0, failed = 0;
 function test(name, fn) { tests.push([name, fn]); }
 function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); }
 
-/* a realistic populated form - the state issueGP() actually runs against,
-   not an empty one */
+/* a realistic populated Issue details card, module mode already checked
+   and a challan already selected - the state issueGP() actually runs
+   against, not an empty form */
 function resetIssueGpDom() {
   DOM = {};
   toasts = []; API_CALLS = []; GO_CALLS = [];
-  window.__gpEditing = null;
-  GP_ITEMS_STUB = [{ description: 'Test item', unit: 'Nos', qty: 1, remark: null }];
-  ['gpBtn', 'gpNRGP', 'gpRGP', 'gpParty', 'gpVehicle', 'gpAddr',
-   'gpExpectedRet'].forEach(function (id) { el(id); });
+  window._gpChallanReady = null;
+  ['gpBtn', 'gpChallanSelV4', 'gpNRGP', 'gpRGP', 'gpParty', 'gpVehicle',
+   'gpAddr', 'gpDesc', 'gpQty', 'gpExpectedRet', 'gpIsSolar',
+   'gpLoadingState', 'gpLoadingStateWrap'].forEach(function (id) { el(id); });
   el('gpNRGP').classList.add('on');
-  el('gpParty').value = 'Repair Vendor Pvt Ltd';
+  el('gpParty').value = 'AGNI GREEN POWER LIMITED (MZ)';
+  el('gpDesc').value = 'ISEN630-G12R modules';
+  el('gpQty').value = '2';
+  el('gpChallanSelV4').value = '9';
 }
 
-test('Issue is refused client-side with no party at all', function () {
+/* the real "Issue details" card, exactly as v4 renders it, with wireGp()'s
+   own injected fields (Type, Party / destination, ...) mixed in ahead of
+   them - a realistic populated card, not an empty one */
+function realCard() {
+  return {
+    flds: [
+      fld('Type'), fld('Party / destination'), fld('Material going out'),
+      fld('Against challan'), fld('Gate pass no.', { value: 'GP-2608-0031' }),
+      fld('Delivery order no.', { placeholder: 'PS26812-0007' }),
+      fld('Container no.', { placeholder: 'Optional' }),
+      fld('Prepared by')
+    ],
+    notes: [note('Placeholder series. Switches to the the other system PS format once confirmed.')],
+    btns: [btn("printDoc('Gate pass','GP-2608-0031',3)"),
+           btn("printDoc('Gate pass','GP-2608-0031',1)")]
+  };
+}
+
+test('gpHideUnwiredFields hides exactly the three unconnected fields, '
+    + 'leaving the real and still-meaningful ones alone', function () {
+  var c = realCard();
+  DOM['v-gp'] = gpView(c.flds, c.notes, c.btns);
+  gpHideUnwiredFields();
+  var byLabel = {};
+  c.flds.forEach(function (f) { byLabel[f.querySelector('label').textContent] = f; });
+  assert(byLabel['Gate pass no.'].style.display === 'none', 'Gate pass no. still shown');
+  assert(byLabel['Delivery order no.'].style.display === 'none', 'Delivery order no. still shown');
+  assert(byLabel['Container no.'].style.display === 'none', 'Container no. still shown');
+  ['Type', 'Party / destination', 'Material going out', 'Against challan',
+   'Prepared by'].forEach(function (label) {
+    assert(byLabel[label].style.display !== 'none', label + ' was hidden too');
+  });
+});
+
+test('gpHideUnwiredFields hides the placeholder-series warning note that '
+    + 'only made sense next to the fake number', function () {
+  var c = realCard();
+  DOM['v-gp'] = gpView(c.flds, c.notes, c.btns);
+  gpHideUnwiredFields();
+  assert(c.notes[0].style.display === 'none', 'the stale warning note is still shown');
+});
+
+test('gpHideUnwiredFields strips the fake gate pass number out of the '
+    + 'preview Print/Export buttons\' onclick, not just the fields', function () {
+  var c = realCard();
+  DOM['v-gp'] = gpView(c.flds, c.notes, c.btns);
+  gpHideUnwiredFields();
+  c.btns.forEach(function (b) {
+    assert(b.getAttribute('onclick').indexOf('GP-2608') === -1,
+          'a preview button onclick still carries the fake number: ' +
+          b.getAttribute('onclick'));
+  });
+});
+
+test('nothing on the rendered card - fields, notes, buttons, or the '
+    + 'still-attached inputs\' own attributes - contains GP-2608 or '
+    + 'PS26812 anywhere after cleanup, matching the exact bug report',
+function () {
+  var c = realCard();
+  DOM['v-gp'] = gpView(c.flds, c.notes, c.btns);
+  gpHideUnwiredFields();
+  // hidden fields keep their label text and their <input> node (display:
+  // none, not removed) - a real regression once slipped through here:
+  // gpHideUnwiredFields() cleared the .value PROPERTY, which real
+  // browsers do NOT reflect back into the value ATTRIBUTE (or touch
+  // placeholder at all), so innerHTML still carried the literal string
+  // through a field that LOOKED cleaned. serialized() models exactly
+  // that split - only removeAttribute actually clears it.
+  var haystack = c.flds.map(function (f) { return f.querySelector('label').textContent; })
+    .concat(c.flds.map(function (f) {
+      var inp = f.querySelector('input');
+      return inp ? inp.serialized() : '';
+    }))
+    .concat(c.notes.map(function (n) { return n.textContent; }))
+    .concat(c.btns.map(function (b) { return b.getAttribute('onclick'); }))
+    .join(' | ');
+  assert(haystack.indexOf('GP-2608') === -1, haystack);
+  assert(haystack.indexOf('PS26812') === -1, haystack);
+});
+
+test('gpFldFor matches a field by its label prefix, not a substring '
+    + 'anywhere in it', function () {
+  var c = realCard();
+  DOM['v-gp'] = gpView(c.flds, c.notes, c.btns);
+  var f = gpFldFor('Container no.');
+  assert(f === c.flds[6], 'did not find the Container no. field');
+  assert(gpFldFor('nonexistent field') === null);
+});
+
+test('gpHideUnwiredFields does nothing, and does not throw, when the '
+    + 'Gate Pass view is not on screen', function () {
+  delete DOM['v-gp'];
+  gpHideUnwiredFields();   // must not throw
+});
+
+test('running gpHideUnwiredFields twice (every wireGp() call re-runs it) '
+    + 'is harmless - a realistic case, since navigating back to Gate Pass '
+    + 're-wires an already-cleaned card', function () {
+  var c = realCard();
+  DOM['v-gp'] = gpView(c.flds, c.notes, c.btns);
+  gpHideUnwiredFields();
+  gpHideUnwiredFields();
+  var byLabel = {};
+  c.flds.forEach(function (f) { byLabel[f.querySelector('label').textContent] = f; });
+  assert(byLabel['Gate pass no.'].style.display === 'none');
+  c.btns.forEach(function (b) {
+    assert(b.getAttribute('onclick').indexOf('GP-2608') === -1);
+  });
+});
+
+
+/* ---- module mode: the checkbox, the challan-derived lock, and the ------
+   client-side Issue gate. The server enforces the real rule regardless
+   (test_gatepass.py's bypass tests prove that); this is what stops the
+   operator from finding out only after clicking Issue. */
+
+test('checking module mode reveals the challan selector and locks the '
+    + 'challan-derived fields - unchecking it restores today\'s editable '
+    + 'standalone flow, nothing left locked or stale', function () {
   resetIssueGpDom();
-  el('gpParty').value = '';
+  var chFld = { style: {} };
+  el('gpChallanSelV4')._closestFld = chFld;
+  el('gpIsSolar').checked = true;
+  window.gpToggleSolarMode();
+  assert(chFld.style.display === 'block', 'challan field did not reveal');
+  assert(el('gpParty').readOnly === true, 'Party was not locked');
+  assert(el('gpVehicle').readOnly === true, 'Vehicle was not locked');
+  assert(el('gpDesc').readOnly === true, 'Description was not locked');
+  assert(el('gpQty').readOnly === true, 'Quantity was not locked');
+
+  el('gpIsSolar').checked = false;
+  window.gpToggleSolarMode();
+  assert(chFld.style.display === 'none', 'challan field did not hide again');
+  assert(el('gpParty').readOnly === false, 'Party stayed locked after unchecking');
+  assert(el('gpVehicle').readOnly === false, 'Vehicle stayed locked after unchecking');
+  assert(el('gpDesc').readOnly === false, 'Description stayed locked after unchecking');
+  assert(el('gpQty').readOnly === false, 'Quantity stayed locked after unchecking');
+  assert(el('gpChallanSelV4').value === '', 'the old challan selection survived unchecking');
+  assert(window._gpChallanReady === null, '_gpChallanReady was not reset on uncheck');
+});
+
+test('Issue refuses client-side when module mode is checked but the '
+    + 'selected challan is not yet fully loaded - the operator finds out '
+    + 'without submitting, not from a refused POST', function () {
+  resetIssueGpDom();
+  el('gpIsSolar').checked = true;
+  window._gpChallanReady = false;
+  el('gpLoadingState').textContent = '0 of 3 pallets loaded';
+  window.issueGP();
+  assert(API_CALLS.length === 0, 'a POST was sent despite the incomplete challan: ' +
+        JSON.stringify(API_CALLS));
+  assert(toasts.length === 1, toasts);
+  assert(toasts[0].indexOf('0 of 3') !== -1, toasts[0]);
+});
+
+test('Issue refuses client-side when module mode is checked but no '
+    + 'challan has been selected at all', function () {
+  resetIssueGpDom();
+  el('gpIsSolar').checked = true;
+  el('gpChallanSelV4').value = '';
+  window._gpChallanReady = null;
   window.issueGP();
   assert(API_CALLS.length === 0, API_CALLS);
-  assert(toasts.length === 1 && toasts[0].toLowerCase().indexOf('party') !== -1, toasts);
+  assert(toasts.length === 1 && toasts[0].toLowerCase().indexOf('select a challan') !== -1,
+        toasts);
 });
 
-test('an Issue carries the item grid\'s own items in the payload', function () {
+test('Issue proceeds and posts is_solar + the real challan_id once the '
+    + 'selected challan is fully loaded', function () {
   resetIssueGpDom();
-  GP_ITEMS_STUB = [{ description: 'Laptop for repair', unit: 'Nos', qty: 1, remark: 'urgent' },
-                   { description: 'Spare cable', unit: 'Set', qty: 2, remark: null }];
+  el('gpIsSolar').checked = true;
+  window._gpChallanReady = true;
   window.issueGP();
-  assert(API_CALLS.length === 1, API_CALLS);
-  var body = API_CALLS[0].body;
-  assert(body.items && body.items.length === 2, body);
-  assert(body.items[0].description === 'Laptop for repair', body.items[0]);
-  assert(body.items[1].qty === 2, body.items[1]);
-  assert(!('is_solar' in body), 'issueGP still sends a field from the removed module branch: ' + JSON.stringify(body));
-  assert(!('challan_id' in body), 'issueGP still sends a field from the removed module branch: ' + JSON.stringify(body));
+  assert(API_CALLS.length === 1, 'no POST was sent for a ready challan: ' + JSON.stringify(API_CALLS));
+  var call = API_CALLS[0];
+  assert(call.path === 'gatepass', call.path);
+  assert(call.body.is_solar === true, call.body);
+  assert(call.body.challan_id === 9, call.body);
 });
 
-test('an Issue with no items in the grid is refused before any request - '
-    + 'the grid is the only source of items now, so an empty grid is an '
-    + 'empty gate pass', function () {
+test('standalone mode (module checkbox off) never consults '
+    + '_gpChallanReady at all - today\'s flow is untouched', function () {
   resetIssueGpDom();
-  GP_ITEMS_STUB = [];
+  el('gpIsSolar').checked = false;
+  el('gpChallanSelV4').value = '';
+  window._gpChallanReady = null;
   window.issueGP();
-  assert(API_CALLS.length === 0, 'a POST was sent with no items: ' + JSON.stringify(API_CALLS));
-  assert(toasts.length === 1 && toasts[0].toLowerCase().indexOf('item') !== -1, toasts);
-});
-
-test('editing an existing standalone gate pass PUTs to its own id instead '
-    + 'of POSTing a new one', function () {
-  resetIssueGpDom();
-  window.__gpEditing = 42;
-  window.issueGP();
-  assert(API_CALLS.length === 1, API_CALLS);
-  assert(API_CALLS[0].path === 'gatepass/42', API_CALLS[0].path);
+  assert(API_CALLS.length === 1, 'standalone Issue was blocked: ' + JSON.stringify(toasts));
+  assert(API_CALLS[0].body.is_solar === false, API_CALLS[0].body);
 });
 
 

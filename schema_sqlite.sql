@@ -693,20 +693,6 @@ CREATE TABLE IF NOT EXISTS gatepass (
   UNIQUE (gp_no)
 ) ;
 
--- Multi-item gate passes. gatepass.description/qty are kept exactly as
--- they were for the historical and module-linked case (never migrated,
--- never read for a row that has lines here) - a NEW standalone gate pass
--- writes its line items here instead. One table, not a column-per-item on
--- gatepass itself.
-CREATE TABLE IF NOT EXISTS gatepass_item (
-  gatepass_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  gatepass_id      INTEGER NOT NULL REFERENCES gatepass(gp_id),
-  description      TEXT NOT NULL,
-  unit             TEXT NOT NULL,
-  qty              INTEGER NOT NULL,
-  remark           TEXT NULL
-) ;
-
 CREATE TABLE IF NOT EXISTS app_config (
   k TEXT NOT NULL PRIMARY KEY,
   v TEXT NULL

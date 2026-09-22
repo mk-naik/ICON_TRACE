@@ -17,17 +17,6 @@
        if (ROLES[k].views && ROLES[k].views.indexOf('challan') !== -1 && ROLES[k].views.indexOf('challan-list') === -1) {
            ROLES[k].views.push('challan-list');
        }
-       // Same shape as challan-list: the nav-i button still says
-       // go('gp', this) and still carries data-v="gp" (untouched), so
-       // whatever role could already reach 'gp' has to be able to reach
-       // 'gp-list' too, or v4's own go() silently refuses the redirected
-       // navigation (a toast, no page change) for every one of them.
-       // 'gp-new' (the real, purpose-built create/edit view - v4's own
-       // 'gp' id is never navigated to at all any more) needs the same.
-       if (ROLES[k].views && ROLES[k].views.indexOf('gp') !== -1) {
-           if (ROLES[k].views.indexOf('gp-list') === -1) ROLES[k].views.push('gp-list');
-           if (ROLES[k].views.indexOf('gp-new') === -1) ROLES[k].views.push('gp-new');
-       }
        // Loading Verification's landing list rides the same nav slot the
        // existing 'loadver' entry (NEW_VIEWS, further down this file)
        // reserves for the same roles - matched by name here rather than
@@ -7979,15 +7968,14 @@ function wireFqcAnomalies() {
           'onclick="clCancelChallan(' + ch.challan_id + ')" ' +
           'title="Cancel this issued challan — serials revert to packed">Cancel</button> ';
       }
-      /* Loading is always available on issued challans, even after a
-         gate pass locks editing (split loads). There is no "Create gate
-         pass" action here any more - submitting Loading Verification is
-         what creates one now (api_loading_submit), automatically, from
-         the challan's own data; nothing is left for a person to create
-         manually, so there is nothing left for this screen to open. */
+      /* Gate pass and loading are always available on issued challans,
+         even after the first gate pass locks editing (split loads). */
       actions += '<button class="btn btn-ghost btn-sm" ' +
         'onclick="clVerifyLoading(' + ch.challan_id + ')" ' +
         'title="Open Loading Verification with these boxes">Verify loading</button> ';
+      actions += '<button class="btn btn-ghost btn-sm" ' +
+        'onclick="clCreateGatePass(' + ch.challan_id + ')" ' +
+        'title="Create a gate pass for this challan">Create gate pass</button> ';
     }
 
     var boxRows = (d.boxes || []).map(function (b) {
@@ -8075,6 +8063,17 @@ function wireFqcAnomalies() {
       .catch(function (e) { if (typeof toast === 'function') toast('Failed: ' + (e.why || e.message)); });
   };
 
+  window.clCreateGatePass = function (id) {
+      window._gpPreselectChallanId = id;
+      go('gp', document.querySelector('[data-v="gp"]'));
+      clCloseDetail();
+  };
+
+  window.clVerifyLoading = function(id) {
+      // Stub for loading verification
+      toast('Verify loading for ' + id);
+  };
+
   window.clEditChallan = function (id) {
     /* Reserves nothing and touches nothing - /edit-draft only reads. The
        original stays exactly as it is unless Save is actually pressed on
@@ -8119,6 +8118,17 @@ function wireFqcAnomalies() {
     }
   };
 
+  window.clCreateGatePass = function (id) {
+    /* Navigate to the Gate Pass view.  gpPreFill() below is called once the
+       screen is visible, to select the challan in the selector. */
+    clCloseDetail();
+    gpPendingChallanId = id;
+    if (typeof go === 'function') {
+      var navEl = document.querySelector('[data-view="gp"]');
+      go('gp', navEl);
+    }
+  };
+
   /* Load wiring for the challan list screen when navigated to */
   function wireChList() {
     var view = document.getElementById('v-challan-list');
@@ -8129,6 +8139,89 @@ function wireFqcAnomalies() {
     } else {
       clLoad();
     }
+  }
+
+  /* ---- Gate Pass: challan selector ---------------------------------------
+   *
+   * Replace the free-text challan_no field with a live selector of issued
+   * challans.  Gate pass creation should be reachable regardless of whether
+   * the challan is locked for editing (split loads).
+   */
+  var gpPendingChallanId = null;
+
+  function gpChallansLoaded(challans) {
+    var sel = document.getElementById('gpChallanSel');
+    if (!sel) return;
+    var keep = sel.value;
+    sel.innerHTML = '<option value="">— no challan —</option>' +
+      challans.map(function (ch) {
+        return '<option value="' + ch.challan_id + '">' +
+          fqcEsc(ch.challan_no || ('IS-' + ch.seq)) + ' · ' +
+          fqcEsc(ch.buyer_name || '—') + ' · ' + (ch.qty || 0) + ' nos' +
+          '</option>';
+      }).join('');
+    /* Restore selection or apply pending pre-fill from clCreateGatePass */
+    if (gpPendingChallanId) {
+      sel.value = String(gpPendingChallanId);
+      gpPendingChallanId = null;
+    } else if (keep) {
+      sel.value = keep;
+    }
+  }
+
+  function gpLoadChallans() {
+    fetch('/api/challans/issued', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { gpChallansLoaded(d.challans || []); })
+      .catch(function () {});
+  }
+
+  /* Inject a challan selector into the Gate Pass form if not already there.
+     The existing form has a plain-text "challan_no" input; we insert a
+     <select> above it (keyed to challan_id) and keep the text field hidden
+     so the legacy template's POST path still works. */
+  function gpInjectChallanSelector() {
+    if (document.getElementById('gpChallanSel')) return;
+    /* Find the legacy challan_no text field.  Gate Pass is a legacy Jinja
+       template (not a v4 view), so we look inside <form> elements. */
+    var forms = document.querySelectorAll('form');
+    var targetInput = null;
+    for (var fi = 0; fi < forms.length; fi++) {
+      var inp = forms[fi].querySelector('[name="challan_no"]');
+      if (inp) { targetInput = inp; break; }
+    }
+    if (!targetInput) return;
+    /* Hide the text field; insert a select above it */
+    targetInput.style.display = 'none';
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-bottom:6px';
+    wrap.innerHTML =
+      '<label style="font-size:11px;color:var(--ink3);display:block;margin-bottom:2px">Challan (optional)</label>' +
+      '<select id="gpChallanSel" style="width:100%;height:32px;border:1px solid var(--bd);border-radius:4px;font-size:12px">' +
+        '<option value="">— no challan —</option>' +
+      '</select>';
+    targetInput.parentNode.insertBefore(wrap, targetInput);
+    /* On submit: write the selected challan_id into a hidden field and
+       the rendered number into the legacy text field */
+    targetInput.parentNode.querySelector('form') &&
+    (function (form) {
+      form.addEventListener('submit', function () {
+        var sel = document.getElementById('gpChallanSel');
+        if (!sel || !sel.value) return;
+        /* Write the challan_no rendered label into the hidden legacy field */
+        var opt = sel.options[sel.selectedIndex];
+        if (opt && opt.value) {
+          targetInput.value = opt.text.split(' · ')[0];   /* the rendered no */
+          /* Also set challan_id via a hidden input */
+          var hid = document.createElement('input');
+          hid.type = 'hidden';
+          hid.name = 'challan_id';
+          hid.value = opt.value;
+          form.appendChild(hid);
+        }
+      });
+    })(targetInput.closest('form'));
+    gpLoadChallans();
   }
 
   /* ---- Invoice selector: exclude live-challan invoices -------------------
@@ -8654,17 +8747,6 @@ function wireFqcAnomalies() {
         view = 'loading-list';
         arguments[0] = view;
       }
-      // Same technique, for Gate Pass: v4's nav-i button still carries
-      // data-v="gp" (never edited) and still says go('gp', this) - that is
-      // patched here to open the landing list instead. Every internal
-      // caller that wants the create/edit page (gpBeginEdit, the list's
-      // own "New Gate Pass" button) targets go('gp-new') directly, its
-      // own real view - v4's native v-gp is never navigated to by
-      // anything at all any more, by either path.
-      if (view === 'gp' && btn && btn.classList && btn.classList.contains('nav-i')) {
-        view = 'gp-list';
-        arguments[0] = view;
-      }
       // v4's own go() does document.getElementById('v-'+id).classList.add
       // ('on') with no null check - called on a view this layer injects
       // lazily, that throws, and since it throws BEFORE go() reaches its
@@ -8677,8 +8759,6 @@ function wireFqcAnomalies() {
         if (view === 'challan-list') clInjectView();
         if (view === 'loading-list') ldInjectView();
         if (view === 'loadsession') ldInjectSessionView();
-        if (view === 'gp-list') gpInjectListView();
-        if (view === 'gp-new') gpInjectCreateView();
       } catch (e) {}
       var result;
       try {
@@ -8693,8 +8773,7 @@ function wireFqcAnomalies() {
         if (view === 'loading-list') {
           ldLoad();
         }
-        if (view === 'gp-list') { window.gpListLoad(); }
-        if (view === 'gp-new') { wireGp(); }
+        if (view === 'gp') { wireGp(); }
         if (view === 'prodentry') { if (typeof peInit === 'function') peInit(); }
         if (view === 'loss') { if (typeof loInit === 'function') loInit(); }
         if (view === 'disp') {
@@ -8709,6 +8788,7 @@ function wireFqcAnomalies() {
   /* Pre-wire on load if either screen is already active */
   try { clInjectView(); } catch (e) {}
   try { ldInjectView(); } catch (e) {}
+  try { gpInjectChallanSelector(); } catch (e) {}
 
   /* ---- Stock & Dispatch dashboard KPIs ----------------------------------- */
   function clAddDashKpis() {
@@ -9067,34 +9147,34 @@ function wireFqcAnomalies() {
   /* Gate Pass, as v4 originally built it, has no path for a gate pass that
      is not tied to a challan - "Against challan" is required, the preview
      is one specific challan's contents, and the only free-text fields are
-     Delivery order no. and Container no. That whole shape was for a
-     module gate pass, and a person never creates one of those here any
-     more (Loading Verification's own submit does, automatically - see
-     api_loading_submit). This page is standalone only now: a laptop sent
-     for repair, cell stock moved to Unit-1, anything leaving the plant
-     with no challan behind it at all. Real party/vehicle fields and the
-     item grid are injected below (wireGp). */
+     Delivery order no. and Container no. But a gate pass covers modules AND
+     every other material leaving the plant - a laptop sent for repair, cell
+     stock moved to Unit-1 - neither of which has a challan at all. Real
+     party/vehicle/description fields are injected below (wireGp), always
+     usable; a challan pre-fills them as a convenience, never locks them. */
   window.issueGP = function() {
       var btn = document.getElementById('gpBtn');
+      var sel = document.getElementById('gpChallanSelV4');
       var typeNRGP = document.getElementById('gpNRGP') && document.getElementById('gpNRGP').classList.contains('on') ? 'NRGP' : 'RGP';
 
+      var chId = sel && sel.value ? parseInt(sel.value, 10) : null;
       var party = (document.getElementById('gpParty') || {}).value || '';
       var vehicle = (document.getElementById('gpVehicle') || {}).value || '';
       var addr = (document.getElementById('gpAddr') || {}).value || '';
+      var desc = (document.getElementById('gpDesc') || {}).value || '';
+      var qtyRaw = (document.getElementById('gpQty') || {}).value || '';
       var expectedRet = document.getElementById('gpExpectedRet') ? document.getElementById('gpExpectedRet').value : '';
 
-      // typeof-guarded: gpCollectItems is defined outside the marker range
-      // test_gatepass.js extracts issueGP from, so a harness that stubs
-      // only this function never sees it declared.
-      var items = (typeof gpCollectItems === 'function') ? gpCollectItems() : [];
-      var editing = window.__gpEditing;
-
+      var isSolar = document.getElementById('gpIsSolar') && document.getElementById('gpIsSolar').checked;
       var payload = {
+          is_solar: isSolar,
           kind: typeNRGP,
           party: party.trim(),
           delivery_address: addr.trim(),
           vehicle_no: vehicle.trim(),
-          items: items,
+          description: desc.trim(),
+          qty: qtyRaw ? parseInt(qtyRaw, 10) : null,
+          challan_id: chId,
           expected_return: typeNRGP === 'RGP' ? expectedRet : null
       };
 
@@ -9102,34 +9182,82 @@ function wireFqcAnomalies() {
           toast('Party / destination is required.');
           return;
       }
-      if (!items.length) {
-          toast('Add at least one item.');
+      if (!payload.description) {
+          toast('Say what material is going out.');
           return;
+      }
+      if (isSolar) {
+          if (!chId) { toast('Select a challan first.'); return; }
+          // The server enforces this regardless (POST /api/gatepass
+          // refuses any challan-linked gate pass whose loading is
+          // incomplete, keyed on challan_id itself - see api_gatepass).
+          // This is only so the operator finds out before submitting,
+          // not instead of the real rule - Issue is already disabled
+          // while this is false, but a disabled attribute is a hint, not
+          // where the rule lives.
+          if (window._gpChallanReady !== true) {
+              var lState = document.getElementById('gpLoadingState');
+              toast((lState && lState.textContent.trim()) ||
+                'Loading verification is not complete for this challan yet.');
+              return;
+          }
       }
 
       btn.disabled = true;
-      btn.textContent = editing ? 'Saving...' : 'Issuing...';
+      btn.textContent = 'Issuing...';
 
-      var req = editing
-        ? api('gatepass/' + editing, { method: 'PUT', body: JSON.stringify(payload) })
-        : api('gatepass', { method: 'POST', body: JSON.stringify(payload) });
-
-      req.then(function(r) {
-            // api() RESOLVES a refusal body too (it only rejects on a
-            // network-level failure) - the DATA_LAYER rule that every
-            // refusal carries its reason only holds if this is actually
-            // read, so a false "issued" toast never fires on a 400.
-            if (!r || r.ok === false) { throw r || new Error('Request failed'); }
-            toast(editing ? ('Gate pass ' + r.gp_no + ' updated.')
-                          : ('Gate pass ' + r.gp_no + ' issued.'));
-            window.__gpEditing = null;
-            go('gp-list');
+      api('gatepass', { method: 'POST', body: JSON.stringify(payload) })
+        .then(function(r) {
+            toast('Gate pass ' + r.gp_no + ' issued.');
+            go('dash');
         })
         .catch(function(err) {
             btn.disabled = false;
-            btn.textContent = editing ? 'Save changes' : 'Issue gate pass';
-            toast((err && err.why) || (err && err.message) || 'Could not save.');
+            btn.textContent = 'Issue gate pass';
+            toast(err.why || err.message);
         });
+  };
+
+  
+  window.gpToggleSolarMode = function() {
+      var isSolar = document.getElementById('gpIsSolar').checked;
+      var selWrap = document.getElementById('gpChallanSelV4') ? document.getElementById('gpChallanSelV4').closest('.fld') : null;
+      var partyEl = document.getElementById('gpParty');
+      var vehEl = document.getElementById('gpVehicle');
+      var descEl = document.getElementById('gpDesc');
+      var qtyEl = document.getElementById('gpQty');
+      var lWrap = document.getElementById('gpLoadingStateWrap');
+      var btn = document.getElementById('gpBtn');
+      var sel = document.getElementById('gpChallanSelV4');
+
+      if (isSolar) {
+          if (selWrap) selWrap.style.display = 'block';
+          partyEl.readOnly = true;
+          vehEl.readOnly = true;
+          descEl.readOnly = true;
+          qtyEl.readOnly = true;
+          partyEl.classList.add('ro');
+          vehEl.classList.add('ro');
+          descEl.classList.add('ro');
+          qtyEl.classList.add('ro');
+          
+          if (sel && sel.onchange) sel.onchange(); // Trigger evaluation
+      } else {
+          if (selWrap) selWrap.style.display = 'none';
+          partyEl.readOnly = false;
+          vehEl.readOnly = false;
+          descEl.readOnly = false;
+          qtyEl.readOnly = false;
+          partyEl.classList.remove('ro');
+          vehEl.classList.remove('ro');
+          descEl.classList.remove('ro');
+          qtyEl.classList.remove('ro');
+          if (lWrap) lWrap.style.display = 'none';
+          if (btn) btn.disabled = false;
+          if (sel) sel.value = '';
+          window._gpChallanReady = null;
+          gpRenderPreview(null);
+      }
   };
 
 window.gpSetKind = function(k) {
@@ -9145,434 +9273,370 @@ window.gpSetKind = function(k) {
           if (r) r.classList.add('on');
           if (retWrap) retWrap.style.display = 'block';
       }
-      if (typeof window.gpItemsSummary === 'function') window.gpItemsSummary();
   };
 
-  /* ---- Gate Pass: the landing list -----------------------------------
-   *
-   * Built exactly like Loading Verification's own landing list (same
-   * .filters bar, same data-itable card, same lazily-injected <section>) -
-   * v-gp itself (the create/edit form wireGp() owns below) is reached
-   * from here via "New Gate Pass" or a row's "Edit", and returns here on
-   * close or on a successful save. Module-linked and standalone gate
-   * passes are ONE feed (/api/gatepasses), never two lists merged in the
-   * browser - the server already reads both out of one table.
-   */
-  function gpLEl(id) { return document.getElementById(id); }
-
-  function gpInjectListView() {
-    if (document.getElementById('v-gp-list')) return;
-    var main = document.querySelector('.main');
-    if (!main) return;
-    var today = new Date().toISOString().slice(0, 10);
-    var sec = document.createElement('section');
-    sec.className = 'view';
-    sec.id = 'v-gp-list';
-    sec.innerHTML =
-      '<div class="pg"><h2>Gate Pass</h2>' +
-        '<p>Every gate pass issued - modules and standalone together</p>' +
-        '<div class="pg-act">' +
-          '<button class="btn btn-primary" id="gpNewBtn">New Gate Pass</button>' +
-        '</div>' +
-      '</div>' +
-      '<div class="filters">' +
-        '<div class="fld"><label>From</label>' +
-          '<input type="date" id="gpLFrom" max="' + today + '" onchange="gpListDateChange(this)"></div>' +
-        '<div class="fld"><label>To</label>' +
-          '<input type="date" id="gpLTo" max="' + today + '" onchange="gpListDateChange(this)"></div>' +
-        '<div class="fld" style="flex:1;min-width:200px"><label>Search</label>' +
-          '<input id="gpLSearch" placeholder="Gate pass no. / party / challan…" ' +
-            'oninput="gpListLoad()"></div>' +
-        '<div class="fld"><label>Customer</label>' +
-          '<select id="gpLCustomer" onchange="gpListLoad()"><option value="">All customers</option></select></div>' +
-        '<div class="sp"><button class="btn btn-ghost" onclick="gpListReset()">Reset</button></div>' +
-      '</div>' +
-      '<div class="wmain o3"><div class="card">' +
-        '<div class="card-h"><h3>Gate passes</h3><div class="ch-r">' +
-          '<span id="gpLCount" class="tag t-mute"></span></div></div>' +
-        '<div class="card-b flush scroll"><table style="width:100%">' +
-          '<thead><tr><th>Gate pass no.</th><th>Date</th><th>Kind</th>' +
-            '<th>Party / destination</th><th class="num">Items</th>' +
-            '<th>Challan</th><th>Status</th><th></th></tr></thead>' +
-          '<tbody id="gpLTableBody">' +
-            '<tr><td colspan="8" style="padding:20px;color:var(--ink3);' +
-              'text-align:center">Loading…</td></tr>' +
-          '</tbody>' +
-        '</table></div>' +
-      '</div></div>';
-    main.appendChild(sec);
-    gpLEl('gpLFrom').value = today;
-    gpLEl('gpLTo').value = today;
-    var newBtn = document.getElementById('gpNewBtn');
-    if (newBtn) newBtn.onclick = function () {
-      window.__gpEditing = null;
-      go('gp-new');
-    };
+  function gpFldFor(label) {
+    var view = document.getElementById('v-gp');
+    if (!view) return null;
+    var flds = view.querySelectorAll('.rail .card-b .fld');
+    for (var i = 0; i < flds.length; i++) {
+      var lab = flds[i].querySelector('label');
+      var text = lab && lab.textContent.replace(/\s+/g, ' ').trim();
+      if (text && text.indexOf(label) === 0) return flds[i];
+    }
+    return null;
   }
 
-  /* Neither end of the range may be later than today. The <input
-     type=date> above already carries max=today (the picker itself refuses
-     to offer one), and this is what happens on the rare path around that
-     anyway - typing a date by hand, or a browser that ignores max. */
-  window.gpListDateChange = function (input) {
-    var today = new Date().toISOString().slice(0, 10);
-    if (input && input.value && input.value > today) {
-      input.value = today;
-      if (typeof toast === 'function') toast('That date has not happened yet.');
-    }
-    gpListLoad();
-  };
-
-  window.gpListReset = function () {
-    var today = new Date().toISOString().slice(0, 10);
-    if (gpLEl('gpLFrom')) gpLEl('gpLFrom').value = today;
-    if (gpLEl('gpLTo')) gpLEl('gpLTo').value = today;
-    if (gpLEl('gpLSearch')) gpLEl('gpLSearch').value = '';
-    if (gpLEl('gpLCustomer')) gpLEl('gpLCustomer').value = '';
-    gpListLoad();
-  };
-
-  /* Pure and testable on purpose: fed a row, returns the <tr>. A module-
-     linked gate pass (challan_id set) is the automatic output of a
-     completed Loading Verification - it carries no Edit action here, not
-     a hidden or disabled one; editing it would mean editing the challan,
-     which already has its own real edit elsewhere. */
-  function gpRenderListRow(r) {
-    var esc = (typeof fqcEsc === 'function') ? fqcEsc : function (s) { return s; };
-    var statusTone = r.status === 'Out' ? 't-rev'
-      : r.status === 'Returned' ? 't-pass' : 't-mute';
-    var actions = '<a class="btn btn-ghost btn-sm" href="/gatepass/' +
-      encodeURIComponent(r.gp_no) + '/print" target="_blank">Print</a>';
-    if (!r.challan_id) {
-      actions += ' <button class="btn btn-ghost btn-sm" onclick="gpBeginEdit(' +
-        r.gp_id + ')">Edit</button>';
-    }
-    var items = r.item_count || (r.description ? 1 : 0);
-    return '<tr>' +
-      '<td class="mono">' + esc(r.gp_no) + '</td>' +
-      '<td>' + esc(r.gp_date || '—') + '</td>' +
-      '<td>' + esc(r.kind || '—') + '</td>' +
-      '<td>' + esc(r.party || '—') + '</td>' +
-      '<td class="num">' + items + '</td>' +
-      '<td class="mono">' + esc(r.challan_no || '—') + '</td>' +
-      '<td><span class="tag ' + statusTone + '">' + esc(r.status || '—') + '</span></td>' +
-      '<td style="white-space:nowrap">' + actions + '</td></tr>';
-  }
-  window.gpRenderListRow = gpRenderListRow;   // extracted and unit-tested directly
-
-  window.gpListLoad = function () {
-    var host = gpLEl('gpLTableBody');
-    if (!host) return;
-    var from = (gpLEl('gpLFrom') || {}).value || '';
-    var to = (gpLEl('gpLTo') || {}).value || '';
-    var q = (gpLEl('gpLSearch') || {}).value || '';
-    var customer = (gpLEl('gpLCustomer') || {}).value || '';
-    var qs = '?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) +
-      '&q=' + encodeURIComponent(q) + '&customer=' + encodeURIComponent(customer);
-    host.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;' +
-      'color:var(--ink3)">Loading…</td></tr>';
-    fetch('/api/gatepasses' + qs, { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d && d.ok === false) {
-          host.innerHTML = '<tr><td colspan="8" style="color:var(--fail);padding:20px">' +
-            (d.why || 'Could not load gate passes.') + '</td></tr>';
-          return;
-        }
-        var rows = (d && d.rows) || [];
-        host.innerHTML = rows.length ? rows.map(gpRenderListRow).join('') :
-          '<tr><td colspan="8" style="text-align:center;padding:20px;' +
-          'color:var(--ink3)">No gate pass in this range.</td></tr>';
-        var cnt = gpLEl('gpLCount');
-        if (cnt) cnt.textContent = rows.length + (rows.length === 1 ? ' row' : ' rows');
-        var custSel = gpLEl('gpLCustomer');
-        if (custSel) {
-          var keep = customer || custSel.value;
-          custSel.innerHTML = '<option value="">All customers</option>' +
-            (d.customers || []).map(function (name) {
-              return '<option value="' + name + '">' + name + '</option>';
-            }).join('');
-          if (keep) custSel.value = keep;
-        }
-      })
-      .catch(function () {
-        host.innerHTML = '<tr><td colspan="8" style="color:var(--fail);padding:20px">' +
-          'Could not load gate passes.</td></tr>';
-      });
-  };
-
-  /* ---- Gate Pass: the standalone item grid ----------------------------
-   *
-   * Exactly Indent's own add-item pattern (indAddItem/indDrop/indFill in
-   * frag_indent_form.html) - a <template> cloned per row, a running index
-   * repainted after add/remove, nothing else invented for this screen.
-   */
-  window.gpAddItem = function () {
-    var tpl = document.getElementById('gp_item_tpl');
-    var body = document.getElementById('gpItemsBody');
-    if (!tpl || !body || !tpl.content) return;
-    var f = tpl.content.cloneNode(true);
-    body.appendChild(f);
-    var rows = body.querySelectorAll('.gp_item_row');
-    rows[rows.length - 1].querySelector('.gpi_n').textContent = rows.length;
-    window.gpItemsSummary();
-  };
-
-  window.gpDropItem = function (b) {
-    var body = document.getElementById('gpItemsBody');
-    if (!body) return;
-    var rows = body.querySelectorAll('.gp_item_row');
-    if (rows.length > 1) {
-      b.closest('.gp_item_row').remove();
-      body.querySelectorAll('.gp_item_row').forEach(function (r, i) {
-        r.querySelector('.gpi_n').textContent = i + 1;
-      });
-    }
-    window.gpItemsSummary();
-  };
-
-  window.gpItemsSummary = function () {
-    var body = document.getElementById('gpItemsBody');
-    var s = document.getElementById('gpItemsSummary');
-    if (!body || !s) return;
-    var rows = body.querySelectorAll('.gp_item_row');
-    var qty = 0;
-    rows.forEach(function (r) {
-      qty += parseInt((r.querySelector('.gpi_qty') || {}).value, 10) || 0;
-    });
-    var kind = document.getElementById('gpNRGP') &&
-      document.getElementById('gpNRGP').classList.contains('on') ? 'NRGP' : 'RGP';
-    s.textContent = rows.length + (rows.length === 1 ? ' item' : ' items') +
-      (qty ? ' · ' + qty + ' total qty' : '') + ' · ' + kind;
-  };
-
-  /* What actually goes in the POST/PUT body - a row with no description or
-     no positive quantity is simply not sent, the same "blank rows do not
-     count" rule Indent's own indSave() applies to its item grid. */
-  window.gpCollectItems = function () {
-    var body = document.getElementById('gpItemsBody');
-    if (!body) return [];
-    var items = [];
-    body.querySelectorAll('.gp_item_row').forEach(function (r) {
-      var desc = ((r.querySelector('.gpi_desc') || {}).value || '').trim();
-      var qty = parseInt((r.querySelector('.gpi_qty') || {}).value, 10);
-      if (desc && qty > 0) {
-        items.push({
-          description: desc,
-          unit: (r.querySelector('.gpi_unit') || {}).value || 'Nos',
-          qty: qty,
-          remark: ((r.querySelector('.gpi_remark') || {}).value || '').trim() || null
-        });
+  // v4's "Issue details" card shipped with a Gate pass no. input PRE-FILLED
+  // with a literal placeholder ("GP-2608-0031") and two fields issueGP()
+  // never reads (Delivery order no., Container no.) - not disabled, not
+  // greyed, just sitting there looking real next to the actual fields this
+  // layer injects above them. The real number only exists once the server
+  // assigns it on submit, and the other two map to nothing this system
+  // tracks, so all three are hidden rather than left to be mistaken for
+  // inputs that do something. Same treatment for the two "Gate pass
+  // preview" print/export buttons, whose onclick carried that same fake
+  // number as the document ref to resolve - a ref that never existed
+  // server-side, so clicking them already failed with a toast naming it.
+  function gpHideUnwiredFields() {
+    ['Gate pass no.', 'Delivery order no.', 'Container no.'].forEach(function (label) {
+      var f = gpFldFor(label);
+      if (!f) return;
+      f.style.display = 'none';
+      // Hiding the field is not enough on its own. "Gate pass no." carries
+      // the fake number as its VALUE ATTRIBUTE - setting the .value
+      // PROPERTY does not touch that (the "dirty value flag": confirmed
+      // live, outerHTML still showed value="GP-2608-0031" after
+      // inp.value=''). "Delivery order no." carries PS26812-0007 as a
+      // PLACEHOLDER instead, a wholly different attribute .value never
+      // touches at all. Both still serialize into innerHTML while merely
+      // hidden, so both are stripped outright, not just cleared to blank
+      // (an empty value="" or placeholder="" attribute would still be an
+      // attribute sitting in the DOM).
+      var inp = f.querySelector('input');
+      if (inp) {
+        inp.removeAttribute('value'); inp.value = '';
+        inp.removeAttribute('placeholder');
       }
     });
-    return items;
-  };
-
-  /* Removes every added row back to exactly one, and every field back to
-     blank - "Clear form" is a fresh New Gate Pass, not a partial undo. */
-  window.gpClearForm = function () {
-    ['gpParty', 'gpAddr', 'gpVehicle', 'gpExpectedRet'].forEach(function (id) {
-      var e = document.getElementById(id);
-      if (e) e.value = '';
+    var view = document.getElementById('v-gp');
+    if (!view) return;
+    var notes = view.querySelectorAll('.rail .card-b .note.n-warn');
+    notes.forEach(function (n) {
+      if (n.textContent.indexOf('Placeholder series') !== -1) n.style.display = 'none';
     });
-    var body = document.getElementById('gpItemsBody');
-    if (body) { body.innerHTML = ''; window.gpAddItem(); }
-    if (typeof window.gpSetKind === 'function') window.gpSetKind('NRGP');
-    window.__gpEditing = null;
-    var btn = document.getElementById('gpBtn');
-    if (btn) btn.textContent = 'Issue gate pass';
-    // Clear form is also how an in-progress edit is abandoned - the
-    // header has to say "New" again immediately, not wait for the next
-    // navigation to notice __gpEditing changed.
-    var title = document.getElementById('gpNewTitle');
-    var sub = document.getElementById('gpNewSubtitle');
-    if (title) title.textContent = 'New Gate Pass';
-    if (sub) sub.textContent = 'Materials leaving the plant with no challan behind them';
-    window.gpItemsSummary();
-  };
+    var btns = view.querySelectorAll('button[onclick*="GP-2608-0031"]');
+    btns.forEach(function (b) {
+      var oc = b.getAttribute('onclick');
+      if (oc) b.setAttribute('onclick', oc.replace(/GP-2608-0031/g, ''));
+    });
+  }
 
-  /* Standalone only - a module-linked gate pass has no Edit action
-     anywhere (gpRenderListRow never emits one for it), so this is never
-     reached for one; nothing here re-checks challan_id because nothing
-     that calls it can carry one. */
-  window.gpBeginEdit = function (gatepass_id) {
-    fetch('/api/gatepass/' + gatepass_id, { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (!d.ok) {
-          if (typeof toast === 'function') toast(d.why || 'Could not open for editing.');
-          return;
-        }
-        go('gp-new');   // no button passed - reaches the form directly, not the list
-        gpFillEditForm(d.gatepass);
-      })
-      .catch(function () {
-        if (typeof toast === 'function') toast('Could not open that gate pass.');
-      });
-  };
+  // The "Gate pass preview" card (the left-hand mock document) was never
+  // wired at all - v4's own SAI BABUJI / CHN-455 / A044-A045 sample data
+  // sat there permanently regardless of which real challan the operator
+  // picked in "Against challan". Rebuilt once, with real ids, so it can
+  // be filled from the selected challan's actual detail bundle instead.
+  function gpRebuildPreviewCard(vGp) {
+    var card = vGp.querySelector('.work > .card');
+    var body = card && card.querySelector('.card-b > div');
+    if (!body || document.getElementById('gpPrevParty')) return;
+    var header = body.querySelector('div');   // the letterhead block, kept as-is
+    var note = body.querySelector('.note.n-warn');
+    body.innerHTML =
+      (header ? header.outerHTML : '') +
+      '<div class="grid g2" style="gap:9px;font-size:11.5px">' +
+        '<div><b>Party</b><br><span id="gpPrevParty">Select a challan to preview</span><br>' +
+          '<span id="gpPrevGstinPan" style="color:var(--ink3)"></span></div>' +
+        '<div><b>Challan no.</b> <span class="mono" id="gpPrevChallanNo">—</span><br>' +
+          '<b>Date</b> <span class="mono" id="gpPrevDate">—</span><br>' +
+          '<b>Vehicle</b> <span class="mono" id="gpPrevVehicle">—</span></div></div>' +
+      '<table style="margin-top:12px;border:1px solid var(--line)">' +
+        '<thead><tr><th>Sl</th><th>Item</th><th>Box no.</th><th>Unit</th>' +
+          '<th style="text-align:right">Qty</th></tr></thead>' +
+        '<tbody id="gpPrevBoxRows"></tbody>' +
+        '<tfoot><tr><td colspan="3">Total boxes <span id="gpPrevTotalBoxes">0</span></td>' +
+          '<td>Nos</td><td class="num" id="gpPrevTotalQty">0</td></tr></tfoot></table>' +
+      // Rebuilt explicitly rather than regex-edited from the original's
+      // outerHTML - a text-pattern match against v4's exact demo wording
+      // ("Suresh Patel" ... "Performed") is exactly the kind of thing
+      // that silently stops matching (and silently keeps showing the old
+      // fake content) the moment that wording drifts even slightly.
+      '<div class="grid g4" style="margin-top:18px;font-size:10px">' +
+        '<div style="border:1px solid var(--line);border-radius:2px;padding:8px">' +
+          '<div style="font-size:8.5px;font-weight:700;color:var(--ink3);' +
+            'text-transform:uppercase;letter-spacing:.6px">Packed by · Team 1</div>' +
+          '<div style="font-weight:700;font-size:11px;margin-top:3px;color:var(--ink3)">not recorded here</div>' +
+          '<div class="mono" style="color:var(--ink3);font-size:9px">see the box’s own record</div>' +
+          '<div style="margin-top:4px"><span class="tag t-mute" style="font-size:8px">—</span></div></div>' +
+        '<div style="border:1px solid var(--line);border-radius:2px;padding:8px">' +
+          '<div style="font-size:8.5px;font-weight:700;color:var(--ink3);' +
+            'text-transform:uppercase;letter-spacing:.6px">Prepared by · Team 2</div>' +
+          '<div style="font-weight:700;font-size:11px;margin-top:3px;color:var(--ink3)">not recorded here</div>' +
+          '<div class="mono" style="color:var(--ink3);font-size:9px">see the box’s own record</div>' +
+          '<div style="margin-top:4px"><span class="tag t-mute" style="font-size:8px">—</span></div></div>' +
+        '<div style="border:1px solid var(--solar);border-radius:2px;padding:8px;background:var(--solar-lt)">' +
+          '<div style="font-size:8.5px;font-weight:700;color:var(--solar);' +
+            'text-transform:uppercase;letter-spacing:.6px">Loaded by · Team 3</div>' +
+          '<div style="font-weight:700;font-size:11px;margin-top:3px;color:var(--ink3)" ' +
+            'id="gpPrevLoadedBy">awaiting scan</div>' +
+          '<div class="mono" style="color:var(--ink3);font-size:9px">verify boxes on vehicle</div>' +
+          '<div style="margin-top:4px"><span class="tag t-rev" id="gpPrevLoadedTag" ' +
+            'style="font-size:8px">Pending</span></div></div>' +
+        '<div style="border:1px solid var(--line);border-radius:2px;padding:8px">' +
+          '<div style="font-size:8.5px;font-weight:700;color:var(--ink3);' +
+            'text-transform:uppercase;letter-spacing:.6px">Security &amp; driver</div>' +
+          '<div style="height:22px;border-bottom:1px solid var(--line);margin-top:4px"></div>' +
+          '<div style="color:var(--ink3);font-size:9px;margin-top:3px">signed at gate</div></div>' +
+      '</div>' +
+      (note ? note.outerHTML : '');
+  }
 
-  function gpFillEditForm(gp) {
-    var set = function (id, v) { var e = document.getElementById(id); if (e) e.value = v || ''; };
-    set('gpParty', gp.party);
-    set('gpAddr', gp.delivery_address);
-    set('gpVehicle', gp.vehicle_no);
-    if (typeof window.gpSetKind === 'function') window.gpSetKind(gp.kind || 'NRGP');
-    set('gpExpectedRet', gp.expected_return);
+  function gpFmtDate(iso) {
+    if (!iso) return '—';
+    var m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? (m[3] + '-' + m[2] + '-' + m[1]) : iso;
+  }
 
-    var body = document.getElementById('gpItemsBody');
-    if (body) {
-      body.innerHTML = '';
-      var items = (gp.items && gp.items.length) ? gp.items
-        : [{ description: '', unit: 'Nos', qty: '', remark: '' }];
-      items.forEach(function (it) {
-        window.gpAddItem();
-        var rows = body.querySelectorAll('.gp_item_row');
-        var r = rows[rows.length - 1];
-        r.querySelector('.gpi_desc').value = it.description || '';
-        r.querySelector('.gpi_unit').value = it.unit || 'Nos';
-        r.querySelector('.gpi_qty').value = it.qty || '';
-        r.querySelector('.gpi_remark').value = it.remark || '';
-      });
+  // Real box_id-level loading status, not v4's frozen "awaiting scan" -
+  // the same three-state aggregate Loading Verification's own landing
+  // list already computes, so this card agrees with that screen instead
+  // of contradicting it.
+  function gpLoadedAgg(boxes) {
+    if (!boxes || !boxes.length) return null;
+    var loaded = boxes.filter(function (b) { return b.loading_status === 'loaded'; }).length;
+    var started = boxes.filter(function (b) { return b.loading_status !== 'pending'; }).length;
+    if (loaded === boxes.length) return 'loaded';
+    if (started > 0) return 'in_progress';
+    return 'pending';
+  }
+
+  function gpRenderPreview(bundle) {
+    var party = document.getElementById('gpPrevParty');
+    if (!party) return;   // the card was never built (view not on screen)
+    var gstinPan = document.getElementById('gpPrevGstinPan');
+    var chNo = document.getElementById('gpPrevChallanNo');
+    var date = document.getElementById('gpPrevDate');
+    var veh = document.getElementById('gpPrevVehicle');
+    var rows = document.getElementById('gpPrevBoxRows');
+    var totalBoxes = document.getElementById('gpPrevTotalBoxes');
+    var totalQty = document.getElementById('gpPrevTotalQty');
+    var loadedBy = document.getElementById('gpPrevLoadedBy');
+    var loadedTag = document.getElementById('gpPrevLoadedTag');
+
+    if (!bundle) {
+      party.textContent = 'Select a challan to preview';
+      if (gstinPan) gstinPan.textContent = '';
+      if (chNo) chNo.textContent = '—';
+      if (date) date.textContent = '—';
+      if (veh) veh.textContent = '—';
+      if (rows) rows.innerHTML = '<tr><td colspan="5" style="text-align:center;' +
+        'color:var(--ink3);padding:10px">No challan selected yet</td></tr>';
+      if (totalBoxes) totalBoxes.textContent = '0';
+      if (totalQty) totalQty.textContent = '0';
+      return;
     }
-    window.gpItemsSummary();
-    window.__gpEditing = gp.gp_id;
-    // wireGp() already ran once, from go('gp-new'), BEFORE __gpEditing
-    // was set to anything - it title'd the page "New" against the state
-    // that held at that moment. Set here too, rather than waiting for a
-    // second navigation to notice this is actually an edit.
-    var title = document.getElementById('gpNewTitle');
-    var sub = document.getElementById('gpNewSubtitle');
-    if (title) title.textContent = 'Edit Gate Pass';
-    if (sub) sub.textContent = 'Nothing changes until you save';
-    var btn = document.getElementById('gpBtn');
-    if (btn) btn.textContent = 'Save changes';
-    if (typeof toast === 'function') {
-      toast('Editing ' + gp.gp_no + '. Nothing changes until you save.');
+
+    var ch = bundle.challan || {};
+    var boxes = bundle.boxes || [];
+    party.textContent = ch.buyer_name || 'General Stock';
+    if (gstinPan) {
+      var gstin = ch.buyer_gstin || '';
+      var pan = gstin.length >= 12 ? gstin.slice(2, 12) : '';
+      gstinPan.textContent = gstin ? ('GSTIN ' + gstin + (pan ? ' · PAN ' + pan : '')) : '';
+    }
+    if (chNo) chNo.textContent = ch.challan_no || '—';
+    if (date) date.textContent = gpFmtDate(ch.challan_date);
+    if (veh) veh.textContent = ch.vehicle_no || '—';
+    if (rows) {
+      rows.innerHTML = boxes.length ? boxes.map(function (b, i) {
+        return '<tr><td>' + (i + 1) + '</td><td class="mono">' + fqcEsc(ch.model || '—') +
+          '</td><td class="mono">' + fqcEsc(b.box_no || '—') + '</td><td>Nos</td>' +
+          '<td class="num">' + (b.qty || 0) + '</td></tr>';
+      }).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--ink3);' +
+        'padding:10px">No boxes on this challan</td></tr>';
+    }
+    if (totalBoxes) totalBoxes.textContent = String(boxes.length);
+    if (totalQty) totalQty.textContent = String(boxes.reduce(function (s, b) {
+      return s + (b.qty || 0);
+    }, 0));
+
+    if (loadedBy && loadedTag) {
+      var agg = gpLoadedAgg(boxes);
+      if (agg === 'loaded') {
+        loadedBy.textContent = 'Loaded';
+        loadedTag.className = 'tag t-pass'; loadedTag.style.fontSize = '8px';
+        loadedTag.textContent = 'Confirmed';
+      } else if (agg === 'in_progress') {
+        loadedBy.textContent = 'In progress';
+        loadedTag.className = 'tag t-rev'; loadedTag.style.fontSize = '8px';
+        loadedTag.textContent = 'Partial';
+      } else {
+        loadedBy.textContent = 'awaiting scan';
+        loadedTag.className = 'tag t-rev'; loadedTag.style.fontSize = '8px';
+        loadedTag.textContent = 'Pending';
+      }
     }
   }
 
-  /* ---- Gate Pass: the create/edit page --------------------------------
-   *
-   * A real, purpose-built view (v-gp-new), injected exactly like Loading
-   * Verification's own session page (v-loadsession) - not v4's native
-   * v-gp patched at runtime. That approach had a real ceiling: v4's own
-   * initAll() unconditionally touches #ldTag/#ldList/#ldMsg/#gpBy/#gpBtn
-   * inside v-gp's native markup on every sign-in with no null checks
-   * (confirmed by reading initAll() itself - removing those ids outright
-   * would throw there), so v-gp itself is left exactly as v4 shipped it,
-   * simply never navigated to by anything any more. This view has its
-   * own ids throughout and needs none of v4's native fields, so there is
-   * nothing here left to hide - the previous round's gpFldFor /
-   * gpHideUnwiredFields / gpHidePreviewCard are deleted, not carried
-   * forward unused.
-   *
-   * The form and the summary trail are two different things, laid out as
-   * two different things: the form (Type, Party, Address, Vehicle, the
-   * item grid) is the main column; the summary (item count, RGP/NRGP,
-   * prepared by) is a compact read-only strip in the rail, with Issue /
-   * Clear form at its end - it reads the form, it does not contain it.
-   */
-  function gpInjectCreateView() {
-    if (document.getElementById('v-gp-new')) return;
-    var main = document.querySelector('.main');
-    if (!main) return;
-    var sec = document.createElement('section');
-    sec.className = 'view';
-    sec.id = 'v-gp-new';
-    sec.innerHTML =
-      '<div class="pg"><h2 id="gpNewTitle">New Gate Pass</h2>' +
-        '<p id="gpNewSubtitle">Materials leaving the plant with no challan behind them</p>' +
-        '<div class="pg-act"><button class="btn btn-ghost" ' +
-          'onclick="window.__gpEditing=null;go(\'gp-list\')">← Back to Gate Pass</button></div>' +
-      '</div>' +
-      '<div class="work">' +
-        '<div class="wmain o1">' +
-          '<div class="card"><div class="card-h"><h3>Gate pass details</h3></div>' +
-            '<div class="card-b"><div class="grid g4">' +
-              '<div class="fld" id="gpTypeWrap"><label>Type</label>' +
+  function wireGp() {
+      var vGp = document.getElementById('v-gp');
+      if (!vGp) return;
+
+      // Inject UI if not present
+      if (!document.getElementById('gpKindSeg')) {
+          var detailsCard = vGp.querySelector('.rail .card-b');
+          if (detailsCard) {
+              // Type toggle, real Party/Vehicle/Description/Qty fields, and
+              // Expected Return. Party and Description are the two things
+              // v4's original markup never had a field for at all - without
+              // them a non-challan gate pass (equipment, materials, cell
+              // stock between units) could not be issued through this
+              // screen no matter what the challan dropdown was set to.
+              var injectHtml =
+                '<div class="fld"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="gpIsSolar" onchange="window.gpToggleSolarMode()"> This gate pass is for solar modules</label></div>' +
+                '<div class="fld" id="gpTypeWrap"><label>Type</label>' +
                 '<div class="seg" id="gpKindSeg">' +
                 '<button class="on" id="gpNRGP" onclick="gpSetKind(\'NRGP\')">NRGP</button>' +
                 '<button id="gpRGP" onclick="gpSetKind(\'RGP\')">RGP</button></div></div>' +
-              '<div class="fld req"><label>Party / destination</label>' +
+                '<div class="fld req"><label>Party / destination</label>' +
                 '<input id="gpParty" placeholder="Who this is going to"></div>' +
-              '<div class="fld"><label>Delivery address</label><input id="gpAddr"></div>' +
-              '<div class="fld"><label>Vehicle / by hand</label>' +
+                '<div class="fld"><label>Delivery address</label>' +
+                '<input id="gpAddr"></div>' +
+                '<div class="fld"><label>Vehicle / by hand</label>' +
                 '<input id="gpVehicle" placeholder="e.g. BY HAND, or a vehicle no."></div>' +
-              '<div class="fld" id="gpRetWrap" style="display:none"><label>Expected return</label>' +
+                '<div class="fld req"><label>Material going out</label>' +
+                '<input id="gpDesc" placeholder="e.g. CORE I5-14400 PROCESSOR SET"></div>' +
+                '<div class="fld"><label>Quantity</label>' +
+                '<input id="gpQty" type="number" min="1"></div>' +
+                '<div class="fld" id="gpRetWrap" style="display:none"><label>Expected return</label>' +
                 '<input type="date" id="gpExpectedRet" data-future="1"></div>' +
-            '</div></div></div>' +
-          // The reference document's own columns are Sl | Material
-          // description | UOM | Qty | Remarks - only address sits outside
-          // this grid, per Mukesh directly. Indent's own add-item pattern
-          // (<template>, clone, renumber), unchanged from before.
-          '<div class="card"><div class="card-h"><h3>Items</h3>' +
-            '<span class="sp hint">Sl · description · unit · quantity · remarks</span></div>' +
-            '<div class="card-b">' +
-              '<div id="gpItemsBody"></div>' +
-              '<button type="button" class="btn btn-sm" onclick="gpAddItem()">+ Add item</button>' +
-            '</div></div>' +
-          '<template id="gp_item_tpl">' +
-            '<div class="grid g4 gp_item_row" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line2)">' +
-            '<div class="fld" style="grid-column:1/-1"><label>Item <span class="gpi_n"></span> — description</label>' +
-            '<input class="gpi_desc" placeholder="e.g. laptop for repair, cell stock"></div>' +
-            '<div class="fld"><label>Unit</label><select class="gpi_unit">' +
-            '<option value="Nos">Nos</option><option value="Kg">Kg</option><option value="Set">Set</option></select></div>' +
-            '<div class="fld"><label>Quantity</label>' +
-            '<input class="gpi_qty" type="number" min="1" step="1" inputmode="numeric" oninput="gpItemsSummary()"></div>' +
-            '<div class="fld" style="grid-column:1/-1"><label>Remarks (optional)</label>' +
-            '<input class="gpi_remark"></div>' +
-            '<div style="grid-column:1/-1">' +
-            '<button type="button" class="btn btn-sm btn-ghost" onclick="gpDropItem(this)">Remove this item</button></div>' +
-            '</div></template>' +
-        '</div>' +
-        '<div class="rail o2">' +
-          '<div class="card"><div class="card-h"><h3>Summary</h3></div>' +
-            '<div class="card-b">' +
-              '<div class="fld"><label>Prepared by</label><div class="lv" id="gpByNew">—</div></div>' +
-              '<div class="hint" id="gpItemsSummary" style="margin-top:8px;font-size:12.5px"></div>' +
-            '</div></div>' +
-          '<div class="rail-acts">' +
-            '<button class="btn btn-primary" id="gpBtn" onclick="issueGP()">Issue gate pass</button>' +
-            '<button class="btn btn-ghost" id="gpClearBtn" onclick="window.gpClearForm()">Clear form</button>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
-    main.appendChild(sec);
-  }
->>>>>>> origin/main
+                '<div class="fld" id="gpLoadingStateWrap" style="display:none; grid-column:1/-1">' +
+                '<span id="gpLoadingState" class="tag"></span></div>';
+detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
 
-  function wireGp() {
-      gpInjectCreateView();
-      var vGp = document.getElementById('v-gp-new');
-      if (!vGp) return;
+              // Replace placeholder select - a CONVENIENCE, never a
+              // requirement. Choosing a challan pre-fills party/vehicle/qty
+              // if the operator has not already typed their own; it never
+              // locks the fields and never gates the Issue button.
+              gpRebuildPreviewCard(vGp);
 
-      var title = document.getElementById('gpNewTitle');
-      var sub = document.getElementById('gpNewSubtitle');
-      if (window.__gpEditing) {
-        if (title) title.textContent = 'Edit Gate Pass';
-        if (sub) sub.textContent = 'Nothing changes until you save';
-      } else {
-        if (title) title.textContent = 'New Gate Pass';
-        if (sub) sub.textContent = 'Materials leaving the plant with no challan behind them';
-        // Every fresh visit starts from one blank item row and blank
-        // fields - an edit (gpBeginEdit, called right after go('gp-new')
-        // returns) overwrites this immediately afterward with the real
-        // ones, so this only ever runs for a genuinely new gate pass.
-        ['gpParty', 'gpAddr', 'gpVehicle', 'gpExpectedRet'].forEach(function (id) {
-          var e = document.getElementById(id); if (e) e.value = '';
+              var selFld = detailsCard.querySelector('select');
+              if (selFld) {
+                  selFld.id = 'gpChallanSelV4';
+                  var reqLabel = selFld.closest('.fld');
+                  if (reqLabel) reqLabel.classList.remove('req');
+                  selFld.onchange = function() {
+                      var chId = this.value ? parseInt(this.value, 10) : null;
+                      window._gpChallanReady = null;
+                      if (!chId) {
+                          gpRenderPreview(null);
+                          if (document.getElementById('gpIsSolar') && document.getElementById('gpIsSolar').checked) {
+                              document.getElementById('gpParty').value = '';
+                              document.getElementById('gpVehicle').value = '';
+                              document.getElementById('gpQty').value = '';
+                              document.getElementById('gpDesc').value = '';
+                              document.getElementById('gpBtn').disabled = true;
+                              document.getElementById('gpLoadingStateWrap').style.display = 'none';
+                          }
+                          return;
+                      }
+                      fetch('/api/challan/' + chId, { cache: 'no-store' })
+                        .then(function(r) { return r.json(); })
+                        .then(function(bundle) {
+                            if (!bundle || bundle.error) return;
+                            var ch = bundle.challan || {};
+                            var partyEl = document.getElementById('gpParty');
+                            var vehEl = document.getElementById('gpVehicle');
+                            var qtyEl = document.getElementById('gpQty');
+                            var descEl = document.getElementById('gpDesc');
+                            var isSolar = document.getElementById('gpIsSolar') && document.getElementById('gpIsSolar').checked;
+
+                            var cname = ch.buyer_name || '';
+                            var cveh = ch.vehicle_no || '';
+                            var cqty = ch.qty || '';
+                            var cdesc = ch.model ? (ch.model + ' modules') : 'Modules against ' + (ch.challan_no || 'challan');
+
+                            if (isSolar) {
+                                partyEl.value = cname;
+                                vehEl.value = cveh;
+                                qtyEl.value = cqty;
+                                descEl.value = cdesc;
+
+                                // ch.loading_agg / loading_why / loading_n_*
+                                // come straight from the server
+                                // (_loading_agg_status / _loading_incomplete,
+                                // the same functions Loading Verification's
+                                // own list and the print/excel refusal
+                                // already call) - not recomputed here from
+                                // bundle.boxes, so this can never drift from
+                                // what the server will actually enforce.
+                                var lWrap = document.getElementById('gpLoadingStateWrap');
+                                var lState = document.getElementById('gpLoadingState');
+                                lWrap.style.display = 'block';
+                                window._gpChallanReady = ch.loading_agg === 'loaded';
+
+                                if (ch.loading_agg === 'loaded') {
+                                    lState.className = 'tag t-pass';
+                                    lState.textContent = '✔ ' + ch.loading_n_loaded + ' of ' +
+                                      ch.loading_n_total + ' pallets loaded';
+                                    document.getElementById('gpBtn').disabled = false;
+                                } else {
+                                    lState.className = 'tag t-fail';
+                                    lState.textContent = ch.loading_why ||
+                                      ((ch.loading_n_loaded || 0) + ' of ' + (ch.loading_n_total || 0) +
+                                       ' pallets loaded — not ready');
+                                    document.getElementById('gpBtn').disabled = true;
+                                }
+                            } else {
+                                if (partyEl && !partyEl.value) partyEl.value = cname;
+                                if (vehEl && !vehEl.value) vehEl.value = cveh;
+                                if (qtyEl && !qtyEl.value) qtyEl.value = cqty;
+                                if (descEl && !descEl.value) descEl.value = cdesc;
+                            }
+
+                            gpRenderPreview(bundle);
+                        })
+                        .catch(function() {});
+                  };
+
+              }
+          }
+      }
+      gpRenderPreview(null);
+
+      if (document.getElementById('gpIsSolar')) { document.getElementById('gpIsSolar').checked = false; window.gpToggleSolarMode(); }
+      gpHideUnwiredFields();
+
+      document.getElementById('gpBtn').disabled = false;
+      document.getElementById('gpBtn').textContent = 'Issue gate pass';
+      if (document.getElementById('gpBy')) document.getElementById('gpBy').value = USER ? USER.name : '';
+
+      fetch('/api/challans?status=issued', { cache: 'no-store' })
+        .then(function(r) { return r.json(); })
+        .then(function(body) {
+            // api_challans_list() returns {"challans": [...]}, not a bare
+            // array - this was treating the wrapper object itself as the
+            // array and calling .forEach on it, which throws and (since
+            // nothing downstream catches it) leaves _gpLiveChallans unset.
+            var rows = (body && body.challans) || [];
+            window._gpLiveChallans = rows;
+            var sel = document.getElementById('gpChallanSelV4');
+            if (!sel) return;
+            var html = '<option value="">— select challan —</option>';
+            rows.forEach(function(r) {
+                var cname = r.customer_name || r.buyer_name || '';
+                html += '<option value="' + r.challan_id + '">' + fqcEsc(r.challan_no) + ' · ' + fqcEsc(cname) + ' · ' + (r.box_count||0) + ' boxes</option>';
+            });
+            sel.innerHTML = html;
+
+            // Handle cross-link preselection
+            if (window._gpPreselectChallanId) {
+                sel.value = window._gpPreselectChallanId;
+                sel.onchange(); // trigger pre-fill
+                window._gpPreselectChallanId = null;
+            }
         });
-        if (typeof window.gpSetKind === 'function') window.gpSetKind('NRGP');
-        var body = document.getElementById('gpItemsBody');
-        if (body) { body.innerHTML = ''; gpAddItem(); }
-      }
-      var btn = document.getElementById('gpBtn');
-      if (btn) {
-        btn.textContent = window.__gpEditing ? 'Save changes' : 'Issue gate pass';
-        btn.disabled = false;
-      }
-      var byEl = document.getElementById('gpByNew');
-      if (byEl) byEl.textContent = USER ? (USER.name + ' · ' + USER.role) : '—';
-      window.gpItemsSummary();
   }
 
   console.log('[ICON TRACE] live layer active \u00B7 build', B.build,
