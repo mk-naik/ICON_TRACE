@@ -1824,8 +1824,8 @@ function wireFqcAnomalies() {
           '<div><label style="font-size:9.5px;font-weight:700;' +
             'color:var(--ink3);text-transform:uppercase;letter-spacing:.6px">' +
             'Proposed</label>' +
-            '<div style="font-family:var(--f-mono);font-size:26px;' +
-            'font-weight:700;line-height:1;color:' +
+            '<div style="font-family:var(--f-ui),-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;font-size:38px;' +
+            'font-weight:800;letter-spacing:.5px;line-height:1;margin-top:2px;color:' +
             (canPass ? 'var(--pass)' : e.proposed === 'reject' ? 'var(--fail)'
               : 'var(--review)') + '">' +
             /* no proposal at all when a source could not be read: that is not
