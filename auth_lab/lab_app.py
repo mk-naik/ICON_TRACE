@@ -1,5 +1,7 @@
 import os
 import sys
+import html
+import urllib.parse
 
 # Set ICON_DB_FILE before importing store
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -58,7 +60,10 @@ def _clear_cookie(resp):
     resp.delete_cookie("auth_session")
 
 def render_layout(title, body, banner=""):
-    html = f"""
+    # named page_html, not html - this function's local scope must not
+    # shadow the `html` module every other route in this file calls
+    # html.escape() from.
+    page_html = f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -91,7 +96,7 @@ def render_layout(title, body, banner=""):
     </body>
     </html>
     """
-    return html
+    return page_html
 
 @app.route("/", methods=["GET"])
 def index():
@@ -115,7 +120,7 @@ def index():
     """
     err = request.args.get("err")
     if err:
-        body = f'<div class="error">{err}</div>' + body
+        body = f'<div class="error">{html.escape(err)}</div>' + body
     
     clock = icon_auth.clock_status()
     banner = ""
@@ -178,7 +183,7 @@ def change_password():
                 else:
                     return render_layout("Change Password", '<div class="error">Change failed.</div>')
             except icon_auth.AuthError as e:
-                return render_layout("Change Password", f'<div class="error">{e}</div><a href="/change-password">Try again</a>')
+                return render_layout("Change Password", f'<div class="error">{html.escape(str(e))}</div><a href="/change-password">Try again</a>')
 
     body = """
     <form method="POST">
@@ -244,10 +249,10 @@ def enrol():
         body = f"""
         <p>Scan this QR code with your authenticator app:</p>
         <div>{qr_svg}</div>
-        <p>Or enter this secret manually: <strong>{res["secret"]}</strong></p>
+        <p>Or enter this secret manually: <strong>{html.escape(res["secret"])}</strong></p>
         <form method="POST">
-            <input type="hidden" name="token" value="{token or ''}">
-            <input type="hidden" name="login_id" value="{login_id}">
+            <input type="hidden" name="token" value="{html.escape(token or '')}">
+            <input type="hidden" name="login_id" value="{html.escape(login_id)}">
             <label>Enter the 6-digit code to confirm:</label>
             <input type="text" name="code" required autocomplete="off">
             <button type="submit">Complete Enrolment</button>
@@ -275,8 +280,8 @@ def me():
 
     body = f"""
     <div class="box">
-        <p><strong>Login ID:</strong> {session['login_id']}</p>
-        <p><strong>Role:</strong> {session['role']}</p>
+        <p><strong>Login ID:</strong> {html.escape(session['login_id'])}</p>
+        <p><strong>Role:</strong> {html.escape(session['role'])}</p>
     </div>
     <div class="box">
         <h3>Simulate Cancel (Step-up)</h3>
@@ -318,12 +323,12 @@ def admin():
                     msg = "User unlocked."
                 elif action == "issue_token":
                     token = icon_auth.issue_enrol_token(cur, session["login_id"], target)
-                    enrol_url = f"/enrol?login_id={target}&token={token}"
+                    enrol_url = f"/enrol?login_id={urllib.parse.quote(target)}&token={urllib.parse.quote(token)}"
                     msg = f"Token issued. URL: {enrol_url}"
                 elif action == "create_admin":
                     name = request.form.get("display_name")
                     token = icon_auth.create_admin(cur, session["login_id"], target, name)
-                    enrol_url = f"/enrol?login_id={target}&token={token}"
+                    enrol_url = f"/enrol?login_id={urllib.parse.quote(target)}&token={urllib.parse.quote(token)}"
                     msg = f"Admin created. Enrolment URL: {enrol_url}"
                 elif action == "open_window":
                     icon_auth.open_backup_window(cur, session["login_id"], target, ip=request.remote_addr)
@@ -338,10 +343,10 @@ def admin():
                     msg = "User deactivated."
                 elif action == "reset_totp":
                     token = icon_auth.reset_totp(cur, session["login_id"], target, ip=request.remote_addr)
-                    enrol_url = f"/enrol?login_id={target}&token={token}"
+                    enrol_url = f"/enrol?login_id={urllib.parse.quote(target)}&token={urllib.parse.quote(token)}"
                     msg = f"TOTP Reset. New URL: {enrol_url}"
             except icon_auth.AuthError as e:
-                msg = f"Error: {e}"
+                msg = f"Error: {html.escape(str(e))}"
 
     with store.conn() as (cx, cur):
         users = icon_auth.list_users(cur, session["login_id"])
@@ -351,17 +356,18 @@ def admin():
     import time
     t = int(time.time())
     for u in users:
+        safe_login_id = html.escape(u['login_id'])
         locked_text = str(u['locked_until'])
         action_html = ""
         if u['locked_until'] > t:
             locked_text = f"<span style='color:red;'>LOCKED (until {u['locked_until']})</span>"
-            action_html = f"<form method='POST' style='margin:0;'><input type='hidden' name='action' value='unlock'><input type='hidden' name='target' value='{u['login_id']}'><button type='submit' style='padding:2px 5px; margin:0;'>Unlock</button></form>"
-        users_html += f"<tr><td>{u['login_id']}</td><td>{u['display_name']}</td><td>{u['role']}</td><td>{u['active']}</td><td>{locked_text}</td><td>{action_html}</td></tr>"
+            action_html = f"<form method='POST' style='margin:0;'><input type='hidden' name='action' value='unlock'><input type='hidden' name='target' value='{safe_login_id}'><button type='submit' style='padding:2px 5px; margin:0;'>Unlock</button></form>"
+        users_html += f"<tr><td>{safe_login_id}</td><td>{html.escape(u['display_name'])}</td><td>{html.escape(u['role'])}</td><td>{u['active']}</td><td>{locked_text}</td><td>{action_html}</td></tr>"
     users_html += "</table>"
 
     body = f"""
-    {f"<div class='error' style='color:green;'>{msg}</div>" if msg else ""}
-    {f"<script>window.open('{enrol_url}', '_blank');</script>" if enrol_url else ""}
+    {f"<div class='error' style='color:green;'>{html.escape(msg)}</div>" if msg else ""}
+    {f"<script>window.open({json.dumps(enrol_url)}, '_blank');</script>" if enrol_url else ""}
     {users_html}
     
     <div class="box">

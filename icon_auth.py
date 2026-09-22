@@ -5,6 +5,7 @@ import struct
 import secrets
 import hmac
 import logging
+import threading
 import pyotp
 from cryptography.fernet import Fernet, InvalidToken
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -187,8 +188,15 @@ def check_pw(pw_hash, pw):
     return check_password_hash(pw_hash, pw)
 
 def hash_token(token):
-    import hashlib
-    return hashlib.sha256(token.encode('utf-8')).hexdigest()
+    # Plain SHA-256 of a short enrol token or recovery code is a lookup
+    # table waiting to happen - a stolen database alone would yield every
+    # code. Keyed with the same Fernet key that already protects the TOTP
+    # secrets, so a stolen database alone yields nothing without it too.
+    import hmac, hashlib
+    key = load_key()
+    if isinstance(key, str):
+        key = key.encode('utf-8')
+    return hmac.new(key, token.encode('utf-8'), hashlib.sha256).hexdigest()
 
 def verify_totp(secret, code, last_step, now_epoch):
     if not secret or not code.isdigit() or len(code) != 6:
@@ -244,12 +252,22 @@ def login(cur, login_id, credential, ip=None, now=None):
         if elapsed < floor:
             time.sleep(floor - elapsed)
 
+def _mask_unknown_id(login_id):
+    """A login_id matching no user is, in practice, at least as often a
+    password typed into the wrong field as it is a real ID - and unlike a
+    real login_id, that must never be stored verbatim. First 2 characters
+    plus a length are enough to debug "which ID" without ever holding
+    something a stolen log could be replayed with."""
+    if not login_id:
+        return "(len=0)"
+    return login_id[:2] + f"(len={len(login_id)})"
+
 def _login_impl(cur, login_id, credential, ip=None, now=None):
     t = _now(now)
     u = _get_user(cur, login_id)
     if not u:
         check_pw(None, credential)
-        log_event(cur, login_id, "login_fail", ip, "unknown ID", t)
+        log_event(cur, _mask_unknown_id(login_id), "login_fail", ip, "unknown ID", t)
         return {"ok": False, "reason": GENERIC_FAIL}
 
     if not u["active"]:
@@ -662,5 +680,34 @@ def sntp_drift(server=None, timeout=2):
         return {"status": status, "drift_s": drift}
     return {"status": "unknown"}
 
+_CLOCK_CACHE = {"result": None, "checked_at": 0}
+_CLOCK_CACHE_LOCK = threading.Lock()
+CLOCK_REFRESH_SECONDS = 15 * 60
+
+def _refresh_clock_cache():
+    result = sntp_drift()
+    with _CLOCK_CACHE_LOCK:
+        _CLOCK_CACHE["result"] = result
+        _CLOCK_CACHE["checked_at"] = time.time()
+
 def clock_status():
-    return sntp_drift()
+    """sntp_drift() blocks for up to its timeout (2s) whenever the NTP
+    server is unreachable - fine once, ruinous on every page load and every
+    /healthz poll. Checked once at import (in a background thread, so
+    startup itself never blocks on it) and refreshed at most every 15
+    minutes; every caller in between reads the cached result. A page
+    served before the first check completes sees "unknown", never a stale
+    "ok" - drift is a warning surfaced loudly, not a gate that disables
+    anything, so there is nothing unsafe about a blank first read."""
+    with _CLOCK_CACHE_LOCK:
+        result, checked_at = _CLOCK_CACHE["result"], _CLOCK_CACHE["checked_at"]
+    if result is None:
+        return {"status": "unknown"}
+    if time.time() - checked_at > CLOCK_REFRESH_SECONDS:
+        threading.Thread(target=_refresh_clock_cache, daemon=True).start()
+    return result
+
+def _start_clock_check():
+    threading.Thread(target=_refresh_clock_cache, daemon=True).start()
+
+_start_clock_check()

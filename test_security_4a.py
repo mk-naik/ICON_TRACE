@@ -6,7 +6,11 @@ def test_admin_promotion_restriction(tmp_path):
     db_path = str(tmp_path / "test.db")
     old_path = store.DB_PATH
     store.DB_PATH = db_path
-    
+    # create_admin() issues an enrol token, hashed via icon_auth.hash_token()
+    # - HMAC-SHA256 keyed by the Fernet key since Round 19's 4e fix, so a
+    # key must exist here too now.
+    icon_auth.create_key()
+
     with store.conn() as (cx, cur):
         icon_auth.ensure_schema(cur)
         # Create superadmin (rank 3)
