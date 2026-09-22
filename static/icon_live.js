@@ -396,6 +396,32 @@
   }
   window.renderMgmt = renderMgmt;
 
+  /* One rule, called from two places (rerender() below, and the focus
+     listener at the bottom of this file): data-future="1" means the field
+     takes tomorrow onward (Gate Pass expected_return, Indent Delivery by) -
+     min=today, and max is cleared, never set. Everything else is capped at
+     today, never below - including produced_on: a production entry records
+     a shift that already happened, so yesterday must work and only
+     tomorrow is refused (the original behaviour; an earlier round wrongly
+     gave it the data-future treatment, which blocked entering *any* past
+     date).
+     Why this needs to run on focus at all, not just in rerender(): inputs
+     injected later as HTML strings (the Gate Pass form, FQC dashboards,
+     and others built via template-literal innerHTML) never pass through
+     rerender() at all, so without this they would carry no limit until
+     the next full rerender happened to run. */
+  function _applyDateLimit(el) {
+    var d = new Date();
+    var localDate = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    if (el.getAttribute('data-future') === '1') {
+      el.removeAttribute('max');
+      el.setAttribute('min', localDate);
+    } else {
+      el.removeAttribute('min');
+      el.setAttribute('max', localDate);
+    }
+  }
+
   function rerender() {
     ['renderMgmt', 'renderProd', 'renderFqcDash', 'renderLiveFqcDash',
      'renderLiveFqcRecent', 'renderPackLog',
@@ -403,15 +429,7 @@
       try { if (typeof window[fn] === 'function') window[fn](); }
       catch (e) { /* a screen that is not on the page yet */ }
     });
-    document.querySelectorAll('input[type="date"]').forEach(function(el) {
-      var d = new Date();
-      var localDate = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-      if (el.getAttribute('data-future') === '1' || el.getAttribute('name') === 'produced_on') {
-        el.setAttribute('min', localDate);
-      } else {
-        el.setAttribute('max', localDate);
-      }
-    });
+    document.querySelectorAll('input[type="date"]').forEach(_applyDateLimit);
     if (typeof window.iconTable !== 'undefined') window.iconTable.wireAll();
     /* before wireResets(), so the Reset it injects gets wired this pass */
     if (typeof addMissingControls === 'function') addMissingControls();
@@ -10245,7 +10263,13 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
       .catch(function () { toast('The server did not answer.'); });
   };
 
+  /* Catches a date input injected as an HTML string after the last
+     rerender() - see _applyDateLimit's own comment for why this exists at
+     all. Capture phase (true), since 'focus' does not bubble. */
+  document.addEventListener('focus', function (e) {
+    if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'date') {
+      _applyDateLimit(e.target);
+    }
+  }, true);
+
 })();
-
-
-document.addEventListener('focus', function(e) { if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'date') { var d = new Date(); var localDate = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); e.target.setAttribute('max', localDate); } }, true);
