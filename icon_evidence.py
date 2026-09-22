@@ -371,12 +371,99 @@ def scan_anomalies(cfg, limit=200, line=None, frm=None, to=None):
             "calibration": calib}
 
 
+def _el_recapture_n(stem, serial):
+    """None if stem (a filename without its extension) is not this serial at
+    all. 0 for the bare serial - the original capture. The digits after
+    <serial>_ for a recapture, so a higher one can win a tie: EL recaptures
+    are named <serial>_1.jpg, <serial>_2.jpg, and so on, each one filed
+    after a rework, never before the capture it replaces."""
+    stem = stem.strip().upper()
+    want = serial.strip().upper()
+    if stem == want:
+        return 0
+    prefix = want + "_"
+    if stem.startswith(prefix):
+        suffix = stem[len(prefix):]
+        if suffix.isdigit():
+            return int(suffix)
+    return None
+
+
+def _el_search(dirpath, serial):
+    """Newest-first, depth-first, and stops at the first directory that has
+    a match - a directory this deep in a real EL tree is either the one the
+    image was filed into or it is not, so nothing past it needs visiting.
+
+    entry.stat() is read off the DirEntry scandir already returned - on
+    Windows that is free (the listing carries it), so a separate os.stat or
+    os.path.getmtime call per entry, which would cost a round trip each, is
+    never made.
+    """
+    try:
+        entries = list(os.scandir(dirpath))
+    except OSError:
+        return None          # unreadable this deep - skip it, not the scan
+
+    candidates = []
+    subdirs = []
+    for e in entries:
+        try:
+            is_dir = e.is_dir(follow_symlinks=False)
+        except OSError:
+            continue
+        if is_dir:
+            subdirs.append(e)
+            continue
+        try:
+            if not e.is_file(follow_symlinks=False):
+                continue
+        except OSError:
+            continue
+        n = _el_recapture_n(os.path.splitext(e.name)[0], serial)
+        if n is None:
+            continue
+        try:
+            mtime = e.stat().st_mtime
+        except OSError:
+            continue
+        candidates.append((mtime, n, e.path))
+
+    if candidates:
+        # newest mtime wins; a higher _n breaks a tie between two files
+        # written in the same instant
+        candidates.sort(key=lambda c: (c[0], c[1]))
+        return candidates[-1][2]
+
+    def _mtime(e):
+        try:
+            return e.stat().st_mtime
+        except OSError:
+            return -1
+
+    subdirs.sort(key=_mtime, reverse=True)
+    for sd in subdirs:
+        found = _el_search(sd.path, serial)
+        if found is not None:
+            return found
+    return None
+
+
 def read_el(cfg, serial, line=None):
     """EL verdict comes from the folder the image was filed under.
 
     Two lines, two EL stations, two output folders - so with no line given
     both are searched. Unreachable is NC and not NA for the same reason as
     the Sun Simulator: the image may be sitting on the share that is down.
+
+    A rework sends a module back through EL, and the recapture is filed as
+    <serial>_1.jpg - often into a DIFFERENT category folder than the
+    original, because the point of reworking it was to change the verdict.
+    Walking the whole tree in arbitrary order and returning the first name
+    match used to hand back the original capture's folder even when a
+    recapture existed, which could show FQC a stale OK for a module now
+    filed under Cell Crack. Searching newest-directory-first and taking the
+    newest matching file in the first directory that has one fixes both
+    that and the arbitrary full-tree walk on every scan.
     """
     srcs = [s for s in sources(cfg, line) if s["el_root"]]
     if not srcs:
@@ -389,15 +476,15 @@ def read_el(cfg, serial, line=None):
             down.append(s)
             continue
         try:
-            for dirpath, _dirs, files in os.walk(root):
-                for fn in files:
-                    if os.path.splitext(fn)[0].strip().upper() == serial.upper():
-                        return {"state": OK,
-                                "verdict": os.path.basename(dirpath).strip() or "OK",
-                                "path": os.path.join(dirpath, fn),
-                                "line": s["line"], "source": s["label"],
-                                "note": "Folder name is the operator's verdict "
-                                        "(%s)." % s["label"]}
+            match = _el_search(root, serial)
+            if match:
+                return {"state": OK,
+                        "verdict": os.path.basename(os.path.dirname(match)).strip()
+                                  or "OK",
+                        "path": match,
+                        "line": s["line"], "source": s["label"],
+                        "note": "Folder name is the operator's verdict "
+                                "(%s)." % s["label"]}
             read.append(s)
         except Exception as e:
             down.append(dict(s, error=str(e)))
