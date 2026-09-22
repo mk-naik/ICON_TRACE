@@ -379,5 +379,9 @@ rebuilds empty on the next request. That is the entire reason for SQLite here:
 while the system is being tested the data in it is test data, and it should be
 thrown away rather than migrated.
 
+`POST /api/db/reset` is opt-in: it does nothing (403) unless the server was
+started with `ICON_ALLOW_RESET=1`. That is deliberate - a route that erases
+the database must not be one accidental request away in production.
+
 `GET /api/db/stats` returns row counts per table and the file size — the
 quickest way to confirm a save actually landed.

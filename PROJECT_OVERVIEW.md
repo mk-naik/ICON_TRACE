@@ -266,14 +266,19 @@ the quantity rules, evidence reading, the parsers, the offline outbox, or the
 schema. Those have rules that are not visible in the markup, and getting one
 subtly wrong produces a system that looks right and is not.
 
-## 9. Authentication
-- **Backend logic**: icon_auth.py
-- **Command Line Tool**: icon_auth_cli.py (run python icon_auth_cli.py for usage)
-- **Lab UI**: uth_lab/
+## 10. Authentication
+- **Backend logic**: icon_auth.py — TOTP, recovery codes, lockout, roles
+- **Command Line Tool**: icon_auth_cli.py (run `python icon_auth_cli.py` for usage)
+- **Lab UI**: auth_lab/ — a standalone Flask app (auth_lab/lab_app.py) for
+  exercising the auth flow in a browser; it does not import app.py or db.py
 - **Tests**:
-  - 	est_icon_auth.py (17 tests)
-  - 	est_auth_lab_live.py (13 tests)
-  - 	est_repo_hygiene.py (3 tests)
+  - test_icon_auth.py (17 tests) — unit-level: login, lockout, roles, tokens
+  - test_auth_lab_live.py (1 test, driving all P-scenarios; shares the
+    `lab_env` fixture from conftest.py with test_auth_lab_lockout.py)
+  - test_auth_lab_lockout.py (1 test) — lockout/cooldown against the live lab
+  - test_repo_hygiene.py (3 tests) — NUL bytes, .gitignore coverage, no
+    stray routes.txt
+  - test_security_4a.py (1 test) — admin promotion restriction
 - **Running the lab**:
   Use two terminals. In both, set ICON_DB_FILE=lab.db (or another path).
   Terminal 1: python auth_lab/lab_app.py

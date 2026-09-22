@@ -301,11 +301,11 @@ outage when it will not.
 
 ## Live Tests
 To run the live tests, install Playwright and run the script:
-``ash
+```bash
 pip install playwright
 python -m playwright install chromium
 python test_build_banner_live.py
-`
+```
 
 ### Authentication and TOTP Requirements
 - **Dependencies**: pip install pyotp cryptography qrcode pytest playwright
