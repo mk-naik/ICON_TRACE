@@ -14,6 +14,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 MAX_FAILS = int(os.environ.get("ICON_AUTH_MAX_FAILS", "10"))
 LOCK_SECONDS = int(os.environ.get("ICON_AUTH_LOCK_SECONDS", "300"))
 LOGIN_TIMING_FLOOR_MS = 350
+# Escalating cooldown before the 10-failure/5-minute lock: 2s after the 1st
+# failure, 4s after the 2nd, 8s after the 3rd and every one after that.
+# Overridable so tests do not have to actually wait ("0,0,0").
+COOLDOWN_STEPS = tuple(int(x) for x in
+    os.environ.get("ICON_AUTH_COOLDOWN_STEPS", "2,4,8").split(","))
+ATTEMPT_PURGE_SECONDS = 15 * 60
 NTP_SERVER = os.environ.get("ICON_NTP_SERVER", "pool.ntp.org")
 
 # Roles rank
@@ -252,6 +258,40 @@ def login(cur, login_id, credential, ip=None, now=None):
         if elapsed < floor:
             time.sleep(floor - elapsed)
 
+def _normalise_login_key(login_id):
+    return (login_id or "").strip().lower()[:64]
+
+def _cooldown_check(cur, norm_id, t):
+    """True if this ID must be refused right now without being evaluated at
+    all - keyed by the typed ID string, for every role and for IDs that
+    match no user, so only real accounts slowing down would itself be an
+    oracle for which IDs exist. Rows quiet for ATTEMPT_PURGE_SECONDS are
+    purged on every call so guessing random IDs cannot grow this table."""
+    cur.execute("DELETE FROM auth_attempt WHERE last_at < %s", (t - ATTEMPT_PURGE_SECONDS,))
+    cur.execute("SELECT next_ok_at FROM auth_attempt WHERE login_key=%s", (norm_id,))
+    row = cur.fetchone()
+    return bool(row and t < row["next_ok_at"])
+
+def _cooldown_record_fail(cur, norm_id, t):
+    """Never time.sleep() here: this runs inside a request, and ICON TRACE
+    serves on Waitress with several worker threads - a sleep in a request
+    handler blocks that thread for its duration, and enough parallel bad
+    logins on one ID would tie up every worker and freeze the whole plant
+    app. The cooldown is enforced by refusing early on the NEXT request
+    instead (_cooldown_check), never by holding this one open."""
+    cur.execute("SELECT fails FROM auth_attempt WHERE login_key=%s", (norm_id,))
+    row = cur.fetchone()
+    fails = (row["fails"] if row else 0) + 1
+    step = COOLDOWN_STEPS[min(fails - 1, len(COOLDOWN_STEPS) - 1)] if COOLDOWN_STEPS else 0
+    cur.execute("""
+        INSERT INTO auth_attempt (login_key, fails, next_ok_at, last_at) VALUES (%s, %s, %s, %s)
+        ON CONFLICT(login_key) DO UPDATE SET fails=excluded.fails,
+            next_ok_at=excluded.next_ok_at, last_at=excluded.last_at
+        """, (norm_id, fails, t + step, t))
+
+def _cooldown_reset(cur, norm_id):
+    cur.execute("DELETE FROM auth_attempt WHERE login_key=%s", (norm_id,))
+
 def _mask_unknown_id(login_id):
     """A login_id matching no user is, in practice, at least as often a
     password typed into the wrong field as it is a real ID - and unlike a
@@ -264,13 +304,23 @@ def _mask_unknown_id(login_id):
 
 def _login_impl(cur, login_id, credential, ip=None, now=None):
     t = _now(now)
+    norm_id = _normalise_login_key(login_id)
+
+    # An attempt arriving inside its own cooldown is refused at once, on
+    # the generic sentence, without touching a credential, a user row or
+    # the counter itself - it is not "one more failure", it never happened.
+    if _cooldown_check(cur, norm_id, t):
+        return {"ok": False, "reason": GENERIC_FAIL}
+
     u = _get_user(cur, login_id)
     if not u:
         check_pw(None, credential)
+        _cooldown_record_fail(cur, norm_id, t)
         log_event(cur, _mask_unknown_id(login_id), "login_fail", ip, "unknown ID", t)
         return {"ok": False, "reason": GENERIC_FAIL}
 
     if not u["active"]:
+        _cooldown_record_fail(cur, norm_id, t)
         log_event(cur, login_id, "login_fail", ip, "inactive", t)
         return {"ok": False, "reason": GENERIC_FAIL}
 
@@ -304,6 +354,7 @@ def _login_impl(cur, login_id, credential, ip=None, now=None):
                     detail = "wrong code or replayed"
             except KeyMissing as e:
                 logging.error("KeyMissing during login for %s: %s", login_id, e)
+                _cooldown_record_fail(cur, norm_id, t)
                 log_event(cur, login_id, "login_fail", ip, f"KeyMissing: {e}", t)
                 return {"ok": False, "reason": GENERIC_FAIL}
 
@@ -340,28 +391,28 @@ def _login_impl(cur, login_id, credential, ip=None, now=None):
             else:
                 detail = "wrong password"
 
-    if not success:
-        pass
-
     is_locked = u["locked_until"] > t
     if is_locked:
-        if success:
-            rem = int((u["locked_until"] - t) // 60) + 1
-            log_event(cur, login_id, "login_fail", ip, "locked (but valid credentials)", t)
-            return {"ok": False, "reason": GENERIC_FAIL}
-        else:
-            log_event(cur, login_id, "login_fail", ip, "locked", t)
-            return {"ok": False, "reason": GENERIC_FAIL}
+        # No reveal on a correct credential while locked: same page, same
+        # status, same time, either way - a locked ID that answered a
+        # correct guess differently would be an oracle telling an attacker
+        # which guess was right, unpunished, for the length of the lock.
+        _cooldown_record_fail(cur, norm_id, t)
+        detail_locked = "locked (but valid credentials)" if success else "locked"
+        log_event(cur, login_id, "login_fail", ip, detail_locked, t)
+        return {"ok": False, "reason": GENERIC_FAIL}
 
     if success:
         for sql, params in state_updates:
             cur.execute(sql, params)
         cur.execute("UPDATE app_user SET failed_count=0, locked_until=0 WHERE user_id=%s", (u["user_id"],))
+        _cooldown_reset(cur, norm_id)
         log_event(cur, login_id, "login_ok", ip, method, t)
         must_reenrol = True if method == "recovery" else bool(u["must_reenrol"])
-        return {"ok": True, "user_id": u["user_id"], "role": u["role"], 
+        return {"ok": True, "user_id": u["user_id"], "role": u["role"],
                 "must_change_pw": bool(u["must_change_pw"]), "must_reenrol": must_reenrol}
     else:
+        _cooldown_record_fail(cur, norm_id, t)
         fails = u["failed_count"] + 1
         if fails >= MAX_FAILS:
             cur.execute("UPDATE app_user SET failed_count=0, locked_until=%s WHERE user_id=%s", (t + LOCK_SECONDS, u["user_id"]))
@@ -567,6 +618,7 @@ def unlock_user(cur, actor_login_id, target_login_id, ip=None, now=None):
         raise AuthError("Not authorized.")
         
     cur.execute("UPDATE app_user SET locked_until=0, failed_count=0 WHERE user_id=%s", (u["user_id"],))
+    _cooldown_reset(cur, _normalise_login_key(target_login_id))
     log_event(cur, target_login_id, "unlocked", ip, f"by {actor_login_id}", t)
 
 def reset_totp(cur, actor_login_id, target_login_id, ip=None, now=None):

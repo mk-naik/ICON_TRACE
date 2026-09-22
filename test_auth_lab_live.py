@@ -169,13 +169,24 @@ def test_live_scenarios(lab_env):
         page.click("button[type='submit']")
         out1 = page.content()
         snap("P4_unknown")
-        
+
+        # Round 19's client-side attempt counter (section 2) renders "N
+        # failed attempts" into the page - real, useful, and *client-side
+        # only*, but it means two page loads a moment apart are no longer
+        # byte-identical DOM regardless of ID, since N itself has moved on.
+        # Reset it between these two attempts so both represent the same
+        # "1 failed attempt" state - what this assertion actually needs to
+        # prove is that unknown-ID and known-wrong-password render
+        # identically for the SAME attempt number, not that the counter
+        # itself never advances.
+        page.evaluate("try { sessionStorage.removeItem('iconAuthAttempt'); } catch (e) {}")
+
         page.goto("http://127.0.0.1:8091/")
         page.fill("input[name='login_id']", "sa1")
         page.fill("input[name='credential']", "pass1234")
         page.click("button[type='submit']")
         out2 = page.content()
-        
+
         assert "That ID or password" in out1
         assert out1 == out2
         

@@ -28,6 +28,13 @@ def db_env():
     # We will override these in icon_auth as well since it caches them at load time
     icon_auth.MAX_FAILS = 5
     icon_auth.LOCK_SECONDS = 300
+    old_cooldown = icon_auth.COOLDOWN_STEPS
+    # These tests exercise scenarios at a handful of fixed `now` values, not
+    # real time passing between attempts - Round 19's escalating cooldown
+    # would otherwise refuse a deliberate, immediate retry the test expects
+    # to be evaluated. test_cooldown_escalation below covers the cooldown
+    # timing itself, with real, non-zero steps.
+    icon_auth.COOLDOWN_STEPS = ()
     
     key_path = os.path.join(os.path.dirname(path), ".icon_totp_key")
     if os.path.exists(key_path):
@@ -50,17 +57,18 @@ def db_env():
         cur.execute("UPDATE app_user SET pw_hash=%s WHERE login_id='super1'", (icon_auth.hash_pw("SuperSecret123!"),))
         
     yield path
-    
+
     os.remove(path)
     if os.path.exists(key_path):
         os.remove(key_path)
-        
+
     if old_db: os.environ["ICON_DB_FILE"] = old_db
     else: del os.environ["ICON_DB_FILE"]
     if old_ntp: os.environ["ICON_NTP_SERVER"] = old_ntp
     else: os.environ.pop("ICON_NTP_SERVER", None)
     if old_max: os.environ["ICON_AUTH_MAX_FAILS"] = old_max
     else: os.environ.pop("ICON_AUTH_MAX_FAILS", None)
+    icon_auth.COOLDOWN_STEPS = old_cooldown
     if old_lock: os.environ["ICON_AUTH_LOCK_SECONDS"] = old_lock
     else: os.environ.pop("ICON_AUTH_LOCK_SECONDS", None)
 
@@ -506,3 +514,72 @@ def test_14b_create_admin(db_env):
         # Already exists
         with pytest.raises(icon_auth.AuthError, match="ID already exists"):
             icon_auth.create_admin(cur, "admin1", "admin4", "Admin Four", now=now)
+
+def test_15_cooldown_escalation(db_env):
+    """Round 19, section 2: the escalating cooldown (2s, 4s, 8s, 8s...)
+    before the 10-failure lock, and that an attempt inside its cooldown is
+    refused without even being counted as a failure - identical for a
+    Super Admin, an Admin, an operator, and an ID that does not exist."""
+    icon_auth.MAX_FAILS = 10
+    icon_auth.COOLDOWN_STEPS = (2, 4, 8)
+    now = 200000
+    with store.conn() as (cx, cur):
+        for login_id in ("super1", "admin1", "op1", "no-such-id"):
+            t = now
+            # Failure 1 -> next attempt refused until t+2
+            r = icon_auth.login(cur, login_id, "wrong", now=t)
+            assert not r["ok"] and r["reason"] == GENERIC_FAIL
+
+            # Inside the 2s cooldown: refused, and must not itself count
+            r = icon_auth.login(cur, login_id, "wrong", now=t + 1)
+            assert not r["ok"]
+            cur.execute("SELECT fails FROM auth_attempt WHERE login_key=%s",
+                        (icon_auth._normalise_login_key(login_id),))
+            assert cur.fetchone()["fails"] == 1, "an attempt inside cooldown must not be counted"
+
+            # Past the 2s cooldown: evaluated, becomes failure 2 -> next
+            # refused until t+2+4
+            r = icon_auth.login(cur, login_id, "wrong", now=t + 2)
+            assert not r["ok"]
+
+            # Inside the 4s cooldown
+            r = icon_auth.login(cur, login_id, "wrong", now=t + 3)
+            assert not r["ok"]
+            cur.execute("SELECT fails FROM auth_attempt WHERE login_key=%s",
+                        (icon_auth._normalise_login_key(login_id),))
+            assert cur.fetchone()["fails"] == 2
+
+            # Past the 4s cooldown: failure 3 -> next refused until +8, and
+            # every failure after this one uses the same 8s step
+            r = icon_auth.login(cur, login_id, "wrong", now=t + 6)
+            assert not r["ok"]
+            r = icon_auth.login(cur, login_id, "wrong", now=t + 7)
+            assert not r["ok"], "still inside the 8s cooldown"
+            r = icon_auth.login(cur, login_id, "wrong", now=t + 14)
+            assert not r["ok"], "past the 8s cooldown, evaluated (and wrong) again"
+            r = icon_auth.login(cur, login_id, "wrong", now=t + 15)
+            assert not r["ok"], "still inside the following 8s cooldown"
+
+def test_16_cooldown_not_a_sleep(db_env):
+    """12 PARALLEL failed logins on one ID must finish in well under
+    MAX_FAILS * LOGIN_TIMING_FLOOR - proving the cooldown is a refusal on
+    the next request, never a time.sleep() held inside this one. ICON
+    TRACE serves on several Waitress worker threads; a sleep in the
+    request path would tie up all of them for the cooldown's duration and
+    freeze the app for every other user, not just this one. Run
+    sequentially, 12 calls cannot finish faster than 12 * the 350ms timing
+    floor (4.2s) regardless of the cooldown - that floor is section 4b's,
+    a separate feature, and is not what this test is checking."""
+    icon_auth.COOLDOWN_STEPS = (2, 4, 8)
+    now = 300000
+    results = []
+    def attempt():
+        with store.conn() as (cx, cur):
+            results.append(icon_auth.login(cur, "op1", "wrong", now=now))
+    threads = [threading.Thread(target=attempt) for _ in range(12)]
+    start = time.time()
+    for th in threads: th.start()
+    for th in threads: th.join()
+    elapsed = time.time() - start
+    assert len(results) == 12
+    assert elapsed < 3, f"12 parallel attempts took {elapsed:.2f}s - looks like something is sleeping"

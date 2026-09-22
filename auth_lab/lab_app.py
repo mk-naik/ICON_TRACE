@@ -59,6 +59,12 @@ def _set_cookie(resp, data):
 def _clear_cookie(resp):
     resp.delete_cookie("auth_session")
 
+# A successful sign-in resets the client-side attempt counter (Round 19,
+# section 2). This page is only ever reached with a valid session, i.e.
+# after icon_auth.login() actually returned ok - so reaching it at all is
+# the reset condition; nothing here needs to know which ID succeeded.
+_CLEAR_ATTEMPT_SCRIPT = "<script>try { sessionStorage.removeItem('iconAuthAttempt'); } catch (e) {}</script>"
+
 def render_layout(title, body, banner=""):
     # named page_html, not html - this function's local scope must not
     # shadow the `html` module every other route in this file calls
@@ -110,17 +116,136 @@ def index():
             return redirect("/enrol")
     
     body = """
-    <form method="POST" action="/login">
+    <form method="POST" action="/login" id="loginForm">
         <label>Login ID:</label>
         <input type="text" name="login_id" id="login_id" required>
         <label>Password or authenticator code:</label>
         <input type="password" name="credential" required>
-        <button type="submit">Sign In</button>
+        <button type="submit" id="signInBtn">Sign In</button>
     </form>
     """
     err = request.args.get("err")
-    if err:
-        body = f'<div class="error">{html.escape(err)}</div>' + body
+    err_html = html.escape(err) if err else ""
+    body = f'<div class="error" id="errBox" style="{"" if err else "display:none;"}">{err_html}</div>' + body
+
+    # This is a courtesy for the user, computed entirely client-side - the
+    # server itself never returns a count, a remaining-attempts figure, a
+    # lock state or a "wait N seconds" (see GENERIC_FAIL - every failure
+    # response is identical). The real enforcement is
+    # icon_auth._login_impl's own cooldown/lock check on the next request;
+    # this only saves a doomed round trip and shows why.
+    # 10, 5 minutes and the cooldown steps come from the server's own
+    # constants, never hard-coded here. One shared counter for the tab, not
+    # one per typed ID: a login page is one ID at a time in practice, and a
+    # single counter is what "reset on any successful sign-in" (below)
+    # means simply - it does not need to know which ID succeeded.
+    body += f"""
+    <script>
+    (function() {{
+        var MAX_FAILS = {icon_auth.MAX_FAILS};
+        var LOCK_SECONDS = {icon_auth.LOCK_SECONDS};
+        var COOLDOWN_STEPS = {json.dumps(list(icon_auth.COOLDOWN_STEPS))};
+        var STORAGE_KEY = 'iconAuthAttempt';
+        var form = document.getElementById('loginForm');
+        var idInput = document.getElementById('login_id');
+        var btn = document.getElementById('signInBtn');
+        var errBox = document.getElementById('errBox');
+        var serverErrText = errBox.textContent;
+        var countdownTimer = null;
+
+        function load() {{
+            try {{ return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || 'null'); }}
+            catch (e) {{ return null; }}
+        }}
+        function save(state) {{
+            try {{
+                if (state) sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+                else sessionStorage.removeItem(STORAGE_KEY);
+            }} catch (e) {{}}
+        }}
+
+        function cooldownFor(count) {{
+            if (!COOLDOWN_STEPS.length || count < 1) return 0;
+            return COOLDOWN_STEPS[Math.min(count - 1, COOLDOWN_STEPS.length - 1)];
+        }}
+
+        function lineFor(count) {{
+            var noun = count === 1 ? 'attempt' : 'attempts';
+            if (count >= MAX_FAILS) {{
+                return count + ' failed ' + noun + '. This ID is now locked for '
+                    + Math.round(LOCK_SECONDS / 60) + ' minutes. Please wait, or ask an Admin to unlock it.';
+            }}
+            return count + ' failed ' + noun + '. After ' + MAX_FAILS
+                + ', this ID is locked for ' + Math.round(LOCK_SECONDS / 60) + ' minutes.';
+        }}
+
+        function renderBox(count) {{
+            var parts = [];
+            if (serverErrText) parts.push(serverErrText);
+            if (count) parts.push(lineFor(count));
+            if (!parts.length) {{ errBox.style.display = 'none'; return; }}
+            errBox.style.display = 'block';
+            errBox.textContent = parts.join(' ');
+        }}
+
+        function tickCountdown(remainMs) {{
+            clearInterval(countdownTimer);
+            function tick() {{
+                var s = Math.ceil(remainMs / 1000);
+                if (s <= 0) {{
+                    btn.disabled = false;
+                    btn.textContent = 'Sign In';
+                    clearInterval(countdownTimer);
+                    return;
+                }}
+                btn.disabled = true;
+                btn.textContent = 'Wait ' + s + 's...';
+                remainMs -= 250;
+            }}
+            tick();
+            countdownTimer = setInterval(tick, 250);
+        }}
+
+        function applyState() {{
+            var st = load();
+            var now = Date.now();
+            if (st && (now - st.lastFailAt) > 5 * 60 * 1000) {{ st = null; save(null); }}
+            if (!st || !st.count) {{ renderBox(0); btn.disabled = false; btn.textContent = 'Sign In'; return; }}
+            renderBox(st.count);
+            // Computed from lastFailAt, not from when the page loaded, so a
+            // refresh neither restarts nor skips the wait.
+            var cd = cooldownFor(st.count) * 1000;
+            var remain = st.lastFailAt + cd - now;
+            if (remain > 0) tickCountdown(remain);
+            else {{ btn.disabled = false; btn.textContent = 'Sign In'; }}
+        }}
+
+        // Block Enter while disabled - the button itself is disabled, but
+        // Enter in a text field submits the form directly.
+        form.addEventListener('keydown', function(e) {{
+            if (e.key === 'Enter' && btn.disabled) e.preventDefault();
+        }});
+
+        // A failure round-trips through ?err= on this same page (see
+        // index()). Counted once, right here - but only ONCE per failure:
+        // ?err= stays in the URL across a reload or back-button, and a
+        // reload must recompute the same remaining wait, never add to it
+        // (Round 19, section 2 - "refreshing the page neither restarts nor
+        // skips the wait"). history.replaceState strips it right after
+        // processing so a reload takes the "just displaying" path below.
+        var params = new URLSearchParams(window.location.search);
+        if (params.get('err')) {{
+            var st = load() || {{count: 0, lastFailAt: 0}};
+            st.count += 1;
+            st.lastFailAt = Date.now();
+            save(st);
+            history.replaceState(null, '', window.location.pathname);
+        }}
+
+        applyState();
+    }})();
+    </script>
+    """
     
     clock = icon_auth.clock_status()
     banner = ""
@@ -185,7 +310,7 @@ def change_password():
             except icon_auth.AuthError as e:
                 return render_layout("Change Password", f'<div class="error">{html.escape(str(e))}</div><a href="/change-password">Try again</a>')
 
-    body = """
+    body = _CLEAR_ATTEMPT_SCRIPT + """
     <form method="POST">
         <label>Old Password:</label>
         <input type="password" name="old_pw" required>
@@ -212,7 +337,7 @@ def enrol():
             res = icon_auth.enrol_commit(cur, login_id, token, code, ip=request.remote_addr)
             if res is not False:
                 # Success
-                body = "<h3>Enrolment Successful!</h3>"
+                body = _CLEAR_ATTEMPT_SCRIPT + "<h3>Enrolment Successful!</h3>"
                 if res: # recovery codes
                     body += "<p>Save these recovery codes NOW. They will not be shown again.</p><div class='codes'>"
                     body += "<br>".join(res)
@@ -278,7 +403,7 @@ def me():
                 else:
                     msg = "<div class='error'>Step-up failed.</div>"
 
-    body = f"""
+    body = _CLEAR_ATTEMPT_SCRIPT + f"""
     <div class="box">
         <p><strong>Login ID:</strong> {html.escape(session['login_id'])}</p>
         <p><strong>Role:</strong> {html.escape(session['role'])}</p>
@@ -360,7 +485,8 @@ def admin():
         locked_text = str(u['locked_until'])
         action_html = ""
         if u['locked_until'] > t:
-            locked_text = f"<span style='color:red;'>LOCKED (until {u['locked_until']})</span>"
+            mins_left = (u['locked_until'] - t + 59) // 60  # round up: "1 min left" until truly over
+            locked_text = f"<span style='color:red;'>Locked - {mins_left} min left</span>"
             action_html = f"<form method='POST' style='margin:0;'><input type='hidden' name='action' value='unlock'><input type='hidden' name='target' value='{safe_login_id}'><button type='submit' style='padding:2px 5px; margin:0;'>Unlock</button></form>"
         users_html += f"<tr><td>{safe_login_id}</td><td>{html.escape(u['display_name'])}</td><td>{html.escape(u['role'])}</td><td>{u['active']}</td><td>{locked_text}</td><td>{action_html}</td></tr>"
     users_html += "</table>"
