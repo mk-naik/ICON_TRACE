@@ -1715,9 +1715,18 @@ Staging
 - [x] Stage 1a - TOTP proven on a STANDALONE login page first (own tiny app, own port);
       only then integrated. Keep the logic in one module so integration is a move, not a
       rewrite. Startup clock check (TOTP fails if the server clock drifts).
-- [ ] Stage 1b - users table, server-side sessions that survive a restart, roles enforced
-      on the server (today 4 role checks across 40 write endpoints; the rest are open),
-      role read from the session, X-User-Role ignored.
+- [~] Stage 1b - users table, server-side sessions that survive a restart, roles enforced
+      on the server, role read from the session, X-User-Role ignored.
+      **Enforcement half done (Round 23).** auth_session is a real table; sessions
+      survive a restart and a second process; role() and actor() read the session and
+      nothing else; X-User-Role and X-User-Name are no longer read anywhere, nor sent;
+      all 49 write endpoints carry require_role(); the login screen is a real login.
+      **Provisioning half not started - Round 24:** there is no UI to create, edit,
+      deactivate or re-enrol a user. app_user starts empty; Mukesh creates the first
+      Super Admin himself with `python icon_auth_cli.py create-superadmin <id> "<name>"`,
+      and until Round 24 every other account has to be made the same way. The real
+      people in v4's USERS array (Mukesh, Rajesh Kumar, Amit Sharma, ...) have NO
+      accounts - that array is dead markup now, read by nothing.
 - [ ] Stage 2 - change feed: a server sequence bumped at the one commit point
       (store.conn); the client polls /api/changes?since=N inside the 5 s ping; only the
       visible screen refetches; 3-5 s is acceptable. True push (SSE) later needs TLS +
@@ -2914,4 +2923,144 @@ the exact reason text. Node is not installed on this machine; the two
 Two real regressions surfaced only because the required verification
 step (running the actual suite, not trusting the file list) was followed
 - exactly the failure mode this round exists to close out.
+
+---
+
+## Round 23 - Stage 1b: real sessions, server-side role() and actor(), 49 endpoints gated
+
+**What was actually wrong.** Every write endpoint trusted two client-sent
+headers: `X-User-Name` for who was acting (recorded in every audit row)
+and `X-User-Role` for what they were allowed to do. Anyone with devtools
+could set either to anything. Five endpoints checked a role at all; the
+other forty-odd were open to anybody who could reach the port. The login
+screen was a dropdown of fourteen names and a password box with eight
+dots painted into its `value`; picking a name set `USER`, a plain
+JavaScript object, and the server believed whatever the page then sent.
+v4's own note said so out loud: *"Authentication is designed, not yet
+built."* It is built now.
+
+**The shape of the fix.** A real `auth_session` row, keyed by an
+unguessable `secrets.token_hex(32)`, carried in an HttpOnly `icon_sid`
+cookie (deliberately a different cookie from Flask's own `session`, which
+this app already uses for pending invoice uploads). `before_request`
+loads it onto `g.icon_session` and blocks nothing by itself;
+`require_role()` on each write endpoint is what refuses. `role()` and
+`actor()` read that session and nothing else.
+
+**The idle rule, stated plainly because it will surprise someone.** The
+window is 5 minutes for Admin and Super Admin, 1 hour for everyone else,
+and it is extended ONLY by a state-changing request that actually
+succeeded. Navigating between screens does not reset it. Somebody who
+reads for the whole window is signed out even though they were sitting
+right there - deliberate, not a bug to fix later. The popup in the last
+two minutes says this in as many words, because the alternative is people
+discovering it by losing a form.
+
+**Why a refused request does not extend a session.** The touch happens in
+`after_request`, keyed on `status < 400` - the same rule `_sync_guard`
+already applies to replay. A request that was refused for any other
+reason has not demonstrated anybody is there; extending on it would mean
+a forbidden endpoint, hammered, could keep a session alive indefinitely.
+
+### The endpoint-to-role map
+
+Built against the screen each endpoint serves, cross-referenced with
+`ROLES` in `icon_trace.html` plus the views `icon_live.js` grants at
+runtime (`challan-list`/`gp-list`/`gp-new`, `loading-list`/`loadsession`,
+and `review` for Production Incharge) and the `Quality` role that file
+creates outright, which v4 never had.
+
+| Endpoints | Allowed roles |
+|---|---|
+| `/api/box/open`, `/api/box/<id>/{scan,remove,close,capacity,abandon,repack}`, `/api/repack`, `/packing` | Packing Operator, Admin, Super Admin |
+| `/api/loading/<id>/{confirm,submit}` | Dispatch Operator, Packing Operator, Admin, Super Admin |
+| `/api/challan`, `/api/challan/checks`, `/api/challan/<id>/{submit,discard,cancel,edit-draft,edit-save}`, `/api/gatepass`, `/api/gatepass/<id>`, `/api/invoice/{parse,confirm}`, `/invoice/{parse,confirm,cancel}`, `/dispatch`, `/gatepass` | Dispatch Operator, Admin, Super Admin |
+| `/api/indent`, `/api/indent/<no>`, `/indent/new`, `/api/allocation`, `/api/allocation/<id>`, `/api/allocation/<id>/update`, `/planning`, `/api/prodentry`, `/api/loss_event`, `/api/loss_event/<id>/close` | Production Incharge, Admin, Super Admin |
+| `/api/fqc`, `/fqc` | FQC Operator, Admin, Super Admin |
+| `/api/quality` | Quality, Admin, Super Admin |
+| `/api/settings`, `/settings`, `/admin/challan-import` | Admin, Super Admin |
+| `/api/material` (POST+PUT), `/api/cell-efficiencies`, `/api/db/reset` | **Super Admin alone** |
+| `/api/export/xlsx` | all seven roles |
+| `/api/review/resolve` | per branch - see below |
+
+Super Admin is included wherever Admin is, because it outranks Admin
+(`icon_auth.ROLE_RANK`) and an allow-list that left it out would lock the
+highest-privileged account out of ordinary work. The reverse does not
+hold: master data is Super Admin ALONE, so an Admin can still read the
+materials list but not write it. `/api/db/reset` keeps Stage 0's
+`ICON_ALLOW_RESET` guard as well - both apply, neither replaces the
+other, and they refuse for visibly different reasons.
+
+`/api/review/resolve` could not become a single decorator: which role is
+allowed depends on the item type, and for a duplicate scan on whether the
+serial has already been dispatched. Its four pre-existing checks now call
+`_require_role()`, the inline counterpart with the same two outcomes,
+each keeping its own wording and its exact existing allowed-role set -
+`("Quality", "Admin")`, `("Production Incharge", "Admin")` and `Admin`
+alone. Who they permit is unchanged; only how it is checked. The route
+also carries a blanket decorator so it answers 401 like every other
+write.
+
+### What proves each part
+
+- Section 1 (the table and its five functions) - `test_session_auth.py`,
+  including a session loaded back by a genuinely separate Python process
+  against the same file, which is what "real, not in memory" means.
+- Sections 2-3 (before_request, role(), actor(), the routes) - the same
+  file: 401 with no cookie and with an expired one, a GET provably not
+  extending a session while a successful POST does, a full login ->
+  authenticated call -> logout -> same cookie now refused flow, and a
+  grep asserting zero remaining `X-User-Role`/`X-User-Name` reads.
+- Section 4 (the gates) - `test_role_gates.py`, which reads the map back
+  out of `app.py`'s own decorators so it cannot drift from what is
+  deployed, then proves all 49 endpoints x 3 identity states. It also
+  proves the original vulnerability specifically: a forged
+  `X-User-Role: Super Admin` header does not promote an FQC Operator, and
+  the audit trail records the session's real name rather than a forged
+  `X-User-Name`.
+- Section 6 (the login screen) - `test_login_screen.py`, in real
+  Chromium.
+
+### Two real bugs this work surfaced
+
+`/api/db/reset` answered 500, not 200. `store.wipe()` deletes the file
+and rebuilds `schema_sqlite.sql`'s tables only, so a reset took
+`app_user` and `auth_session` with it; the after_request hook then died
+on *no such table: auth_session*, and every later request carrying a
+cookie would have died the same way. A reset empties the data - it must
+not leave the server unable to answer.
+
+The session-touch hook could turn a completed save into a 500. It is
+housekeeping, running after the work is already committed and answered,
+so it now logs and moves on. The worst case is somebody signing in again
+sooner than they expected, which is the safe direction to fail in.
+
+A third was self-inflicted and caught only by running the whole suite
+rather than the file just edited: the new sign-in bypassed
+`window.signIn()`, which `icon_live.js` wraps to hang its entire
+bootstrap off (`applyBoot`, `addScreens`, the wirings). Four Playwright
+files broke on screens that were no longer being registered at all. The
+base function is now replaced early, before the wrapper captures it, so
+the chain still runs in its original order - the same "patch v4's
+functions, do not replace them" rule the overview states.
+
+### Round 24 - honest state: not started
+
+There is no user-management UI. `app_user` starts empty. Mukesh creates
+the first Super Admin himself, locally, with
+
+    python icon_auth_cli.py create-superadmin <his-login-id> "<his-name>"
+
+which prints a one-time enrolment token he uses himself - no agent should
+ever see it. Until Round 24 every other account is made the same way, and
+there is no screen to deactivate someone, reset an enrolment, or bind a
+station. The fourteen names in v4's `USERS` array have no accounts and
+never will unless somebody creates them: that array and the `#who`
+`<option>` list are dead markup, read by nothing, left in place only
+because `icon_trace.html` may not be edited.
+
+Also deferred, deliberately: `must_change_pw` and `must_reenrol` come
+back from `icon_auth.login()` and the main app currently ignores both.
+Only the lab acts on them. Nothing in this round asked for that flow, and
+it needs a screen - which is Round 24's business.
 
