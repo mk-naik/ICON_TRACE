@@ -291,7 +291,21 @@ subtly wrong produces a system that looks right and is not.
   - test_repo_hygiene.py (3 tests) — NUL bytes, .gitignore coverage, no
     stray routes.txt
   - test_security_4a.py (1 test) — admin promotion restriction
-- **Running the lab**:
-  Use two terminals. In both, set ICON_DB_FILE=lab.db (or another path).
-  Terminal 1: python auth_lab/lab_app.py
-  Terminal 2: python icon_auth_cli.py ...
+- **Running the lab, as a sandbox** (exercising the auth flow, not
+  provisioning a real account): use two terminals, and in BOTH set
+  ICON_DB_FILE to the same path — lab.db, or another throwaway one.
+  Terminal 1: `python auth_lab/lab_app.py`
+  Terminal 2: `python icon_auth_cli.py ...`
+- **Provisioning a real account** (Round 23 on): the CLI and the real app
+  (serve.py) both default ICON_DB_FILE to icontrace.db, so
+  `python icon_auth_cli.py create-superadmin ...` with no override already
+  writes to the database the real app reads. But app.py has no /enrol
+  route yet (Round 24) — only the lab serves one, and left to ITS OWN
+  default the lab opens auth_lab/lab.db instead, a different file, where
+  the token the CLI just printed does not exist. Point the lab at the
+  SAME database to complete enrolment against the real account:
+  `ICON_DB_FILE=<path to icontrace.db> python auth_lab/lab_app.py`, then
+  open the Enrol URL the CLI printed. The CLI prints this exact instruction
+  itself now, with the real path filled in, after create-superadmin,
+  create-admin and reset-totp — read it rather than assuming port 8091
+  always means "the lab's own sandbox".

@@ -3121,3 +3121,64 @@ back from `icon_auth.login()` and the main app currently ignores both.
 Only the lab acts on them. Nothing in this round asked for that flow, and
 it needs a screen - which is Round 24's business.
 
+---
+
+## Round 23 follow-up - the bootstrap command sent Mukesh to an empty database
+
+**What happened.** Following this round's own report, Mukesh ran
+`python icon_auth_cli.py create-superadmin mknaik "Mukesh Naik"` (no
+`ICON_DB_FILE` set), which correctly wrote the account into the real
+`icontrace.db` and printed an Enrol URL on port 8091. He then started
+`auth_lab/lab_app.py` (also no `ICON_DB_FILE` set) and opened that URL,
+and got *"Invalid or expired token, or invalid user."* Re-running
+`create-superadmin` for the same id then failed on
+`UNIQUE constraint failed: app_user.login_id`, since the account was
+already there - just not enrolled, and now with two tokens no server had
+ever served.
+
+**Root cause.** `icon_auth_cli.py` and the real app both default
+`ICON_DB_FILE` to `icontrace.db`; `auth_lab/lab_app.py` defaults it to its
+own `auth_lab/lab.db` - a different, normally-empty file, kept separate
+on purpose so lab experiments never touch real data (the same reason
+`test_auth_lab_live.py`/`test_auth_lab_lockout.py` point it at a fresh
+tempfile per run). That separation is correct for the lab's actual job -
+exercising the auth flow - but the CLI's printed Enrol URL always names
+port 8091 with no mention of which database it just wrote to or that the
+lab needs pointing at that same file to serve the token at all. The lab
+is also the ONLY thing that serves `/enrol` - `app.py` has no such route
+yet (Round 24) - so there was no way to complete enrolment against the
+real database without already knowing to set `ICON_DB_FILE` on the lab
+too, which nothing said to do. `sa1`, which Mukesh could sign into at
+127.0.0.1:8091, was leftover data that has only ever existed in
+`auth_lab/lab.db` - unrelated to `mknaik`, and proof of the same split.
+
+**Fixed.** `icon_auth_cli.py`'s `create-superadmin`, `create-admin` and
+`reset-totp` now print the real `store.DB_PATH` they just wrote to and
+the exact command to start the lab against that same file, rather than a
+bare Enrol URL that only works by coincidence. `list` prints which
+database it is reading, for the same reason. `PROJECT_OVERVIEW.md`
+section 10 now states both cases separately: running the lab as a
+sandbox (both terminals share one throwaway `ICON_DB_FILE`, as before)
+versus provisioning a real account (the lab must be pointed at the SAME
+`icontrace.db` the CLI and the real app already share by default).
+
+**Mukesh's unblock**, run now: `python icon_auth_cli.py reset-totp mknaik`
+(both of the earlier tokens had expired by the time this was found - a
+900-second TTL, not a bug) - then start the lab exactly as that command's
+own output says, using the printed path, and open the Enrol URL it gives.
+`mknaik` is already the right role (Super Admin) in `icontrace.db`; this
+issues a fresh token against the same account, nothing is recreated.
+
+**Checked and ruled out, not fixed here:** `test_auth_lab_live.py`,
+`test_auth_lab_lockout.py` and `test_security_4c.py` all fail on this
+machine with a Playwright timeout waiting on a `<strong>` locator on the
+enrol page, even though a saved screenshot at the moment of failure shows
+the page rendered correctly with that exact element present. Confirmed
+unrelated to this fix by reverting `icon_auth_cli.py` to its pre-fix
+state and reproducing the identical failure. All three share the
+`lab_env` fixture, which spawns `auth_lab/lab_app.py` as a real
+subprocess and drives it with Playwright - the common thread points at
+that fixture or this machine's Playwright/subprocess interaction, not at
+any test's own logic. Left for separate investigation; `test_icon_auth.py`
+(19/19, no live browser) is unaffected.
+
