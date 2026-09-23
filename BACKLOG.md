@@ -7,7 +7,27 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ---
 
+## Branding & UI Polish  *(done — 24 Sep 2026)*
+
+- [x] **Favicon:** Created `static/favicon.svg` — a radial-gradient orange sun
+      disc with warm ring, matching the login-sun mark and EN-ICON logo artwork.
+      Linked via `<link rel="icon" type="image/svg+xml">` in both
+      `icon_trace.html` and `base.html` so every page shows the icon in the
+      browser tab.
+- [x] **Company name corrected:** "En Power Technologies Pvt. Ltd." →
+      **"Icon Solar-En Power Technologies Pvt. Ltd."** in the login card note
+      (`icon_trace.html` line 541) and the live-auth login note (`icon_live.js`
+      line 203). Print templates (`gatepass_print.html`, `challan_print.html`,
+      `pallet_sheet.html`, `ftr_print.html`) already carried the full name
+      "ICON SOLAR-EN POWER TECHNOLOGIES PRIVATE LIMITED" and were untouched.
+- [x] **Tagline updated:** Login subtitle and page `<title>` changed from
+      "Traceability & Dispatch" → **"Solar Module Traceability System"**, which
+      accurately describes what the application does across all its screens.
+
+---
+
 ## Phase 4: Security and Remaining Issues (Sept 2026) *(done)*
+
 
 - [x] **4a. Admin promotion:** Restricted admin promotion logic (rank 2 to 1 only).
 - [x] **4b. Adaptive timing:** Added a dummy hash check and dynamic timing floor in `check_pw` to deter timing attacks.
