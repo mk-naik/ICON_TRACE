@@ -6591,6 +6591,22 @@ function initAll(){
      grade rules, stations, loss reasons) stays as v4 defines it - that is
      configuration, not dummy data.
      ========================================================= -->
+<style>
+/* The login card above is v4's: a dropdown of names, a password box with
+   dots painted into its value, and a note saying authentication is not
+   built. icon_live.js replaces all of it at runtime - but it is an
+   external script fetched after this point in the document, so on a slow
+   first load the browser painted the old form for a beat before the real
+   one appeared. Hidden here, where the parser reaches it immediately
+   after #login and long before that fetch returns, and revealed by
+   installRealLogin() once the real fields are in place. The animation is
+   the safety net: if icon_live.js never arrives, #login reveals itself
+   anyway rather than leaving a blank screen with no way in. */
+#login{visibility:hidden;animation:iconLoginFallback 0s linear 4s forwards}
+#login.icon-ready{visibility:visible;animation:none}
+@keyframes iconLoginFallback{to{visibility:visible}}
+</style>
+{% include '_splash.html' %}
 <script>window.ICON_BOOT = {{ boot | tojson }};</script>
 <script src="{{ url_for('static', filename='icon_table.js') }}?b={{ boot.build }}"></script>
 <script src="{{ url_for('static', filename='icon_offline.js') }}?b={{ boot.build }}"></script>

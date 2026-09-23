@@ -1,0 +1,280 @@
+{# ================= EN-ICON splash =================
+   Shown between sign-in and the first screen - the one moment in this app
+   where somebody is genuinely waiting on work (enterApp -> applyBoot ->
+   addScreens -> a fetch per injected screen), and the screen underneath is
+   half-built. Not shown before sign-in: the login card renders instantly,
+   so a splash there would be delay with nothing behind it.
+
+   Every rule below is scoped under #enIconSplash. The artwork's own
+   stylesheet used bare class names, and one of them (.tg) already exists
+   in icon_trace.html - unscoped, this would have reached into v4's page.
+
+   Speed is one variable, --t. 1 = 3.20s, .6 = 1.92s (used here - Mukesh:
+   sign-in does not happen repeatedly, 2s is acceptable). The mark finishes
+   at 1850ms*t but the wordmark and tagline run to 3200ms*t, so the minimum
+   show is the FULL intro: cutting at the mark leaves the letters half
+   drawn.
+
+   API: window.EnIconSplash.show() / .hide(); fires "enicon:splashhidden".
+   ================================================= #}
+<style>
+#enIconSplash{
+  --t:.6;
+  --c-blue:#317ABE; --c-green:#B0D247; --c-yellow:#FFCC2A; --c-tagline:#00A558;
+  --c-knockout:#ffffff;
+  --c-surface:#ffffff;
+  --c-discshadow:rgba(49,122,190,.28);
+}
+@media (prefers-color-scheme:dark){
+  #enIconSplash{ --c-surface:#0B1A2B; --c-discshadow:transparent; }
+}
+
+#enIconSplash{position:fixed;inset:0;z-index:10000;display:none;
+  align-items:center;justify-content:center;background:var(--c-surface);
+  opacity:1;transition:opacity 320ms ease}
+#enIconSplash.is-showing{display:flex}
+#enIconSplash.is-leaving{opacity:0}
+#enIconSplash .stage{width:clamp(220px,46vw,480px);
+  transition:transform 320ms cubic-bezier(.4,0,.6,1)}
+#enIconSplash.is-leaving .stage{transform:scale(1.045)}
+#enIconSplash #logo{display:block;width:100%;height:auto;overflow:visible}
+
+/* ---------- palette ---------- */
+#enIconSplash .k-blue{fill:var(--c-blue)}
+#enIconSplash .k-green{fill:var(--c-green)}
+#enIconSplash .k-yellow{fill:var(--c-yellow)}
+#enIconSplash .tg{fill:var(--c-tagline)}
+#enIconSplash #disc{fill:var(--c-knockout)}
+#enIconSplash #frameFill{fill:var(--c-knockout)}
+#enIconSplash #tailsplit{fill:var(--c-knockout);stroke:var(--c-blue);
+  stroke-width:1.3;stroke-miterlimit:8}
+#enIconSplash #frameLine{fill:none;stroke:var(--c-yellow);stroke-width:3;
+  stroke-miterlimit:8}
+#enIconSplash #discShadow{fill:var(--c-discshadow);filter:url(#soft);opacity:0;
+  transform-box:view-box;transform-origin:93.12px 34.88px;transform:scale(1.03)}
+
+/* ================= intro : mark complete 1850ms, ends 3200ms ============ */
+#enIconSplash #ring,
+#enIconSplash #sunFull{transform-box:view-box;transform-origin:94.581px 41.29px}
+#enIconSplash #sunFull{fill:var(--c-yellow);stroke:var(--c-yellow);stroke-width:3.471;
+  animation:enicSunTravel calc(1000ms*var(--t)) linear both,
+            enicSunOpen   calc(300ms*var(--t))  ease-out calc(1000ms*var(--t)) forwards,
+            enicEclipse   calc(400ms*var(--t))  ease-in  calc(1600ms*var(--t)) forwards}
+#enIconSplash #ring{animation:enicSunTravel calc(1000ms*var(--t)) linear both,
+                enicSunPulse calc(3600ms*var(--t)) ease-in-out calc(3200ms*var(--t)) infinite}
+@keyframes enicSunTravel{
+  0.00%{transform:translate(-86.46px,107.21px) scale(0.140)}
+  29.87%{transform:translate(-69.76px,104.13px) scale(0.306)}
+  43.73%{transform:translate(-53.94px,97.95px) scale(0.418)}
+  54.65%{transform:translate(-40.06px,88.41px) scale(0.517)}
+  64.02%{transform:translate(-27.80px,76.71px) scale(0.608)}
+  72.38%{transform:translate(-17.73px,63.21px) scale(0.693)}
+  80.01%{transform:translate(-9.60px,48.61px) scale(0.774)}
+  87.09%{transform:translate(-3.83px,32.99px) scale(0.852)}
+  92.50%{transform:translate(-0.58px,16.72px) scale(0.927)}
+  100.00%{transform:translate(0.00px,-0.00px) scale(1.000)}}
+@keyframes enicWipeFollow{
+  0.00%{transform:translateY(180.50px)}
+  25.97%{transform:translateY(177.42px)}
+  38.02%{transform:translateY(171.24px)}
+  47.52%{transform:translateY(161.70px)}
+  55.67%{transform:translateY(150.00px)}
+  62.94%{transform:translateY(136.50px)}
+  69.57%{transform:translateY(121.90px)}
+  75.73%{transform:translateY(106.28px)}
+  80.43%{transform:translateY(90.01px)}
+  86.96%{transform:translateY(73.29px)}
+  100%{transform:translateY(0)}}
+@keyframes enicSunOpen{to{fill-opacity:0}}
+@keyframes enicEclipse{to{opacity:0}}
+@keyframes enicSunPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
+
+#enIconSplash #wipeA rect{animation:enicWipeFollow calc(1150ms*var(--t)) linear both}
+#enIconSplash #wipeB rect{animation:enicWipeUp calc(650ms*var(--t))
+  cubic-bezier(.25,.85,.3,1) calc(1050ms*var(--t)) both}
+@keyframes enicWipeUp{from{transform:translateY(205px)}to{transform:translateY(0)}}
+
+#enIconSplash #tailDetail{opacity:0;
+  animation:enicFillIn calc(550ms*var(--t)) ease-out calc(1200ms*var(--t)) forwards}
+
+#enIconSplash #disc{transform-box:view-box;transform-origin:94.581px 41.29px;
+  animation:enicDiscIn calc(420ms*var(--t)) cubic-bezier(.25,.9,.3,1) calc(950ms*var(--t)) both}
+@keyframes enicDiscIn{from{transform:scale(.25);opacity:0}to{transform:none;opacity:1}}
+
+#enIconSplash #crescent{transform-box:view-box;transform-origin:94.581px 41.29px;
+  animation:enicPop calc(360ms*var(--t)) ease-out calc(1060ms*var(--t)) both}
+@keyframes enicPop{from{transform:scale(.7);opacity:0}to{transform:none;opacity:1}}
+
+#enIconSplash .ray{transform-box:view-box;transform-origin:94.581px 41.29px;
+  animation:enicRayOut calc(380ms*var(--t)) cubic-bezier(.2,.9,.3,1.2) both,
+            enicTwinkle calc(2800ms*var(--t)) ease-in-out infinite;
+  animation-delay:calc((1040ms + var(--i)*50ms)*var(--t)),
+                  calc((3200ms + var(--i)*95ms)*var(--t))}
+@keyframes enicRayOut{from{transform:scale(.1);opacity:0}to{transform:scale(1);opacity:1}}
+@keyframes enicTwinkle{0%,100%{opacity:1}50%{opacity:.5}}
+
+#enIconSplash #leaf{transform-box:view-box;transform-origin:105px 63px;
+  animation:enicUnfurl calc(460ms*var(--t)) cubic-bezier(.3,1.2,.4,1) calc(1400ms*var(--t)) both}
+@keyframes enicUnfurl{from{transform:rotate(-24deg) scale(.1);opacity:0}to{transform:none;opacity:1}}
+
+#enIconSplash #discShadow{animation:enicShadowPulse calc(850ms*var(--t)) ease-out
+  calc(1450ms*var(--t)) both}
+@keyframes enicShadowPulse{0%{opacity:0}25%{opacity:1}100%{opacity:0}}
+
+#enIconSplash #frameLine{stroke-dasharray:883;stroke-dashoffset:883;
+  animation:enicDraw calc(480ms*var(--t)) cubic-bezier(.45,0,.2,1) calc(1850ms*var(--t)) both}
+#enIconSplash #frameFill{opacity:0;
+  animation:enicFillIn calc(450ms*var(--t)) ease-out calc(2050ms*var(--t)) forwards}
+@keyframes enicFillIn{to{opacity:1}}
+@keyframes enicDraw{to{stroke-dashoffset:0}}
+
+#enIconSplash .ltr{animation:enicRise calc(280ms*var(--t)) cubic-bezier(.2,.85,.3,1) both;
+  animation-delay:calc((2460ms + var(--i)*36ms)*var(--t))}
+@keyframes enicRise{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
+
+#enIconSplash .tg{animation:enicSettle calc(340ms*var(--t)) cubic-bezier(.2,.85,.3,1) both;
+  animation-delay:calc((2740ms + var(--i)*8ms)*var(--t))}
+@keyframes enicSettle{from{transform:translateX(var(--dx));opacity:0}to{transform:none;opacity:1}}
+
+#enIconSplash .breathe{animation:enicBreathe calc(3600ms*var(--t)) ease-in-out
+  calc(3200ms*var(--t)) infinite}
+@keyframes enicBreathe{0%,100%{transform:scale(1)}50%{transform:scale(1.012)}}
+
+@media (prefers-reduced-motion:reduce){
+  #enIconSplash #logo *,#enIconSplash #logo rect,#enIconSplash .breathe{
+    animation:none!important;transform:none!important}
+  #enIconSplash #frameLine{stroke-dashoffset:0!important}
+  #enIconSplash #discShadow,#enIconSplash #sunFull{opacity:0!important}
+  #enIconSplash #tailDetail{opacity:1!important}
+  #enIconSplash .stage{animation:enicSoftIn 240ms ease both}
+  @keyframes enicSoftIn{from{opacity:0}to{opacity:1}}
+}
+</style>
+
+<div id="enIconSplash" aria-hidden="true">
+  <div class="stage">
+    <div class="breathe">
+      <svg id="logo" viewBox="-16 -20 372 202" xmlns="http://www.w3.org/2000/svg"
+           role="img" aria-label="EN-ICON - Harvesting the sun">
+        <defs>
+          <filter id="soft" x="-25%" y="-25%" width="150%" height="150%">
+            <feGaussianBlur stdDeviation="3"/>
+          </filter>
+          <clipPath id="wipeA"><rect x="-30" y="-30" width="430" height="235"/></clipPath>
+          <clipPath id="wipeB"><rect x="-30" y="-30" width="430" height="235"/></clipPath>
+        </defs>
+        <path id="frameFill" d="M1.5 55.9352C1.5 51.5895 5.03748 48.052 9.38325 48.052H330.022C334.368 48.052 337.905 51.5895 337.905 55.9352V151.644C337.905 155.99 334.368 159.527 330.022 159.527H9.38325C5.03748 159.527 1.5 155.99 1.5 151.644V55.9352Z"/>
+        <path id="frameLine" d="M1.5 55.9352C1.5 51.5895 5.03748 48.052 9.38325 48.052H330.022C334.368 48.052 337.905 51.5895 337.905 55.9352V151.644C337.905 155.99 334.368 159.527 330.022 159.527H9.38325C5.03748 159.527 1.5 155.99 1.5 151.644V55.9352Z"/>
+        <path id="discShadow" d="M54.2574 37.2699C52.7574 11.7699 78.2574 -1.23004 96.1647 0.091663C112.25 0.842321 132.089 13.1477 132.304 36.4717C131.741 60.466 107.757 70.2699 94.7574 69.7699C80.1196 70.8691 56.8043 61.854 54.2574 37.2699Z"/>
+        <path id="disc" d="M54.2574 37.2699C52.7574 11.7699 78.2574 -1.23004 96.1647 0.091663C112.25 0.842321 132.089 13.1477 132.304 36.4717C131.741 60.466 107.757 70.2699 94.7574 69.7699C80.1196 70.8691 56.8043 61.854 54.2574 37.2699Z"/>
+        <g id="swooshWrap" clip-path="url(#wipeB)">
+        <path id="swoosh" class="k-green" fill-rule="evenodd" clip-rule="evenodd" d="M91.0174 0.118485C88.5242 2.07556 78.8996 -1.14155 64.798 11.7269C62.4924 14.1665 41.5007 34.7292 66.755 60.3588C69.0338 62.6912 68.6585 61.6456 68.6049 62.8788C66.7282 75.7472 64.1009 92.1813 57.0233 106.953C49.5703 120.626 36.4338 142.69 6.56827 143.199C45.4149 131.215 52.8142 95.8273 57.6131 67.1683C58.8731 59.903 59.2485 63.2005 56.7552 59.9298C35.6831 43.3349 46.7017 18.4292 56.219 9.79661C70.7764 -2.40158 87.988 0.413386 91.0174 0.118485Z"/>
+        </g>
+        <g id="tailWrap" clip-path="url(#wipeA)">
+        <path id="tailCore" class="k-blue" d="M20.92 149.04 L12.42 148.88 L7.96 148.50 L11.17 147.96 L16.33 146.71 L23.58 144.46 L28.00 142.62 L32.58 140.38 L38.00 137.21 L41.67 134.71 L44.58 132.46 L47.92 129.54 L50.79 126.67 L55.38 121.33 L59.71 115.17 L62.38 110.67 L65.54 104.33 L68.38 97.33 L70.12 92.00 L71.79 85.67 L73.04 79.42 L73.71 74.75 L74.58 65.62 L77.33 66.88 L81.92 68.38 L86.17 69.38 L88.33 69.62 L94.08 69.79 L98.92 69.54 L102.25 69.04 L106.62 67.92 L106.46 69.25 L104.62 75.67 L104.46 77.33 L102.79 82.50 L99.54 90.92 L96.46 97.25 L92.54 103.92 L87.88 110.50 L83.54 115.67 L77.83 121.46 L70.92 127.29 L63.50 132.46 L56.92 136.29 L53.17 138.21 L48.00 140.54 L46.33 141.38 L45.92 141.79 L40.17 144.04 L35.17 145.62 L29.00 147.21 L22.92 148.46 L21.33 148.62 L20.92 149.04 Z"/>
+        <g id="tailDetail">
+        <path id="tailsplit" fill-rule="evenodd" clip-rule="evenodd" d="M101.205 75.3719L122.257 68.2699C121.855 75.7497 111.929 100.224 97.2103 118.374C82.4652 136.497 58.9408 140.438 43.2574 142.77C69.2892 120.465 90.4543 105.639 101.205 75.3719Z"/>
+        <path id="tail" class="k-blue" fill-rule="evenodd" clip-rule="evenodd" d="M128.738 50.7611C128.979 50.9756 127.21 61.9137 125.923 68.1335C120.829 92.7443 112.331 110.358 99.087 123.629C83.8057 138.99 63.243 147.167 35.3614 148.99C30.4017 149.312 14.8791 149.151 9.99984 148.722L7.8551 148.561L9.32961 148.32C11.528 147.998 17.6673 146.443 20.7235 145.478C28.6323 142.931 37.1308 138.4 43.7795 133.146C58.6855 121.377 69.1947 102.101 73.0284 79.5542C73.6182 75.9618 73.9667 73.0127 74.3957 67.7045L74.5833 65.667L76.2187 66.4177C78.4171 67.3828 82.6529 68.6964 85.6824 69.2862C89.4089 70.0369 98.0951 69.9565 101.929 69.1254C113.028 66.7662 121.875 61.0022 127.398 52.5841C128.068 51.5117 128.684 50.7075 128.738 50.7611ZM120.105 70.5731C120.025 70.4659 106.835 75.2915 105.494 75.9349C105.012 76.1494 104.61 76.4979 104.61 76.7124C104.61 77.4631 101.661 86.042 100.267 89.2859C90.8029 111.806 73.7791 128.937 50.2942 139.58C46.0315 141.51 45.5489 141.805 46.7821 141.591C47.2111 141.51 49.0609 141.215 50.9108 140.921C59.3825 139.526 66.2725 137.489 73.3769 134.299C86.6207 128.374 97.3444 118.776 105.468 105.64C110.025 98.267 113.913 89.42 118.014 77.1414C119.221 73.5757 120.159 70.5999 120.105 70.5731Z"/>
+        </g>
+        </g>
+        <path class="ray k-yellow" style="--i:0" fill-rule="evenodd" clip-rule="evenodd" d="M127.264 20.413C125.869 23.1208 122.92 24.9438 120.4 26.4719C119.435 25.48 119.65 24.7293 118.577 23.6569C120.427 22.3165 121.821 21.6194 124.073 21.2709C125.172 21.0833 126.191 20.7615 127.264 20.413Z"/>
+        <path class="ray k-yellow" style="--i:1" fill-rule="evenodd" clip-rule="evenodd" d="M113.805 8.16119C113.912 11.1906 112.197 14.2201 110.749 16.767C109.409 16.3648 109.248 15.6142 107.8 15.1852C108.738 13.1209 109.65 11.8341 111.446 10.44C112.331 9.74294 113.055 8.96547 113.805 8.16119Z"/>
+        <path class="ray k-yellow" style="--i:2" fill-rule="evenodd" clip-rule="evenodd" d="M131.607 37.2224C129.194 39.0722 125.762 39.4743 122.813 39.7692C122.357 38.4824 122.894 37.8926 122.384 36.4717C124.609 36.0159 126.191 36.016 128.363 36.6594C129.435 36.9543 130.507 37.0883 131.607 37.2224Z"/>
+        <path class="ray k-yellow" style="--i:3" fill-rule="evenodd" clip-rule="evenodd" d="M96.5133 3.60364C97.8269 6.33818 97.5052 9.79657 97.2103 12.7188C95.8162 12.9064 95.3605 12.263 93.8592 12.5043C93.886 10.1987 94.2077 8.67058 95.28 6.65989C95.7894 5.66795 96.1379 4.67601 96.5133 3.60364Z"/>
+        <path class="ray k-yellow" style="--i:4" fill-rule="evenodd" clip-rule="evenodd" d="M78.9532 7.30334C81.366 9.12637 82.6261 12.3435 83.6984 15.1048C82.5456 15.8823 81.8486 15.5338 80.6154 16.4185C79.5966 14.3542 79.1945 12.8529 79.2213 10.5741C79.2481 9.44808 79.114 8.40252 78.9532 7.30334Z"/>
+        <circle id="sunFull" cx="94.581" cy="41.290" r="22.955"/>
+        <path id="crescent" class="k-blue" fill-rule="evenodd" clip-rule="evenodd" d="M86.3794 22.8259C81.3929 23.8446 77.4519 26.4183 74.5565 30.6005C73.8327 31.6193 73.2429 32.5308 73.2429 32.638C73.2429 32.8793 75.0659 33.7908 76.7549 34.4611C77.7736 34.8632 79.0337 34.9168 85.8432 34.9436C94.3417 34.9972 94.8511 35.0509 97.9878 36.5522C100.722 37.8926 103.189 40.3323 104.931 43.4153C106.486 46.1499 107.505 50.1713 107.988 55.2382L108.149 57.2757L108.819 55.6403C109.757 53.3348 110.937 48.5359 111.312 45.4797C112.224 38.3216 110.669 33.3887 106.218 28.8847C101.151 23.791 93.323 21.405 86.3794 22.8259Z"/>
+        <path id="leaf" class="k-green" fill-rule="evenodd" clip-rule="evenodd" d="M71.7148 34.3538L74.3153 35.5602C77.8809 36.9275 79.2482 36.8739 85.6288 36.6058C97.3444 36.1232 107.451 42.2089 106.191 61.9137C105.441 61.1898 104.878 60.4928 104.315 59.6349C99.9985 53.3884 93.4571 48.7772 86.4062 46.1231L86.1381 46.3912C88.4705 48.4018 90.4276 49.9836 93.2426 52.2624C95.8967 54.4339 100.079 58.1068 102.116 61.1898C102.787 62.2354 103.484 63.415 103.779 64.8359C96.1916 65.3721 87.7199 62.7448 81.9023 57.8387C77.4788 53.6564 75.0927 49.3134 73.9131 45.6137C72.9748 42.6111 71.9561 36.1768 71.7148 34.3538Z"/>
+        <path id="ring" class="k-yellow" fill-rule="evenodd" clip-rule="evenodd" d="M101.956 17.8929L102.814 18.1074C106.191 19.0993 109.462 20.9492 112.116 23.228L112.572 23.5765C116.567 26.6863 119.14 32.075 120.025 36.9275C120.427 40.5199 120.32 44.1123 119.328 47.5707C116.728 55.6135 111.929 58.8306 107.371 61.9673C107.773 59.7689 108.98 58.5357 109.409 57.651C119.006 37.4905 111.795 31.0831 106.54 25.8016C98.8189 19.5551 90.8834 19.9304 85.0658 20.7883C74.5298 23.8178 73.2161 30.3056 71.7148 30.8418C73.4306 26.8472 79.3018 13.2281 101.956 17.8929Z"/>
+        <path class="ray k-yellow" style="--i:5" fill-rule="evenodd" clip-rule="evenodd" d="M64.9856 18.8044C68.015 19.0189 70.83 21.0028 73.2428 22.7186C72.7067 24.0054 71.9292 24.0859 71.3662 25.5068C69.4091 24.354 68.2295 23.3084 67.0231 21.3781C66.4065 20.4398 65.7094 19.6355 64.9856 18.8044Z"/>
+        <path class="ltr k-blue" style="--i:0" fill-rule="evenodd" clip-rule="evenodd" d="M141.017 93.7899V109.205H149.462H157.907V107.597V105.988H151.204H144.502V100.09V94.192H151.204H157.907V92.5835V90.9749H151.204H144.502V86.2833V81.5917H151.204H157.907V79.9831V78.3746H149.462H141.017V93.7899Z"/>
+        <path class="ltr k-blue" style="--i:1" fill-rule="evenodd" clip-rule="evenodd" d="M164.85 93.5484V109.259H166.727H168.604L168.657 97.543L168.738 85.8006L175.574 92.2348C179.354 95.7736 184.046 100.17 186.03 102.02C188.013 103.87 190.641 106.336 191.874 107.516C193.107 108.696 194.206 109.688 194.367 109.741C194.501 109.795 194.608 103.897 194.608 94.1383V78.4012H192.732H190.855L190.802 90.1437L190.721 101.886L185.627 97.0605C178.737 90.5458 166.244 78.9106 165.467 78.3208L164.85 77.8383V93.5484Z"/>
+        <path class="ltr k-blue" style="--i:2" fill-rule="evenodd" clip-rule="evenodd" d="M200.211 98.3474V99.8219H204.099H207.986V98.3474V96.8729H204.099H200.211V98.3474Z"/>
+        <path class="ltr k-blue" style="--i:3" fill-rule="evenodd" clip-rule="evenodd" d="M212.249 94.3261V109.741H213.992H215.734V94.3261V78.9108H213.992H212.249V94.3261Z"/>
+        <path class="ltr k-blue" style="--i:4" fill-rule="evenodd" clip-rule="evenodd" d="M235.466 78.2405C231.471 78.9107 228.227 80.5461 225.546 83.227C222.49 86.31 221.123 89.5808 221.096 93.8166C221.069 98.8836 222.839 102.717 226.512 105.774C230.05 108.669 233.428 109.768 238.79 109.741C242.597 109.741 244.876 109.312 247.959 107.972L249.246 107.436V105.613V103.79L247.584 104.674C244.179 106.471 239.997 107.221 236.297 106.685C233.214 106.256 230.721 105.023 228.469 102.878C225.627 100.17 224.394 96.9533 224.689 93.0123C224.876 90.4119 225.627 88.4012 227.209 86.4441C231.873 80.6801 240.72 79.3665 247.825 83.361L249.246 84.1653V82.3155V80.4924L247.718 79.7954C246.86 79.4201 245.439 78.9107 244.554 78.6962C242.678 78.1869 237.396 77.9188 235.466 78.2405Z"/>
+        <path class="ltr k-blue" style="--i:5" fill-rule="evenodd" clip-rule="evenodd" d="M273.186 78.3477C284.232 80.0635 290.398 91.1089 285.652 100.733C284.5 103.093 281.148 106.417 278.602 107.704C275.947 109.071 274.178 109.527 270.961 109.715C265.143 110.036 260.639 108.401 256.832 104.621C253.723 101.538 252.141 97.9721 252.141 93.9239C252.141 89.8757 253.723 86.3369 256.832 83.2538C259.755 80.3584 262.891 78.7767 266.779 78.2405C268.441 78.0528 271.336 78.0796 273.186 78.3477ZM264.875 81.8061C260.8 83.093 257.637 86.2296 256.404 90.1706C255.707 92.3421 255.841 96.4708 256.672 98.5887C257.958 101.859 261.444 104.996 265.117 106.122C267.797 106.926 271.685 106.926 274.339 106.122C283.722 103.227 286.832 92.074 280.103 85.2913C278.387 83.5219 276.886 82.6104 274.58 81.8597C271.765 80.9214 267.69 80.8946 264.875 81.8061Z"/>
+        <path class="ltr k-blue" style="--i:6" fill-rule="evenodd" clip-rule="evenodd" d="M292.596 93.629V109.42H294.473H296.349L296.403 97.6772L296.484 85.8812L305.733 94.5942C310.826 99.3662 316.644 104.862 318.682 106.792L322.354 110.278V94.3529V78.4014H320.478H318.601V90.1706V101.913L317.958 101.404C317.609 101.136 311.979 95.881 305.411 89.7417C298.87 83.6024 293.32 78.3746 293.052 78.1601C292.623 77.8116 292.596 78.6427 292.596 93.629Z"/>
+        <path class="tg" style="--i:0;--dx:-8.83px" d="M141.67 130.21V117.57H143.15V122.43H149.77V117.57H151.28V130.21H149.77V123.87H143.15V130.21Z"/>
+        <path class="tg" style="--i:1;--dx:-7.42px" d="M163.15 126.34Q163.15 125.00 162.43 124.18Q161.71 123.37 160.55 123.37Q159.35 123.37 158.68 124.12Q158.01 124.87 158.01 126.22Q158.01 127.65 158.68 128.43Q159.36 129.20 160.61 129.20Q161.80 129.20 162.47 128.45Q163.15 127.69 163.15 126.34ZM164.45 122.31V130.21H163.15V128.78Q162.68 129.64 161.95 130.10Q161.23 130.55 160.32 130.55Q158.65 130.55 157.62 129.38Q156.59 128.21 156.59 126.28Q156.59 124.33 157.59 123.18Q158.59 122.03 160.26 122.03Q161.24 122.03 161.95 122.47Q162.67 122.92 163.12 123.80V122.31Z"/>
+        <path class="tg" style="--i:2;--dx:-6.22px" d="M170.19 130.21V122.31H171.38V123.95Q171.91 122.93 172.52 122.49Q173.12 122.05 173.99 122.05Q174.23 122.05 174.45 122.09Q174.67 122.12 174.89 122.20L174.45 123.42Q174.22 123.34 174.02 123.30Q173.81 123.26 173.63 123.26Q172.57 123.26 172.04 124.04Q171.51 124.81 171.51 126.36V130.21Z"/>
+        <path class="tg" style="--i:3;--dx:-5.28px" d="M181.93 130.70 178.07 122.31H179.57L181.91 127.83L184.26 122.31H185.76Z"/>
+        <path class="tg" style="--i:4;--dx:-4.13px" d="M195.79 125.37Q195.72 124.33 195.11 123.76Q194.49 123.19 193.42 123.19Q192.44 123.19 191.80 123.79Q191.15 124.38 191.05 125.37ZM197.22 126.47H191.05V126.59Q191.05 127.86 191.76 128.64Q192.48 129.42 193.63 129.42Q194.41 129.42 195.04 128.99Q195.67 128.56 196.16 127.70L197.17 128.39Q196.58 129.46 195.67 130.01Q194.76 130.55 193.56 130.55Q191.78 130.55 190.68 129.36Q189.58 128.17 189.58 126.23Q189.58 124.38 190.67 123.19Q191.76 122.01 193.47 122.01Q195.20 122.01 196.21 123.13Q197.22 124.26 197.22 126.20Z"/>
+        <path class="tg" style="--i:5;--dx:-3.03px" d="M201.47 128.88 202.61 128.11Q202.94 128.74 203.43 129.05Q203.92 129.37 204.60 129.37Q205.25 129.37 205.66 129.04Q206.06 128.71 206.06 128.18Q206.06 127.76 205.78 127.48Q205.51 127.21 204.83 126.98Q204.77 126.95 204.61 126.90Q201.77 125.91 201.77 124.41Q201.77 123.36 202.54 122.69Q203.30 122.03 204.53 122.03Q205.54 122.03 206.27 122.44Q206.99 122.85 207.30 123.60L206.22 124.27Q205.98 123.73 205.52 123.44Q205.06 123.14 204.44 123.14Q203.86 123.14 203.48 123.47Q203.11 123.81 203.11 124.33Q203.11 125.05 204.66 125.54Q204.95 125.64 205.12 125.69Q206.39 126.10 206.89 126.63Q207.39 127.17 207.39 128.04Q207.39 129.16 206.60 129.85Q205.81 130.55 204.54 130.55Q203.46 130.55 202.69 130.14Q201.93 129.72 201.47 128.88Z"/>
+        <path class="tg" style="--i:6;--dx:-2.14px" d="M212.67 123.43H211.24V122.31H212.67V119.13H214.03V122.31H215.46V123.43H214.03V130.21H212.67Z"/>
+        <path class="tg" style="--i:7;--dx:-1.4px" d="M219.80 118.51Q219.80 118.10 220.08 117.81Q220.37 117.52 220.78 117.52Q221.18 117.52 221.46 117.82Q221.75 118.11 221.75 118.52Q221.75 118.93 221.47 119.21Q221.18 119.50 220.78 119.50Q220.37 119.50 220.08 119.21Q219.80 118.93 219.80 118.51ZM220.11 130.21V122.31H221.46V130.21Z"/>
+        <path class="tg" style="--i:8;--dx:-0.39px" d="M227.33 130.21V122.31H228.64V123.53Q229.14 122.77 229.84 122.40Q230.55 122.03 231.48 122.03Q232.86 122.03 233.63 122.77Q234.41 123.51 234.41 124.83V130.21H233.05V125.56Q233.05 124.36 232.55 123.78Q232.05 123.19 231.01 123.19Q230.42 123.19 229.93 123.41Q229.44 123.63 229.11 124.04Q228.87 124.35 228.76 124.75Q228.65 125.15 228.65 126.13V130.21Z"/>
+        <path class="tg" style="--i:9;--dx:0.87px" d="M246.07 126.28Q246.07 124.96 245.36 124.14Q244.64 123.33 243.48 123.33Q242.28 123.33 241.60 124.08Q240.93 124.83 240.93 126.18Q240.93 127.61 241.61 128.39Q242.29 129.17 243.53 129.17Q244.72 129.17 245.40 128.40Q246.07 127.64 246.07 126.28ZM247.37 122.31V130.07Q247.37 131.36 247.20 131.90Q247.03 132.45 246.64 132.88Q246.09 133.48 245.30 133.77Q244.52 134.06 243.49 134.06Q241.72 134.06 240.73 133.24Q239.74 132.42 239.70 130.92H241.20V131.02Q241.20 131.91 241.80 132.40Q242.40 132.88 243.51 132.88Q244.31 132.88 244.88 132.62Q245.44 132.35 245.74 131.84Q245.92 131.54 246.00 131.15Q246.07 130.77 246.07 130.04V129.42V128.71Q245.62 129.56 244.89 130.01Q244.16 130.46 243.25 130.46Q241.57 130.46 240.54 129.31Q239.52 128.15 239.52 126.23Q239.52 124.30 240.51 123.16Q241.51 122.03 243.18 122.03Q244.15 122.03 244.88 122.47Q245.62 122.92 246.04 123.78V122.31Z"/>
+        <path class="tg" style="--i:10;--dx:2.49px" d="M258.91 123.43H257.48V122.31H258.91V119.13H260.27V122.31H261.70V123.43H260.27V130.21H258.91Z"/>
+        <path class="tg" style="--i:11;--dx:3.51px" d="M266.28 130.21V116.83H267.59V123.53Q268.09 122.77 268.79 122.40Q269.50 122.03 270.43 122.03Q271.81 122.03 272.58 122.77Q273.36 123.51 273.36 124.83V130.21H272.00V125.56Q272.00 124.36 271.50 123.78Q271.00 123.19 269.96 123.19Q269.36 123.19 268.88 123.41Q268.39 123.63 268.06 124.04Q267.82 124.35 267.71 124.75Q267.60 125.15 267.60 126.13V130.21Z"/>
+        <path class="tg" style="--i:12;--dx:4.75px" d="M284.59 125.37Q284.52 124.33 283.91 123.76Q283.29 123.19 282.21 123.19Q281.24 123.19 280.60 123.79Q279.95 124.38 279.85 125.37ZM286.02 126.47H279.85V126.59Q279.85 127.86 280.56 128.64Q281.28 129.42 282.43 129.42Q283.21 129.42 283.84 128.99Q284.47 128.56 284.96 127.70L285.97 128.39Q285.38 129.46 284.47 130.01Q283.56 130.55 282.36 130.55Q280.58 130.55 279.48 129.36Q278.38 128.17 278.38 126.23Q278.38 124.38 279.47 123.19Q280.56 122.01 282.27 122.01Q284.00 122.01 285.01 123.13Q286.02 124.26 286.02 126.20Z"/>
+        <path class="tg" style="--i:13;--dx:6.41px" d="M295.84 128.88 296.98 128.11Q297.30 128.74 297.80 129.05Q298.29 129.37 298.96 129.37Q299.62 129.37 300.02 129.04Q300.43 128.71 300.43 128.18Q300.43 127.76 300.15 127.48Q299.88 127.21 299.20 126.98Q299.13 126.95 298.98 126.90Q296.14 125.91 296.14 124.41Q296.14 123.36 296.90 122.69Q297.67 122.03 298.90 122.03Q299.91 122.03 300.63 122.44Q301.36 122.85 301.67 123.60L300.59 124.27Q300.35 123.73 299.89 123.44Q299.42 123.14 298.81 123.14Q298.22 123.14 297.85 123.47Q297.48 123.81 297.48 124.33Q297.48 125.05 299.03 125.54Q299.32 125.64 299.49 125.69Q300.76 126.10 301.26 126.63Q301.76 127.17 301.76 128.04Q301.76 129.16 300.97 129.85Q300.18 130.55 298.91 130.55Q297.82 130.55 297.06 130.14Q296.30 129.72 295.84 128.88Z"/>
+        <path class="tg" style="--i:14;--dx:7.55px" d="M308.08 122.31V126.20Q308.08 127.90 308.58 128.58Q309.08 129.25 310.26 129.25Q311.45 129.25 311.94 128.59Q312.43 127.92 312.43 126.20V122.31H313.79V126.92Q313.79 128.71 312.89 129.63Q311.98 130.55 310.23 130.55Q308.49 130.55 307.59 129.63Q306.69 128.70 306.69 126.92V122.31Z"/>
+        <path class="tg" style="--i:15;--dx:8.83px" d="M319.44 130.21V122.31H320.74V123.53Q321.24 122.77 321.95 122.40Q322.65 122.03 323.58 122.03Q324.96 122.03 325.74 122.77Q326.51 123.51 326.51 124.83V130.21H325.15V125.56Q325.15 124.36 324.65 123.78Q324.15 123.19 323.11 123.19Q322.52 123.19 322.03 123.41Q321.54 123.63 321.22 124.04Q320.97 124.35 320.86 124.75Q320.76 125.15 320.76 126.13V130.21Z"/>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var el = document.getElementById('enIconSplash');
+  if (!el) return;
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion:reduce)').matches;
+  var t = parseFloat(getComputedStyle(el).getPropertyValue('--t')) || 1;
+  /* The mark lands at 1850ms*t, but the wordmark and tagline run on to
+     3200ms*t - hiding at the mark leaves the letters half drawn, so the
+     floor is the whole intro. */
+  var MIN = reduce ? 240 : Math.round(3200 * t);
+  var t0 = 0, shownAt = 0, armed = false, safety = null;
+
+  function now(){ return (window.performance && performance.now) ? performance.now() : Date.now(); }
+
+  function show(){
+    if (el.classList.contains('is-showing')) return;
+    /* Replacing the stage restarts every CSS animation inside it, so a
+       second sign-in in the same page gets the whole intro again rather
+       than a frozen final frame. */
+    var stage = el.querySelector('.stage');
+    if (stage) stage.parentNode.replaceChild(stage.cloneNode(true), stage);
+    el.classList.remove('is-leaving', 'is-gone');
+    el.classList.add('is-showing');
+    el.setAttribute('aria-hidden', 'false');
+    shownAt = now(); armed = false;
+    /* Never leave it up for ever if whatever it is covering never
+       finishes - the app underneath is usable, the cover is not. */
+    clearTimeout(safety);
+    safety = setTimeout(hide, 8000);
+  }
+
+  function finish(){
+    el.classList.add('is-leaving');
+    setTimeout(function(){
+      el.classList.remove('is-showing', 'is-leaving');
+      el.setAttribute('aria-hidden', 'true');
+      armed = false;
+      document.dispatchEvent(new CustomEvent('enicon:splashhidden'));
+    }, 340);
+  }
+
+  function hide(){
+    if (!el.classList.contains('is-showing') || armed) return;
+    armed = true;
+    clearTimeout(safety);
+    setTimeout(finish, Math.max(0, MIN - (now() - shownAt)));
+  }
+
+  /* No minimum, no fade: for when what the splash was covering turned out
+     not to be happening at all - a refused sign-in. Holding the animation
+     out to its full length there would mean waiting two seconds to be
+     told the password was wrong. */
+  function cancel(){
+    if (!el.classList.contains('is-showing')) return;
+    armed = false;
+    clearTimeout(safety);
+    el.classList.remove('is-showing', 'is-leaving');
+    el.setAttribute('aria-hidden', 'true');
+  }
+
+  window.EnIconSplash = { show: show, hide: hide, cancel: cancel, minShow: MIN };
+})();
+</script>

@@ -210,6 +210,12 @@
         if (e.key === 'Enter') { e.preventDefault(); realSignIn(); }
       });
     });
+
+    /* #login is hidden by the template until this point, so the old form
+       is never painted while this file is still being fetched. It is the
+       real one now, so let it be seen. */
+    var login = document.getElementById('login');
+    if (login) login.classList.add('icon-ready');
   }
 
   function realSignIn() {
@@ -219,6 +225,12 @@
     if (!idEl || !pwEl) return;
     setLoginMsg('');
     if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+
+    /* Up now, not after the answer comes back: icon_auth.login() holds
+       every attempt open for a 350ms timing floor by design, and that is
+       dead time the splash may as well be covering. Cancelled outright
+       below if the credential is refused. */
+    if (window.EnIconSplash) window.EnIconSplash.show();
 
     fetch('/login', {
       method: 'POST',
@@ -233,6 +245,7 @@
            it is locked, that only the credential was wrong, are all facts
            worth not handing out. The server already refuses this way on
            purpose; do not improve on it here. */
+        if (window.EnIconSplash) window.EnIconSplash.cancel();
         setLoginMsg(res.body.why || 'That did not work.');
         pwEl.value = '';
         pwEl.focus();
@@ -241,6 +254,7 @@
       pwEl.value = '';
       enterApp(res.body);
     }).catch(function () {
+      if (window.EnIconSplash) window.EnIconSplash.cancel();
       if (btn) { btn.disabled = false; btn.textContent = 'Sign in'; }
       setLoginMsg('The server did not answer.');
     });
@@ -284,8 +298,27 @@
        that is the whole point of the change. */
     USER = { name: who.name, role: who.role, station: who.station || '' };
     ensureRoleEntry(USER.role);
+
+    /* The splash covers the only stretch in this app where somebody is
+       genuinely waiting on work rather than looking at a finished screen:
+       signIn()'s wrapper runs applyBoot(), addScreens() and a fetch per
+       injected screen, and until those land the first screen is visibly
+       half-built. Covers the reload-with-a-live-cookie path too, which
+       reaches enterApp() without anyone signing in - otherwise a reload
+       would jump straight into a half-built screen while a fresh sign-in
+       got the splash, which would read as a glitch rather than a rule. */
+    var splash = window.EnIconSplash;
+    if (splash) splash.show();
+
     window.signIn();          /* the live layer's wrapper, by now */
     startIdleWatch();
+
+    /* hide() honours its own minimum, so a bootstrap faster than the
+       animation does not produce a flicker of half-drawn logo. */
+    if (splash) {
+      if (document.readyState === 'complete') splash.hide();
+      else window.addEventListener('load', function () { splash.hide(); });
+    }
   }
 
   function ensureRoleEntry(role) {

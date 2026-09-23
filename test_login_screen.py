@@ -228,6 +228,72 @@ def t_idle_warning_appears_and_extends():
             "the popup's button did not extend the session (%s -> %s)" % (before, after)
 
 
+@test("v4's old login is never painted, even while icon_live.js is still "
+     "being fetched - the markup is in the DOM but #login stays hidden "
+     "until the real fields replace it")
+def t_no_flash_of_the_old_login():
+    seed_account()
+    with H.browser() as b:
+        ctx = b.new_context(viewport={"width": 1400, "height": 900})
+
+        def slow(route):
+            import time as _t
+            _t.sleep(1.5)          # hold the live layer back on purpose
+            route.continue_()
+
+        ctx.route("**/icon_live.js*", slow)
+        pg = ctx.new_page()
+        pg.goto(H.base_url() + "/", wait_until="commit")
+        pg.wait_for_timeout(700)   # mid-fetch: the old form's best chance
+
+        assert pg.evaluate("!!document.getElementById('who')"), \
+            "test is not proving anything - v4's markup is not in the DOM here"
+        vis = pg.evaluate(
+            "getComputedStyle(document.getElementById('login')).visibility")
+        assert vis == "hidden", \
+            "the old login was painted while the live layer loaded (%s)" % vis
+
+        pg.wait_for_selector("#liLoginId", timeout=20000)
+        assert pg.evaluate(
+            "getComputedStyle(document.getElementById('login')).visibility") == "visible"
+        assert pg.evaluate(
+            "document.getElementById('login').classList.contains('icon-ready')")
+        ctx.close()
+
+
+@test("the splash covers the sign-in and the bootstrap behind it, then "
+     "clears itself and leaves the app on screen")
+def t_splash_covers_sign_in():
+    seed_account()
+    with H.browser() as b:
+        pg = blank_page(b)
+        assert pg.evaluate(
+            "getComputedStyle(document.getElementById('enIconSplash')).display") == "none", \
+            "the splash is up before anyone has signed in"
+
+        sign_in(pg)
+        pg.wait_for_selector("#enIconSplash.is-showing", timeout=8000)
+        pg.wait_for_selector("#enIconSplash", state="hidden", timeout=15000)
+
+        assert pg.evaluate("document.getElementById('app').classList.contains('on')")
+        assert pg.evaluate("USER.name") == NAME
+        assert pg.errors == [], pg.errors
+
+
+@test("a refused sign-in does not sit behind the splash for two seconds - "
+     "it is cancelled outright and the reason shows at once")
+def t_splash_cancelled_on_refusal():
+    seed_account()
+    with H.browser() as b:
+        pg = blank_page(b)
+        sign_in(pg, credential="not-the-password")
+        pg.wait_for_selector("#liMsg:not(:empty)", timeout=10000)
+        assert not pg.evaluate(
+            "document.getElementById('enIconSplash').classList.contains('is-showing')"), \
+            "a wrong password left the splash up"
+        assert pg.inner_text("#liMsg") == icon_auth.GENERIC_FAIL
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)
