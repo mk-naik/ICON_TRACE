@@ -164,7 +164,7 @@ window.open = function (u) { OPENED.push(u); };
 
 /* ---- the code under test, read out of the file that ships ----------- */
 var H = here();
-var src = readFile(H.dir + 'static' + H.sep + 'icon_live.js');
+var src = readFile(H.dir + H.sep + 'static' + H.sep + 'icon_live.js');
 var from = src.indexOf('  var rpSrc = [], rpPicked');
 var to = src.indexOf('  /* END repack');
 if (from < 0 || to < 0 || to < from) {
