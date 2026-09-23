@@ -44,6 +44,7 @@ os.environ["ICON_DB_FILE"] = os.path.join(TMP, "test.db")
 import db                                                    # noqa: E402
 import store                                                 # noqa: E402
 import app as APP                                            # noqa: E402
+import auth_test_helper as AUTH
 
 _results = []
 
@@ -103,14 +104,24 @@ def setup(n=8):
                 "wattage": WATT, "customer": "STOCK", "dcr": "DCR",
                 "format_version": 2, "date_produced": "2026-09-09",
                 "shift": 1, "sequence": i, "state": "planned"})
-    return APP.app.test_client()
+    c = APP.app.test_client()
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    return c
 
 
-def hdrs(role, name=None):
-    h = {"X-User-Role": role}
-    if name:
-        h["X-User-Name"] = name
-    return h
+def as_role(c, role, name=None):
+    """Put a REAL session for `role` on this client and return no headers
+    at all.
+
+    This used to be hdrs(), which forged X-User-Role/X-User-Name - exactly
+    the hole Round 23 closed, so there is nothing left to forge. These
+    tests are about what a given role may and may not resolve, so they get
+    a genuine account in that role instead of a claim to be in it. Called
+    mid-test on purpose: a duplicate scan really is raised by one person
+    and resolved by another.
+    """
+    AUTH.test_login(c, role=role, name=name)
+    return {}
 
 
 def serial_row(s):
@@ -153,7 +164,14 @@ def review_item(review_id):
 
 
 def pass_and_pack(c, i, capacity=1):
-    """One module, passed and closed alone into its own box."""
+    """One module, passed and closed alone into its own box.
+
+    Arranges state rather than testing a role, so it runs as Super Admin -
+    a test that has just switched this client to Quality to check what
+    Quality may resolve must not then be refused for packing a box it only
+    needs as scenery.
+    """
+    AUTH.test_login(c)
     s = serial(i)
     r = c.post("/api/fqc", json={"serial": s, "outcome": "pass"})
     assert r.status_code == 200, r.get_json()
@@ -181,6 +199,7 @@ def make_invoice(qty, model=MODEL):
 
 
 def dispatch_one(c, i):
+    AUTH.test_login(c)          # scenery, not the role under test
     """Pack serial i alone, then dispatch its box - state becomes
     'dispatched' the same way a real challan does it."""
     bid = pass_and_pack(c, i, capacity=1)
@@ -205,7 +224,7 @@ def t_agree_no_item():
     pass_and_pack(c, 0)
     add_rescan_row(0, "2026-09-09 12:00:00", "628.0")   # still >= 625: a pass
     r = c.post("/api/fqc", json={"serial": serial(0), "outcome": "pass"},
-               headers=hdrs("FQC Operator"))
+               headers=as_role(c, "FQC Operator"))
     assert r.status_code == 200, r.get_json()
     d = r.get_json()
     assert d.get("duplicate_scan") is True and d.get("agree") is True, d
@@ -223,13 +242,13 @@ def t_disagree_creates_item():
     pass_and_pack(c, 1)
     add_rescan_row(1, "2026-09-09 12:00:00", "600.0")   # below wattage: reject
     r = c.post("/api/fqc", json={"serial": serial(1), "outcome": "reject"},
-               headers=hdrs("FQC Operator"))
+               headers=as_role(c, "FQC Operator"))
     assert r.status_code == 200, r.get_json()
     d = r.get_json()
     assert d.get("duplicate_scan") is True and d.get("agree") is False, d
     review_id = d["review_id"]
 
-    feed = c.get("/api/review", headers=hdrs("Production Incharge")).get_json()
+    feed = c.get("/api/review", headers=as_role(c, "Production Incharge")).get_json()
     item = next(x for x in feed if x["type"] == "duplicate_scan" and x["id"] == review_id)
     assert item["evidence"]["original"]["outcome"] == "pass", item
     assert item["evidence"]["rescan"]["outcome"] == "reject", item
@@ -251,7 +270,7 @@ def t_bare_operator_cannot_resolve():
     pass_and_pack(c, 2)
     add_rescan_row(2, "2026-09-09 12:00:00", "600.0")
     d = c.post("/api/fqc", json={"serial": serial(2), "outcome": "reject"},
-               headers=hdrs("FQC Operator")).get_json()
+               headers=as_role(c, "FQC Operator")).get_json()
     review_id = d["review_id"]
 
     # FQC Operator is the role that actually raised this - v4 has no role
@@ -261,7 +280,7 @@ def t_bare_operator_cannot_resolve():
     r = c.post("/api/review/resolve",
               json={"type": "duplicate_scan", "id": review_id,
                     "resolution": "keep_original", "reason": "trying anyway"},
-              headers=hdrs("FQC Operator"))
+              headers=as_role(c, "FQC Operator"))
     assert r.status_code == 403, r.get_json()
     assert review_item(review_id)["status"] == "open", "resolved by an Operator anyway"
 
@@ -269,7 +288,7 @@ def t_bare_operator_cannot_resolve():
     r = c.post("/api/review/resolve",
               json={"type": "duplicate_scan", "id": review_id,
                     "resolution": "keep_original", "reason": "trying anyway"},
-              headers=hdrs("Packing Operator"))
+              headers=as_role(c, "Packing Operator"))
     assert r.status_code == 403, r.get_json()
 
     # Production Incharge (the Shift Incharge role) succeeds.
@@ -277,7 +296,7 @@ def t_bare_operator_cannot_resolve():
               json={"type": "duplicate_scan", "id": review_id,
                     "resolution": "keep_original",
                     "reason": "the rescan probe looked loose"},
-              headers=hdrs("Production Incharge"))
+              headers=as_role(c, "Production Incharge"))
     assert r.status_code == 200, r.get_json()
     assert review_item(review_id)["status"] == "resolved"
 
@@ -320,13 +339,13 @@ def t_keep_rescanned_uses_repack():
     # Now raise and resolve a duplicate-scan conflict on box X the same way.
     add_rescan_row(3, "2026-09-09 12:00:00", "600.0")
     d = c.post("/api/fqc", json={"serial": serial(3), "outcome": "reject"},
-               headers=hdrs("FQC Operator")).get_json()
+               headers=as_role(c, "FQC Operator")).get_json()
     review_id = d["review_id"]
     out = c.post("/api/review/resolve",
                 json={"type": "duplicate_scan", "id": review_id,
                       "resolution": "keep_rescanned",
                       "reason": "rescan is correct, original was a bad read"},
-                headers=hdrs("Production Incharge", "Rajesh Kumar")).get_json()
+                headers=as_role(c, "Production Incharge", "Rajesh Kumar")).get_json()
     assert out.get("ok"), out
 
     kids_x, kids_y = lineage(bx), lineage(by)
@@ -365,13 +384,13 @@ def t_original_preserved_in_journey():
 
     add_rescan_row(7, "2026-09-09 12:00:00", "600.0")
     d = c.post("/api/fqc", json={"serial": serial(7), "outcome": "reject"},
-               headers=hdrs("FQC Operator")).get_json()
+               headers=as_role(c, "FQC Operator")).get_json()
     review_id = d["review_id"]
     out = c.post("/api/review/resolve",
                 json={"type": "duplicate_scan", "id": review_id,
                       "resolution": "keep_rescanned",
                       "reason": "rescan is correct"},
-              headers=hdrs("Production Incharge")).get_json()
+              headers=as_role(c, "Production Incharge")).get_json()
     assert out.get("ok"), out
 
     after = fqc_row_by_id(before["fqc_id"])
@@ -410,7 +429,7 @@ def t_dispatched_admin_only_no_replacement():
 
     add_rescan_row(0, "2026-09-09 12:00:00", "600.0")
     d = c.post("/api/fqc", json={"serial": serial(0), "outcome": "reject"},
-               headers=hdrs("FQC Operator")).get_json()
+               headers=as_role(c, "FQC Operator")).get_json()
     assert d.get("duplicate_scan") and d.get("agree") is False, d
     review_id = d["review_id"]
 
@@ -419,14 +438,14 @@ def t_dispatched_admin_only_no_replacement():
     r = c.post("/api/review/resolve",
               json={"type": "duplicate_scan", "id": review_id,
                     "resolution": "keep_original", "reason": "trying anyway"},
-              headers=hdrs("Production Incharge"))
+              headers=as_role(c, "Production Incharge"))
     assert r.status_code == 403, r.get_json()
     assert review_item(review_id)["status"] == "open"
 
     # Admin with no reason is refused too - mandatory here as everywhere.
     r = c.post("/api/review/resolve",
               json={"type": "duplicate_scan", "id": review_id},
-              headers=hdrs("Admin"))
+              headers=as_role(c, "Admin"))
     assert r.status_code == 400, r.get_json()
 
     # A request naming a replacement serial and asking to "replace" is
@@ -437,7 +456,7 @@ def t_dispatched_admin_only_no_replacement():
                     "resolution": "replace",
                     "replacement_serial": "ICON999X0000000001",
                     "reason": "the dispatched module already shipped"},
-              headers=hdrs("Admin"))
+              headers=as_role(c, "Admin"))
     assert r.status_code == 200, r.get_json()
     assert r.get_json()["resolution"] == "acknowledged", \
         "a replacement-serial resolution was honoured"
@@ -466,7 +485,7 @@ def t_reason_mandatory_everywhere():
                  ).status_code == 200
     r = c.post("/api/review/resolve",
               json={"type": "quality_grade", "id": serial(0), "grade": "GY"},
-              headers=hdrs("Quality"))
+              headers=as_role(c, "Quality"))
     assert r.status_code == 400, r.get_json()
     assert live_fqc_row(serial(0))["quality_grade"] is None, \
         "graded with no reason recorded"
@@ -474,7 +493,7 @@ def t_reason_mandatory_everywhere():
     r = c.post("/api/review/resolve",
               json={"type": "quality_grade", "id": serial(0), "grade": "GY",
                     "reason": "edge chip, cosmetic only"},
-              headers=hdrs("Quality"))
+              headers=as_role(c, "Quality"))
     assert r.status_code == 200, r.get_json()
     row = live_fqc_row(serial(0))
     assert row["quality_grade"] == "GY" and row["quality_note"], row
@@ -483,12 +502,12 @@ def t_reason_mandatory_everywhere():
     pass_and_pack(c, 1)
     add_rescan_row(1, "2026-09-09 12:00:00", "600.0")
     d = c.post("/api/fqc", json={"serial": serial(1), "outcome": "reject"},
-               headers=hdrs("FQC Operator")).get_json()
+               headers=as_role(c, "FQC Operator")).get_json()
     review_id = d["review_id"]
     r = c.post("/api/review/resolve",
               json={"type": "duplicate_scan", "id": review_id,
                     "resolution": "keep_original"},
-              headers=hdrs("Production Incharge"))
+              headers=as_role(c, "Production Incharge"))
     assert r.status_code == 400, r.get_json()
     assert review_item(review_id)["status"] == "open"
 
@@ -496,7 +515,7 @@ def t_reason_mandatory_everywhere():
               json={"type": "duplicate_scan", "id": review_id,
                     "resolution": "keep_original",
                     "reason": "the rescan probe looked loose"},
-              headers=hdrs("Production Incharge"))
+              headers=as_role(c, "Production Incharge"))
     assert r.status_code == 200, r.get_json()
     item = review_item(review_id)
     assert item["status"] == "resolved" and item["reason"], \
@@ -517,13 +536,13 @@ def t_production_sees_but_cannot_act_on_quality():
                  "reason": "OV-QUALITY — quality engineer instruction"}
                  ).status_code == 200
 
-    feed = c.get("/api/review", headers=hdrs("Production Incharge")).get_json()
+    feed = c.get("/api/review", headers=as_role(c, "Production Incharge")).get_json()
     item = next(x for x in feed if x["type"] == "quality_grade" and
                x["serial"] == serial(0))
     assert item["locked"] is True, "Production should not see the evidence"
     assert item["evidence"] is None
 
-    feed_q = c.get("/api/review", headers=hdrs("Quality")).get_json()
+    feed_q = c.get("/api/review", headers=as_role(c, "Quality")).get_json()
     item_q = next(x for x in feed_q if x["type"] == "quality_grade" and
                  x["serial"] == serial(0))
     assert item_q["locked"] is False
@@ -532,7 +551,7 @@ def t_production_sees_but_cannot_act_on_quality():
     r = c.post("/api/review/resolve",
               json={"type": "quality_grade", "id": serial(0), "grade": "GY",
                     "reason": "trying anyway"},
-              headers=hdrs("Production Incharge"))
+              headers=as_role(c, "Production Incharge"))
     assert r.status_code == 403, r.get_json()
 
 

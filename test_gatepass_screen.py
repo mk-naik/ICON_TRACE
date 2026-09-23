@@ -35,6 +35,7 @@ import datetime, sys, traceback
 import ui_harness as H                                       # noqa: E402  (first: sets the DB path)
 import db                                                    # noqa: E402
 import store                                                 # noqa: E402
+import auth_test_helper as AUTH                              # noqa: E402
 
 APP = H.APP
 _results = []
@@ -118,7 +119,9 @@ def standalone_gatepass(c, party="Repair Vendor Pvt Ltd"):
 
 def base():
     store.wipe()
-    return APP.app.test_client()
+    c = APP.app.test_client()
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    return c
 
 
 # --------------------------------------------------------------------------

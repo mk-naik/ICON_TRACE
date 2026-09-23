@@ -30,6 +30,7 @@ import csv, os, sys, traceback
 import ui_harness as H                                       # noqa: E402  (first: sets the DB path)
 import db                                                    # noqa: E402
 import store                                                 # noqa: E402
+import auth_test_helper as AUTH
 
 APP = H.APP
 _results = []
@@ -81,7 +82,10 @@ def setup(tester=True):
                 "wattage": WATT, "customer": "C0008", "dcr": "DCR",
                 "format_version": 2, "date_produced": "2026-09-07", "shift": 1,
                 "sequence": 484 + i, "state": "planned"})
-    return APP.app.test_client()
+    c = APP.app.test_client()
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    return c
 
 
 def tester_back():
@@ -324,7 +328,14 @@ def t_hold_disagrees_to_review():
                              "note": "tester down"})
     tester_back()                                            # SHORT reads 620.5
     with H.browser() as b:
-        pg = H.open_page(b, "hold")
+        # Admin, not the Super Admin default: resolving a quality-type
+        # review item is gated to _QUALITY_ROLES = ("Quality", "Admin"),
+        # which Round 23 preserved exactly rather than widening, so a
+        # Super Admin session is correctly refused here and the Resolve
+        # control is never rendered for it. Admin is the role that can
+        # both grade at FQC and resolve the review this test walks
+        # through end to end.
+        pg = H.open_page(b, "hold", role="Admin")
         pg.wait_for_selector("#holdRows tr td.mono")
         rows = hold_rows(pg)
         assert len(rows) == 1 and "needs review" in rows[0][6].lower(), rows

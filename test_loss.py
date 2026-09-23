@@ -23,6 +23,7 @@ os.environ["ICON_DB_FILE"] = os.path.join(TMP, "test.db")
 import db                                                    # noqa: E402
 import store                                                 # noqa: E402
 import app as APP                                            # noqa: E402
+import auth_test_helper as AUTH
 
 _results = []
 
@@ -36,7 +37,9 @@ def test(name):
 
 def setup():
     store.wipe()
-    return APP.app.test_client()
+    c = APP.app.test_client()
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    return c
 
 
 def open_event(c, line="A", mach="Laminator-2", reason="LOP-MACH",

@@ -31,6 +31,7 @@ os.environ["ICON_DB_FILE"] = os.path.join(TMP, "test.db")
 import db                                                    # noqa: E402
 import store                                                 # noqa: E402
 import app as APP                                            # noqa: E402
+import auth_test_helper as AUTH
 
 _results = []
 
@@ -66,7 +67,9 @@ def setup():
         db.set_config(cur, {"ss_csv_path": SS, "el_root": os.path.dirname(EL),
                             "ss_a_csv_path": "", "ss_b_csv_path": "",
                             "el_a_root": "", "el_b_root": ""})
-    return APP.app.test_client()
+    c = APP.app.test_client()
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    return c
 
 
 def _seed_serials(idx, watt=WATT, model=MODEL):

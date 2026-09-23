@@ -33,6 +33,7 @@ import csv, os, sys, traceback
 import ui_harness as H                                       # noqa: E402  (first: sets the DB path)
 import db                                                    # noqa: E402
 import store                                                 # noqa: E402
+import auth_test_helper as AUTH
 import icon_customers as customers                           # noqa: E402
 
 APP = H.APP
@@ -110,7 +111,10 @@ def base(serial_rows=(), records=()):
             store.insert(cur, "serial", r)
         for r in records:
             r(cur)
-    return APP.app.test_client()
+    c = APP.app.test_client()
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    return c
 
 
 def serial_record(serial, build, customer, seq, model="ISEN625-G12R"):
@@ -404,6 +408,7 @@ def t_bld_is_the_real_build():
         assert by[legacy][h.index("Customer")] == CUSTOMER_NAME
     # and it is the API that says so, not the page inventing it
     c = APP.app.test_client()
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
     api = {r["serial"]: r for r in c.get("/api/fqc/recent").get_json()["rows"]}
     assert api[two]["build_instance"] == 2 and api[legacy]["build_instance"] == 1, \
         {k: v["build_instance"] for k, v in api.items()}

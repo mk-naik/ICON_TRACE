@@ -28,6 +28,7 @@ import io, sys, traceback
 import ui_harness as H                                       # noqa: E402  (first: sets the DB path)
 import db                                                    # noqa: E402
 import store                                                 # noqa: E402
+import auth_test_helper as AUTH
 import icon_models as models                                 # noqa: E402
 
 APP = H.APP
@@ -57,6 +58,7 @@ def seed():
     somebody emptied - on the list, not in the export."""
     store.wipe()
     c = APP.app.test_client()
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
     for no, date, cust, items in (
             (A, "2026-09-10", CUST_A, [(ITEMS[0], 120), (ITEMS[1], 60)]),
             (B, "2026-09-09", CUST_B, [(ITEMS[2], 36)])):

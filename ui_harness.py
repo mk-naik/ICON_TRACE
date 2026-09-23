@@ -53,12 +53,24 @@ def browser():
             b.close()
 
 
-def open_page(b, view=None, wait_ms=700):
+def open_page(b, view=None, wait_ms=700, role="Super Admin"):
     """A fresh page, signed in, optionally already on a screen. Errors the
-    page throws are collected on page.errors so a test can say so."""
+    page throws are collected on page.errors so a test can say so.
+
+    Signed in twice over, for two different reasons: the real icon_sid
+    cookie below is what the SERVER checks on every write (Round 23), and
+    signIn() is v4's own client-side ceremony that reveals #app. Before
+    this round only the second existed, which is precisely the hole that
+    round closed - a browser that looked signed in to itself and carried
+    nothing the server had ever issued.
+    """
+    import auth_test_helper as AUTH
     pg = b.new_page(viewport={"width": 1500, "height": 950})
     pg.errors = []
     pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    sid = AUTH.make_session_id(role=role)
+    pg.context.add_cookies([{"name": "icon_sid", "value": sid,
+                             "domain": "127.0.0.1", "path": "/"}])
     pg.goto(base_url() + "/")
     pg.wait_for_load_state("networkidle")
     pg.evaluate("signIn()")

@@ -34,6 +34,7 @@ from urllib.parse import quote
 import ui_harness as H                                       # noqa: E402  (first: sets the DB path)
 import db                                                    # noqa: E402
 import store                                                 # noqa: E402
+import auth_test_helper as AUTH
 import icon_models as models                                 # noqa: E402
 
 APP = H.APP
@@ -133,6 +134,7 @@ def seed():
     """
     store.wipe()
     c = APP.app.test_client()
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
     it = [i["item_code"] for i in models.all_items()][0]
     r = c.post("/api/indent", json={"indent_no": "SEP-05/2026", "indent_date": "2026-09-05",
                                     "customer": BUYER, "items": [{"item_code": it, "qty": 5}]})
@@ -328,6 +330,7 @@ def t_customer():
 def t_no_fabrication():
     store.wipe()
     c = APP.app.test_client()
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
     for empty in (True, False):
         for q in ("CHN-455", "BAT-2602-00019", "BOX-2608-00031",
                   "RPK-2608-00008", "GP-2608-0030", "zzzz"):

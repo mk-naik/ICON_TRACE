@@ -313,8 +313,17 @@ def _touch_session(resp):
     timer, by design."""
     if (request.method in ("POST", "PUT", "DELETE", "PATCH")
             and getattr(g, "icon_session", None) and resp.status_code < 400):
-        with store.conn() as (cx, cur):
-            icon_auth.touch_session(cur, g.icon_session["session_id"], now=time.time())
+        try:
+            with store.conn() as (cx, cur):
+                icon_auth.touch_session(cur, g.icon_session["session_id"],
+                                        now=time.time())
+        except Exception:
+            # Housekeeping, and the work this request did is already
+            # committed and answered. An idle timer that could not be
+            # extended must never turn a completed save into a 500 - the
+            # worst case is that the person is asked to sign in sooner
+            # than they expected, which is the safe direction to fail in.
+            app.logger.warning("could not extend session", exc_info=True)
     return resp
 
 
@@ -4757,6 +4766,14 @@ def api_db_reset():
                         "why": "Database reset is disabled on this server. "
                                "Set ICON_ALLOW_RESET=1 and restart to enable it."}), 403
     store.wipe()
+    # store.wipe() deletes the file and rebuilds schema_sqlite.sql's tables
+    # only - icon_auth's are a separate schema it knows nothing about. Left
+    # out, a reset takes app_user and auth_session with it and every
+    # subsequent request carrying a cookie dies on "no such table:
+    # auth_session", including this one's own after_request hook. A reset
+    # empties the data; it must not leave the server unable to answer.
+    with store.conn() as (cx, cur):
+        icon_auth.ensure_schema(cur)
     return jsonify({"ok": True, "stats": store.stats()})
 
 

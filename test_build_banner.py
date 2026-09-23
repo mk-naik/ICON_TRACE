@@ -51,6 +51,32 @@ def test(fn):
             _fail += 1
     return wrapper
 
+def _super_admin(mod, client):
+    """A real Super Admin session on `client`, against THIS copied app
+    module's own database.
+
+    Round 23 put every write endpoint behind a session, /api/db/reset
+    included - so an anonymous POST there now stops at 401 without ever
+    reaching the ICON_ALLOW_RESET guard these tests are about. Both guards
+    are real and both are deliberate; to test the second one you have to
+    get past the first.
+    """
+    import icon_auth
+    with mod.store.conn() as (cx, cur):
+        icon_auth.ensure_schema(cur)
+        cur.execute("INSERT INTO app_user (login_id, display_name, role, "
+                    "created_at, created_by) VALUES (%s, %s, %s, %s, %s)",
+                    ("bb.super", "Build Banner Super", "Super Admin",
+                     1000000, "test"))
+        u = mod.store.one(cur, "SELECT * FROM app_user WHERE login_id=%s",
+                          ("bb.super",))
+        sid = icon_auth.create_session(
+            cur, {"user_id": u["user_id"], "login_id": u["login_id"],
+                  "display_name": u["display_name"], "role": u["role"]})
+    client.set_cookie("icon_sid", sid)
+    return client
+
+
 def _load_app(tmp, env_overrides=None):
     """Load app module from tmp dir with a throwaway DB."""
     import importlib.util
@@ -357,7 +383,7 @@ def _G_reset_disabled_by_default_403():
         mod = _load_app(tmp)
         with mod.store.conn() as (cx, cur):
             mod.store.insert(cur, "app_config", {"k": "g1_key", "v": "g1_val"})
-        client = mod.app.test_client()
+        client = _super_admin(mod, mod.app.test_client())
         r = client.post("/api/db/reset")
         assert r.status_code == 403
         d = json.loads(r.data)
@@ -378,7 +404,7 @@ def _G_reset_enabled_with_1_wipes():
         mod = _load_app(tmp, {"ICON_ALLOW_RESET": "1"})
         with mod.store.conn() as (cx, cur):
             mod.store.insert(cur, "app_config", {"k": "g2_key", "v": "g2_val"})
-        client = mod.app.test_client()
+        client = _super_admin(mod, mod.app.test_client())
         r = client.post("/api/db/reset")
         assert r.status_code == 200
         d = json.loads(r.data)
@@ -397,7 +423,7 @@ def _G_reset_disabled_for_0_and_empty():
             mod = _load_app(tmp, env)
             assert mod._RESET_ENABLED is False, (
                 "ICON_ALLOW_RESET=%r should keep reset disabled" % val)
-            r = mod.app.test_client().post("/api/db/reset")
+            r = _super_admin(mod, mod.app.test_client()).post("/api/db/reset")
             assert r.status_code == 403
         finally:
             shutil.rmtree(tmp, ignore_errors=True)

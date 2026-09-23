@@ -36,6 +36,16 @@ import db                                                    # noqa: E402
 import store                                                 # noqa: E402
 import icon_evidence as ev                                   # noqa: E402
 import app as APP                                            # noqa: E402
+import auth_test_helper as AUTH
+
+
+def as_role(c, role):
+    """A REAL session in `role` on this client, and no headers at all -
+    X-User-Role was the spoofable thing Round 23 removed, so this test
+    proves the gate with a genuine account rather than a claim to one."""
+    AUTH.test_login(c, role=role)
+    return {}
+
 
 _results = []
 
@@ -99,7 +109,9 @@ def setup(ss_rows=None, ss_path=None):
                 "wattage": WATT, "customer": "STOCK", "dcr": "DCR",
                 "format_version": 2, "date_produced": "2026-09-07",
                 "shift": 1, "sequence": 483 + i, "state": "planned"})
-    return APP.app.test_client()
+    c = APP.app.test_client()
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    return c
 
 
 def fqc_row(serial):
@@ -639,7 +651,9 @@ def dash_setup():
                 "grade": "A" if outcome == "pass" else None,
                 "mode": "confirmed", "decided_by": "operator",
                 "at": day + " 10:00:00", "defect": defect})
-    return APP.app.test_client()
+    c = APP.app.test_client()
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    return c
 
 
 @test("with no filter, the dashboard counts every live record")
@@ -865,12 +879,12 @@ def t_resolve_provisional_mismatch():
         body = {"type": "provisional_mismatch", "id": rid, "resolution": choice,
                 "reason": "looked at the image and the flash report"}
 
-        r = c.post("/api/review/resolve", json=body, headers={"X-User-Role": "FQC Operator"})
+        r = c.post("/api/review/resolve", json=body, headers=as_role(c, "FQC Operator"))
         assert r.status_code == 403, "an operator resolved a Quality decision"
         r = c.post("/api/review/resolve", json=dict(body, reason=""),
-                   headers={"X-User-Role": "Quality"})
+                   headers=as_role(c, "Quality"))
         assert r.status_code == 400, "resolved with no reason"
-        r = c.post("/api/review/resolve", json=body, headers={"X-User-Role": "Quality"})
+        r = c.post("/api/review/resolve", json=body, headers=as_role(c, "Quality"))
         assert r.status_code == 200, r.get_json()
 
         s = serial_row(SHORT)
@@ -879,7 +893,7 @@ def t_resolve_provisional_mismatch():
         assert len(recs) == 2 and sum(1 for x in recs if x["superseded_by"] is None) == 1, \
             "one live decision expected, kept both rows: %s" % recs
         assert hold(c)["rows"] == [], "still on the Hold list after resolving"
-        r = c.post("/api/review/resolve", json=body, headers={"X-User-Role": "Quality"})
+        r = c.post("/api/review/resolve", json=body, headers=as_role(c, "Quality"))
         assert r.status_code == 400, "resolved twice"
 
 

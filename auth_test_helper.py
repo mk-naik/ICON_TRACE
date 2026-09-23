@@ -80,6 +80,18 @@ def make_user(role="Super Admin", login_id=None, name=None, station=None):
         return dict(row)
 
 
+def make_session_id(role="Super Admin", login_id=None, name=None,
+                    station=None):
+    """Just the session id, for a caller that sets the cookie itself -
+    a Playwright browser context, rather than a Flask test client."""
+    u = make_user(role, login_id=login_id, name=name, station=station)
+    with store.conn() as (cx, cur):
+        return icon_auth.create_session(
+            cur, {"user_id": u["user_id"], "login_id": u["login_id"],
+                  "display_name": u["display_name"], "role": u["role"]},
+            station=u.get("station"), ip="127.0.0.1")
+
+
 def test_login(client, role="Super Admin", login_id=None, name=None,
                station=None):
     """Put a real session for `role` on `client`. Returns the session row's

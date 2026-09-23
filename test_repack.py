@@ -28,6 +28,7 @@ os.environ["ICON_DB_FILE"] = os.path.join(TMP, "test.db")
 import db                                                    # noqa: E402
 import store                                                 # noqa: E402
 import app as APP                                            # noqa: E402
+import auth_test_helper as AUTH
 
 _results = []
 
@@ -73,7 +74,9 @@ def setup(n=6, models=None):
                 "wattage": WATT, "customer": "STOCK", "dcr": "DCR",
                 "format_version": 2, "date_produced": "2026-09-09",
                 "shift": 1, "sequence": i, "state": "planned"})
-    return APP.app.test_client()
+    c = APP.app.test_client()
+    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    return c
 
 
 def pass_fqc(c, i):
