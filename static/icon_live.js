@@ -246,12 +246,18 @@
     });
   }
 
-  function enterApp(who) {
-    /* From the SERVER's answer, never from anything picked on this page -
-       that is the whole point of the change. */
-    USER = { name: who.name, role: who.role, station: who.station || '' };
-    ensureRoleEntry(USER.role);
-
+  /* v4's own signIn() read the #who dropdown and set USER from it. That
+     dropdown is gone, so this replaces the BASE function only - and does
+     it here, early, on purpose: further down this same file the live
+     layer wraps window.signIn to hang its whole bootstrap off it
+     (applyBoot, addScreens, sidebarToggle, the wirings). Replacing the
+     base before that wrapper is installed means the wrapper captures this
+     version and the entire chain still runs, in the same order it always
+     has. Replacing signIn wholesale after the fact - or reimplementing
+     v4's steps inline instead of calling it - silently skips every one of
+     those, and screens the live layer adds (Indent, Loading Verification)
+     never get registered at all. */
+  window.signIn = function () {
     ['uname', 'umName'].forEach(function (id) {
       var el = document.getElementById(id);
       if (el) el.textContent = USER.name;
@@ -262,17 +268,23 @@
     });
     var av = document.getElementById('av');
     if (av) {
-      av.textContent = USER.name.split(' ').map(function (w) { return w[0]; })
-        .join('').slice(0, 2).toUpperCase();
+      av.textContent = (USER.name || '').split(' ')
+        .map(function (w) { return w[0]; }).join('').slice(0, 2).toUpperCase();
     }
     document.getElementById('login').classList.add('gone');
     document.getElementById('app').classList.add('on');
-
     if (typeof initAll === 'function') initAll();
     if (typeof applyRole === 'function') applyRole();
     var home = (ROLES[USER.role] && ROLES[USER.role].home) || 'search';
     if (typeof go === 'function') go(home);
+  };
 
+  function enterApp(who) {
+    /* From the SERVER's answer, never from anything picked on this page -
+       that is the whole point of the change. */
+    USER = { name: who.name, role: who.role, station: who.station || '' };
+    ensureRoleEntry(USER.role);
+    window.signIn();          /* the live layer's wrapper, by now */
     startIdleWatch();
   }
 
@@ -281,12 +293,19 @@
        never heard of - Super Admin above all, which exists only in
        icon_auth's rank table. Without an entry here v4's own go() refuses
        every screen and the person lands on a blank app. Cosmetic only:
-       what they may actually DO is decided server-side. */
+       what they may actually DO is decided server-side.
+
+       The SAME object as Admin's, deliberately, not a copy of it.
+       addScreens() registers each new screen by role name
+       (v.roles.forEach -> ROLES[r].views.push), and no NEW_VIEWS entry
+       names Super Admin - so a copy taken here, before those run, would
+       be frozen at v4's original list and Super Admin would be refused
+       every screen added since: Indent, Loading Verification, the gate
+       pass list. Sharing the array means anything granted to Admin later
+       is already granted here. */
     if (typeof ROLES === 'undefined' || !ROLES || ROLES[role]) return;
-    var admin = ROLES['Admin'];
-    ROLES[role] = admin
-      ? { home: admin.home, views: admin.views.slice(), perms: admin.perms.slice() }
-      : { home: 'search', views: ['search'], perms: [] };
+    ROLES[role] = ROLES['Admin'] ||
+      { home: 'search', views: ['search'], perms: [] };
   }
 
   /* ---- idle warning ------------------------------------------------ */
