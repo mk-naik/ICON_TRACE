@@ -133,6 +133,13 @@ a.nav-i{text-decoration:none}
   gap: 12px;
 }
 .fld { margin-bottom: 0; }
+/* ...except on the login card, which is not in a .grid and so has nothing
+   to supply the spacing instead. The rule above exists because a .fld
+   inside the .grid above would otherwise double up on the grid's own gap;
+   written unscoped, it also flattened v4's login screen, where the fields
+   and the Sign in button ended up touching. v4's own .fld{margin-bottom:12px}
+   is what this restores - the spacing that file was designed with. */
+#login .fld { margin-bottom: 12px; }
 .fld label {
   display: block;
   font-size: 10.5px;
