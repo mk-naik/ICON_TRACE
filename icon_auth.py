@@ -734,9 +734,12 @@ def create_operator(cur, actor_login_id, target_login_id, display_name, role, te
 # "who is this, and what are they allowed to do" is decided from now on.
 # ---------------------------------------------------------------------------
 
-SESSION_WINDOW_SHORT = 300     # Admin, Super Admin - the highest-privilege
-                                # accounts get the shortest idle leash.
-SESSION_WINDOW_LONG = 3600     # every other role
+# Admin and Super Admin - the highest-privilege accounts get the shortest
+# idle leash - then everybody else. Overridable the same way MAX_FAILS and
+# LOCK_SECONDS already are, so a test can watch the idle warning appear
+# without sitting through an hour of real time. Never set in production.
+SESSION_WINDOW_SHORT = int(os.environ.get("ICON_SESSION_SECONDS_ADMIN", "300"))
+SESSION_WINDOW_LONG = int(os.environ.get("ICON_SESSION_SECONDS", "3600"))
 
 
 def _session_window(role):

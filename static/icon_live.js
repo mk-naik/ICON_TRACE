@@ -91,19 +91,21 @@
 
   function api(path, opts) {
     opts = opts || {};
-    // Authentication is designed, not built - USER is chosen at sign-in
-    // with nothing behind it. But a server-side role gate (Quality-only,
-    // Shift-Incharge-or-above) has to know a role to check, so it travels
-    // on every call here, once, rather than each new endpoint inventing its
-    // own way to say who is asking. See actor()/role() in app.py.
+    /* Round 23: X-User-Name and X-User-Role used to travel on every call
+       here, and app.py trusted both - who you were and what you were
+       allowed to do, decided by two headers anyone with devtools could
+       type. Both are gone. Identity now rides the icon_sid cookie the
+       server itself issued at /login, which the browser attaches on its
+       own, and the server reads a real session row rather than anything
+       this file claims. Nothing is sent from here at all. */
     var headers = Object.assign({ 'Content-Type': 'application/json' },
       opts.headers || {});
-    if (typeof USER !== 'undefined' && USER && USER.name) {
-      headers['X-User-Name'] = USER.name;
-      headers['X-User-Role'] = USER.role || '';
-    }
     return fetch('/api/' + path, Object.assign({}, opts, { headers: headers }))
       .then(function (r) {
+      /* A dead session is not a business refusal - it cannot be reported
+         in a toast beside a form the person can no longer submit. Put the
+         login screen back instead, once, and let them start again. */
+      if (r.status === 401) { sessionLost(); }
       /* A refusal carries its reason in the body. Throwing on the status code
          alone would replace "only 240 remain on that line" with "400". */
       return r.json().then(function (body) {
@@ -114,6 +116,266 @@
     });
   }
   window.iconApi = api;
+
+  /* ====================================================================
+     REAL SIGN-IN (Round 23)
+
+     v4's login screen is a dropdown of fourteen names and a password box
+     with eight dots painted in it - its own note says "Authentication is
+     designed, not yet built". Picking a name set USER, a plain JavaScript
+     object, and that was the whole of it: anyone could type USER.role =
+     'Admin' in the console and the server believed it, because the server
+     was told who you were by a header this file sent.
+
+     This replaces that screen's contents at runtime - icon_trace.html is
+     v4 and stays read-only, exactly like every other override in this
+     file. USERS and the #who <option> list below it are now dead: nothing
+     reads them any more. They are left in place because that file may not
+     be edited, not by oversight.
+
+     USER is still set, and ROLES still drives which nav buttons show -
+     but only from what the SERVER returned, and only as a convenience.
+     Hiding a button is not a security boundary; the boundary is
+     require_role() on all 49 write endpoints, which does not care what
+     this file believes.
+     ==================================================================== */
+
+  var IDLE_WARN_AT = 120;          /* seconds left when the popup appears */
+  var _idleTimer = null;
+
+  function sessionLost() {
+    /* No silent re-auth: we cannot prove who is at the keyboard now. */
+    if (_idleTimer) { clearInterval(_idleTimer); _idleTimer = null; }
+    hideIdleWarning();
+    if (typeof USER !== 'undefined' && USER) USER.name = '';
+    var app = document.getElementById('app');
+    var login = document.getElementById('login');
+    if (app) app.classList.remove('on');
+    if (login) {
+      login.classList.remove('gone');
+      setLoginMsg('Your session has timed out. Please sign in again.');
+    }
+  }
+  window.iconSessionLost = sessionLost;
+
+  function setLoginMsg(text) {
+    var el = document.getElementById('liMsg');
+    if (el) el.textContent = text || '';
+  }
+
+  function installRealLogin() {
+    var card = document.querySelector('#login .login-card');
+    if (!card || document.getElementById('liLoginId')) return;
+
+    /* The dropdown's .fld and the painted-dots password .fld, replaced by
+       two real inputs. Same labels the lab uses, so a person meets the
+       same words in both places. */
+    var flds = card.querySelectorAll('.fld');
+    if (flds.length) {
+      flds[0].innerHTML = '<label>Login ID</label>' +
+        '<input id="liLoginId" type="text" autocomplete="username" ' +
+        'autocapitalize="none" spellcheck="false">';
+    }
+    if (flds.length > 1) {
+      flds[1].innerHTML = '<label>Password or authenticator code</label>' +
+        '<input id="liCredential" type="password" ' +
+        'autocomplete="current-password">';
+    }
+
+    var btn = card.querySelector('button');
+    if (btn) {
+      btn.removeAttribute('onclick');
+      btn.id = 'liSubmit';
+      btn.addEventListener('click', realSignIn);
+    }
+
+    var msg = document.createElement('p');
+    msg.id = 'liMsg';
+    msg.style.cssText = 'color:var(--fail);min-height:1.2em;margin:8px 0 0;' +
+                        'font-size:12.5px';
+    if (btn && btn.parentNode) btn.parentNode.insertBefore(msg, btn.nextSibling);
+
+    /* v4's note still says authentication is not built. It is now. */
+    var note = card.querySelector('.login-note');
+    if (note) {
+      note.innerHTML = 'Each role sees only its own screens, and the server ' +
+        'checks the role on every save - not the screen you can reach.<br>' +
+        'En Power Technologies Pvt. Ltd. &middot; Unit-2, Raipur';
+    }
+
+    [document.getElementById('liLoginId'),
+     document.getElementById('liCredential')].forEach(function (el) {
+      if (!el) return;
+      el.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); realSignIn(); }
+      });
+    });
+  }
+
+  function realSignIn() {
+    var idEl = document.getElementById('liLoginId');
+    var pwEl = document.getElementById('liCredential');
+    var btn = document.getElementById('liSubmit');
+    if (!idEl || !pwEl) return;
+    setLoginMsg('');
+    if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+
+    fetch('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ login_id: idEl.value, credential: pwEl.value })
+    }).then(function (r) {
+      return r.json().then(function (d) { return { ok: r.ok, body: d }; });
+    }).then(function (res) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Sign in'; }
+      if (!res.ok || !res.body.ok) {
+        /* Whatever went wrong, the same sentence: that an ID exists, that
+           it is locked, that only the credential was wrong, are all facts
+           worth not handing out. The server already refuses this way on
+           purpose; do not improve on it here. */
+        setLoginMsg(res.body.why || 'That did not work.');
+        pwEl.value = '';
+        pwEl.focus();
+        return;
+      }
+      pwEl.value = '';
+      enterApp(res.body);
+    }).catch(function () {
+      if (btn) { btn.disabled = false; btn.textContent = 'Sign in'; }
+      setLoginMsg('The server did not answer.');
+    });
+  }
+
+  function enterApp(who) {
+    /* From the SERVER's answer, never from anything picked on this page -
+       that is the whole point of the change. */
+    USER = { name: who.name, role: who.role, station: who.station || '' };
+    ensureRoleEntry(USER.role);
+
+    ['uname', 'umName'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.textContent = USER.name;
+    });
+    ['urole', 'umRole'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.textContent = USER.role;
+    });
+    var av = document.getElementById('av');
+    if (av) {
+      av.textContent = USER.name.split(' ').map(function (w) { return w[0]; })
+        .join('').slice(0, 2).toUpperCase();
+    }
+    document.getElementById('login').classList.add('gone');
+    document.getElementById('app').classList.add('on');
+
+    if (typeof initAll === 'function') initAll();
+    if (typeof applyRole === 'function') applyRole();
+    var home = (ROLES[USER.role] && ROLES[USER.role].home) || 'search';
+    if (typeof go === 'function') go(home);
+
+    startIdleWatch();
+  }
+
+  function ensureRoleEntry(role) {
+    /* v4's ROLES knows five names. A real account can hold one it has
+       never heard of - Super Admin above all, which exists only in
+       icon_auth's rank table. Without an entry here v4's own go() refuses
+       every screen and the person lands on a blank app. Cosmetic only:
+       what they may actually DO is decided server-side. */
+    if (typeof ROLES === 'undefined' || !ROLES || ROLES[role]) return;
+    var admin = ROLES['Admin'];
+    ROLES[role] = admin
+      ? { home: admin.home, views: admin.views.slice(), perms: admin.perms.slice() }
+      : { home: 'search', views: ['search'], perms: [] };
+  }
+
+  /* ---- idle warning ------------------------------------------------ */
+
+  function hideIdleWarning() {
+    var el = document.getElementById('idleWarn');
+    if (el) el.remove();
+  }
+
+  function showIdleWarning(secondsLeft) {
+    if (document.getElementById('idleWarn')) return;
+    var w = document.createElement('div');
+    w.id = 'idleWarn';
+    w.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:9999;' +
+      'background:var(--card,#fff);border:1px solid var(--review,#c80);' +
+      'border-left:4px solid var(--review,#c80);border-radius:8px;' +
+      'padding:14px 16px;box-shadow:0 6px 24px rgba(0,0,0,.18);max-width:320px';
+    w.innerHTML =
+      '<div style="font-weight:700;margin-bottom:4px">Still there?</div>' +
+      '<div id="idleWarnTxt" style="font-size:12.5px;margin-bottom:10px"></div>' +
+      '<button class="btn btn-primary btn-sm" id="idleStay">Keep me signed in</button>';
+    document.body.appendChild(w);
+    document.getElementById('idleStay').addEventListener('click', function () {
+      fetch('/api/session/extend', { method: 'POST' })
+        .then(function (r) { return r.json().then(function (d) {
+          return { ok: r.ok, body: d }; }); })
+        .then(function (res) {
+          if (!res.ok) { sessionLost(); return; }
+          hideIdleWarning();
+        })
+        .catch(function () { hideIdleWarning(); });
+    });
+    setIdleText(secondsLeft);
+  }
+
+  function setIdleText(secondsLeft) {
+    var el = document.getElementById('idleWarnTxt');
+    if (!el) return;
+    var mins = Math.max(0, Math.floor(secondsLeft / 60));
+    var secs = Math.max(0, secondsLeft % 60);
+    el.textContent = 'You will be signed out in ' +
+      (mins ? mins + 'm ' : '') + secs + 's. Reading a screen does not ' +
+      'keep you signed in - only saving something does.';
+  }
+
+  function startIdleWatch() {
+    if (_idleTimer) clearInterval(_idleTimer);
+    _idleTimer = setInterval(checkSession, 15000);
+    checkSession();
+  }
+
+  function checkSession() {
+    fetch('/api/session').then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (!s.signed_in) { sessionLost(); return; }
+        var left = Math.round(s.expires_at - (Date.now() / 1000));
+        if (left <= IDLE_WARN_AT) { showIdleWarning(left); setIdleText(left); }
+        else { hideIdleWarning(); }
+      })
+      .catch(function () { /* server down is the conn chip's job, not this */ });
+  }
+
+  /* ---- sign out ---------------------------------------------------- */
+
+  (function patchSignOut() {
+    var orig = window.signOut;
+    if (typeof orig !== 'function' || orig.__real) return;
+    var patched = function (e) {
+      fetch('/logout', { method: 'POST' }).catch(function () {});
+      if (_idleTimer) { clearInterval(_idleTimer); _idleTimer = null; }
+      hideIdleWarning();
+      orig.apply(this, arguments);
+      /* v4's signOut() hides #app but leaves USER.name set, so anything
+         reading it still thinks somebody is here. */
+      if (typeof USER !== 'undefined' && USER) USER.name = '';
+      setLoginMsg('');
+      var pw = document.getElementById('liCredential');
+      if (pw) pw.value = '';
+    };
+    patched.__real = true;
+    window.signOut = patched;
+  })();
+
+  installRealLogin();
+  /* Already signed in (a reload with a live cookie) - go straight in
+     rather than showing a login screen the server would not require. */
+  fetch('/api/session').then(function (r) { return r.json(); })
+    .then(function (s) { if (s.signed_in) enterApp(s); })
+    .catch(function () {});
 
   /* ---- 1. master data v4 already has, kept -------------------------- */
   /* MATERIALS, MAT_CATS, *_MAKES, GRADE_RULES, ELVI_CODES, STATIONS,

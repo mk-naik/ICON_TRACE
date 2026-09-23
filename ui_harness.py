@@ -57,12 +57,13 @@ def open_page(b, view=None, wait_ms=700, role="Super Admin"):
     """A fresh page, signed in, optionally already on a screen. Errors the
     page throws are collected on page.errors so a test can say so.
 
-    Signed in twice over, for two different reasons: the real icon_sid
-    cookie below is what the SERVER checks on every write (Round 23), and
-    signIn() is v4's own client-side ceremony that reveals #app. Before
-    this round only the second existed, which is precisely the hole that
-    round closed - a browser that looked signed in to itself and carried
-    nothing the server had ever issued.
+    Signed in by holding a real session, not by performing v4's own
+    sign-in ceremony. Round 23 replaced that ceremony: signIn() read a
+    dropdown of names and set USER, a plain JavaScript object the server
+    then believed. The page now asks /api/session who it is holding a
+    cookie for and lets itself in from the answer, so the cookie planted
+    here is the whole of it - and the #who dropdown signIn() used to read
+    no longer exists to be read.
     """
     import auth_test_helper as AUTH
     pg = b.new_page(viewport={"width": 1500, "height": 950})
@@ -73,7 +74,7 @@ def open_page(b, view=None, wait_ms=700, role="Super Admin"):
                              "domain": "127.0.0.1", "path": "/"}])
     pg.goto(base_url() + "/")
     pg.wait_for_load_state("networkidle")
-    pg.evaluate("signIn()")
+    pg.wait_for_selector("#app.on", timeout=15000)
     pg.wait_for_timeout(wait_ms)
     if view:
         pg.evaluate("go(%r)" % view)
