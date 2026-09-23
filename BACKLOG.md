@@ -2809,3 +2809,109 @@ Considered and explicitly rejected: a hard gate on FQC requiring
 Entry is shift-end paperwork, and a module that physically reaches FQC
 before that paperwork is filed must still be inspectable on time.
 
+---
+
+## Round 22 - Gate Pass reconciliation after a silently-incomplete merge
+
+**What the earlier revert actually did to git's ancestry, not just the
+files.** `dd25bfa` ("Revert icon_trace/Gate Pass content pulled in by
+c5cb1ed merge") put this branch's pre-rebuild Gate Pass code back -
+`app.py`, `db.py`, `static/icon_live.js`, `schema_sqlite.sql`,
+`templates/gatepass_print.html`, and the Gate Pass test files - after an
+earlier merge (`c5cb1ed`) had pulled in main's independent Gate Pass
+rebuild (multi-item, the landing list, `api_loading_submit` auto-creating
+the record) and the conflict resolution favoured main's side almost
+everywhere. A revert commit does not remove anything from history: the
+merge and everything before it stayed exactly where it was, an ancestor
+of the branch tip from that point on. That is the detail that made the
+later merge misbehave - not a mistake in the revert itself, which did
+what it said.
+
+**Why Round 21's `Merge origin/main` reported clean while still missing
+main's actual current Gate Pass code.** By the time that merge ran, the
+computed merge-base between the branch and `origin/main` was a commit at
+or after `c5cb1ed` - a point in history where the rebuild was already
+present on *both* sides. Between that base and `origin/main`'s new tip,
+the Gate Pass files had barely moved (main's own later work was FQC/EL/
+Production Entry, elsewhere). Between that same base and the branch's
+tip, `dd25bfa` had changed them enormously - reverting the rebuild back
+out. A three-way merge with one side unchanged and the other side
+changed takes the changed side, no contest, no conflict marker, nothing
+to report. Git was correct that nothing was *contested*; it was not
+correct that the result matched what either line of work currently
+wanted. `test_gatepass.py` and `test_loading.py` carried through the
+merge as the branch's own reverted, pre-rebuild versions too, so they
+kept passing against code that had gone backwards - a merge and its own
+tests agreeing is not the same claim as the merge being right, and nothing
+short of diffing against main's actual current tip file-by-file would
+have caught it.
+
+**The general lesson.** A clean merge only proves nothing was contested
+between the two side's changes since their shared base. It does not prove
+the result matches either side's current intent - especially once an
+earlier revert has put a stale version of something back into the branch
+that a later merge-base will treat as "already agreed."
+
+**Files touched this round, by section:**
+
+- *Section 1 (taken wholesale from `origin/main`, confirmed zero diff
+  after):* `db.py`, `schema_sqlite.sql`, `templates/gatepass_print.html`,
+  `README.md`, `test_gatepass.py`, `test_gatepass.js`,
+  `test_gatepass_landing.js` (restored - existed only on main's line),
+  `test_gatepass_multiitem.py` (restored), `test_gatepass_screen.py`
+  (restored), `test_loading.py`, `test_loading.js`, `test_challan.js`,
+  `test_fqc_dashboard.js`, `test_packing.js`, `test_repack.js`.
+- *Section 2 (checked, correctly left alone):* `templates/frag_settings.html`
+  (Stage 0's reset-guard UI - main predates it), `templates/indent_new.html`,
+  `templates/frag_indent_form.html`, `templates/gatepass.html` (all three
+  already carry `data-future="1"`, main does not).
+- *Section 3 (`app.py`, hand-reconciled with the branch as base):* added
+  `_validate_gp_items()`, `_clamp_gp_date_range()`,
+  `GET`/`PUT /api/gatepass/<id>`; replaced the bodies of `api_gatepasses()`,
+  `api_gatepass()`, `api_loading_submit()` with main's current versions
+  (the auto-create-on-submit behaviour, the duplicate-challan refusal).
+- *Section 3 follow-up (found only by running the real suite, not listed
+  in this round's own instructions):* `gatepass_print()` still only read
+  the `gatepass` row and never fetched `gatepass_item` rows -
+  `test_gatepass_multiitem.py`'s print test caught a new multi-item
+  standalone gate pass printing with its item lines silently missing.
+  Fixed the same way as the three functions this round did name: main's
+  version, verbatim.
+- *Section 4 (`static/icon_live.js`, hand-reconciled with main as the new
+  base):* checked out main wholesale (restores the entire multi-item
+  rebuild the branch had lost), replaced main's crude UTC-only max-date
+  block with a call to `_applyDateLimit`, restored `_applyDateLimit()`
+  and its capturing focus listener verbatim from
+  `origin/stage0-build-banner~1`, added `data-future="1"` to the rebuilt
+  form's `#gpExpectedRet` input.
+- *Section 4 follow-up (also found only by running the real suite):*
+  main's `ping()` still compared `d.boot_build`, the old combined hash -
+  a second branch-original fix in this same file this round's own
+  instructions did not name (they called out only `_applyDateLimit`).
+  `test_build_banner.py::H_no_consumer_reads_d_boot_build` caught it.
+  Restored verbatim from the same `~1` commit: `isAdmin` requiring `#app`
+  to carry the `"on"` class (no stale banner on the sign-in screen after
+  sign-out) and including Super Admin, and the reload-banner comparison
+  going back to `d.build` vs `B.build` gated on `signedIn`.
+
+**Verification, real not assumed.** `test_gatepass.py` 11/11,
+`test_loading.py` 14/14, `test_gatepass_multiitem.py` 9/9,
+`test_gatepass_screen.py` 4/4 (real Chromium via Playwright - the rebuilt
+multi-item UI, the live summary trail, auto-create-on-submit), full
+Section 6 suite green except `test_fqc.py`'s one pre-existing, unrelated
+failure (unchanged, present before this round). A dedicated real-browser
+pass (screenshots, then deleted) confirmed: the New Gate Pass screen
+shows the rebuilt item table and "+ Add item"; `#gpExpectedRet` accepts
+tomorrow (`min` set, no `max`) while Production Entry's date field still
+refuses it (`max` = today, no `data-future`); creating a challan, loading
+every box and submitting auto-creates the gate pass with no manual POST,
+and a manual POST against that same challan afterward is refused with
+the exact reason text. Node is not installed on this machine; the two
+`node` commands this round's instructions specified
+(`test_gatepass.js`, `test_gatepass_landing.js`) were run instead via
+`cscript //E:JScript`, the documented fallback - both green.
+
+Two real regressions surfaced only because the required verification
+step (running the actual suite, not trusting the file list) was followed
+- exactly the failure mode this round exists to close out.
+
