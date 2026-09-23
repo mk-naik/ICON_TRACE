@@ -27,10 +27,11 @@ Run:  python serve.py
 
 import os, io, json, time, hashlib, datetime, secrets, traceback, functools, glob, threading
 from flask import (Flask, render_template, request, redirect, url_for,
-                   session, flash, jsonify, send_file, abort)
+                   session, flash, jsonify, send_file, abort, g, make_response)
 
 import db
 import store
+import icon_auth
 import icon_invoice_parser as invparse
 import icon_challan_import as chimport
 import icon_box_number as bx
@@ -260,6 +261,62 @@ STARTED_AT = datetime.datetime.now().strftime("%d-%m-%Y %I:%M:%S %p")
 # (or true/yes, case-insensitive) to enable it.  Requires a restart to take effect.
 _RESET_ENABLED = os.environ.get("ICON_ALLOW_RESET", "").strip().lower() in ("1", "true", "yes")
 
+# The auth tables (app_user, auth_session, ...) are icon_auth.py's own
+# schema, separate from schema_sqlite.sql - store.conn() guarantees the
+# latter on every call but knows nothing of the former. Ensured once here so
+# a fresh database works the first time the app itself starts, without
+# depending on icon_auth_cli.py having been run first.
+with store.conn() as (_cx, _cur):
+    icon_auth.ensure_schema(_cur)
+
+
+# ---------------------------------------------------------------------------
+# Real sessions (Round 23). icon_sid is deliberately a different cookie from
+# Flask's own "session" (already used elsewhere in this file for pending
+# invoice uploads) - two unrelated things, two names, no collision.
+# ---------------------------------------------------------------------------
+
+SESSION_COOKIE = "icon_sid"
+_SESSION_EXEMPT_PREFIXES = ("/static/",)
+_SESSION_EXEMPT_PATHS = {"/healthz"}
+
+
+@app.before_request
+def _load_session():
+    """Reads icon_sid, loads the real row it points at (or None), and
+    stashes it on g.icon_session for role()/actor() and Section 4's
+    require_role decorator to read. Never blocks anything by itself - a
+    missing or expired session just means g.icon_session stays None, and
+    it is up to each write route's own decorator to refuse that. GET pages
+    (including '/', which now carries the real login form) always still
+    render signed out; the security boundary this round adds is on writes,
+    not on which screens the SPA shell will show cosmetically."""
+    g.icon_session = None
+    if request.path in _SESSION_EXEMPT_PATHS or \
+       request.path.startswith(_SESSION_EXEMPT_PREFIXES):
+        return
+    sid = request.cookies.get(SESSION_COOKIE)
+    if not sid:
+        return
+    with store.conn() as (cx, cur):
+        g.icon_session = icon_auth.load_session(cur, sid, now=time.time())
+
+
+@app.after_request
+def _touch_session(resp):
+    """Extends the session's idle window, but ONLY for a state-changing
+    request that actually succeeded (status < 400) - the same "refused
+    should not count" rule _sync_guard already applies to replay, and
+    AFTER the handler runs, never before: a request refused for some other
+    reason must not extend a session on a technicality. Reading (GET) never
+    reaches here - navigating between screens does not reset the idle
+    timer, by design."""
+    if (request.method in ("POST", "PUT", "DELETE", "PATCH")
+            and getattr(g, "icon_session", None) and resp.status_code < 400):
+        with store.conn() as (cx, cur):
+            icon_auth.touch_session(cur, g.icon_session["session_id"], now=time.time())
+    return resp
+
 
 @app.after_request
 def no_store(resp):
@@ -343,18 +400,42 @@ def _sync_guard(fn):
 
 
 def actor():
-    # Authentication is designed, not built (v4's own login note says so).
-    # USER.name is chosen client-side with nothing behind it - but a
-    # gate that checks a role has to know one, so the live layer sends the
-    # signed-in name and role on every call and this is where the server
-    # reads it, same trust level as the rest of the app, just no longer
-    # thrown away. Falls back exactly as before when the header is absent.
-    return (request.headers.get("X-User-Name") or "").strip() \
-        or session.get("user", "operator")
+    """The real, server-verified name behind this request - from the
+    session _load_session() already put on g, never from a client-sent
+    header. X-User-Name used to be trusted outright; anyone with devtools
+    could set it to anything, which is the exact hole Round 23 closes.
+    display_name (not login_id) to match every existing dispatch_audit row,
+    which has always recorded a human name like "Mukesh", never an ID.
+    Empty, not "system", when signed out - every write endpoint now
+    requires a session before its body ever runs (Section 4), so the only
+    remaining no-session caller is the template context processor below,
+    a read-only display value where blank is simply blank."""
+    return g.icon_session["display_name"] if g.icon_session else ""
 
 
 def role():
-    return (request.headers.get("X-User-Role") or "").strip()
+    """The session's real role, never a client-sent header - same reasoning
+    as actor() above."""
+    return g.icon_session["role"] if g.icon_session else ""
+
+
+def require_role(*allowed_roles):
+    """Gate a write endpoint by role, in one place instead of 41 manual
+    `if role() not in (...)` blocks. 401 (who are you) when there is no
+    valid session at all; 403 (I know who you are, and no) when there is
+    one but its role is not in allowed_roles - deliberately distinct
+    statuses, not the same refusal reused twice."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def inner(*a, **kw):
+            if not g.icon_session:
+                return jsonify({"ok": False, "why": "Sign in required."}), 401
+            if g.icon_session["role"] not in allowed_roles:
+                return jsonify({"ok": False,
+                    "why": "Not permitted for your role."}), 403
+            return fn(*a, **kw)
+        return inner
+    return deco
 
 
 @app.context_processor
@@ -370,6 +451,78 @@ def globals_():
         "cfg_unit": "2",
         "build": build_id(),
     }
+
+
+# --------------------------------------------------------------------------
+# Real login/logout/session routes (Round 23). Credential handling itself -
+# lockout, cooldown, the timing floor, the generic refusal text - is
+# icon_auth.login()'s own job, reused exactly as the lab already proved it;
+# nothing here reimplements any of that.
+# --------------------------------------------------------------------------
+
+@app.route("/login", methods=["POST"])
+def api_login():
+    body = request.get_json(force=True) or {}
+    login_id = str(body.get("login_id") or "")
+    credential = str(body.get("credential") or "")
+    with store.conn() as (cx, cur):
+        res = icon_auth.login(cur, login_id, credential, ip=request.remote_addr)
+        if not res["ok"]:
+            # The exact same generic body and status the lab returns -
+            # deliberately uninformative (Round 20): whether the ID exists,
+            # whether it is locked, whether the credential was merely
+            # wrong, all look identical from the outside.
+            return jsonify({"ok": False, "why": res["reason"]}), 401
+        u = store.one(cur, "SELECT * FROM app_user WHERE user_id=%s", (res["user_id"],))
+        session_id = icon_auth.create_session(
+            cur, {"user_id": u["user_id"], "login_id": u["login_id"],
+                  "display_name": u["display_name"], "role": u["role"]},
+            station=u.get("station"), ip=request.remote_addr)
+    resp = jsonify({"ok": True, "name": u["display_name"], "role": u["role"],
+                    "station": u.get("station")})
+    resp.set_cookie(SESSION_COOKIE, session_id, httponly=True, samesite="Lax")
+    return resp
+
+
+@app.route("/logout", methods=["POST"])
+def api_logout():
+    sid = request.cookies.get(SESSION_COOKIE)
+    if sid:
+        with store.conn() as (cx, cur):
+            icon_auth.delete_session(cur, sid)
+    resp = jsonify({"ok": True})
+    resp.delete_cookie(SESSION_COOKIE)
+    return resp
+
+
+@app.route("/api/session/extend", methods=["POST"])
+def api_session_extend():
+    """The idle-warning popup's own action - a deliberate click, so this
+    DOES touch the session even though it changes no business data (unlike
+    every other write, which only touches on an actual successful save).
+    Refuses, rather than revives, a session that has already expired -
+    logged out is logged out, no reviving from the popup."""
+    if not g.icon_session:
+        return jsonify({"ok": False, "why": "Session already expired."}), 401
+    with store.conn() as (cx, cur):
+        ok = icon_auth.touch_session(cur, g.icon_session["session_id"], now=time.time())
+        row = icon_auth.load_session(cur, g.icon_session["session_id"], now=time.time()) if ok else None
+    if not ok:
+        return jsonify({"ok": False, "why": "Session already expired."}), 401
+    return jsonify({"ok": True, "expires_at": row["expires_at"]})
+
+
+@app.route("/api/session")
+def api_session_info():
+    """Drives the client's logged-in UI state and the idle-warning
+    countdown. No cookie, or an expired one, is simply signed_in: false -
+    never an error; a GET here must always work, signed in or not."""
+    if not g.icon_session:
+        return jsonify({"signed_in": False})
+    s = g.icon_session
+    return jsonify({"signed_in": True, "name": s["display_name"],
+                    "role": s["role"], "station": s["station"],
+                    "expires_at": s["expires_at"]})
 
 
 # --------------------------------------------------------------------------
