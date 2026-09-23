@@ -438,6 +438,55 @@ def require_role(*allowed_roles):
     return deco
 
 
+def _require_role(*allowed_roles, why="Not permitted for your role."):
+    """The inline counterpart to require_role(), for the one route whose
+    allowed roles depend on the request body rather than being fixed for
+    the whole endpoint: /api/review/resolve permits a different set per
+    item type (Quality for a quality decision, Production Incharge for a
+    duplicate scan, Admin alone once the serial is already dispatched), so
+    a decorator wrapping the whole function cannot express it. Same two
+    outcomes as the decorator - 401 with no session, 403 with the wrong
+    role - raised as the _Refuse every caller here already catches, and
+    keeping each site's own existing wording rather than flattening four
+    specific refusals into one generic sentence."""
+    if not g.icon_session:
+        raise _Refuse("Sign in required.", 401)
+    if g.icon_session["role"] not in allowed_roles:
+        raise _Refuse(why, 403)
+
+
+# ---------------------------------------------------------------------------
+# The role map (Round 23, Section 4). Every allowed-role set in one place, by
+# the SCREEN each endpoint serves, cross-referenced against ROLES in
+# icon_trace.html plus the three views icon_live.js grants at runtime
+# (challan-list/gp-list/gp-new, loading-list/loadsession, and 'review' for
+# Production Incharge) - and the 'Quality' role that file creates outright,
+# which v4 never had.
+#
+# Super Admin is included everywhere Admin is: it outranks Admin
+# (icon_auth.ROLE_RANK), so an allow-list that left it out would lock the
+# highest-privileged account out of ordinary work. The reverse does not
+# hold - _R_MASTER is Super Admin ALONE, deliberately, per this round's
+# rule that master data is writable only there while Admin can still read it.
+# ---------------------------------------------------------------------------
+
+_R_MASTER   = ("Super Admin",)
+_R_ADMIN    = ("Admin", "Super Admin")
+_R_PACK     = ("Packing Operator", "Admin", "Super Admin")
+_R_LOADING  = ("Dispatch Operator", "Packing Operator", "Admin", "Super Admin")
+_R_DISPATCH = ("Dispatch Operator", "Admin", "Super Admin")
+_R_PROD     = ("Production Incharge", "Admin", "Super Admin")
+_R_FQC      = ("FQC Operator", "Admin", "Super Admin")
+_R_QUALITY  = ("Quality", "Admin", "Super Admin")
+# Export is every screen's own button, on every role's own data - the rows
+# come from the screen in front of the person, not from a second query here,
+# so this is the one write-method endpoint that genuinely belongs to
+# everybody. Admin-only here would break the Export button for five of the
+# seven roles.
+_R_EVERY    = ("Admin", "Super Admin", "Production Incharge", "FQC Operator",
+               "Packing Operator", "Dispatch Operator", "Quality")
+
+
 @app.context_processor
 def globals_():
     return {
@@ -711,6 +760,7 @@ def api_customer_resolve():
 
 
 @app.route("/api/box/open", methods=["POST"])
+@require_role(*_R_PACK)
 @_sync_guard
 def api_box_open():
     d = request.get_json(force=True)
@@ -763,6 +813,7 @@ def api_box_open():
 
 
 @app.route("/api/box/<int:box_id>/scan", methods=["POST"])
+@require_role(*_R_PACK)
 @_sync_guard
 def api_box_scan(box_id):
     serial = (request.get_json(force=True).get("serial") or "").strip().upper()
@@ -924,6 +975,7 @@ def api_box_check():
 
 
 @app.route("/api/box/<int:box_id>/remove", methods=["POST"])
+@require_role(*_R_PACK)
 @_sync_guard
 def api_box_remove(box_id):
     """Take a module back out of an open box. The slot is pulled on screen,
@@ -1158,6 +1210,7 @@ def _repack(cur, box_ids, groups, release, reason):
 
 
 @app.route("/api/repack", methods=["POST"])
+@require_role(*_R_PACK)
 @_sync_guard
 def api_repack():
     """Several pallets opened at once - the Repack screen's own workflow."""
@@ -1173,6 +1226,7 @@ def api_repack():
 
 
 @app.route("/api/box/<int:box_id>/repack", methods=["POST"])
+@require_role(*_R_PACK)
 @_sync_guard
 def api_box_repack(box_id):
     """One closed pallet, opened from the Packing screen."""
@@ -1187,6 +1241,7 @@ def api_box_repack(box_id):
 
 
 @app.route("/api/box/<int:box_id>/close", methods=["POST"])
+@require_role(*_R_PACK)
 @_sync_guard
 def api_box_close(box_id):
     """A pallet less than its own declared capacity is not "partial" - it is
@@ -1221,6 +1276,7 @@ def api_box_close(box_id):
 
 
 @app.route("/api/box/<int:box_id>/capacity", methods=["POST"])
+@require_role(*_R_PACK)
 @_sync_guard
 def api_box_capacity(box_id):
     """Change what an OPEN box has declared it will hold.
@@ -1262,6 +1318,7 @@ def api_box_capacity(box_id):
 
 
 @app.route("/api/box/<int:box_id>/abandon", methods=["POST"])
+@require_role(*_R_PACK)
 @_sync_guard
 def api_box_abandon(box_id):
     """Give up a box that was opened and never packed.
@@ -1509,6 +1566,7 @@ def api_loading_get(challan_id):
 
 
 @app.route("/api/loading/<int:challan_id>/confirm", methods=["POST"])
+@require_role(*_R_LOADING)
 @_sync_guard
 def api_loading_confirm(challan_id):
     """Space, in the session screen, on a pallet the lookup already found.
@@ -1541,6 +1599,7 @@ def api_loading_confirm(challan_id):
 
 
 @app.route("/api/loading/<int:challan_id>/submit", methods=["POST"])
+@require_role(*_R_LOADING)
 @_sync_guard
 def api_loading_submit(challan_id):
     """Refuses unless every pallet has been confirmed; promotes every one
@@ -1894,6 +1953,7 @@ def _challan_precheck(cur, box_ids, invoice_id, exclude_challan_id=None):
 
 
 @app.route("/api/challan/checks", methods=["POST"])
+@require_role(*_R_DISPATCH)
 def api_challan_checks():
     """The rail, live: the same refusal Create would give, before the click."""
     d = request.get_json(force=True) or {}
@@ -2037,6 +2097,7 @@ class _ChallanRefused(Exception):
 
 
 @app.route("/api/challan", methods=["POST"])
+@require_role(*_R_DISPATCH)
 @_sync_guard
 def api_challan_create():
     """Save as draft, or Create outright.
@@ -2061,6 +2122,7 @@ def api_challan_create():
 
 
 @app.route("/api/challan/<int:challan_id>/submit", methods=["POST"])
+@require_role(*_R_DISPATCH)
 @_sync_guard
 def api_challan_submit(challan_id):
     """Turn an existing draft into the real thing.
@@ -2107,6 +2169,7 @@ def api_challan_submit(challan_id):
 
 
 @app.route("/api/challan/<int:challan_id>/discard", methods=["POST"])
+@require_role(*_R_DISPATCH)
 @_sync_guard
 def api_challan_discard(challan_id):
     body = request.get_json(silent=True) or {}
@@ -2209,6 +2272,7 @@ def api_challan_get(challan_id):
 
 
 @app.route("/api/challan/<int:challan_id>/cancel", methods=["POST"])
+@require_role(*_R_DISPATCH)
 @_sync_guard
 def api_challan_cancel(challan_id):
     """Cancel an ISSUED challan.
@@ -2288,6 +2352,7 @@ def _next_edit_suffix(cur, fy, seq):
 
 
 @app.route("/api/challan/<int:challan_id>/edit-draft", methods=["POST"])
+@require_role(*_R_DISPATCH)
 def api_challan_edit_draft(challan_id):
     """What Edit needs to pre-fill the Create screen - resolved here,
     server-side, never guessed by the client.
@@ -2351,6 +2416,7 @@ def api_challan_edit_draft(challan_id):
 
 
 @app.route("/api/challan/<int:challan_id>/edit-save", methods=["POST"])
+@require_role(*_R_DISPATCH)
 @_sync_guard
 def api_challan_edit_save(challan_id):
     """Save an edit: a NEW challan row, same (fy, seq), the next 'M' suffix.
@@ -2817,6 +2883,7 @@ def api_prodentries():
 
 
 @app.route("/api/prodentry", methods=["POST"])
+@require_role(*_R_PROD)
 @_sync_guard
 def api_prodentry():
     d = request.get_json(force=True)
@@ -2978,6 +3045,7 @@ def api_loss_events():
 
 
 @app.route("/api/loss_event", methods=["POST"])
+@require_role(*_R_PROD)
 @_sync_guard
 def api_loss_event_open():
     d = request.get_json(force=True) or {}
@@ -3030,6 +3098,7 @@ def api_loss_event_open():
 
 
 @app.route("/api/loss_event/<int:event_id>/close", methods=["POST"])
+@require_role(*_R_PROD)
 @_sync_guard
 def api_loss_event_close(event_id):
     with store.conn() as (cx, cur):
@@ -3304,6 +3373,7 @@ def api_materials():
 
 @app.route("/api/material", methods=["POST"])
 @app.route("/api/material/<int:n>", methods=["PUT"])
+@require_role(*_R_MASTER)
 def api_material_save(n=None):
     """Save one material. The number is the key allocation_material already
     references, so it is assigned once and never reassigned - renumbering a
@@ -3336,6 +3406,7 @@ def api_material_save(n=None):
 
 
 @app.route("/api/cell-efficiencies", methods=["PUT"])
+@require_role(*_R_MASTER)
 def api_cell_efficiencies():
     """Replace the list of cell efficiencies.
 
@@ -3362,6 +3433,7 @@ def api_cell_efficiencies():
 
 
 @app.route("/api/settings", methods=["POST"])
+@require_role(*_R_ADMIN)
 def api_settings():
     d = request.get_json(force=True)
     with store.conn() as (cx, cur):
@@ -3372,6 +3444,7 @@ def api_settings():
 
 
 @app.route("/api/indent", methods=["POST"])
+@require_role(*_R_PROD)
 def api_indent_create():
     d = request.get_json(force=True)
     errors, lines = [], []
@@ -3448,6 +3521,7 @@ def api_indent_line(line_id):
 
 
 @app.route("/api/allocation", methods=["POST"])
+@require_role(*_R_PROD)
 @_sync_guard
 def api_allocation_create():
     """Allocate a serial range against an indent line.
@@ -3528,6 +3602,7 @@ def api_allocation_create():
 
 
 @app.route("/api/allocation/<int:alloc_id>/update", methods=["PUT"])
+@require_role(*_R_PROD)
 def api_allocation_update(alloc_id):
     d = request.get_json(force=True)
     try:
@@ -3625,6 +3700,7 @@ def api_allocation_get(alloc_id):
 
 
 @app.route("/api/allocation/<int:alloc_id>", methods=["DELETE"])
+@require_role(*_R_PROD)
 def api_allocation_cancel(alloc_id):
     """An allocation can be withdrawn while every serial in it is still
     'planned'. Once one has been graded, production has acted on it and the
@@ -3796,6 +3872,7 @@ def _sheet_title(raw, used):
 
 
 @app.route("/api/export/xlsx", methods=["POST"])
+@require_role(*_R_EVERY)
 def api_export_xlsx():
     """Every Export button on every screen, in one endpoint.
 
@@ -4548,6 +4625,7 @@ def api_indent_get(indent_no):
 
 
 @app.route("/api/indent/<path:indent_no>", methods=["PUT"])
+@require_role(*_R_PROD)
 def api_indent_update(indent_no):
     d = request.get_json(force=True)
     with store.conn() as (cx, cur):
@@ -4665,6 +4743,7 @@ def api_db_stats():
 
 
 @app.route("/api/db/reset", methods=["POST"])
+@require_role(*_R_MASTER)
 def api_db_reset():
     """Delete the database file. Disabled unless ICON_ALLOW_RESET=1 is set.
 
@@ -4682,6 +4761,7 @@ def api_db_reset():
 
 
 @app.route("/api/invoice/parse", methods=["POST"])
+@require_role(*_R_DISPATCH)
 def api_invoice_parse():
     f = request.files.get("pdf")
     if not f or not f.filename:
@@ -4704,6 +4784,7 @@ def api_invoice_parse():
 
 
 @app.route("/api/invoice/confirm", methods=["POST"])
+@require_role(*_R_DISPATCH)
 def api_invoice_confirm():
     pend = session.get("pending")
     if not pend or not os.path.exists(pend["tmp"]):
@@ -4873,6 +4954,7 @@ def invoice_upload():
 
 
 @app.route("/invoice/parse", methods=["POST"])
+@require_role(*_R_DISPATCH)
 def invoice_parse():
     f = request.files.get("pdf")
     if not f or not f.filename:
@@ -4934,6 +5016,7 @@ def invoice_parse():
 # --------------------------------------------------------------------------
 
 @app.route("/invoice/confirm", methods=["POST"])
+@require_role(*_R_DISPATCH)
 def invoice_confirm():
     pend = session.get("pending")
     if not pend or not os.path.exists(pend["tmp"]):
@@ -5014,6 +5097,7 @@ def invoice_confirm():
 
 
 @app.route("/invoice/cancel", methods=["POST"])
+@require_role(*_R_DISPATCH)
 def invoice_cancel():
     pend = session.pop("pending", None)
     if pend and os.path.exists(pend["tmp"]):
@@ -5026,6 +5110,7 @@ def invoice_cancel():
 # --------------------------------------------------------------------------
 
 @app.route("/admin/challan-import", methods=["GET", "POST"])
+@require_role(*_R_ADMIN)
 def challan_import():
     """Two phases, deliberately separate.
 
@@ -5129,6 +5214,7 @@ def indent_list():
 
 
 @app.route("/indent/new", methods=["GET", "POST"])
+@require_role(*_R_PROD)
 def indent_new():
     with db.conn() as (cx, cur):
         known = db.known_customers(cur)
@@ -5236,6 +5322,7 @@ def indent_new():
 # --------------------------------------------------------------------------
 
 @app.route("/planning", methods=["GET", "POST"])
+@require_role(*_R_PROD)
 def planning():
     with db.conn() as (cx, cur):
         prog = db.indent_progress(cur)
@@ -5531,9 +5618,8 @@ def _resolve_provisional_mismatch(cur, review_id, resolution, reason):
         raise _Refuse("No such review item.", 404)
     if item["status"] != "open":
         raise _Refuse("Review #%d is already resolved." % review_id)
-    if role() not in _QUALITY_ROLES:
-        raise _Refuse("Only Quality can resolve a provisional decision that "
-                      "the evidence disagrees with.", 403)
+    _require_role(*_QUALITY_ROLES, why="Only Quality can resolve a "
+                  "provisional decision that the evidence disagrees with.")
     resolution = (resolution or "").strip()
     if resolution not in ("keep_decision", "keep_evidence"):
         raise _Refuse("Choose which stands: the decision that was made, or "
@@ -5624,6 +5710,7 @@ def _other_needs_note(defect, note):
 
 
 @app.route("/api/fqc", methods=["POST"])
+@require_role(*_R_FQC)
 @_sync_guard
 def api_fqc_grade():
     """The operator supplies the JUDGEMENT. The server reads the MEASUREMENT.
@@ -5815,6 +5902,7 @@ def _grade_quality(cur, serial, grade, note, decided_by):
 
 
 @app.route("/api/quality", methods=["POST"])
+@require_role(*_R_QUALITY)
 @_sync_guard
 def api_quality_grade():
     d = request.get_json(force=True)
@@ -5936,9 +6024,8 @@ def _resolve_duplicate_scan(cur, review_id, resolution, reason):
         bool((srec or {}).get("state") == "dispatched")
 
     if dispatched:
-        if role() != "Admin":
-            raise _Refuse("Only Admin can resolve a conflict on a serial "
-                          "that has already been dispatched.", 403)
+        _require_role("Admin", why="Only Admin can resolve a conflict on a "
+                      "serial that has already been dispatched.")
         # TODO(deliberate, future work): a dispatched duplicate-scan conflict
         # may eventually need a replacement-serial workflow - the customer
         # already has the original module, and making the rescan's outcome
@@ -5949,10 +6036,9 @@ def _resolve_duplicate_scan(cur, review_id, resolution, reason):
         db.supersede_fqc(cur, item["new_fqc_id"], item["fqc_id"])
         resolution = "acknowledged"
     else:
-        if role() not in _INCHARGE_ROLES:
-            raise _Refuse("Only a Production Shift Incharge or above can "
-                          "resolve a duplicate scan - they carry the "
-                          "consequence of the choice.", 403)
+        _require_role(*_INCHARGE_ROLES, why="Only a Production Shift "
+                      "Incharge or above can resolve a duplicate scan - "
+                      "they carry the consequence of the choice.")
         resolution = (resolution or "").strip()
         if resolution not in ("keep_original", "keep_rescanned"):
             raise _Refuse("Choose which record stands: the original or "
@@ -5986,6 +6072,7 @@ def _resolve_duplicate_scan(cur, review_id, resolution, reason):
 
 
 @app.route("/api/review/resolve", methods=["POST"])
+@require_role(*_R_EVERY)
 @_sync_guard
 def api_review_resolve():
     """One endpoint behind every resolve action in Needs Review, whatever
@@ -5993,6 +6080,13 @@ def api_review_resolve():
     Review calls exactly this, because there is nowhere else left that
     resolves anything. Role is re-checked here regardless of what the
     calling screen already hid.
+
+    The decorator here only proves there IS a session, in some known role,
+    so this endpoint answers 401 the same way every other write does - the
+    role that actually matters is checked per branch below (_require_role),
+    because which one is allowed depends on the item's type and, for a
+    duplicate scan, on whether the serial has already been dispatched. A
+    single fixed set on the decorator could not say that.
     """
     d = request.get_json(force=True) or {}
     item_type = (d.get("type") or "").strip()
@@ -6002,11 +6096,10 @@ def api_review_resolve():
             "Say why — every resolution needs a reason, no exceptions."}), 400
 
     if item_type == "quality_grade":
-        if role() not in _QUALITY_ROLES:
-            return jsonify({"ok": False, "why":
-                "Only Quality can resolve a quality decision."}), 403
         serial = (d.get("id") or d.get("serial") or "").strip().upper()
         try:
+            _require_role(*_QUALITY_ROLES,
+                          why="Only Quality can resolve a quality decision.")
             with store.conn() as (cx, cur):
                 saved = _grade_quality(cur, serial, d.get("grade"), reason,
                                        actor())
@@ -6241,6 +6334,7 @@ def api_fqc_dashboard_modules():
     return jsonify(out)
 
 @app.route("/fqc", methods=["GET", "POST"])
+@require_role(*_R_FQC)
 def fqc():
     serial = (request.values.get("serial") or "").strip().upper()
     rec = evidence = None
@@ -6308,6 +6402,7 @@ _COUNTER = bx.DailyCounter()
 
 
 @app.route("/packing", methods=["GET", "POST"])
+@require_role(*_R_PACK)
 def packing():
     msg = None
     act = request.form.get("action")
@@ -6384,6 +6479,7 @@ def packing_label(box_no):
 # --------------------------------------------------------------------------
 
 @app.route("/dispatch", methods=["GET", "POST"])
+@require_role(*_R_DISPATCH)
 def dispatch():
     closed = [b for b in _BOXES.values() if b.state == bx.Box.CLOSED]
     with db.conn() as (cx, cur):
@@ -6428,6 +6524,7 @@ def dispatch():
 # --------------------------------------------------------------------------
 
 @app.route("/gatepass", methods=["GET", "POST"])
+@require_role(*_R_DISPATCH)
 def gatepass():
     with db.conn() as (cx, cur):
         rows = db.gatepasses(cur)
@@ -6480,6 +6577,7 @@ def gatepass():
 # --------------------------------------------------------------------------
 
 @app.route("/settings", methods=["GET", "POST"])
+@require_role(*_R_ADMIN)
 def settings():
     with db.conn() as (cx, cur):
         if request.method == "POST":
@@ -6699,6 +6797,7 @@ def api_gatepass_get(gatepass_id):
 
 
 @app.route("/api/gatepass", methods=["POST"])
+@require_role(*_R_DISPATCH)
 @_sync_guard
 def api_gatepass():
     body = request.get_json(force=True)
@@ -6791,6 +6890,7 @@ def api_gatepass():
 
 
 @app.route("/api/gatepass/<int:gatepass_id>", methods=["PUT"])
+@require_role(*_R_DISPATCH)
 @_sync_guard
 def api_gatepass_update(gatepass_id):
     """Standalone only. A module-linked gate pass is the automatic output
