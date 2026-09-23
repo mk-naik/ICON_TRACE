@@ -2491,8 +2491,12 @@ def gatepass_print(gp_no):
     print dialog opens - who prints how many is the operator's call."""
     with store.conn() as (cx, cur):
         gp = store.one(cur, "SELECT * FROM gatepass WHERE gp_no=%s", (gp_no,))
-    if not gp:
-        abort(404)
+        if not gp:
+            abort(404)
+        # Present only on a NEW standalone gate pass - a historical or
+        # module-linked row has none, and the template falls back to
+        # gp.description/qty exactly as it always has for those.
+        items = [dict(r) for r in db.gatepass_items(cur, gp["gp_id"])]
     if gp["kind"] == "RGP":
         copies = ["Copy 1 of 3 — creator", "Copy 2 of 3 — gate",
                   "Copy 3 of 3 — recipient, returned on receipt"]
@@ -2500,7 +2504,8 @@ def gatepass_print(gp_no):
         copies = ["Copy 1 of 3 — creator", "Copy 2 of 3 — gate",
                   "Copy 3 of 3 — gate"]
     qr = bc.qr_svg(bc.gp_qr_payload(gp_no))
-    return render_template("gatepass_print.html", gp=gp, copies=copies, qr=qr)
+    return render_template("gatepass_print.html", gp=gp, items=items,
+                           copies=copies, qr=qr)
 
 
 @app.route("/challan/<int:fy>/<int:seq>/ftr")
