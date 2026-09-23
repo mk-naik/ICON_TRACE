@@ -140,6 +140,25 @@ CREATE TABLE IF NOT EXISTS auth_event (
     ip TEXT,
     detail TEXT
 );
+
+-- Real, server-side, database-backed sessions (Round 23). display_name is
+-- not strictly identity or authorization - user_id/login_id/role already
+-- are - but every existing dispatch_audit row records a human display
+-- name (the old USER.name), never a login_id, and a session is short-lived
+-- enough (5 min - 1 hour) that a snapshot taken at login cannot drift into
+-- something misleading before it expires.
+CREATE TABLE IF NOT EXISTS auth_session (
+    session_id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    login_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    station TEXT,
+    created_at INTEGER NOT NULL,
+    last_active_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    ip TEXT
+);
 """
 
 def ensure_schema(cur):
@@ -155,6 +174,14 @@ CREATE TABLE IF NOT EXISTS auth_attempt (
     for stmt in AUTH_SCHEMA.strip().split(";"):
         if stmt.strip():
             cur.execute(stmt)
+
+    # station: a person's own binding, not a per-session choice - added to
+    # an app_user table that may already exist from before this column did,
+    # so CREATE TABLE IF NOT EXISTS alone would silently skip it.
+    cur.execute("PRAGMA table_info(app_user)")
+    cols = {r["name"] for r in cur.fetchall()}
+    if "station" not in cols:
+        cur.execute("ALTER TABLE app_user ADD COLUMN station TEXT")
 
 def log_event(cur, login_id, event, ip=None, detail=None, now=None):
     cur.execute("INSERT INTO auth_event (at, login_id, event, ip, detail) VALUES (%s, %s, %s, %s, %s)",
@@ -699,6 +726,81 @@ def create_operator(cur, actor_login_id, target_login_id, display_name, role, te
     cur.execute("INSERT INTO app_user (login_id, display_name, role, pw_hash, must_change_pw, created_at, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 (target_login_id, display_name, role, hash_pw(temp_pw), 1, t, actor_login_id))
     log_event(cur, target_login_id, "password_set", ip, f"temp by {actor_login_id}", t)
+
+
+# ---------------------------------------------------------------------------
+# Real sessions (Round 23). Replaces the client-sent X-User-Name/X-User-Role
+# headers app.py trusted until now - a session row here is the one place
+# "who is this, and what are they allowed to do" is decided from now on.
+# ---------------------------------------------------------------------------
+
+SESSION_WINDOW_SHORT = 300     # Admin, Super Admin - the highest-privilege
+                                # accounts get the shortest idle leash.
+SESSION_WINDOW_LONG = 3600     # every other role
+
+
+def _session_window(role):
+    return SESSION_WINDOW_SHORT if role in ("Admin", "Super Admin") else SESSION_WINDOW_LONG
+
+
+def purge_expired_sessions(cur, now=None):
+    """Opportunistic, not a background job - called from create_session()
+    so the table cannot grow unbounded just from people signing in."""
+    cur.execute("DELETE FROM auth_session WHERE expires_at < %s", (_now(now),))
+
+
+def create_session(cur, user, station=None, ip=None, now=None):
+    """`user` needs user_id, login_id, role and display_name - the fields a
+    caller already has right after a successful login() plus the login_id
+    it was called with. Returns the new session_id."""
+    t = _now(now)
+    purge_expired_sessions(cur, t)
+    session_id = secrets.token_hex(32)
+    expires_at = t + _session_window(user["role"])
+    cur.execute(
+        "INSERT INTO auth_session (session_id, user_id, login_id, "
+        "display_name, role, station, created_at, last_active_at, "
+        "expires_at, ip) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (session_id, user["user_id"], user["login_id"], user["display_name"],
+         user["role"], station, t, t, expires_at, ip))
+    return session_id
+
+
+def touch_session(cur, session_id, now=None):
+    """Extends expires_at by the role's own window, from `now` - called only
+    for a state-changing request (POST/PUT/DELETE/PATCH); a GET must never
+    reach this. Returns False without changing anything if the session is
+    missing or already past its expiry - a technicality that should have
+    been refused, not quietly revived."""
+    t = _now(now)
+    cur.execute("SELECT role FROM auth_session WHERE session_id=%s "
+                "AND expires_at > %s", (session_id, t))
+    row = cur.fetchone()
+    if not row:
+        return False
+    cur.execute("UPDATE auth_session SET last_active_at=%s, expires_at=%s "
+                "WHERE session_id=%s",
+                (t, t + _session_window(row["role"]), session_id))
+    return True
+
+
+def load_session(cur, session_id, now=None):
+    """The row, or None if missing or expired. Never extends anything -
+    loading and extending are two separate operations (see touch_session),
+    so a GET that merely reads this can never itself keep a session alive."""
+    if not session_id:
+        return None
+    t = _now(now)
+    cur.execute("SELECT * FROM auth_session WHERE session_id=%s", (session_id,))
+    row = cur.fetchone()
+    if not row or row["expires_at"] <= t:
+        return None
+    return row
+
+
+def delete_session(cur, session_id):
+    cur.execute("DELETE FROM auth_session WHERE session_id=%s", (session_id,))
+
 
 def sntp_drift(server=None, timeout=2):
     if not server:
