@@ -6095,8 +6095,22 @@ function wireFqcAnomalies() {
            disk at startup however many times the page is reloaded. Only
            somebody who can restart it can fix that, so only they are told;
            an operator cannot act on it and does not need the noise. */
-        var admin = (typeof USER !== 'undefined' && USER && USER.role === 'Admin');
-        if (d.server_stale && admin) {
+        /* v4 initialises USER = {name:'', role:'Admin'} before anyone signs
+           in, so the sign-in screen would count as an Admin without the name
+           check below.  signedIn is true only once a real user has picked a
+           name from the dropdown. 
+           v4's signOut() does not reset USER.name, it only hides #app. To prevent
+           stale banners showing on the sign-in screen after a sign-out, we must
+           also require that #app has the "on" class. */
+        var _appEl = document.getElementById('app');
+        var signedIn = (typeof USER !== 'undefined' && USER && !!USER.name &&
+                        _appEl && _appEl.classList.contains('on'));
+        var isAdmin  = signedIn &&
+                       (USER.role === 'Admin' || USER.role === 'Super Admin');
+
+        /* Restart banner: Python on disk is newer than what Waitress imported.
+           Only an admin can restart the server; operators see nothing here. */
+        if (d.server_stale && isAdmin) {
           setChip('stale', 'The server is running code from ' +
                   (d.started || 'before the last change'));
           banner('stale',
@@ -6106,22 +6120,30 @@ function wireFqcAnomalies() {
             'screens only.');
           return;
         }
-        /* boot_build is missing on a server that predates it — which is
-           exactly a server too old to have restarted, so falling silent
-           there was the worst possible answer. Compare against whatever it
-           does report. */
-        var theirs = d.boot_build || d.build;
-        if (B.build && theirs && theirs !== B.build) {
+
+        /* Reload banner: JS/CSS/templates changed since this page was served.
+           Compare d.build (live ASSET hash) against B.build (asset hash baked
+           into this page at render time).  Do NOT compare against boot_build:
+           that was the old combined hash, and non-admins would never see a
+           banner clear after a reload if Python had also changed.
+           Only shown when signed in — a signed-out user cannot act on it and
+           the sign-in screen reloads itself on every navigation anyway. */
+        if (signedIn && B.build && d.build && d.build !== B.build) {
           setChip('stale', 'This page was built from different code');
           banner('stale',
             'This page is out of date. ' +
             '<a href="#" style="color:#fff;text-decoration:underline" ' +
             'onclick="location.reload(true);return false">Reload</a>' +
-            (d.boot_build ? '' :
+            (d.server_stale === undefined ?
               ' — and this server is old enough that it cannot tell you ' +
-              'whether it needs restarting. Restart it.'));
+              'whether it needs restarting. Restart it.' : ''));
           return;
         }
+
+        /* Signed out (or non-admin with a stale server): clear any stale
+           banner that might be on screen and fall through to the normal "up"
+           path so the chip stays green.  The "server down" banner is handled
+           in the .catch path below and still shows regardless of sign-in. */
         setChip('up', 'Server reachable · build ' + d.build + ' · ' + d.store);
         if (wasDown) {
           wasDown = false;
