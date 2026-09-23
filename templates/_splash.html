@@ -263,18 +263,6 @@
     setTimeout(finish, Math.max(0, MIN - (now() - shownAt)));
   }
 
-  /* No minimum, no fade: for when what the splash was covering turned out
-     not to be happening at all - a refused sign-in. Holding the animation
-     out to its full length there would mean waiting two seconds to be
-     told the password was wrong. */
-  function cancel(){
-    if (!el.classList.contains('is-showing')) return;
-    armed = false;
-    clearTimeout(safety);
-    el.classList.remove('is-showing', 'is-leaving');
-    el.setAttribute('aria-hidden', 'true');
-  }
-
-  window.EnIconSplash = { show: show, hide: hide, cancel: cancel, minShow: MIN };
+  window.EnIconSplash = { show: show, hide: hide, minShow: MIN };
 })();
 </script>

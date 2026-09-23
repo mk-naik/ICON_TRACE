@@ -200,7 +200,7 @@
     if (note) {
       note.innerHTML = 'Each role sees only its own screens, and the server ' +
         'checks the role on every save - not the screen you can reach.<br>' +
-        'En Power Technologies Pvt. Ltd. &middot; Unit-2, Raipur';
+        'Icon Solar-En Power Technologies Pvt. Ltd. &middot; Unit-2, Raipur';
     }
 
     [document.getElementById('liLoginId'),
@@ -224,18 +224,34 @@
     var btn = document.getElementById('liSubmit');
     if (!idEl || !pwEl) return;
     setLoginMsg('');
+
+    /* Nothing typed is not a failed sign-in, it is an unfinished one -
+       answered here rather than sent. The server would refuse it anyway,
+       but every refusal it sees counts towards the lockout and its
+       escalating cooldown, and somebody who hits Enter twice on an empty
+       form should not be paying for that. The server still does its own
+       checking; this only avoids asking it a question with no content. */
+    var loginId = (idEl.value || '').trim();
+    var credential = pwEl.value || '';
+    if (!loginId || !credential) {
+      setLoginMsg('Enter your ID and your password or code.');
+      (loginId ? pwEl : idEl).focus();
+      return;
+    }
+
     if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
 
-    /* Up now, not after the answer comes back: icon_auth.login() holds
-       every attempt open for a 350ms timing floor by design, and that is
-       dead time the splash may as well be covering. Cancelled outright
-       below if the credential is refused. */
-    if (window.EnIconSplash) window.EnIconSplash.show();
-
+    /* The splash is NOT shown here. It says "you are in and the app is
+       assembling itself", and until this answer comes back we do not know
+       that - a refused sign-in would flash the whole brand animation and
+       then drop back to the login screen, which is what happened when
+       this was started on the click to cover login()'s 350ms timing
+       floor. Covering dead time is not worth a splash that lies. It goes
+       up in enterApp(), once the server has said yes. */
     fetch('/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ login_id: idEl.value, credential: pwEl.value })
+      body: JSON.stringify({ login_id: loginId, credential: credential })
     }).then(function (r) {
       return r.json().then(function (d) { return { ok: r.ok, body: d }; });
     }).then(function (res) {
@@ -245,7 +261,6 @@
            it is locked, that only the credential was wrong, are all facts
            worth not handing out. The server already refuses this way on
            purpose; do not improve on it here. */
-        if (window.EnIconSplash) window.EnIconSplash.cancel();
         setLoginMsg(res.body.why || 'That did not work.');
         pwEl.value = '';
         pwEl.focus();
@@ -254,7 +269,6 @@
       pwEl.value = '';
       enterApp(res.body);
     }).catch(function () {
-      if (window.EnIconSplash) window.EnIconSplash.cancel();
       if (btn) { btn.disabled = false; btn.textContent = 'Sign in'; }
       setLoginMsg('The server did not answer.');
     });
@@ -584,7 +598,7 @@
     });
     
     window.mgReset = function() {
-      var today = new Date().toISOString().split('T')[0];
+      var today = _localDate();
       ['mgFrom', 'mgTo'].forEach(function(id) {
         var el = document.getElementById(id); if (el) el.value = today;
       });
@@ -735,9 +749,30 @@
      and others built via template-literal innerHTML) never pass through
      rerender() at all, so without this they would carry no limit until
      the next full rerender happened to run. */
+  /* Today, as the person in front of the screen means it.
+
+     new Date().toISOString() is UTC. Unit-2 runs on IST (UTC+5:30), so
+     between local midnight and 05:30 the UTC date is still YESTERDAY -
+     and every date the SERVER writes (gp_date, pack_date, challan_date)
+     comes from Python's date.today(), which is local. Defaulting a filter
+     from the UTC date during those hours asks for a day nothing was
+     stamped with: the Gate Pass list showed "No gate pass in this range"
+     against a database that had them, every night, for the whole of C
+     shift. Caught exactly that way - the clock crossed midnight mid-run
+     and two gate pass tests started failing on data they had just
+     written. */
+  function _localDate(d) {
+    /* No padStart: the JS tests read functions straight out of this file
+       and run them under Windows Script Host where Node is not installed,
+       and JScript has no ES2017 string methods. */
+    d = d || new Date();
+    var m = d.getMonth() + 1, day = d.getDate();
+    return d.getFullYear() + '-' + (m < 10 ? '0' + m : m) +
+           '-' + (day < 10 ? '0' + day : day);
+  }
+
   function _applyDateLimit(el) {
-    var d = new Date();
-    var localDate = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    var localDate = _localDate();
     if (el.getAttribute('data-future') === '1') {
       el.removeAttribute('max');
       el.setAttribute('min', localDate);
@@ -1292,7 +1327,7 @@ function wireFqcAnomalies() {
   
   // Default dates for Stock & Dispatch and Packing Log and DOM patches
   (function initUI() {
-    var today = new Date().toISOString().split('T')[0];
+    var today = _localDate();
     
     // Patch v-disp (Stock & Dispatch)
     var dpDate = document.querySelector('#v-disp input[type="date"]');
@@ -1875,7 +1910,7 @@ function wireFqcAnomalies() {
         mdlCat.innerHTML += '<option>Pending</option>';
     }
 
-    var today = new Date().toISOString().slice(0, 10);
+    var today = _localDate();
     if (fFrom && (fFrom.value === '2026-08-19' || !fFrom.value)) fFrom.value = today;
     if (fTo && (fTo.value === '2026-08-19' || !fTo.value)) fTo.value = today;
 
@@ -1917,7 +1952,7 @@ function wireFqcAnomalies() {
        ['fDashModel', 'All'], ['fDashResult', 'All']].forEach(function (x) {
         var e = document.getElementById(x[0]); if (e) e.value = x[1];
       });
-      var today = new Date().toISOString().slice(0, 10);
+      var today = _localDate();
       var fr = document.getElementById('fFrom'), t = document.getElementById('fTo');
       if (fr) fr.value = today; if (t) t.value = today;
       if (typeof fqcRange === 'function') fqcRange();
@@ -3408,7 +3443,7 @@ function wireFqcAnomalies() {
        locks once the box is a row, to whatever date it was actually opened
        with; the server refuses anything after today regardless of what is
        typed here, so this only ever offers a date it will accept. */
-    var todayStr = new Date().toISOString().slice(0, 10);
+    var todayStr = _localDate();
     view.querySelectorAll('input[type=date]').forEach(function (d) {
       if (open) {
         d.value = packBox.pack_date || todayStr;
@@ -8619,7 +8654,7 @@ function wireFqcAnomalies() {
         '</div>' +
       '</div>';
     main.appendChild(sec);
-    var today = new Date().toISOString().slice(0, 10);
+    var today = _localDate();
     ldEl('ldFrom').value = today;
     ldEl('ldTo').value = today;
     // icon_table.js's own search box still hides/shows rows visually;
@@ -9061,7 +9096,7 @@ function wireFqcAnomalies() {
     fetch('/api/challans', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        var today = new Date().toISOString().slice(0, 10);
+        var today = _localDate();
         var chs = d.challans || [];
         var drafts = chs.filter(function (c) { return c.status === 'draft'; }).length;
         var issuedToday = chs.filter(function (c) {
@@ -9493,7 +9528,7 @@ window.gpSetKind = function(k) {
     if (document.getElementById('v-gp-list')) return;
     var main = document.querySelector('.main');
     if (!main) return;
-    var today = new Date().toISOString().slice(0, 10);
+    var today = _localDate();
     var sec = document.createElement('section');
     sec.className = 'view';
     sec.id = 'v-gp-list';
@@ -9544,7 +9579,7 @@ window.gpSetKind = function(k) {
      to offer one), and this is what happens on the rare path around that
      anyway - typing a date by hand, or a browser that ignores max. */
   window.gpListDateChange = function (input) {
-    var today = new Date().toISOString().slice(0, 10);
+    var today = _localDate();
     if (input && input.value && input.value > today) {
       input.value = today;
       if (typeof toast === 'function') toast('That date has not happened yet.');
@@ -9553,7 +9588,7 @@ window.gpSetKind = function(k) {
   };
 
   window.gpListReset = function () {
-    var today = new Date().toISOString().slice(0, 10);
+    var today = _localDate();
     if (gpLEl('gpLFrom')) gpLEl('gpLFrom').value = today;
     if (gpLEl('gpLTo')) gpLEl('gpLTo').value = today;
     if (gpLEl('gpLSearch')) gpLEl('gpLSearch').value = '';
@@ -10275,7 +10310,7 @@ window.gpSetKind = function(k) {
         // ("2026-08-21") - cosmetic only (nothing reads it), but a shift
         // setup panel showing last month's date while working today reads
         // as broken.
-        dateInp.value = new Date().toISOString().slice(0, 10);
+        dateInp.value = _localDate();
       }
     }
     if (filterFlds[1]) {
@@ -10302,7 +10337,7 @@ window.gpSetKind = function(k) {
     var firstCard = o1 && o1.querySelector('.card');
     if (!o1 || !firstCard || document.getElementById('loFilterFrom')) return;
 
-    var today = new Date().toISOString().slice(0, 10);
+    var today = _localDate();
 
     var bar = document.createElement('div');
     bar.className = 'card-b';
@@ -10483,7 +10518,7 @@ window.gpSetKind = function(k) {
       linked_event_id: linkedEventId,
       start: startEl ? startEl.value : '',
       mode: modeEl ? modeEl.value.split(' — ')[0] : 'Live',
-      date: new Date().toISOString().slice(0, 10),
+      date: _localDate(),
       shift: shiftEl ? shiftEl.value : ''
     };
     if (!payload.line || !payload.mach || !payload.reason || !payload.start) {

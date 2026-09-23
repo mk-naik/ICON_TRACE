@@ -154,6 +154,12 @@ if (from < 0 || to < 0 || to < from) {
   if (WSH) WScript.Quit(1); else process.exit(1);
 }
 var code = src.substring(from, to).replace(/\.catch\(/g, "['catch'](");
+/* _localDate() lives outside the sliced block but the block calls it, so
+   it is pulled out of the same file rather than re-implemented here: a
+   stand-in copy would go on passing if the real one regressed. */
+var _ldFrom = src.indexOf('  function _localDate(');
+var _ldTo = src.indexOf(String.fromCharCode(10) + '  }', _ldFrom) + 4;
+eval(src.substring(_ldFrom, _ldTo));
 eval(code);
 
 /* ---- harness ------------------------------------------------------------ */

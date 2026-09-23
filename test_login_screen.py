@@ -280,18 +280,71 @@ def t_splash_covers_sign_in():
         assert pg.errors == [], pg.errors
 
 
-@test("a refused sign-in does not sit behind the splash for two seconds - "
-     "it is cancelled outright and the reason shows at once")
-def t_splash_cancelled_on_refusal():
+def watch_splash(pg):
+    """Record whether the splash is EVER shown from here on.
+
+    Checking after the fact is not enough and was the hole in the first
+    version of this test: the splash used to go up on the click and come
+    down when the refusal arrived, so a test that only looked at the end
+    state saw it hidden and passed, while a person saw the whole brand
+    animation flash and then drop back to the login screen."""
+    pg.evaluate("""() => {
+      window.__splashEverShown = false;
+      const el = document.getElementById('enIconSplash');
+      if (el.classList.contains('is-showing')) window.__splashEverShown = true;
+      new MutationObserver(() => {
+        if (el.classList.contains('is-showing')) window.__splashEverShown = true;
+      }).observe(el, {attributes: true, attributeFilter: ['class']});
+    }""")
+
+
+@test("a refused sign-in never shows the splash at all - not for a "
+     "moment. The animation says 'you are in'; until the server has said "
+     "so, showing it is a claim we cannot make")
+def t_splash_never_shown_on_refusal():
     seed_account()
     with H.browser() as b:
         pg = blank_page(b)
+        watch_splash(pg)
         sign_in(pg, credential="not-the-password")
         pg.wait_for_selector("#liMsg:not(:empty)", timeout=10000)
-        assert not pg.evaluate(
-            "document.getElementById('enIconSplash').classList.contains('is-showing')"), \
-            "a wrong password left the splash up"
+        pg.wait_for_timeout(400)
+        assert pg.evaluate("window.__splashEverShown") is False, \
+            "the splash flashed during a failed sign-in"
         assert pg.inner_text("#liMsg") == icon_auth.GENERIC_FAIL
+        assert pg.evaluate(
+            "!document.getElementById('app').classList.contains('on')")
+
+
+@test("clicking Sign in with nothing typed is answered on the spot - no "
+     "splash, and no request, so an empty form cannot spend one of the "
+     "attempts that lead to a lockout")
+def t_empty_form_never_reaches_the_server():
+    seed_account()
+    with H.browser() as b:
+        pg = blank_page(b)
+        watch_splash(pg)
+        posts = []
+        pg.on("request", lambda r: posts.append(r.url)
+              if r.method == "POST" and "/login" in r.url else None)
+
+        pg.click("#liSubmit")                      # both fields empty
+        pg.wait_for_selector("#liMsg:not(:empty)", timeout=5000)
+        assert pg.evaluate("window.__splashEverShown") is False, \
+            "the splash showed for an empty form"
+        assert posts == [], "an empty form was still POSTed to /login: %s" % posts
+
+        pg.fill("#liLoginId", LOGIN_ID)            # ID only, still no credential
+        pg.click("#liSubmit")
+        pg.wait_for_timeout(400)
+        assert posts == [], "an empty credential was still POSTed: %s" % posts
+        assert pg.evaluate("window.__splashEverShown") is False
+
+        # and a complete form does reach it
+        pg.fill("#liCredential", PASSWORD)
+        pg.click("#liSubmit")
+        pg.wait_for_selector("#app.on", timeout=15000)
+        assert len(posts) == 1, posts
 
 
 if __name__ == "__main__":

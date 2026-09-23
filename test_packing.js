@@ -392,6 +392,12 @@ var packSrc = srcFull.substring(from, to).replace(/\.catch\(/g, "['catch'](");
    find none of them. Evaluated once here, at the true top level, they stay
    global for the rest of the run; each test resets the couple of variables
    that actually hold per-test state instead of re-running this. */
+/* _localDate() lives outside the sliced block but the block calls it, so
+   it is pulled out of the same file rather than re-implemented here: a
+   stand-in copy would go on passing if the real one regressed. */
+var _ldFrom = srcFull.indexOf('  function _localDate(');
+var _ldTo = srcFull.indexOf(String.fromCharCode(10) + '  }', _ldFrom) + 4;
+eval(srcFull.substring(_ldFrom, _ldTo));
 eval(packSrc);
 
 /* ---- harness ----------------------------------------------------------- */
