@@ -2978,8 +2978,8 @@ creates outright, which v4 never had.
 | `/api/indent`, `/api/indent/<no>`, `/indent/new`, `/api/allocation`, `/api/allocation/<id>`, `/api/allocation/<id>/update`, `/planning`, `/api/prodentry`, `/api/loss_event`, `/api/loss_event/<id>/close` | Production Incharge, Admin, Super Admin |
 | `/api/fqc`, `/fqc` | FQC Operator, Admin, Super Admin |
 | `/api/quality` | Quality, Admin, Super Admin |
-| `/api/settings`, `/settings`, `/admin/challan-import` | Admin, Super Admin |
-| `/api/material` (POST+PUT), `/api/cell-efficiencies`, `/api/db/reset` | **Super Admin alone** |
+| `/admin/challan-import` (view, and the CHECK phase) | Admin, Super Admin |
+| `/api/material` (POST+PUT), `/api/cell-efficiencies`, `/api/db/reset`, `/api/settings`, `/settings` (the POST), `/admin/challan-import` (the LOAD phase) | **Super Admin alone** |
 | `/api/export/xlsx` | all seven roles |
 | `/api/review/resolve` | per branch - see below |
 
@@ -2990,6 +2990,43 @@ hold: master data is Super Admin ALONE, so an Admin can still read the
 materials list but not write it. `/api/db/reset` keeps Stage 0's
 `ICON_ALLOW_RESET` guard as well - both apply, neither replaces the
 other, and they refuse for visibly different reasons.
+
+**Settings moved to Super Admin alone (follow-up).** `/api/settings` was
+first gated at Admin on the reading that it was general configuration. It
+is not: what it writes is `grade_a_min`/`grade_b_min`, the per-line
+`ss_csv_path` and `el_root`, and the SS column map. Those decide what
+counts as an A grade, where evidence is read from, and which column of
+the export is Pmax - the same bucket as materials and cell efficiencies,
+and the architecture decision groups it there explicitly. Getting one
+wrong does not fail loudly; it silently mis-grades or mis-reads every
+module after it.
+
+`/settings`, the HTML form, writes the SAME `DEFAULT_CONFIG` keys through
+the same `db.set_config()`. Gating only the JSON route would have left
+the restriction trivially bypassable by posting the form instead, so both
+moved together. The route itself stays reachable by Admin: master data is
+Super Admin to WRITE, not to look at, and the page's own read of what is
+configured is worth keeping open.
+
+**`/admin/challan-import`: split by phase, not left whole.** This was a
+genuine open question rather than a correction - it is not named in the
+architecture list, though that list's "DB reset/import/system tools"
+plausibly means this, since `icon_challan_import.py` is the only importer
+in the repo. Answered by what the two phases actually do, which the route
+already separates: CHECK reads every workbook and writes nothing, LOAD
+writes a batch of historical challans, boxes and serials straight in,
+bypassing the quantity reconciliation, loading verification and invoice
+match the normal Create Challan path enforces. A bad batch is expensive
+to unwind, and a half-loaded history is worse than none - the route's own
+docstring says so.
+
+So CHECK stays Admin and LOAD is Super Admin: an Admin can prepare a
+batch and see in full what it would do, and a Super Admin commits it.
+That is the same read/write line drawn everywhere else in this bucket,
+and it does not make Mukesh personally run the preparation for every
+batch of history - only the moment it enters the record. A refused LOAD
+still renders the whole report, but answers 403 rather than 200, so
+"refused" is never mistaken for "ran and found nothing to do".
 
 `/api/review/resolve` could not become a single decorator: which role is
 allowed depends on the item type, and for a duplicate scan on whether the

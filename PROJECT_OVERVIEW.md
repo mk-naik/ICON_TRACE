@@ -49,7 +49,7 @@ in this project and reverted both times.
 
 | File | Holds |
 |---|---|
-| `templates/icon_trace.html` | v4 verbatim, plus one injected `<script>` before `</body>` |
+| `templates/icon_trace.html` | v4 verbatim, plus the live layer's own bootstrap block before `</body>` |
 | `static/icon_live.js` | every override, patch and injection |
 | `static/icon_table.js` | shared filter / search / reset / scroll / export |
 | `static/icon_offline.js` | IndexedDB outbox for offline work |
@@ -118,8 +118,20 @@ value looks wrong but is right (Pmax is column 2, not 10).
 
 ## 5. Do not
 
-**Do not edit `icon_trace.html`.** The only permitted change is the injected
-script block already at the bottom.
+**Do not edit `icon_trace.html`.** The only permitted change is the live
+layer's own bootstrap block at the bottom — everything after the
+`================= ICON TRACE live layer =================` comment, which
+marks where v4 ends. That block is this project's, not v4's, and may be
+extended: it holds the `ICON_BOOT` payload and the `<script src>` tags, and
+as of Round 23 also a `<style>` that hides `#login` until the live layer has
+replaced v4's fake sign-in form (otherwise the old one paints while
+`icon_live.js` is still being fetched), and `{% include '_splash.html' %}`.
+
+A `<style>` or a Jinja `{% include %}` there is as legitimate as a
+`<script>`; what matters is the line, not the tag. Anything **above** that
+comment is v4 and stays untouched — including the `USERS` array and the
+`#who` `<option>` list, which are dead markup nothing reads any more but
+still may not be deleted.
 
 **Do not use `class="grid"` alone.** v4's `.grid` sets `display:grid` and a
 gap but **no columns** — it renders one field per row. Columns come from

@@ -3442,7 +3442,7 @@ def api_cell_efficiencies():
 
 
 @app.route("/api/settings", methods=["POST"])
-@require_role(*_R_ADMIN)
+@require_role(*_R_MASTER)
 def api_settings():
     d = request.get_json(force=True)
     with store.conn() as (cx, cur):
@@ -5136,7 +5136,7 @@ def challan_import():
              the whole batch, because a half-loaded history is worse than
              none - you cannot tell which serials are missing.
     """
-    results, stats, seeded = None, None, None
+    results, stats, seeded, refused = None, None, None, None
     action = request.form.get("action", "check")
 
     if request.method == "POST":
@@ -5197,6 +5197,24 @@ def challan_import():
 
         held = [r for r in results if not r["ok"]]
 
+        # CHECK reads every file and writes nothing; LOAD writes a batch of
+        # historical challans, boxes and serials straight in, bypassing the
+        # quantity reconciliation, loading verification and invoice match
+        # the normal Create Challan path enforces. So the two phases are
+        # gated differently, which is also how they were already designed:
+        # an Admin can prepare a batch and see exactly what it would do, and
+        # a Super Admin is the one who commits it.
+        if action == "load":
+            try:
+                _require_role(*_R_MASTER, why="Only a Super Admin can load an "
+                              "import - checking a batch is open to Admin, "
+                              "committing it to the record is not.")
+            except _Refuse as e:
+                flash(e.why, "fail")
+                # Falls back to exactly what CHECK would have done: the
+                # batch is still reported in full, just not committed.
+                action, refused = "check", e.why
+
         if action == "load" and not held:
             with db.conn() as (cx, cur):
                 for r in results:
@@ -5214,8 +5232,12 @@ def challan_import():
             flash("Nothing was loaded - %d file(s) are held. A half-loaded "
                   "history is worse than none." % len(held), "fail")
 
-    return render_template("challan_import.html", results=results,
+    page = render_template("challan_import.html", results=results,
                            stats=stats, seeded=seeded)
+    # A refused LOAD still shows the batch in full - what it would have
+    # done, held rather than hidden - but says 403 rather than 200, so
+    # "refused" is never mistaken for "ran and found nothing to do".
+    return (page, 403) if refused else page
 
 
 # --------------------------------------------------------------------------
@@ -6596,20 +6618,39 @@ def gatepass():
 @app.route("/settings", methods=["GET", "POST"])
 @require_role(*_R_ADMIN)
 def settings():
+    refused = None
     with db.conn() as (cx, cur):
         if request.method == "POST":
+            # This form writes the same DEFAULT_CONFIG keys /api/settings
+            # does, so it carries the same Super-Admin-only gate. Gating the
+            # JSON route alone would have left the restriction trivially
+            # bypassable by posting the form instead. The route itself stays
+            # open to Admin so they can still READ what is configured -
+            # master data is Super Admin to WRITE, not to see.
+            try:
+                _require_role(*_R_MASTER, why="Only a Super Admin can change "
+                              "these settings - they decide how every "
+                              "reading is graded and where evidence is "
+                              "read from.")
+            except _Refuse as e:
+                refused = e.why
             # ONLY what the form actually submitted. Writing every key in
             # DEFAULT_CONFIG blanked whatever this form does not carry - which
             # after two lines were added meant a save here wiped Line B's
             # paths and column map without saying so.
-            sent = {k: (request.form.get(k) or "").strip()
-                    for k in db.DEFAULT_CONFIG if k in request.form}
+            sent = {} if refused else {
+                k: (request.form.get(k) or "").strip()
+                for k in db.DEFAULT_CONFIG if k in request.form}
             if sent:
                 db.set_config(cur, sent)
                 db.audit(cur, actor(), "config.update", "config", None,
                          {"keys": sorted(sent)})
                 flash("Settings saved.", "pass")
         cfg = db.get_config(cur)
+    if refused:
+        flash(refused, "fail")
+        return render_template("settings.html", cfg=cfg,
+                               probe=_evidence_probe(cfg)), 403
     return render_template("settings.html", cfg=cfg, probe=_evidence_probe(cfg))
 
 

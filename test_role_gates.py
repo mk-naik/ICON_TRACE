@@ -248,6 +248,52 @@ def t_reset_has_both_guards():
         "expected the reset flag guard, got %s" % r_flag.get_json()
 
 
+@test("settings are master data, not ordinary Admin config: an Admin is "
+     "refused on BOTH the JSON route and the HTML form, and neither writes "
+     "anything - the form would otherwise be a way round the gate")
+def t_settings_is_super_admin_only():
+    import db
+    for role, want in (("Admin", 403), ("Super Admin", 200)):
+        fresh()
+        c = APP.app.test_client()
+        AUTH.test_login(c, role=role)
+
+        r = c.post("/api/settings", json={"grade_a_min": "317"})
+        assert r.status_code == want, \
+            "POST /api/settings as %s -> %s" % (role, r.status_code)
+
+        f = c.post("/settings", data={"grade_b_min": "271"})
+        assert f.status_code == want, \
+            "POST /settings (form) as %s -> %s" % (role, f.status_code)
+
+        with store.conn() as (cx, cur):
+            cfg = db.get_config(cur)
+        if want == 403:
+            assert cfg.get("grade_a_min") != "317" and \
+                   cfg.get("grade_b_min") != "271", \
+                "an Admin's refused save still reached app_config: %s" % cfg
+        else:
+            assert cfg.get("grade_a_min") == "317", cfg
+            assert cfg.get("grade_b_min") == "271", \
+                "the form did not save for a Super Admin: %s" % cfg
+
+
+@test("an Admin can still READ the settings page and prepare an import - "
+     "master data is Super Admin to write, not to look at")
+def t_admin_keeps_read_access_to_master_screens():
+    fresh()
+    c = APP.app.test_client()
+    AUTH.test_login(c, role="Admin")
+    assert c.get("/settings").status_code == 200
+    assert c.get("/admin/challan-import").status_code == 200
+    # CHECK writes nothing, so it stays open to Admin...
+    assert c.post("/admin/challan-import",
+                 data={"action": "check"}).status_code == 200
+    # ...while LOAD, which writes the batch in, does not.
+    assert c.post("/admin/challan-import",
+                 data={"action": "load"}).status_code == 403
+
+
 @test("401 and 403 stay distinct on the same endpoint: no session is 'who "
      "are you', a known-but-wrong role is 'I know who you are and the "
      "answer is no'")
