@@ -11,3 +11,6 @@ __pycache__/
 # Authentication keys
 .icon_secret
 .icon_totp_key
+
+# Uploaded invoice files
+storage/invoices/
