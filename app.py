@@ -2647,25 +2647,31 @@ def api_prodentry():
         if start_row["sequence"] > end_row["sequence"]:
             return jsonify({"ok": False, "why": "Start serial is greater than end serial."}), 400
             
-        # Verify that all serials in the range are planned and find the exact ones
+        # Verify every serial in the range exists and none has already been
+        # recorded under an earlier production entry. `state` is NOT this
+        # check: FQC can legitimately grade a serial before its shift's
+        # paperwork is filed (a module cannot be graded at all unless it was
+        # made), so a serial already 'graded'/'rejected' is not a conflict -
+        # only prod_entry_id, set exclusively by this route, proves a
+        # production entry already exists for it.
         seq_start = start_row["sequence"]
         seq_end = end_row["sequence"]
         qty = (seq_end - seq_start) + 1
-        
-        serials_in_range = store.rows(cur, 
-            "SELECT serial, state FROM serial WHERE sequence >= %s AND sequence <= %s "
+
+        serials_in_range = store.rows(cur,
+            "SELECT serial, state, prod_entry_id FROM serial WHERE sequence >= %s AND sequence <= %s "
             "AND model=%s AND wattage=%s AND build_instance=1",
             (seq_start, seq_end, start_row["model"], start_row["wattage"]))
-            
+
         if len(serials_in_range) != qty:
             return jsonify({"ok": False, "why": f"Expected {qty} serials in range, but found {len(serials_in_range)}."}), 400
-            
-        not_planned = [s["serial"] for s in serials_in_range if s["state"] != "planned"]
-        if not_planned:
-            return jsonify({"ok": False, "why": f"Serials are already produced or graded: {not_planned[0]}..."}), 400
-            
+
+        already_recorded = [s["serial"] for s in serials_in_range if s["prod_entry_id"]]
+        if already_recorded:
+            return jsonify({"ok": False, "why": f"Serials already recorded under an earlier production entry: {already_recorded[0]}..."}), 400
+
         kw_output = (qty * start_row["wattage"]) / 1000.0
-        
+
         # Insert production entry
         eid = store.insert(cur, "production_entry", {
             "prod_date": date,
@@ -2681,14 +2687,23 @@ def api_prodentry():
             "material_note": mat_note,
             "created_by": actor()
         })
-        
-        # Update serials
+
+        # Every serial in the range is now recorded under this entry, whether
+        # or not FQC already reached it. `state` only advances for a serial
+        # still 'planned' - one FQC already graded/rejected stays exactly
+        # where FQC left it, never regressed back to 'produced'.
+        cur.execute(
+            "UPDATE serial SET prod_entry_id=%s "
+            "WHERE sequence >= %s AND sequence <= %s AND model=%s AND wattage=%s AND build_instance=1",
+            (eid, seq_start, seq_end, start_row["model"], start_row["wattage"])
+        )
         cur.execute(
             "UPDATE serial SET state='produced', date_produced=%s, shift=%s "
-            "WHERE sequence >= %s AND sequence <= %s AND model=%s AND wattage=%s AND build_instance=1",
+            "WHERE sequence >= %s AND sequence <= %s AND model=%s AND wattage=%s "
+            "AND build_instance=1 AND state='planned'",
             (date, shift, seq_start, seq_end, start_row["model"], start_row["wattage"])
         )
-        
+
         db.audit(cur, actor(), "production.entry", "production_entry", eid, {
             "start_serial": start_serial,
             "end_serial": end_serial,

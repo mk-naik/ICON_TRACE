@@ -1840,8 +1840,8 @@ function wireFqcAnomalies() {
           '<div><label style="font-size:9.5px;font-weight:700;' +
             'color:var(--ink3);text-transform:uppercase;letter-spacing:.6px">' +
             'Proposed</label>' +
-            '<div style="font-family:var(--f-mono);font-size:26px;' +
-            'font-weight:700;line-height:1;color:' +
+            '<div style="font-family:var(--f-ui),-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;font-size:38px;' +
+            'font-weight:800;letter-spacing:.5px;line-height:1;margin-top:2px;color:' +
             (canPass ? 'var(--pass)' : e.proposed === 'reject' ? 'var(--fail)'
               : 'var(--review)') + '">' +
             /* no proposal at all when a source could not be read: that is not
@@ -9921,9 +9921,17 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
     var st = document.getElementById('peStatus');
     
     var dateFld = document.querySelector('#peManual input[type="date"]');
-    var shiftFld = document.querySelector('#peManual select:nth-of-type(1)');
-    var inchargeFld = document.querySelector('#peManual select:nth-of-type(2)');
-    var lineFld = document.querySelector('#peManual select:nth-of-type(3)');
+    // :nth-of-type(n) counts siblings under the SAME parent - each of these
+    // three <select>s is the only select in its own .fld div, so all three
+    // independently match :nth-of-type(1) and nth-of-type(2)/(3) never
+    // matched anything at all. Shift incharge and Line were silently sent
+    // empty on every save, which the server correctly refused - selecting
+    // by position within the shared grid instead, the same order they
+    // appear in the markup.
+    var peSelects = document.querySelectorAll('#peManual .grid.g3 select');
+    var shiftFld = peSelects[0];
+    var inchargeFld = peSelects[1];
+    var lineFld = peSelects[2];
     var matChgFld = document.getElementById('peMatChg');
     
     var d = {
@@ -9944,14 +9952,17 @@ detailsCard.insertAdjacentHTML('afterbegin', injectHtml);
     
     api('prodentry', { method: 'POST', body: JSON.stringify(d) })
       .then(function(r) {
+        btn.disabled = false;
+        btn.textContent = 'Record production';
+        if (!r.ok) {
+          st.innerHTML = '<div class="note n-warn"><span>!</span><span>' + fqcEsc(r.why || 'Could not record.') + '</span></div>';
+          return;
+        }
         toast('Recorded ' + r.qty + ' modules as produced.');
-        
+
         window.peToggleForm(false);
         if (typeof renderProd === 'function') renderProd();
         if (typeof window.renderPE === 'function') window.renderPE();
-        
-        btn.disabled = false;
-        btn.textContent = 'Record production';
       })
       .catch(function(e) {
         btn.disabled = false;

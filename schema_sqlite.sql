@@ -581,6 +581,14 @@ CREATE TABLE IF NOT EXISTS serial (
   grade          TEXT NULL,
   state          TEXT
                  NOT NULL DEFAULT 'planned',
+  -- Set once, by Production Entry alone, to the entry that recorded this
+  -- serial as physically made. Deliberately separate from `state`: FQC can
+  -- legitimately reach a module before the shift-end paperwork does (grading
+  -- it 'graded'/'rejected' on its own), and a module cannot be graded at all
+  -- unless it was made - so `state` moving past 'planned' is not proof a
+  -- production entry exists, and this column is what Production Entry's own
+  -- double-recording check reads instead of `state`.
+  prod_entry_id  INTEGER NULL REFERENCES production_entry(entry_id),
   PRIMARY KEY (serial, build_instance)
 
 ) ;

@@ -144,6 +144,13 @@ def _migrate(cx, text):
     # gate pass linked to a real challan row (not just a typed string)
     if cols("gatepass") and "challan_id" not in cols("gatepass"):
         cx.execute("ALTER TABLE gatepass ADD COLUMN challan_id INTEGER REFERENCES challan(challan_id)")
+
+    # Production Entry's own double-recording guard, separate from `state` -
+    # FQC can legitimately grade a serial before its shift's paperwork is
+    # filed, which used to make Production Entry refuse the whole range.
+    if cols("serial") and "prod_entry_id" not in cols("serial"):
+        cx.execute("ALTER TABLE serial ADD COLUMN prod_entry_id INTEGER "
+                   "REFERENCES production_entry(entry_id)")
     cx.commit()
 
 

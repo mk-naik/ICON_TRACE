@@ -2722,3 +2722,90 @@ by the date-picker change, both still passed.
   currently works and passes; whether it should is a product question, not
   one this round's scope (section 4a named `update_user` specifically) or
   time covered.
+
+## Round 20 — Production Entry's "undefined" toast, a dead Shift Incharge/Line selector, and the FQC-before-paperwork gap
+
+Mukesh reported "Record production" toasting "Record undefined modules as
+produced." on a real serial. Checked the real database directly rather than
+guessing: `ICON625R1290710000` genuinely existed with `state='rejected'` -
+the server had correctly refused the save, and two separate, real bugs in
+`icon_live.js`'s `peSave()` turned that refusal into a nonsense success
+toast and closed the form as if nothing was wrong.
+
+**Bug 1 - the refusal never reached the screen.** `peSave()`'s `.then()`
+unconditionally read `toast('Recorded ' + r.qty + ' modules as
+produced.')` and closed the form, with no check of `r.ok` first - every
+other save handler in this file follows `if (!r.ok) { toast(r.why);
+return; }`, this one didn't. A refusal body has no `qty`, hence
+"undefined", and the form collapsed as if the save had gone through.
+Fixed to match the file's own established idiom - the real `why` now
+shows in the status box, and the form stays open with what was typed.
+
+**Bug 2 - Shift Incharge and Line were never actually sent.** Found while
+fixing bug 1: `peSave()` read them with
+`document.querySelector('#peManual select:nth-of-type(2)')` /
+`nth-of-type(3)`. `:nth-of-type(n)` counts siblings under the SAME
+parent - each of these three `<select>`s sits alone in its own `.fld`
+div, so all three are independently `nth-of-type(1)`, and nothing was
+ever `nth-of-type(2)` or `(3)`. Incharge and Line were silently posted as
+empty strings on every save, regardless of what the dropdowns visibly
+showed - the server then correctly refused "Missing required fields.",
+which bug 1 then papered over the same way. Live in the real database,
+`production_entry` had zero rows - no save had ever actually succeeded
+through this form. Fixed by reading all three selects by position within
+their shared grid (`#peManual .grid.g3 select`) instead.
+
+**The deeper question this raised.** Once bug 1 surfaced the server's real
+refusal text ("Serials are already produced or graded"), Mukesh pointed
+out the real practical sequence: Indent -> Planning -> Production Entry ->
+FQC -> Packing -> Challan -> Dispatch, and that Production Entry is filed
+at *shift end* while individual modules physically reach the FQC station
+throughout the shift - often before that paperwork exists. A module
+cannot be graded at all unless it was made, so a serial FQC already
+graded or rejected is proof of production, not a conflict with recording
+it; refusing the whole shift's range because FQC beat the paperwork to a
+few modules was the actual bug.
+
+The reason `state != 'planned'` was ever used as the "already recorded"
+check is that, before this round, `state` never moved without a
+production entry causing it. FQC's own `record_fqc()` set it to
+'graded'/'rejected' regardless of whether production entry had run for
+that serial, which conflates two different facts into one column: what
+stage a serial has reached, and whether its shift's paperwork exists.
+Untangled by adding `serial.prod_entry_id` (nullable, set only by
+`api_prodentry`, migrated in `store.py`'s existing `_migrate()`) as the
+one thing that means "already recorded" - independent of whatever FQC or
+packing has done since. `api_prodentry` now refuses only on
+`prod_entry_id IS NOT NULL`; on success every serial in the range gets
+`prod_entry_id` set (so a second entry over the same range is still
+correctly refused), but `state` only advances to `'produced'` for a
+serial still `'planned'` - one FQC already graded stays exactly where
+FQC left it, never regressed backwards.
+
+Confirmed live, in a browser, against the actual reported scenario: a
+6-serial range where two serials were already `rejected`/`graded` (FQC
+ahead of paperwork) now records successfully, the two FQC-decided serials
+keep their real state, the four still-planned ones move to `produced`,
+and all six now carry `prod_entry_id`.
+
+**Which tests prove it.** `test_production.py`'s existing "already
+produced" test rewritten to simulate the real mechanism - a genuine prior
+`/api/prodentry` call, not a hand-set `state` - since a hand-set state no
+longer means anything to this check. New test locks in the FQC-ahead
+scenario explicitly: the entry succeeds, the FQC-decided serial's state
+is untouched, and all five serials (FQC-decided included) end up carrying
+the new entry's id. Full suite re-run: `test_production.py` 7/7 (was 6,
+minus one rewritten, plus one new), `test_fqc.py`, `test_fqc_override.py`,
+`test_packing.py`, `test_repack.py`, `test_challan.py`, `test_loading.py`,
+`test_gatepass.py`, `test_gatepass_multiitem.py`, `test_indent.py`,
+`test_search_invoice.py`, `test_review.py`, `test_loss.py`,
+`test_evidence.py` all green; the one pre-existing, unrelated
+`test_fqc.py` failure already tracked this session is unchanged. Migration
+verified against the real `icontrace.db` directly - `prod_entry_id`
+appears on `PRAGMA table_info(serial)` with no data loss.
+
+Considered and explicitly rejected: a hard gate on FQC requiring
+`state == 'produced'` before grading. Mukesh's own call - Production
+Entry is shift-end paperwork, and a module that physically reaches FQC
+before that paperwork is filed must still be inspectable on time.
+

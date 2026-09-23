@@ -16,7 +16,7 @@ module goes to Quality with a fault it does not have. Every test below names
 the rule it defends, so a failure says which decision broke.
 """
 
-import csv, os, shutil, sys, tempfile, traceback
+import csv, os, shutil, sys, tempfile, time, traceback
 import db
 import icon_evidence as ev
 import icon_ftr as ftr
@@ -223,6 +223,96 @@ def t_el_down_is_nc():
 def t_el_na():
     r = ev.read_el(cfg(), "ICON999R2609110000")
     assert r["state"] == ev.NA, r
+
+
+@test("both EL roots missing is NC")
+def t_el_all_roots_missing_is_nc():
+    r = ev.read_el(cfg(el_a_root=os.path.join(TMP, "nope_a"),
+                       el_b_root=os.path.join(TMP, "nope_b")),
+                   "ICON999R2609110000")
+    assert r["state"] == ev.NC, r
+
+
+@test("a recapture filed into a different category folder wins over the "
+     "original - the verdict is the recapture's, not the stale one a "
+     "rework was meant to replace")
+def t_el_recapture_wins():
+    # a dedicated tree, not the shared el_a fixture - the point is which of
+    # two folders' own mtimes sorts first, so nothing else may touch them
+    serial = "ICON620R2609113456"
+    root = os.path.join(TMP, "el_a_recap")
+    orig_dir = os.path.join(root, "OK")
+    recap_dir = os.path.join(root, "Cell Crack")
+    os.makedirs(orig_dir, exist_ok=True)
+    os.makedirs(recap_dir, exist_ok=True)
+
+    # the original capture: passed, filed under OK, older
+    orig = os.path.join(orig_dir, serial + ".jpg")
+    open(orig, "w").close()
+    old = time.time() - 7200
+    os.utime(orig, (old, old))
+    os.utime(orig_dir, (old, old))
+
+    # the module was reworked and re-shot: now Cell Crack, newer, and
+    # named with the recapture suffix EL actually writes
+    recap = os.path.join(recap_dir, serial + "_1.jpg")
+    open(recap, "w").close()
+    new = time.time()
+    os.utime(recap, (new, new))
+    os.utime(recap_dir, (new, new))
+
+    r = ev.read_el(cfg(el_a_root=root, el_b_root=""), serial)
+    assert r["state"] == ev.OK, r
+    assert r["verdict"] == "Cell Crack", \
+        "the stale OK capture won instead of the recapture: %r" % r
+    assert r["path"] == recap, r
+
+
+@test("a plain <serial>.jpg with no recapture still resolves exactly as "
+     "before")
+def t_el_plain_file_unaffected():
+    # the same case t_el_found already defends, named here explicitly so
+    # this rule (not just the newer recapture one) has its own test
+    r = ev.read_el(cfg(), "ICON625R2609112345")
+    assert r["state"] == ev.OK and r["verdict"] == "Cell Crack", r
+    assert r["path"] == os.path.join(EL_A, "ICON625R2609112345.jpg"), r
+
+
+@test("the newest-matching directory is found without listing every dated "
+     "folder in the tree")
+def t_el_newest_first_limits_directory_listings():
+    serial = "ICON615R2609114567"
+    root = os.path.join(TMP, "el_scan_count")
+    dated = ["2026-09-0%d" % i for i in range(1, 6)]     # 5 folders, oldest..newest
+    now = time.time()
+    for i, name in enumerate(dated):
+        d = os.path.join(root, name)
+        os.makedirs(d, exist_ok=True)
+        for j in range(20):                              # noise: never matches
+            open(os.path.join(d, "ICON000R0000000000_%d.jpg" % j), "w").close()
+        if name == dated[-1]:                             # only the newest has it
+            open(os.path.join(d, serial + ".jpg"), "w").close()
+        os.utime(d, (now - (len(dated) - i) * 60,) * 2)    # oldest folder, oldest mtime
+
+    real_scandir = os.scandir
+    calls = []
+
+    def counting_scandir(path="."):
+        calls.append(path)
+        return real_scandir(path)
+
+    os.scandir = counting_scandir
+    try:
+        r = ev.read_el(cfg(el_a_root=root, el_b_root=""), serial)
+    finally:
+        os.scandir = real_scandir
+
+    assert r["state"] == ev.OK and r["verdict"] == dated[-1], r
+    # root, plus the one (newest) folder the match was actually in - not
+    # one call per dated folder in the tree
+    assert len(calls) == 2, \
+        "expected 2 directories listed (root + newest), got %d: %s" \
+        % (len(calls), calls)
 
 
 # --------------------------------------------------------------------------
