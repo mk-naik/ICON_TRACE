@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="sunGrad" cx="38%" cy="38%" r="50%">
+      <stop offset="0%" stop-color="#F5B85C"/>
+      <stop offset="100%" stop-color="#E08A1E"/>
+    </radialGradient>
+    <radialGradient id="ringGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="60%" stop-color="#FDF3E4"/>
+      <stop offset="100%" stop-color="#F5D89A"/>
+    </radialGradient>
+  </defs>
+  <!-- Outer ring (light glow) -->
+  <circle cx="32" cy="32" r="30" fill="url(#ringGrad)"/>
+  <!-- Inner sun disc -->
+  <circle cx="32" cy="32" r="20" fill="url(#sunGrad)"/>
+</svg>
