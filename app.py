@@ -470,6 +470,48 @@ def require_role(*allowed_roles):
     return deco
 
 
+def require_screen_write(screen_id):
+    """Gate a write endpoint by the account's own write flag for the screen
+    it belongs to (Round 27) - the per-user table Round 26 built and seeded
+    from each role's defaults, rather than the role name itself. Same shape
+    and same three outcomes as require_role() above: 401 with no session,
+    403 while the password is still a temporary one, 403 when the account
+    may not write on this screen. An account with no row for the screen is
+    refused - get_screen_perms() reads absence as no access, on purpose.
+
+    Sub-view ids resolve to their parent screen, as icon_auth.SUBVIEWS says
+    they must. admin and items are refused at import time: they are the
+    critical surface, deliberately kept on role gates (_R_MASTER/_R_ADMIN),
+    and a typo that moved one of them onto a per-user flag must not start."""
+    sid = icon_auth.SUBVIEWS.get(screen_id, screen_id)
+    if sid in icon_auth.EXCLUDED_SCREENS:
+        raise ValueError("%s stays role-gated - never a per-user screen" % sid)
+    if sid not in icon_auth.SCREEN_IDS:
+        raise ValueError("unknown screen: %s" % screen_id)
+
+    def deco(fn):
+        @functools.wraps(fn)
+        def inner(*a, **kw):
+            if not g.icon_session:
+                return jsonify({"ok": False, "why": "Sign in required."}), 401
+            # A temporary password is a credential somebody else chose and
+            # knows. Until it is replaced the account may read, but must
+            # not write anything into the record under its own name.
+            if getattr(g, "icon_must_change_pw", False):
+                return jsonify({"ok": False, "why":
+                    "Set your own password before saving anything."}), 403
+            with store.conn() as (cx, cur):
+                perms = icon_auth.get_screen_perms(
+                    cur, g.icon_session["login_id"])
+            if not perms[sid]["write"]:
+                return jsonify({"ok": False,
+                    "why": "Not permitted for your role."}), 403
+            return fn(*a, **kw)
+        inner.icon_screen = sid
+        return inner
+    return deco
+
+
 def _require_role(*allowed_roles, why="Not permitted for your role."):
     """The inline counterpart to require_role(), for the one route whose
     allowed roles depend on the request body rather than being fixed for
