@@ -3466,3 +3466,189 @@ Once, on the real database, after this round is merged:
     copy icontrace.db icontrace.db.bak
     python migrate_screen_perms.py            # read what it will do
     python migrate_screen_perms.py --apply
+
+## Round 27 - enforcement moves onto per-screen permissions.
+
+**From this round, an ordinary screen's write endpoints check the account's
+own `user_screen_perm` row, not its role.** `require_screen_write(screen)`
+in app.py has the same shape as `require_role()`: 401 "Sign in required."
+with no session, 403 "Set your own password before saving anything." while
+`must_change_pw` stands (kept exactly as `require_role` has it), and 403
+"Not permitted for your role." when the account's write flag for that
+screen is false - **or there is no row at all**, which
+`get_screen_perms()` reads as no access on purpose. Sub-view ids resolve to
+their parent through `icon_auth.SUBVIEWS`. `admin`, `items` and unknown ids
+are refused with a ValueError at import time, so a typo cannot quietly
+move the critical surface onto a per-user flag.
+
+> **Run the Round 26 migration on the real database before this code runs
+> against it.** Until then, every account with no permission rows is
+> refused every write this round moves. Mukesh's step, unchanged except
+> for the new time limit:
+>
+>     copy icontrace.db icontrace.db.bak
+>     python migrate_screen_perms.py
+>     python migrate_screen_perms.py --apply     (within 10 minutes of the copy)
+
+### The endpoint-to-screen map
+
+40 endpoints on 13 screens. With
+every account seeded from its role's defaults, the set of roles that pass
+is **identical to Round 23's on 39 of the 40**. That was checked
+mechanically against the decorators at d9574c2. The one difference is
+marked in the table.
+
+| Screen | Endpoint | Was |
+|---|---|---|
+| challan | `POST /api/challan` | _R_DISPATCH |
+| challan | `POST /api/challan/<id>/submit` | _R_DISPATCH |
+| challan | `POST /api/challan/<id>/discard` | _R_DISPATCH |
+| challan | `POST /api/challan/<id>/cancel` | _R_DISPATCH |
+| challan | `POST /api/challan/<id>/edit-draft` | _R_DISPATCH |
+| challan | `POST /api/challan/<id>/edit-save` | _R_DISPATCH |
+| challan | `POST /api/challan/checks` | _R_DISPATCH |
+| gp | `POST /api/gatepass` | _R_DISPATCH |
+| gp | `PUT /api/gatepass/<id>` | _R_DISPATCH |
+| gp | `GET/POST /gatepass` *(legacy form page)* | _R_DISPATCH |
+| invoice | `POST /api/invoice/parse` | _R_DISPATCH |
+| invoice | `POST /api/invoice/confirm` | _R_DISPATCH |
+| invoice | `POST /invoice/parse`, `/invoice/confirm`, `/invoice/cancel` *(legacy)* | _R_DISPATCH |
+| disp | `GET/POST /dispatch` *(legacy form page)* | _R_DISPATCH |
+| loadver | `POST /api/loading/<id>/confirm` | _R_LOADING |
+| loadver | `POST /api/loading/<id>/submit` | _R_LOADING |
+| pack | `POST /api/box/open` | _R_PACK |
+| pack | `POST /api/box/<id>/scan`, `/remove`, `/close`, `/capacity`, `/abandon` | _R_PACK |
+| pack | `POST /api/box/<id>/repack` | _R_PACK |
+| pack | `GET/POST /packing` *(legacy form page)* | _R_PACK |
+| repack | `POST /api/repack` | _R_PACK |
+| fqc | `POST /api/fqc` | _R_FQC |
+| fqc | `GET/POST /fqc` *(legacy form page)* | _R_FQC |
+| indent | `POST /api/indent`, `PUT /api/indent/<no>` | _R_PROD |
+| indent | `GET/POST /indent/new` *(legacy form page)* | _R_PROD |
+| plan | `POST /api/allocation`, `PUT .../<id>/update`, `DELETE .../<id>` | _R_PROD |
+| plan | `GET/POST /planning` *(legacy form page)* | _R_PROD |
+| prodentry | `POST /api/prodentry` | _R_PROD |
+| loss | `POST /api/loss_event`, `POST /api/loss_event/<id>/close` | _R_PROD |
+| review | `POST /api/review/resolve` | _R_EVERY - **narrows**: Dispatch and Packing Operator have no write on Needs Review. Every inner branch already refused them, so they could never resolve anything. They now get the 403 at the door instead. |
+
+Where the map is less than obvious:
+
+- **No live-page caller today.** These are mapped by what the endpoint's
+  own path and docstring say it belongs to: `/api/box/<id>/repack` ("one
+  closed pallet, opened from the Packing screen" -> pack),
+  `/api/challan/<id>/cancel` (challan - the Challan list's Cancel button
+  calls `/discard`), and the legacy server-rendered pages `/dispatch`,
+  `/gatepass`, `/packing`, `/fqc`, `/planning`, `/indent/new` and
+  `/invoice/*`.
+- **The legacy GET/POST pages are gated on GET as well**, as they were
+  under `require_role`. So an account with view but not write on, say,
+  pack cannot open `/packing` at all. The behaviour is unchanged, but
+  "view" in the new table does not reach these old pages. If nothing uses
+  them, they are candidates for removal.
+- `/api/challan/checks` and `/api/challan/<id>/edit-draft` are POSTs that
+  write nothing. They stay behind challan's write flag because the only
+  reason to call them is to go on and write a challan.
+
+### Still on role gates, deliberately
+
+| Endpoint | Gate | Why it did not move |
+|---|---|---|
+| `POST /api/material`, `PUT /api/material/<n>`, `PUT /api/cell-efficiencies`, `POST /api/db/reset`, `POST /api/settings` | _R_MASTER | The admin/items critical surface - never per-user. |
+| `GET/POST /settings`, `GET/POST /admin/challan-import` | _R_ADMIN | The Admin screen's own surface. Their writes are Super-Admin-only through the inner checks below. |
+| `GET/POST /api/users`, `POST /api/users/<id>/reset-password`, `/reset-totp`, `/unlock`, `/deactivate`, `/reactivate` | _R_ADMIN | User management lives inside the Admin screen. `admin` is excluded from the registry, so there is no flag to move them onto. |
+| `POST /api/export/xlsx` | _R_EVERY | Every screen's download button, read-only screens included. Tying it to any one screen's write flag would take Export away from exactly those screens (Round 26's warning). |
+| `POST /api/quality` | _R_QUALITY | **Serves no screen.** Quality Decision was retired into Needs Review, and nothing in the live page calls this endpoint now. Putting it on review's flag would let Production Incharge and FQC Operator (who have write on Needs Review) grade quality here, bypassing the `_QUALITY_ROLES` check the review path keeps. Left as it was; a candidate for deletion. |
+
+### The inline role checks - preserved word for word
+
+Six `_require_role()` calls inside endpoints add to the outer gate and are
+untouched by this round. They are the same calls with the same text, only
+shifted in line number. Checked by diff against d9574c2: the only lines
+removed from app.py are the 40 decorator lines and one docstring sentence.
+
+| app.py (at c06f6c3) | Where | Allows |
+|---|---|---|
+| 5624 | `/admin/challan-import`, action=load | _R_MASTER |
+| 6075 | `_resolve_provisional_mismatch` | _QUALITY_ROLES |
+| 6486 | `_resolve_duplicate_scan`, serial already dispatched | "Admin" |
+| 6498 | `_resolve_duplicate_scan`, not dispatched | _INCHARGE_ROLES |
+| 6561 | `api_review_resolve`, quality_grade | _QUALITY_ROLES |
+| 7052 | `/settings`, POST | _R_MASTER |
+
+`test_inner_role_checks.py` proves each one with an actor whose write flag
+on the outer screen is asserted true but whose role is wrong for the
+branch. Each is refused in the inner check's own words, never the outer
+gate's.
+
+Noticed while testing, not changed: `_QUALITY_ROLES` is `("Quality",
+"Admin")`. **Super Admin is not in it**, so a Super Admin cannot resolve a
+quality decision or a provisional mismatch, although everywhere else Super
+Admin can do everything Admin can. This round's rule was word-for-word
+preservation, so this is flagged for a decision rather than changed.
+
+### Backup freshness in the migration
+
+`_backup_present()` used to accept any backup that existed - last week's as
+readily as one from a minute ago. It now finds the **newest** backup and
+its age, and `--apply` refuses anything over ten minutes old
+(`ICON_BACKUP_MAX_AGE_S` overrides this), naming the file and its age:
+
+    Refusing to run: the newest backup, ...\icontrace.db.bak, is 20 minutes old - older than the 10 minutes allowed.
+
+Age is taken from the later of modified and created time, because
+Windows' `copy` keeps the source's modified time. Checked: a copy made at
+16:08:39 of a file last written at 15:08:39 has LastWriteTime 15:08:39 and
+CreationTime 16:08:39. Going by modified time alone would refuse a
+genuinely fresh copy, and copying again would not help.
+
+### Test fixtures
+
+`auth_test_helper.make_user()` now seeds each new account with its role's
+defaults, as `create_operator()` and friends do for real accounts - the
+Round 26 note, acted on. `test_role_gates.py` reads either decorator and
+works out a screen-gated endpoint's allowed roles from those defaults, so
+its 11 tests mean the same as before. `test_login_screen.py` creates its
+own account directly (it needs a real password), so it seeds the same
+way. The full suite found this: Dispatch Operator was refused the gate
+pass with a 403.
+
+### What proves it
+
+- `test_screen_write_gates.py` (9) - generated from the decorators. The
+  map equals the reviewed map above. `admin`, `items` and typos are
+  refused at import. The critical surface still carries its role gates.
+  On all 40 endpoints: write:true passes for a **Quality** account (whose
+  role reaches none of them); write:false and no row are both 403 for a
+  **Super Admin** (whose role reaches all of them); an unmigrated account
+  gets 403; no session gets 401; and `must_change_pw` gets 403 through the
+  new gate.
+- `test_inner_role_checks.py` (6) - the six inner checks above, plus a
+  right role with its flag withdrawn, refused at the door.
+- `test_screen_perms.py` (16 -> 20) - a fresh backup is accepted; a
+  20-minute-old backup is refused with its age named; the limit is
+  configurable; and the newest of several backups is the one judged,
+  including a copy that kept its source's old modified time.
+
+Full suite at 398f730: every Python and JS file passes, except failures
+that reproduce identically at d9574c2 (checked in a clean worktree of it):
+`test_fqc.py`'s one ("the module journey says what happened at FQC"),
+`test_build_banner_live.py` (waits for v4's `#who` dropdown, gone since
+Round 23), `test_js.js` (WSH compile error at 2146), and
+`test_fqc_dashboard.js` (2/16, WSH has no `console`). The UI files that
+expect a server already running on 8090 or 5000 (`test_fqc_anomaly_ui`,
+`test_fqc_dashboard_ui`, `test_fqc_recent_ui`, `test_mgmt_ui`,
+`test_pack_ui`, `test_prod_ui`) answer ERR_CONNECTION_REFUSED without
+one - environmental. One flaky test: `test_login_screen.py`'s "old login
+is never painted" is timed with a sleep (a 1.5s delay checked at 700ms)
+and failed 2 of 7 runs here, against 0 of 6 at d9574c2. It measures
+`GET /` and the page's own scripts, which this round does not touch.
+
+### For Round 28
+
+- The page still decides what to show from `ROLES`, not from this table.
+  An account whose write was withdrawn on a screen still sees that
+  screen's buttons and gets a 403 when it presses one. The editor, and a
+  nav driven by `get_screen_perms()`, are Round 28's job.
+- Round 26's `ensureRoleEntry()` note still stands.
+- Observed, pre-existing, untouched: `POST /api/box/open` with no `model`
+  raises a KeyError and answers 500 rather than 400.
