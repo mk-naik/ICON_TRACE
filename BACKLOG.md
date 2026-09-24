@@ -3987,3 +3987,16 @@ Questions that need Mukesh are marked **Decide:**.
   **Decide:** the same redesign dropped a PASSED module's grade band from
   the journey - it reads "Pass", where it used to read "A" or "B". If the
   band matters on Search & Trace, it belongs in that step's detail.
+- **test_fqc_dashboard.js 2/16 -> 18/18.** Three harness gaps, no product
+  bug: no `can()` stub (Round 28's loader guard - missed then, as the file
+  was already failing), no `console` under Windows Script Host (the old
+  note blamed this alone), and `_localDate()` not read out of the shipped
+  file. The last two tests expected the Customer filter to send a CODE;
+  9944a0c (12 Sep) deliberately sends the NAME, and that is right -
+  allocations write the canonical name into `serial.customer`
+  (`_line_payload`'s `cust`), which `/api/fqc/dashboard` filters on.
+  Mapping to a code would match no allocated module.
+- **Decide: `test_js.js` is not a test.** 3,927 lines of v4's page script
+  with snippets pasted in, ending in an unterminated `function check() {`;
+  no harness, never passed. Added in 1512063 (12 Sep). Delete it, so the
+  suite's only non-server failure stops being noise.

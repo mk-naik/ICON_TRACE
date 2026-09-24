@@ -11,8 +11,8 @@
  *     about what they are counting
  *   the filter bar actually reaches the server - Apply, Reset, and changing
  *     a date all ask the real question again, not a demo array's
- *   the Customer select sends the server a customer CODE, translated from
- *     the display name the operator actually picked
+ *   the Customer select sends the server the customer's NAME - what an
+ *     allocation writes into serial.customer, which the server filters on
  *   "All ..." never becomes a literal filter value
  *
  * v4's Apply button filtered a fixed sample array (SHIFT_ROWS) and wrote
@@ -73,6 +73,11 @@ if (!Date.prototype.toISOString) Date.prototype.toISOString = function () {
 
 var WSH = (typeof WScript !== 'undefined');
 function echo(s) { if (WSH) WScript.Echo(s); else console.log(s); }
+/* Windows Script Host has no console; the code under test logs through
+   it. A silent one, so a log line cannot fail a test. */
+if (typeof console === 'undefined') {
+  var console = { log: function () {}, warn: function () {}, error: function () {} };
+}
 function here() {
   if (WSH) {
     var p = WScript.ScriptFullName;
@@ -241,6 +246,10 @@ function drawDonut() { drawDonutCalls++; }
 var C = { green: '#0', amber: '#1', red: '#2' };
 var toasts;
 function toast(t) { toasts.push(t); }
+/* Round 28: renderers ask can() before they fetch - here the viewer can
+   see the FQC Dashboard under test. */
+function can(v) { return true; }
+function canWrite(v) { return true; }
 function fqcEsc(v) {
   return String(v === null || v === undefined ? '' : v)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -291,6 +300,15 @@ if (from < 0 || to < 0 || to < from) {
   if (WSH) WScript.Quit(1); else process.exit(1);
 }
 var dashSrc = srcFull.substring(from, to).replace(/\.catch\(/g, "['catch'](");
+/* The dashboard's date defaults come from _localDate(), which lives outside
+   the block above - read from the same shipped file, not re-typed here. */
+var ldFrom = srcFull.indexOf('  function _localDate(d) {');
+var ldTo = ldFrom < 0 ? -1 : srcFull.indexOf('\n  }\n', ldFrom);
+if (ldFrom < 0 || ldTo < 0) {
+  echo('CANNOT RUN: icon_live.js no longer has function _localDate(d).');
+  if (WSH) WScript.Quit(1); else process.exit(1);
+}
+eval(srcFull.substring(ldFrom, ldTo + 4));
 eval(dashSrc);
 
 /* ---- harness -------------------------------------------------------------- */
@@ -321,11 +339,16 @@ function defaultReply() {
 
 /* ---- filters read the DOM correctly ------------------------------------- */
 
-test('a customer picked by name is sent to the server as its code', function () {
+/* Sent as the NAME since 9944a0c (12 Sep), and correctly: an allocation
+   writes the customer's canonical name into serial.customer
+   (_line_payload's "cust"), and /api/fqc/dashboard filters on
+   s.customer = %s. Mapping the name to its code, as this test used to
+   require, would match no allocated module at all. */
+test('a customer is sent to the server as its name - what serial.customer holds', function () {
   reset();
   document.getElementById('fDashCust').value = 'SG MEDA';
   var f = fqcDashFilters();
-  assert(f.customer === 'SGMEDA', f.customer);
+  assert(f.customer === 'SG MEDA', f.customer);
 });
 
 test('"All ..." selections are never sent as literal filter values', function () {
@@ -350,7 +373,7 @@ test('the query string carries every filter that is actually set', function () {
   document.getElementById('fDashModel').value = 'ISEN630-G12R';
   document.getElementById('fDashResult').value = 'Rejected only';
   var q = fqcDashQuery(fqcDashFilters());
-  ['from=', 'to=', 'shift=2', 'customer=SGMEDA', 'model=ISEN630-G12R',
+  ['from=', 'to=', 'shift=2', 'customer=SG%20MEDA', 'model=ISEN630-G12R',
    'result=reject'].forEach(function (part) {
     assert(q.indexOf(part) !== -1, part + ' missing from ' + q);
   });
