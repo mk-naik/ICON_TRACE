@@ -851,6 +851,145 @@
   };
   window.canWrite = function (v) { return !!_perm(v).write; };
 
+  /* ---- Master data: a Super Admin's to change, an Admin's to read ------
+   *
+   * The server has refused every master-data write to anyone but a Super
+   * Admin since Round 23 (_R_MASTER: /api/material, /api/cell-efficiencies,
+   * /api/settings, /api/db/reset). The page disagreed with it both ways:
+   * v4's addRecord() and editRecord() refuse anyone whose role is not
+   * literally 'Admin', so a Super Admin was told "Only Admin can add master
+   * data" - while an Admin got the form, filled it in, and was refused by
+   * the server on save.
+   *
+   * Decided here, once, per kind of record:
+   *   material             saved to the server - a Super Admin edits it;
+   *                        anyone else sees it read-only, and is told why
+   *   model, station,      v4 edits these in the page and saves nothing,
+   *   reason, user         so the change is gone on reload - a demo control
+   *                        on a live screen, offered to nobody
+   *
+   * icon_trace.html is v4's and may not be edited, so once this has allowed
+   * the action v4's own function still does the work - called with the role
+   * name its check looks for, and the real one restored the moment it
+   * returns (it runs synchronously; nothing else can observe the swap). */
+  var MASTER_REASON = 'Only a Super Admin can change master data. You can view it.';
+  var PAGE_ONLY_REASON = 'This list is not saved to the server yet, so it cannot be ' +
+                         'edited here.';
+  var MASTER_KINDS = { material: 'saved', model: 'page', station: 'page',
+                       reason: 'page', user: 'page' };
+
+  var _roleDuringV4 = null;   /* the REAL role while a v4 call runs as 'Admin' */
+
+  function _isSuperAdmin() {
+    if (_roleDuringV4) return _roleDuringV4 === 'Super Admin';
+    return typeof USER !== 'undefined' && !!USER && USER.role === 'Super Admin';
+  }
+
+  function masterRefusal(kind) {
+    var k = MASTER_KINDS[kind];
+    if (k === 'page') return PAGE_ONLY_REASON;
+    if (k === 'saved' && !_isSuperAdmin()) return MASTER_REASON;
+    return null;
+  }
+  window.masterRefusal = masterRefusal;
+
+  /* v4's addRecord() calls editRecord() inside itself, so this nests:
+     the inner call must still be judged on the real role, not the swapped
+     one - hence _roleDuringV4, set by the outermost call only. */
+  function _asV4Admin(fn, self, args) {
+    var real = USER.role, outer = !_roleDuringV4;
+    if (real === 'Super Admin') {
+      if (outer) _roleDuringV4 = real;
+      USER.role = 'Admin';
+    }
+    try { return fn.apply(self, args); }
+    finally { USER.role = real; if (outer) _roleDuringV4 = null; }
+  }
+
+  ['addRecord', 'editRecord'].forEach(function (name) {
+    var v4 = window[name];
+    if (typeof v4 !== 'function' || v4.__master) return;
+    var w = function (kind) {
+      var why = masterRefusal(kind);
+      if (why) { if (typeof toast === 'function') toast(why); return; }
+      return _asV4Admin(v4, this, arguments);
+    };
+    w.__master = true;
+    window[name] = w;
+  });
+
+  /* v4's Drafts screen (still its own sample data) likewise shows "all
+     sections" to a role named exactly 'Admin'. A Super Admin sees what an
+     Admin sees. */
+  ['draftsVisible', 'renderDrafts', 'openDraft', 'cancelDraft', 'dfCheck']
+    .forEach(function (name) {
+      var v4 = window[name];
+      if (typeof v4 !== 'function' || v4.__asAdmin) return;
+      var w = function () { return _asV4Admin(v4, this, arguments); };
+      w.__asAdmin = true;
+      window[name] = w;
+    });
+
+  /* The same rule on screen: controls the rule refuses are disabled with
+     the reason on hover, so nobody fills in a form to be refused at the
+     end. Re-applied as the Admin screen re-renders its tables. */
+  function _masterLock(el, why) {
+    if (el.disabled && el.title === why) return;
+    el.disabled = true;
+    el.title = why;
+    el.classList.add('ro-locked');
+  }
+
+  function applyMasterLocks() {
+    var admin = document.getElementById('v-admin');
+    if (!admin || typeof USER === 'undefined' || !USER || !USER.role) return;
+    admin.querySelectorAll('[onclick*="addRecord("], [onclick*="editRecord("]')
+      .forEach(function (b) {
+        var m = (b.getAttribute('onclick') || '').match(/(?:add|edit)Record\(\s*'(\w+)'/);
+        var why = m && masterRefusal(m[1]);
+        if (why) _masterLock(b, why);
+      });
+    if (_isSuperAdmin()) return;
+    /* cell efficiencies and the evidence-source settings are master data
+       too, behind the same Super-Admin-only gates */
+    ['effAdd', 'effNew'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) _masterLock(el, MASTER_REASON);
+    });
+    admin.querySelectorAll('#effChips [data-eff]').forEach(function (a) {
+      a.style.display = 'none';
+    });
+    var set = document.getElementById('v-settings');
+    if (set) {
+      set.querySelectorAll('input, select, textarea, button').forEach(function (el) {
+        _masterLock(el, MASTER_REASON);
+      });
+    }
+    ['ad-materials', 'ad-stations'].forEach(function (id) {
+      var pane = document.getElementById(id);
+      if (!pane || pane.querySelector(':scope > .ro-note')) return;
+      var n = document.createElement('div');
+      n.className = 'note n-info ro-note';
+      n.innerHTML = '<span>i</span><span>' + MASTER_REASON + '</span>';
+      pane.insertBefore(n, pane.firstChild);
+    });
+  }
+  window.applyMasterLocks = applyMasterLocks;
+
+  var _masterObs = null;
+  function watchMasterLocks() {
+    var admin = document.getElementById('v-admin');
+    if (!admin || _masterObs || typeof MutationObserver === 'undefined') return;
+    var busy = false;
+    _masterObs = new MutationObserver(function () {
+      if (busy) return;
+      busy = true;
+      try { applyMasterLocks(); } finally { busy = false; }
+    });
+    _masterObs.observe(admin, { childList: true, subtree: true,
+      attributes: true, attributeFilter: ['disabled'] });
+  }
+
   /* ---- A screen the account may view but not write --------------------
    *
    * Its save/create controls are disabled, with the reason on hover and a
@@ -911,6 +1050,8 @@
       _roObservers[sec.id].observe(sec, { childList: true, subtree: true,
         attributes: true, attributeFilter: ['disabled'] });
     });
+    applyMasterLocks();
+    watchMasterLocks();
   }
   window.applyWriteLocks = applyWriteLocks;
 

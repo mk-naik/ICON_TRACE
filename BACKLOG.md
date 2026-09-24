@@ -3852,3 +3852,51 @@ a server already running on 8090 or 5000.
   removal.
 - Round 26's `ensureRoleEntry()` note narrows to `admin`/`items`: an
   unknown role is still aliased to Admin's list there.
+
+## Round 28 follow-up - master data on the Admin screen
+
+Reported by Mukesh: signed in as Super Admin, Admin tabs said "Only Admin
+can add master data". Audited every Admin tab and Item Master on the
+running page as Super Admin and as Admin. The server had it right all along
+(`_R_MASTER`: materials, cell efficiencies, settings, reset are Super Admin
+only); the page disagreed both ways:
+
+- v4's `addRecord()`/`editRecord()` refuse any role not literally `'Admin'`
+  - so a **Super Admin** was refused on Materials, Models and Reason codes.
+- An **Admin** got the Material form, filled it in, and the server refused
+  the save.
+- Stations & sources told an Admin **"Evidence sources saved." over a 403**
+  - nothing had been written. `frag_settings.html` now reports the
+  server's refusal.
+
+Now decided in one place in icon_live.js, per kind of record:
+
+| Kind | Super Admin | Admin |
+|---|---|---|
+| material, cell efficiency, evidence-source settings | edits | read-only - controls disabled, "Only a Super Admin can change master data. You can view it." on hover and as a note on the tab |
+| model, station, reason code | not offered | not offered |
+
+Models, stations and reason codes are edited by v4 **in the page only** and
+saved nowhere - the change is gone on reload. That is a demo control on a
+live screen (PROJECT_OVERVIEW 5), so no role is offered it; each control
+says "This list is not saved to the server yet". Making them real needs
+endpoints - a decision for Mukesh, not taken here.
+
+v4's check stays in icon_trace.html (read-only); once the live layer has
+allowed an action, v4's own function runs with the role name it checks
+for and the real one restored as it returns. The same wrapper gives a
+Super Admin v4's "all sections" Drafts view (sample data).
+
+Found, not changed (placeholders that only toast): **"Cancel document"**
+toasts "Document cancelled. Original preserved." and **"Sign off review"**
+toasts "Access review recorded against ..." - neither calls the server,
+and both claim something happened. "+ Add type" (Machines) and
+"+ New version" (Grade rules) only describe a form that does not exist.
+Consumption BOM, Serial namespace, Open questions and Item Master have no
+edit controls for anyone.
+
+`test_master_data_ui.py` (4): a Super Admin opens and edits materials with
+no "Only Admin" anywhere; an Admin sees every master control disabled with
+the reason, and a forced save is reported as refused; models/stations/
+reasons offered to nobody; Drafts shows a Super Admin all sections, with
+the role never left swapped.

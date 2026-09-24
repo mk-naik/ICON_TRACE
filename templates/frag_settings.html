@@ -98,7 +98,17 @@
     body.el_root=body.el_a_root;
     fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify(body)})
-     .then(function(r){return r.json();}).then(function(){
+     .then(function(r){return r.json().then(function(d){return {ok:r.ok&&d.ok!==false,d:d};});})
+     .then(function(res){
+       /* The server's answer decides what is said: an Admin used to be
+          told "Evidence sources saved." while /api/settings refused the
+          save (Super Admin only) and nothing was written. */
+       if(!res.ok){
+         var why=(res.d&&res.d.why)||'Not saved - the server refused it.';
+         document.getElementById('s_msg').textContent=why;
+         if(typeof toast==='function') toast(why);
+         return;
+       }
        document.getElementById('s_msg').textContent='Saved.';
        if(typeof toast==='function') toast('Evidence sources saved.');
        if(window.iconLoadView) iconLoadView('settings','/view/settings');
