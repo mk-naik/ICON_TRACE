@@ -3337,3 +3337,132 @@ not slipping past, writes refused meanwhile, the policy's own sentence on
 a weak password, the temporary one dead afterwards, and an account reset
 mid-session stopped on its next action. `test_users_screen.py` (6) - the
 card layout and the self-row Reset TOTP.
+
+---
+
+## Round 26 - per-screen permissions, the foundation
+
+**This round changes no one's actual access.** It adds the table that
+per-user permissions will live in, the functions that read and write it,
+and seeds every account so the table says exactly what its role already
+grants. Round 27 is where enforcement moves onto this table; Round 28 is
+where the screen that edits it exists. Until Round 27 ships, nothing reads
+`user_screen_perm` to decide anything.
+
+Why at all: role buckets cannot express the real case - someone who should
+see everything in Dispatch but create nothing outside their own screen
+there, while two other people nominally sharing "Dispatch Operator" need
+different screens entirely.
+
+### The screen registry
+
+`icon_auth.SCREENS`, confirmed against the live files rather than
+transcribed - `test_screen_perms.py` parses every `data-v` in
+icon_trace.html and every `NEW_VIEWS` entry in icon_live.js on each run,
+and fails if the registry disagrees on any id, label or section.
+
+| Section | id | Label |
+|---|---|---|
+| Overview | `mgmt` | Management Overview |
+| Overview | `search` | Search & Trace |
+| Production | `proddash` | Production Dashboard |
+| Production | `indent` | Indent *(NEW_VIEWS)* |
+| Production | `plan` | Planning |
+| Production | `prodentry` | Production Entry |
+| Production | `loss` | Loss & Breakdown |
+| FQC | `dash` | FQC Dashboard |
+| FQC | `fqc` | FQC Entry |
+| Packing | `pack` | New Pallet |
+| Packing | `repack` | Repack |
+| Packing | `packdash` | Packing Log |
+| Dispatch | `disp` | Stock & Dispatch |
+| Dispatch | `invoice` | Tax Invoice |
+| Dispatch | `challan` | Challan |
+| Dispatch | `loadver` | Loading Verification *(NEW_VIEWS)* |
+| Dispatch | `gp` | Gate Pass |
+| Control | `drafts` | Drafts |
+| Control | `hold` | Hold & Deviation |
+| Control | `review` | Needs Review |
+
+**Excluded, deliberately:** `admin` and `items`, the Super-Admin-only
+critical surface. They stay role-gated exactly as Round 23 built them, and
+no per-user toggle may reach them - Round 27 included.
+
+**Sub-views** belong to their screen, not to themselves: `challan-list`
+-> challan, `gp-list` and `gp-new` -> gp, `loading-list` and `loadsession`
+-> loadver, `invoice-parser` -> invoice. Round 27's enforcement has to
+resolve them that way (`icon_auth.SUBVIEWS`).
+
+### The write:false defaults - for Mukesh to confirm before Round 27
+
+Each was checked against the code rather than assumed from its name.
+
+| Screen | Default write | Why |
+|---|---|---|
+| Management Overview | false | No write call anywhere in its wiring. |
+| Search & Trace | false | Read only. |
+| Production Dashboard | false | No write call. |
+| FQC Dashboard | false | No write call. |
+| Packing Log | false | No write call. |
+| Hold & Deviation | false | `GET /api/hold` only. Holds clear by themselves when evidence arrives, or through Needs Review - nothing is released from this screen. |
+| Drafts | false | Still v4's own sample-data screen, never overridden by the live layer, and makes no server call at all. (Like Users was before Round 24 - a candidate for the same treatment.) |
+| **Needs Review** | **true - departs from the brief** | The brief listed it read-only. It is not: it is where Quality, Production Incharge and Admin resolve items, through `POST /api/review/resolve` - the Quality role's entire job. Read-only here would take that job away the moment Round 27 enforces, which this round's own rule forbids. |
+
+Export (`POST /api/export/xlsx`) is on every screen, read-only ones
+included, and is gated as a read since Round 23. **Round 27 must not tie
+it to these write flags**, or every read-only screen loses its download
+button.
+
+### One departure from the brief in how defaults are derived
+
+The brief said to read `ROLES` from icon_trace.html. The live layer
+rewrites that object at runtime, and v4's literal alone would have given
+Admin and Super Admin no Indent or Loading Verification, Dispatch and
+Packing no Loading Verification, Production Incharge no Indent or Needs
+Review, and **the Quality role no screens at all**. `default_perms_for_role()`
+therefore applies the same four sources the running page does, parsed
+rather than hand-copied. It is tested against something independent: the
+test signs in to the real page in Chromium and reads `window.ROLES` as the
+live layer left it. A v4-only parse fails that test on its first role.
+
+### Things Round 27 needs to know
+
+- **A screen's write flag is broader than some roles' real power on it.**
+  FQC Operator gets `write` on Needs Review, because v4's ROLES gives them
+  that screen - but `/api/review/resolve`'s per-branch checks admit only
+  Quality, Production Incharge and Admin, so an FQC Operator can resolve
+  nothing there. Round 27 must **keep** those inner checks, not replace
+  them with this table, or FQC Operators gain resolve power the day
+  enforcement moves.
+- **Nobody may change their own permissions.** `_require_can_act_on()`
+  permits acting on yourself; here that would be the one way a restricted
+  account could hand a screen back to itself, so `set_screen_perms()`
+  refuses it.
+- **`ensureRoleEntry()` in icon_live.js aliases ANY role the page does not
+  know to Admin's screens.** Cosmetic today, since the server refuses an
+  unknown role everything - but once the nav is driven by this table
+  instead, that fallback should narrow to nothing, matching
+  `default_perms_for_role()`, which gives an unknown role no screens.
+- **Test fixtures create accounts directly**, bypassing create_operator(),
+  so those accounts have no permission rows. Harmless now; once Round 27
+  enforces, `auth_test_helper` will need to seed them.
+
+### What proves it
+
+`test_screen_perms.py` (16): the registry against the live nav, mutation-
+checked for a wrong label, a wrong section and a missing screen; the role
+defaults against `window.ROLES` from a real browser, role by role and
+screen by screen; the no-rows default; every create function leaving a full
+row set, read back; the hierarchy refusal; the self-change refusal; unknown
+screen, write-without-view and malformed input refused before anything is
+written; partial maps merging rather than replacing; and the migration's
+dry run, backup refusal, exact result (140 cells across seven roles, zero
+mismatches) and safe re-run.
+
+### Running it
+
+Once, on the real database, after this round is merged:
+
+    copy icontrace.db icontrace.db.bak
+    python migrate_screen_perms.py            # read what it will do
+    python migrate_screen_perms.py --apply
