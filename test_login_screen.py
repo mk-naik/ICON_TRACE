@@ -71,6 +71,10 @@ def seed_account(role="Dispatch Operator"):
             "pw_hash, created_at, created_by) VALUES (%s,%s,%s,%s,%s,%s,%s)",
             (LOGIN_ID, NAME, role, "DISPATCH-01",
              icon_auth.hash_pw(PASSWORD), 1000000, "test"))
+        # The starting permissions every real account is created with
+        # (Round 26) - the write gates read these since Round 27.
+        icon_auth.set_screen_perms(cur, "cli", LOGIN_ID,
+                                   icon_auth.default_perms_for_role(role))
 
 
 def blank_page(b):
