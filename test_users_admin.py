@@ -150,6 +150,30 @@ def t_list_is_gated():
 
 
 # --------------------------------------------------------------------------
+# Round 25 section 1 - create_admin()'s missing hierarchy check
+# --------------------------------------------------------------------------
+
+@test("icon_auth.create_admin() refuses an Admin outright, called DIRECTLY "
+     "with no endpoint in front of it - creating a rank-2 account is "
+     "acting on rank 2, and the library now says so itself")
+def t_create_admin_hierarchy_in_the_library():
+    base()
+    with store.conn() as (cx, cur):
+        try:
+            icon_auth.create_admin(cur, ADMIN, "sneaky", "Sneaky Admin")
+            assert False, "an Admin created an Admin straight against icon_auth"
+        except icon_auth.AuthError as e:
+            # the same refusal the rest of the hierarchy uses, not a new one
+            assert str(e) == "Not found.", str(e)
+        assert store.one(cur, "SELECT 1 FROM app_user WHERE login_id=%s",
+                         ("sneaky",)) is None
+
+        # a Super Admin, and the CLI actor, are both unaffected
+        assert len(icon_auth.create_admin(cur, SA, "bysa", "By SA")) == 32
+        assert len(icon_auth.create_admin(cur, "cli", "bycli", "By CLI")) == 32
+
+
+# --------------------------------------------------------------------------
 # 2 - the four account actions
 # --------------------------------------------------------------------------
 

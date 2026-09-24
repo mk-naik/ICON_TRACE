@@ -722,8 +722,16 @@ def create_admin(cur, actor_login_id, target_login_id, display_name, ip=None, no
         actor = _get_user(cur, actor_login_id)
         if not actor: raise AuthError("Actor not found.")
         actor_rank = get_rank(actor["role"])
-        if actor_rank < 2:
-            raise AuthError("Not found.") # Following the pattern of hiding existence/rejecting
+        # Rank 3, not rank 2. Creating an Admin means creating a rank-2
+        # account, and "an Admin never acts on another Admin" is the rule
+        # every other function here enforces through _require_can_act_on() -
+        # set_temp_password(), unlock_user() and deactivate_user() all call
+        # it. This one never did, so an Admin could mint a peer it was then
+        # forbidden to touch. Same "Not found." the rest of the hierarchy
+        # uses, so a refusal here discloses nothing a refusal anywhere else
+        # would not.
+        if actor_rank < 3:
+            raise AuthError("Not found.")
     else:
         actor_rank = 3
         

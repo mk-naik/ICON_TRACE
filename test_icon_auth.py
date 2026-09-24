@@ -498,22 +498,30 @@ def test_14b_create_admin(db_env):
         with pytest.raises(icon_auth.AuthError, match="Not found."):
             icon_auth.create_admin(cur, "op1", "admin3", "Admin Three", now=now)
             
-        # Admin can create admin
-        token = icon_auth.create_admin(cur, "admin1", "admin4", "Admin Four", now=now)
-        assert len(token) == 32 # 16 hex bytes
-        
-        # User is created
+        # An Admin cannot create an Admin either (Round 25). This asserted
+        # the opposite until then, which locked in the one place the
+        # hierarchy was never checked: creating a rank-2 account is acting
+        # on rank 2, and an Admin may not. Same refusal as the operator
+        # case above it - "Not found." - so neither discloses more than the
+        # other.
+        with pytest.raises(icon_auth.AuthError, match="Not found."):
+            icon_auth.create_admin(cur, "admin1", "admin4", "Admin Four", now=now)
+
+        # ...and nothing was created by the attempt
         cur.execute("SELECT role FROM app_user WHERE login_id='admin4'")
-        row = cur.fetchone()
-        assert row["role"] == "Admin"
-        
+        assert cur.fetchone() is None
+
         # Super admin can create admin
         token2 = icon_auth.create_admin(cur, "super1", "admin5", "Admin Five", now=now)
         assert len(token2) == 32
-        
-        # Already exists
+
+        cur.execute("SELECT role FROM app_user WHERE login_id='admin5'")
+        assert cur.fetchone()["role"] == "Admin"
+
+        # Already exists - asked by a Super Admin, since an Admin no longer
+        # gets far enough to be told
         with pytest.raises(icon_auth.AuthError, match="ID already exists"):
-            icon_auth.create_admin(cur, "admin1", "admin4", "Admin Four", now=now)
+            icon_auth.create_admin(cur, "super1", "admin5", "Admin Five", now=now)
 
 def test_15_cooldown_escalation(db_env):
     """Round 19, section 2: the escalating cooldown (2s, 4s, 8s, 8s...)
