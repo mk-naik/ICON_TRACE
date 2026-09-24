@@ -138,7 +138,7 @@ def live_roles_from_the_page():
      "role by role and screen by screen - read out of a real browser after "
      "sign-in, so the live layer's runtime additions are included")
 def t_defaults_match_the_running_page():
-    page = live_roles_from_the_page()
+    page = page_roles()
     assert "Quality" in page, "the live layer's Quality role is missing from the page"
     for role, views in page.items():
         want_view = {icon_auth.SUBVIEWS.get(v, v) for v in views} & icon_auth.SCREEN_IDS
@@ -273,6 +273,137 @@ def t_partial_map_is_a_merge():
         after = icon_auth.get_screen_perms(cur, "op1")
     changed = {s for s in icon_auth.SCREEN_IDS if before[s] != after[s]}
     assert changed == {"invoice"}, changed
+
+
+# --------------------------------------------------------------------------
+# Section 3 - the migration, driven as the real script
+# --------------------------------------------------------------------------
+
+ROLES_TO_SEED = (("sa1", "Super Admin"), ("admin1", "Admin"),
+                 ("pi1", "Production Incharge"), ("fqc1", "FQC Operator"),
+                 ("pk1", "Packing Operator"), ("dp1", "Dispatch Operator"),
+                 ("q1", "Quality"))
+
+_PAGE_ROLES = []
+
+
+def page_roles():
+    if not _PAGE_ROLES:
+        _PAGE_ROLES.append(live_roles_from_the_page())
+    return _PAGE_ROLES[0]
+
+
+def old_shaped_db():
+    """A database as it stood BEFORE Round 26: accounts in every role, and no
+    user_screen_perm table at all. Its own directory, so the script's backup
+    check looks there and not at the repository's real database."""
+    d = tempfile.mkdtemp(prefix="icontrace_mig_")
+    path = os.path.join(d, "icontrace.db")
+    store.DB_PATH = path
+    with store.conn() as (cx, cur):
+        icon_auth.ensure_schema(cur)
+        cur.execute("DROP TABLE user_screen_perm")
+        for login_id, role in ROLES_TO_SEED:
+            cur.execute("INSERT INTO app_user (login_id, display_name, role, created_at) "
+                        "VALUES (%s, %s, %s, 1)", (login_id, login_id.upper(), role))
+    return d, path
+
+
+def run_script(path, *args):
+    env = dict(os.environ, ICON_DB_FILE=path)
+    return subprocess.run([sys.executable, os.path.join(BASE, "migrate_screen_perms.py")]
+                          + list(args), env=env, cwd=BASE,
+                          capture_output=True, text=True, timeout=120)
+
+
+def table_exists(path):
+    import sqlite3
+    cx = sqlite3.connect(path)
+    try:
+        return cx.execute("SELECT 1 FROM sqlite_master WHERE name='user_screen_perm'"
+                          ).fetchone() is not None
+    finally:
+        cx.close()
+
+
+@test("migration: the dry run writes nothing - not even the table - and "
+     "says what it would do for every account")
+def t_migration_dry_run():
+    d, path = old_shaped_db()
+    try:
+        out = run_script(path)
+        assert out.returncode == 0, out.stderr
+        assert "Dry run - nothing written" in out.stdout, out.stdout
+        for login_id, _ in ROLES_TO_SEED:
+            assert login_id in out.stdout, login_id
+        assert not table_exists(path), "the dry run created the permission table"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@test("migration: --apply without a backup beside the database is refused, "
+     "and writes nothing")
+def t_migration_needs_backup():
+    d, path = old_shaped_db()
+    try:
+        out = run_script(path, "--apply")
+        assert out.returncode == 1, out.stdout
+        assert "Refusing to run: no backup" in out.stdout, out.stdout
+        assert not table_exists(path), "a refused apply still wrote"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@test("migration: --apply with a backup present gives every account exactly "
+     "what its role grants on the RUNNING page - checked screen by screen "
+     "against window.ROLES, not against the function that wrote it")
+def t_migration_applies_exactly():
+    page = page_roles()
+    d, path = old_shaped_db()
+    try:
+        shutil.copyfile(path, path + ".bak")
+        out = run_script(path, "--apply")
+        assert out.returncode == 0, out.stdout + out.stderr
+        assert "Seeded %d account(s)." % len(ROLES_TO_SEED) in out.stdout, out.stdout
+
+        store.DB_PATH = path
+        with store.conn() as (cx, cur):
+            for login_id, role in ROLES_TO_SEED:
+                got = icon_auth.get_screen_perms(cur, login_id)
+                reach = {icon_auth.SUBVIEWS.get(v, v) for v in page[role]} \
+                    & icon_auth.SCREEN_IDS
+                for sid in icon_auth.SCREEN_IDS:
+                    assert got[sid]["view"] == (sid in reach), \
+                        "%s (%s) / %s: migrated view=%s, the page gives %s" % (
+                            login_id, role, sid, got[sid]["view"], sid in reach)
+                    assert got[sid]["write"] == (sid in reach and
+                                                 sid not in icon_auth.READ_ONLY_SCREENS), \
+                        (login_id, sid)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@test("migration: running it again leaves accounts that already have rows "
+     "alone - including one whose screens were changed on purpose, which a "
+     "reset to role defaults would silently undo")
+def t_migration_is_safe_to_rerun():
+    d, path = old_shaped_db()
+    try:
+        shutil.copyfile(path, path + ".bak")
+        assert run_script(path, "--apply").returncode == 0
+        store.DB_PATH = path
+        with store.conn() as (cx, cur):
+            icon_auth.set_screen_perms(cur, "sa1", "dp1",
+                                       {"invoice": {"view": False, "write": False}})
+        again = run_script(path, "--apply")
+        assert again.returncode == 0, again.stdout
+        assert "Seeded 0 account(s)." in again.stdout, again.stdout
+        assert "left alone" in again.stdout
+        with store.conn() as (cx, cur):
+            assert icon_auth.get_screen_perms(cur, "dp1")["invoice"] == \
+                {"view": False, "write": False}, "a deliberate change was reset"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":
