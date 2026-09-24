@@ -589,6 +589,33 @@ if __name__ == "__main__":
     
     with store.conn() as (cx, cur):
         icon_auth.ensure_schema(cur)
-        
+
+    # Which database this is pointed at is the single most important thing
+    # about a lab run, and it used to be the one thing this never said. An
+    # account enrolled here only works in the app if BOTH are reading the
+    # same file: the TOTP secret is Fernet-encrypted with the key that sits
+    # beside the database, so a different file means a different key too,
+    # and the app refuses the code with its usual generic "not accepted".
+    # Hours were lost to exactly that, with nothing on screen to show why.
+    real_db = os.path.join(os.path.dirname(BASE), "icontrace.db")
+    db_path = os.path.abspath(store.DB_PATH)
+    shared = os.path.normcase(db_path) == os.path.normcase(os.path.abspath(real_db))
     print("Serving lab on http://127.0.0.1:8091")
+    print("Database: %s" % db_path)
+    print("TOTP key: %s" % os.path.join(os.path.dirname(db_path), ".icon_totp_key"))
+    if shared:
+        print("This IS the app's own database - accounts enrolled here work "
+              "in ICON TRACE.")
+    else:
+        print("")
+        print("  WARNING: this is NOT the app's database (%s)." % real_db)
+        print("  Anything enrolled here will NOT be able to sign in to ICON")
+        print("  TRACE - different file, and a different .icon_totp_key with")
+        print("  it. To enrol real accounts, restart pointed at the app's own")
+        print("  database:")
+        if os.name == "nt":
+            print('    $env:ICON_DB_FILE = "%s"; python auth_lab\\lab_app.py' % real_db)
+        else:
+            print('    ICON_DB_FILE="%s" python auth_lab/lab_app.py' % real_db)
+        print("")
     serve(app, host="127.0.0.1", port=8091)
