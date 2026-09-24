@@ -187,3 +187,46 @@ a.nav-i{text-decoration:none}
 .defect-list .dl-opt.on, .defect-list .dl-opt:hover { background: var(--solar-lt); }
 .defect-list .dl-opt b { color: var(--solar); }
 .defect-list .dl-none { color: var(--ink3); }
+
+/* ---- Users (Round 25) -------------------------------------------------
+   The approved mockup's card list, replacing v4's table. Actions live in a
+   menu behind a kebab rather than sitting in the open: a row that offers
+   Reset password, Unlock and Deactivate all at once reads as three equal
+   invitations, and two of those are not everyday actions.               */
+.usr-cards { display: flex; flex-direction: column; gap: 8px; }
+.usr-card {
+  display: grid;
+  grid-template-columns: 38px minmax(150px, 1.4fr) minmax(120px, 1fr) auto 40px;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+}
+.usr-av {
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--brand); color: #fff;
+  font-size: 12px; font-weight: 700; letter-spacing: .3px;
+  display: flex; align-items: center; justify-content: center;
+}
+.usr-who, .usr-role { display: flex; flex-direction: column; line-height: 1.35; }
+.usr-who b { font-size: 13.5px; }
+.usr-role { font-size: 12.5px; }
+.usr-status { justify-self: end; }
+.usr-actions { position: relative; justify-self: end; }
+.usr-kebab { font-size: 16px; line-height: 1; padding: 4px 9px; }
+.usr-menu {
+  display: none;
+  position: absolute; right: 0; top: calc(100% + 5px); z-index: 40;
+  min-width: 178px; padding: 6px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; box-shadow: 0 8px 26px rgba(0, 0, 0, .16);
+}
+.usr-menu.on { display: block; }
+.usr-menu .btn { display: block; width: 100%; text-align: left; margin: 2px 0; }
+
+@media (max-width: 860px) {
+  .usr-card { grid-template-columns: 34px 1fr auto; row-gap: 6px; }
+  .usr-role, .usr-status { grid-column: 2 / -1; justify-self: start; }
+}
