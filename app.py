@@ -428,6 +428,14 @@ def role():
     return g.icon_session["role"] if g.icon_session else ""
 
 
+def actor_login_id():
+    """The session's login_id, which is what icon_auth keys every account on
+    - distinct from actor() above, which is the display name the audit trail
+    records. Passing one where the other is wanted silently looks up nobody,
+    and icon_auth reads that as "actor not found"."""
+    return g.icon_session["login_id"] if g.icon_session else ""
+
+
 def require_role(*allowed_roles):
     """Gate a write endpoint by role, in one place instead of 41 manual
     `if role() not in (...)` blocks. 401 (who are you) when there is no
@@ -581,6 +589,58 @@ def api_session_info():
     return jsonify({"signed_in": True, "name": s["display_name"],
                     "role": s["role"], "station": s["station"],
                     "expires_at": s["expires_at"]})
+
+
+# --------------------------------------------------------------------------
+# User management (Round 24). Every endpoint here is a thin wrapper over an
+# icon_auth function that already enforces the hierarchy - an Admin may act
+# on rank 1 only, or on themselves - via _require_can_act_on(), which raises
+# AuthError("Not found.") rather than saying "forbidden", so that the
+# existence of higher-ranked IDs is not disclosed. None of that is
+# reimplemented here; it is called and its refusal passed through unchanged.
+# --------------------------------------------------------------------------
+
+def _locked_minutes(locked_until, now=None):
+    """Minutes left on a lock, rounded up so it reads "1 min left" until the
+    lock is genuinely over. 0 when not locked. The raw epoch never reaches
+    the client - it is meaningless on screen and invites a client-side clock
+    being used to decide whether a lock has expired."""
+    t = int(now if now is not None else time.time())
+    if not locked_until or locked_until <= t:
+        return 0
+    return (int(locked_until) - t + 59) // 60
+
+
+def _user_row(u, station=None, now=None):
+    return {"login_id": u["login_id"], "display_name": u["display_name"],
+            "role": u["role"], "active": bool(u["active"]),
+            "station": station,
+            "locked_minutes": _locked_minutes(u["locked_until"], now)}
+
+
+@app.route("/api/users")
+@require_role(*_R_ADMIN)
+def api_users_list():
+    """The Users screen's list. icon_auth.list_users() already does the rank
+    filtering (an Admin sees rank-1 accounts plus themselves; a Super Admin
+    sees everyone), and is left alone because icon_auth_cli.py shares it and
+    legitimately needs to see every account.
+
+    The one thing added on top, here rather than in list_users(): Super
+    Admin rows are stripped for EVERY viewer, including a Super Admin
+    looking at this screen themselves. Mukesh's direct instruction - those
+    accounts are created and managed only through icon_auth_cli.py, run
+    locally, so listing them on a screen that cannot act on them would be
+    misleading whoever is reading it. This is deliberate, not an oversight:
+    see BACKLOG.md, Round 24.
+    """
+    with store.conn() as (cx, cur):
+        rows = [dict(r) for r in icon_auth.list_users(cur, actor_login_id())]
+        stations = {r["login_id"]: r["station"]
+                    for r in store.rows(cur, "SELECT login_id, station FROM app_user")}
+    users = [_user_row(u, stations.get(u["login_id"]))
+             for u in rows if u["role"] != "Super Admin"]
+    return jsonify({"users": users})
 
 
 # --------------------------------------------------------------------------
