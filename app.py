@@ -687,6 +687,82 @@ def _target(cur, login_id):
     return target
 
 
+# Every role this screen may create. Super Admin is absent on purpose and
+# is refused explicitly below rather than merely being missing from a list,
+# so the refusal is a stated rule rather than an accident of membership.
+_CREATABLE_ROLES = tuple(r for r in _R_EVERY if r != "Super Admin")
+
+
+@app.route("/api/users", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_users_action
+def api_users_create():
+    body = request.get_json(force=True) or {}
+    login_id = str(body.get("login_id") or "").strip()
+    display_name = str(body.get("display_name") or "").strip()
+    new_role = str(body.get("role") or "").strip()
+    station = str(body.get("station") or "").strip() or None
+
+    if not login_id:
+        return jsonify({"ok": False, "why": "A login ID is required."}), 400
+    if not display_name:
+        return jsonify({"ok": False, "why": "A name is required."}), 400
+    if new_role == "Super Admin":
+        # Not a gap to be closed later: there is no path to this role from
+        # this screen for anybody, a Super Admin included. The only door is
+        # `icon_auth_cli.py create-superadmin`, run on the server itself.
+        return jsonify({"ok": False, "why":
+            "Super Admin accounts are created only with icon_auth_cli.py, on "
+            "the server itself - never from this screen."}), 403
+    if new_role not in _CREATABLE_ROLES:
+        return jsonify({"ok": False, "why":
+            "%r is not a role this screen can create." % new_role}), 400
+
+    with store.conn() as (cx, cur):
+        if icon_auth._get_user(cur, login_id):
+            return jsonify({"ok": False, "why":
+                "That login ID already exists."}), 400
+
+        if new_role == "Admin":
+            # icon_auth.create_admin() permits an Admin to create another
+            # Admin, and test_icon_auth.py asserts that as deliberate Stage
+            # 1a behaviour, so it is not changed there. Creating an Admin
+            # from THIS screen is Super-Admin-only, which is a policy of the
+            # screen rather than of the library. Nothing is disclosed by
+            # saying so plainly: the account does not exist yet, so there is
+            # no existence to hide.
+            if role() != "Super Admin":
+                return jsonify({"ok": False, "why":
+                    "Only a Super Admin can create an Admin account."}), 403
+            token = icon_auth.create_admin(cur, actor_login_id(), login_id,
+                                           display_name, ip=request.remote_addr)
+            if station:
+                cur.execute("UPDATE app_user SET station=%s WHERE login_id=%s",
+                            (station, login_id))
+            db.audit(cur, actor(), "user.create", "app_user", login_id,
+                     {"role": new_role})
+            return jsonify({"ok": True, "login_id": login_id, "role": new_role,
+                            "token": token,
+                            "enrol_url": _enrol_url(login_id, token)})
+
+        temp_password = str(body.get("temp_password") or "")
+        # Checked here so the policy's own sentence reaches the screen.
+        # create_operator() checks it again itself - that is the real gate;
+        # this one only makes the message arrive as something a person can
+        # act on rather than a generic refusal.
+        err = icon_auth.check_password_policy(temp_password, login_id, display_name)
+        if err:
+            return jsonify({"ok": False, "why": err}), 400
+        icon_auth.create_operator(cur, actor_login_id(), login_id, display_name,
+                                  new_role, temp_password, ip=request.remote_addr)
+        if station:
+            cur.execute("UPDATE app_user SET station=%s WHERE login_id=%s",
+                        (station, login_id))
+        db.audit(cur, actor(), "user.create", "app_user", login_id,
+                 {"role": new_role})
+    return jsonify({"ok": True, "login_id": login_id, "role": new_role})
+
+
 @app.route("/api/users/<login_id>/reset-password", methods=["POST"])
 @require_role(*_R_ADMIN)
 @_users_action

@@ -302,6 +302,110 @@ def t_actions_are_gated():
         assert anon.post("/api/users/%s/%s" % (OP, action), json={}).status_code == 401
 
 
+# --------------------------------------------------------------------------
+# 3 - create
+# --------------------------------------------------------------------------
+
+def create(c, **body):
+    return c.post("/api/users", json=body)
+
+
+@test("an Admin can create an operator, who lands with a forced password "
+     "change and shows up on the list immediately")
+def t_create_operator():
+    base()
+    r = create(as_admin(), login_id="newop", display_name="New Op",
+               role="FQC Operator", temp_password="CorrectHorse99",
+               station="FQC-01")
+    assert r.status_code == 200, r.get_json()
+    row = user_row("newop")
+    assert row["role"] == "FQC Operator" and row["station"] == "FQC-01", row
+    assert row["must_change_pw"] == 1, "a temp password was not marked temporary"
+    listed = {u["login_id"] for u in as_admin().get("/api/users").get_json()["users"]}
+    assert "newop" in listed
+
+
+@test("there is NO path to Super Admin from this screen - refused for an "
+     "Admin and for a Super Admin alike. The only door is "
+     "icon_auth_cli.py, run on the server")
+def t_super_admin_cannot_be_created():
+    base()
+    for c, who in ((as_admin(), "Admin"), (as_super(), "Super Admin")):
+        r = create(c, login_id="sa_new", display_name="Sneaky",
+                   role="Super Admin", temp_password="CorrectHorse99")
+        assert r.status_code == 403, "%s got %s" % (who, r.status_code)
+        assert "icon_auth_cli.py" in r.get_json()["why"], r.get_json()
+        assert user_row("sa_new") is None, "%s created a Super Admin" % who
+
+
+@test("creating an Admin is Super-Admin-only, and returns the enrolment "
+     "link rather than a password - an Admin account has no password path")
+def t_create_admin_is_super_admin_only():
+    base()
+    refused = create(as_admin(), login_id="admin9", display_name="Admin Nine",
+                     role="Admin")
+    assert refused.status_code == 403, refused.get_json()
+    assert refused.get_json()["why"] == \
+        "Only a Super Admin can create an Admin account.", refused.get_json()
+    assert user_row("admin9") is None
+
+    ok = create(as_super(), login_id="admin9", display_name="Admin Nine",
+                role="Admin")
+    assert ok.status_code == 200, ok.get_json()
+    d = ok.get_json()
+    assert len(d["token"]) == 32 and "admin9" in d["enrol_url"], d
+    assert user_row("admin9")["role"] == "Admin"
+    assert not user_row("admin9")["pw_hash"], \
+        "an Admin was created with a password"
+
+
+@test("a weak temp password is refused with the policy's own sentence, and "
+     "creates nobody")
+def t_create_weak_password():
+    base()
+    r = create(as_super(), login_id="weakop", display_name="Weak Op",
+               role="FQC Operator", temp_password="abc")
+    assert r.status_code == 400, r.get_json()
+    assert r.get_json()["why"] == "Password must be at least 8 characters.", \
+        r.get_json()
+    assert user_row("weakop") is None
+
+
+@test("a duplicate login ID, an unknown role and a missing name are clear "
+     "400s - not a 500 out of a constraint violation")
+def t_create_bad_input():
+    base()
+    c = as_super()
+    create(c, login_id="dup", display_name="Dup", role="FQC Operator",
+           temp_password="CorrectHorse99")
+
+    cases = [
+        (dict(login_id="dup", display_name="Again", role="FQC Operator",
+              temp_password="CorrectHorse99"), "That login ID already exists."),
+        (dict(login_id="x1", display_name="X", role="Wizard",
+              temp_password="CorrectHorse99"),
+         "'Wizard' is not a role this screen can create."),
+        (dict(login_id="x2", display_name="", role="FQC Operator",
+              temp_password="CorrectHorse99"), "A name is required."),
+        (dict(login_id="", display_name="X", role="FQC Operator",
+              temp_password="CorrectHorse99"), "A login ID is required."),
+    ]
+    for body, want in cases:
+        r = create(c, **body)
+        assert r.status_code == 400, (body, r.status_code)
+        assert r.get_json()["why"] == want, (body, r.get_json())
+
+
+@test("create is gated like every other admin surface")
+def t_create_is_gated():
+    base()
+    body = dict(login_id="nope", display_name="Nope", role="FQC Operator",
+                temp_password="CorrectHorse99")
+    assert create(client_as(OP, "FQC Operator"), **body).status_code == 403
+    assert APP.app.test_client().post("/api/users", json=body).status_code == 401
+    assert user_row("nope") is None
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)
