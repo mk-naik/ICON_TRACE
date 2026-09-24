@@ -347,6 +347,59 @@ def t_empty_form_never_reaches_the_server():
         assert len(posts) == 1, posts
 
 
+@test("with the OS asking for reduced motion the splash holds the finished "
+     "mark still, for long enough to read as deliberate - not the 166ms "
+     "flicker that setting used to produce")
+def t_splash_holds_under_reduced_motion():
+    seed_account()
+    with H.browser() as b:
+        # What Windows' Accessibility -> Visual effects -> Animation effects
+        # OFF does to a browser. Reported as "just showing logo for a
+        # fraction of a second and load screens".
+        ctx = b.new_context(viewport={"width": 1400, "height": 900},
+                            reduced_motion="reduce")
+        pg = ctx.new_page()
+        pg.goto(H.base_url() + "/")
+        pg.wait_for_selector("#liLoginId", timeout=15000)
+        assert pg.evaluate(
+            "matchMedia('(prefers-reduced-motion:reduce)').matches") is True
+
+        pg.evaluate("""() => {
+          window.__t = {};
+          const el = document.getElementById('enIconSplash');
+          const t0 = performance.now();
+          new MutationObserver(() => {
+            if (el.classList.contains('is-leaving')) {
+              if (!window.__t.left) window.__t.left = performance.now() - t0;
+            } else if (el.classList.contains('is-showing')) {
+              if (!window.__t.shown) window.__t.shown = performance.now() - t0;
+            }
+          }).observe(el, {attributes: true, attributeFilter: ['class']});
+        }""")
+        pg.fill("#liLoginId", LOGIN_ID)
+        pg.fill("#liCredential", PASSWORD)
+        pg.click("#liSubmit")
+        # Wait for it to COME UP first: the splash sits at display:none at
+        # rest, so asking for state="hidden" straight after the click is
+        # satisfied instantly, before it has shown at all.
+        pg.wait_for_selector("#enIconSplash.is-showing", timeout=10000)
+        pg.wait_for_selector("#enIconSplash", state="hidden", timeout=15000)
+
+        t = pg.evaluate("window.__t")
+        visible = t["left"] - t["shown"]
+        assert visible > 700, \
+            "the splash only held for %dms under reduced motion - that is " \
+            "the flicker, not a hold" % visible
+
+        # ...and it is still genuinely motionless: no animation on the mark,
+        # and no scale on the way out.
+        anim = pg.evaluate(
+            "getComputedStyle(document.querySelector('#enIconSplash .breathe'))"
+            ".animationName")
+        assert anim in ("none", ""), "the mark is still animating: %r" % anim
+        ctx.close()
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

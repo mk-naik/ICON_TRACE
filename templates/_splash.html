@@ -148,6 +148,11 @@
   #enIconSplash #tailDetail{opacity:1!important}
   #enIconSplash .stage{animation:enicSoftIn 240ms ease both}
   @keyframes enicSoftIn{from{opacity:0}to{opacity:1}}
+  /* The leave scales the stage up by 4.5%. A fade is mild enough to keep,
+     but that is a transform - exactly what this media query is asking us
+     not to do - and it was the one piece of movement still getting
+     through. */
+  #enIconSplash.is-leaving .stage{transform:none}
 }
 </style>
 
@@ -224,7 +229,13 @@
   /* The mark lands at 1850ms*t, but the wordmark and tagline run on to
      3200ms*t - hiding at the mark leaves the letters half drawn, so the
      floor is the whole intro. */
-  var MIN = reduce ? 240 : Math.round(3200 * t);
+  /* Reduced motion asks for no MOTION, not for a flicker. At 240ms the mark
+     appeared and vanished inside a fifth of a second, which reads as a
+     glitch and is arguably worse for somebody motion-sensitive than a calm
+     hold - an abrupt appear/disappear is itself abrupt. The animation stays
+     off (the CSS block above sees to that); the static mark simply holds
+     long enough to look deliberate. */
+  var MIN = reduce ? 1000 : Math.round(3200 * t);
   var t0 = 0, shownAt = 0, armed = false, safety = null;
 
   function now(){ return (window.performance && performance.now) ? performance.now() : Date.now(); }
