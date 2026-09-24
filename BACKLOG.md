@@ -1735,18 +1735,20 @@ Staging
 - [x] Stage 1a - TOTP proven on a STANDALONE login page first (own tiny app, own port);
       only then integrated. Keep the logic in one module so integration is a move, not a
       rewrite. Startup clock check (TOTP fails if the server clock drifts).
-- [~] Stage 1b - users table, server-side sessions that survive a restart, roles enforced
+- [x] Stage 1b - users table, server-side sessions that survive a restart, roles enforced
       on the server, role read from the session, X-User-Role ignored.
       **Enforcement half done (Round 23).** auth_session is a real table; sessions
       survive a restart and a second process; role() and actor() read the session and
       nothing else; X-User-Role and X-User-Name are no longer read anywhere, nor sent;
       all 49 write endpoints carry require_role(); the login screen is a real login.
-      **Provisioning half not started - Round 24:** there is no UI to create, edit,
-      deactivate or re-enrol a user. app_user starts empty; Mukesh creates the first
-      Super Admin himself with `python icon_auth_cli.py create-superadmin <id> "<name>"`,
-      and until Round 24 every other account has to be made the same way. The real
-      people in v4's USERS array (Mukesh, Rajesh Kumar, Amit Sharma, ...) have NO
-      accounts - that array is dead markup now, read by nothing.
+      **Provisioning half done (Round 24).** The Users screen inside Admin is real:
+      GET /api/users lists actual accounts, and create / reset-password / reset-totp /
+      unlock / deactivate / reactivate all work from it. v4's fourteen fictional names
+      are no longer rendered anywhere - that array is dead markup, read by nothing.
+      Still CLI-only, deliberately: Super Admin accounts
+      (`python icon_auth_cli.py create-superadmin <id> "<name>"`), and enrolment
+      itself, which auth_lab/lab_app.py still serves because app.py has no /enrol
+      route.
 - [ ] Stage 2 - change feed: a server sequence bumped at the one commit point
       (store.conn); the client polls /api/changes?since=N inside the 5 s ping; only the
       visible screen refetches; 3-5 s is acceptable. True push (SSE) later needs TLS +
@@ -3181,4 +3183,79 @@ subprocess and drives it with Playwright - the common thread points at
 that fixture or this machine's Playwright/subprocess interaction, not at
 any test's own logic. Left for separate investigation; `test_icon_auth.py`
 (19/19, no live browser) is unaffected.
+
+---
+
+## Round 24 - real user management screen
+
+**What was there before.** The Users tab inside Admin rendered fourteen
+fictional people out of v4's static `USERS` array - Mukesh, Rajesh Kumar,
+Amit Sharma and the rest - every one shown **Active**, each with an Edit
+button that opened a form over a record no server had ever heard of. The
+accounts that could actually sign in were not on that screen at all.
+Harmless while nothing was real; misleading the moment Round 23 made roles
+real, because an Admin could reasonably believe they had just changed a
+real account.
+
+**What it is now.** `renderUsers()` is replaced outright - not patched -
+and fetches `GET /api/users`. The markup is rebuilt too: v4's columns were
+User ID / Name / Role / Line / Shift / Last sign-in, three of which
+describe fields no account carries. Each row is an initials avatar, name
+over login_id, role over station, a status tag (Active / `Locked - N min
+left` / Deactivated), and the actions that target actually permits.
+
+**Super Admin is excluded from `GET /api/users` for every viewer,
+including a Super Admin looking at the screen themselves. This is Mukesh's
+direct instruction, not an oversight.** Those accounts are created and
+managed only through `icon_auth_cli.py`, run on the server, so listing
+them on a screen that cannot act on them would mislead whoever is reading
+it. The filter lives in app.py rather than inside `list_users()`, because
+`icon_auth_cli.py` shares that function and legitimately needs to see
+everyone. If this ever looks like a bug: it is not. The test that guards
+it says so in its own name.
+
+**Endpoints**, each a thin wrapper over the icon_auth function that
+already enforces the hierarchy, all gated `@require_role(*_R_ADMIN)`:
+`GET /api/users`, `POST /api/users`, and per account
+`reset-password`, `reset-totp`, `unlock`, `deactivate`, `reactivate`.
+`reactivate_user()` is new in icon_auth.py, mirroring `deactivate_user()`
+exactly.
+
+**Refusals disclose nothing new.** `_require_can_act_on()` raises
+`"Not found."` for a hierarchy violation - byte-identical to what a
+login_id that does not exist produces - and that wording is passed
+through unchanged rather than improved on. reset-password checks the
+target's role only AFTER that check, so its friendlier "use Reset TOTP
+instead" cannot become a way of discovering that an account exists and
+outranks you. Removing that ordering in a mutation test produced exactly
+that leak.
+
+**Which test proves what.** `test_users_admin.py` (20): the Super Admin
+exclusion for both viewer roles; the rank filtering; no hashes or secrets
+in the payload; minutes-left instead of a raw epoch; every action's happy
+path, hierarchy refusal and gating; the create endpoint's every branch.
+`test_users_screen.py` (6, real Chromium): the fourteen names gone from
+the rendered page; a weak password refused on screen with the policy's own
+sentence; an Admin account offering no password field and yielding a
+copyable enrolment link; an Admin seeing "View only" where it may not act;
+an Admin refused when calling the API directly rather than through a
+button; deactivate/reactivate confirmed at `/login` itself.
+
+**A finding worth recording.** This round's brief assumed
+`icon_auth.create_admin()`'s hierarchy check already refused an Admin
+creating another Admin. It does not - that function never calls
+`_require_can_act_on()` at all, and `test_icon_auth.py:501` asserts
+"Admin can create admin" as deliberate Stage 1a behaviour. So icon_auth
+was left alone and the Super-Admin-only gate lives in the endpoint, as a
+policy of this screen rather than of the library. Anyone tightening
+`create_admin()` later should know they would be changing a tested
+decision, not fixing an oversight.
+
+**Open, and not decided here: should an Admin be scoped to accounts at
+their own station or line?** This round does NOT scope by station - an
+Admin sees every rank-1 account regardless of where it is stationed,
+which is simply how `list_users()` already worked. That is a default
+carried forward, not a considered decision, and it is recorded here so it
+is not mistaken for one. If Unit-2 ever wants an FQC line lead who
+administers only their own line's operators, this is the thing to revisit.
 
