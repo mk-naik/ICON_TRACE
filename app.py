@@ -292,6 +292,7 @@ def _load_session():
     render signed out; the security boundary this round adds is on writes,
     not on which screens the SPA shell will show cosmetically."""
     g.icon_session = None
+    g.icon_must_change_pw = False
     if request.path in _SESSION_EXEMPT_PATHS or \
        request.path.startswith(_SESSION_EXEMPT_PREFIXES):
         return
@@ -300,6 +301,14 @@ def _load_session():
         return
     with store.conn() as (cx, cur):
         g.icon_session = icon_auth.load_session(cur, sid, now=time.time())
+        if g.icon_session:
+            # Read from app_user every request rather than copied onto the
+            # session at login: an account whose password is reset while it
+            # is signed in must be stopped on its NEXT action, not left
+            # running on a flag captured before the reset happened.
+            row = store.one(cur, "SELECT must_change_pw FROM app_user "
+                                 "WHERE user_id=%s", (g.icon_session["user_id"],))
+            g.icon_must_change_pw = bool(row and row["must_change_pw"])
 
 
 @app.after_request
@@ -447,6 +456,12 @@ def require_role(*allowed_roles):
         def inner(*a, **kw):
             if not g.icon_session:
                 return jsonify({"ok": False, "why": "Sign in required."}), 401
+            # A temporary password is a credential somebody else chose and
+            # knows. Until it is replaced the account may read, but must
+            # not write anything into the record under its own name.
+            if getattr(g, "icon_must_change_pw", False):
+                return jsonify({"ok": False, "why":
+                    "Set your own password before saving anything."}), 403
             if g.icon_session["role"] not in allowed_roles:
                 return jsonify({"ok": False,
                     "why": "Not permitted for your role."}), 403
@@ -545,9 +560,38 @@ def api_login():
                   "display_name": u["display_name"], "role": u["role"]},
             station=u.get("station"), ip=request.remote_addr)
     resp = jsonify({"ok": True, "name": u["display_name"], "role": u["role"],
-                    "station": u.get("station")})
+                    "station": u.get("station"),
+                    # icon_auth has always returned this; nothing was
+                    # reading it, so an operator handed a temporary password
+                    # signed in on it and stayed on it indefinitely.
+                    "must_change_pw": bool(res.get("must_change_pw"))})
     resp.set_cookie(SESSION_COOKIE, session_id, httponly=True, samesite="Lax")
     return resp
+
+
+@app.route("/api/session/change-password", methods=["POST"])
+def api_change_password():
+    """Deliberately NOT behind require_role: it is the one thing an account
+    holding a temporary password is allowed to do, and require_role refuses
+    everything else while must_change_pw is set."""
+    if not g.icon_session:
+        return jsonify({"ok": False, "why": "Sign in required."}), 401
+    body = request.get_json(force=True) or {}
+    current = str(body.get("current_password") or "")
+    new = str(body.get("new_password") or "")
+    with store.conn() as (cx, cur):
+        try:
+            ok = icon_auth.change_password(cur, g.icon_session["login_id"],
+                                           current, new,
+                                           ip=request.remote_addr)
+        except icon_auth.AuthError as e:
+            # The policy's own sentence, so the person is told the actual
+            # rule they broke rather than "that did not work".
+            return jsonify({"ok": False, "why": str(e)}), 400
+    if not ok:
+        return jsonify({"ok": False, "why":
+            "That current password was not accepted."}), 400
+    return jsonify({"ok": True})
 
 
 @app.route("/logout", methods=["POST"])
@@ -588,7 +632,10 @@ def api_session_info():
     s = g.icon_session
     return jsonify({"signed_in": True, "name": s["display_name"],
                     "role": s["role"], "station": s["station"],
-                    "expires_at": s["expires_at"]})
+                    "expires_at": s["expires_at"],
+                    # so a RELOAD lands back on the change-password step
+                    # rather than slipping past it into the app
+                    "must_change_pw": bool(getattr(g, "icon_must_change_pw", False))})
 
 
 # --------------------------------------------------------------------------

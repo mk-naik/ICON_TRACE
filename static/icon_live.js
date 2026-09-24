@@ -487,9 +487,15 @@
     if (el) el.textContent = text || '';
   }
 
+  var _loginCardHtml = null;
+
   function installRealLogin() {
     var card = document.querySelector('#login .login-card');
     if (!card || document.getElementById('liLoginId')) return;
+    /* v4's markup, kept once, so the change-password step can hand the
+       card back exactly as it found it rather than this function trying to
+       patch fields it has already replaced with something else. */
+    if (_loginCardHtml === null) _loginCardHtml = card.innerHTML;
 
     /* The dropdown's .fld and the painted-dots password .fld, replaced by
        two real inputs. Same labels the lab uses, so a person meets the
@@ -637,6 +643,13 @@
     USER = { name: who.name, role: who.role, station: who.station || '' };
     ensureRoleEntry(USER.role);
 
+    /* A temporary password is one somebody else chose and still knows.
+       Nothing else loads until it has been replaced - and the server
+       refuses every write in the meantime regardless of what this screen
+       does, so this is the courtesy, not the control. Checked on the
+       reload path too, so refreshing cannot slip past it. */
+    if (who.must_change_pw) { showChangePassword(); return; }
+
     /* The splash covers the only stretch in this app where somebody is
        genuinely waiting on work rather than looking at a finished screen:
        signIn()'s wrapper runs applyBoot(), addScreens() and a fetch per
@@ -657,6 +670,80 @@
       if (document.readyState === 'complete') splash.hide();
       else window.addEventListener('load', function () { splash.hide(); });
     }
+  }
+
+  /* The change-password step. Rendered into the login card rather than as
+     a screen inside #app, so "cannot reach anything else" is structural:
+     the app is still hidden, and there is nowhere to navigate to. */
+  function showChangePassword() {
+    var card = document.querySelector('#login .login-card');
+    var login = document.getElementById('login');
+    if (!card || !login) return;
+    login.classList.remove('gone');
+    login.classList.add('icon-ready');
+    document.getElementById('app').classList.remove('on');
+
+    card.innerHTML =
+      '<div class="login-mark"><div class="login-sun"></div>' +
+        '<h1>ICON <span>TRACE</span></h1></div>' +
+      '<p class="login-sub">Choose your own password</p>' +
+      '<div class="note n-warn"><span>!</span><span>You signed in with a ' +
+        'temporary password. Whoever issued it knows it, so it has to be ' +
+        'replaced before you can save anything.</span></div>' +
+      '<div class="fld"><label>Temporary password</label>' +
+        '<input type="password" id="cpCurrent" autocomplete="current-password"></div>' +
+      '<div class="fld"><label>New password</label>' +
+        '<input type="password" id="cpNew" autocomplete="new-password">' +
+        '<span class="sp hint">' + PW_HINT + '</span></div>' +
+      '<div class="fld"><label>New password again</label>' +
+        '<input type="password" id="cpAgain" autocomplete="new-password"></div>' +
+      '<button class="btn btn-primary btn-full" id="cpSubmit">Set my password</button>' +
+      '<p id="cpMsg" style="color:var(--fail);min-height:1.2em;margin:8px 0 0;' +
+        'font-size:12.5px"></p>';
+
+    document.getElementById('cpSubmit').addEventListener('click', _submitChangePassword);
+    ['cpCurrent', 'cpNew', 'cpAgain'].forEach(function (id) {
+      document.getElementById(id).addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); _submitChangePassword(); }
+      });
+    });
+  }
+
+  function _submitChangePassword() {
+    var msg = document.getElementById('cpMsg');
+    var btn = document.getElementById('cpSubmit');
+    var current = document.getElementById('cpCurrent').value;
+    var next = document.getElementById('cpNew').value;
+    var again = document.getElementById('cpAgain').value;
+    msg.textContent = '';
+    /* Checked here because the server has no way to know they typed it
+       twice - everything else is left to the policy on the far end. */
+    if (next !== again) { msg.textContent = 'Those two do not match.'; return; }
+    if (!current || !next) { msg.textContent = 'Fill both password boxes.'; return; }
+
+    btn.disabled = true;
+    api('session/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: current, new_password: next })
+    }).then(function (d) {
+      btn.disabled = false;
+      if (!d || d.ok !== true) {
+        msg.textContent = (d && d.why) || 'That did not work.';
+        return;
+      }
+      /* Straight in - the session is the same one, it simply is not held
+         back any more. */
+      fetch('/api/session').then(function (r) { return r.json(); })
+        .then(function (s) {
+          var card = document.querySelector('#login .login-card');
+          if (card && _loginCardHtml !== null) card.innerHTML = _loginCardHtml;
+          installRealLogin();
+          if (s.signed_in) enterApp(s);
+        });
+    }).catch(function () {
+      btn.disabled = false;
+      msg.textContent = 'The server did not answer.';
+    });
   }
 
   function ensureRoleEntry(role) {
