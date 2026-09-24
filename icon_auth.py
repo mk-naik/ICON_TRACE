@@ -159,6 +159,18 @@ CREATE TABLE IF NOT EXISTS auth_session (
     expires_at INTEGER NOT NULL,
     ip TEXT
 );
+
+-- Per-account, per-screen access (Round 26). The ABSENCE of a row means no
+-- access - never "work it out from the role". Every account is given an
+-- explicit row per screen when it is created, so that fallback is a safety
+-- net and not the normal path.
+CREATE TABLE IF NOT EXISTS user_screen_perm (
+    user_id INTEGER NOT NULL,
+    screen_id TEXT NOT NULL,
+    can_view INTEGER NOT NULL DEFAULT 0,
+    can_write INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, screen_id)
+);
 """
 
 def ensure_schema(cur):
@@ -562,6 +574,9 @@ def create_superadmin(cur, login_id, display_name, now=None):
     t = _now(now)
     cur.execute("INSERT INTO app_user (login_id, display_name, role, created_at, created_by) VALUES (%s, %s, %s, %s, %s)",
                 (login_id, display_name, "Super Admin", t, "cli"))
+    # Every new account gets an explicit row per screen from day one, so
+    # "no row means no access" stays a safety net rather than the norm.
+    set_screen_perms(cur, "cli", login_id, default_perms_for_role("Super Admin"), now=t)
     return _issue_enrol_token_impl(cur, "cli", login_id, t)
 
 def issue_enrol_token(cur, actor_login_id, target_login_id, now=None):
@@ -814,6 +829,8 @@ def create_admin(cur, actor_login_id, target_login_id, display_name, ip=None, no
     cur.execute("INSERT INTO app_user (login_id, display_name, role, created_at, created_by) VALUES (%s, %s, %s, %s, %s)",
                 (target_login_id, display_name, "Admin", t, actor_login_id))
     log_event(cur, target_login_id, "admin_created", ip, f"by {actor_login_id}", t)
+    set_screen_perms(cur, actor_login_id, target_login_id,
+                     default_perms_for_role("Admin"), ip=ip, now=t)
     return _issue_enrol_token_impl(cur, actor_login_id, target_login_id, t)
 
 def create_operator(cur, actor_login_id, target_login_id, display_name, role, temp_pw, ip=None, now=None):
@@ -828,6 +845,8 @@ def create_operator(cur, actor_login_id, target_login_id, display_name, role, te
     cur.execute("INSERT INTO app_user (login_id, display_name, role, pw_hash, must_change_pw, created_at, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 (target_login_id, display_name, role, hash_pw(temp_pw), 1, t, actor_login_id))
     log_event(cur, target_login_id, "password_set", ip, f"temp by {actor_login_id}", t)
+    set_screen_perms(cur, actor_login_id, target_login_id,
+                     default_perms_for_role(role), ip=ip, now=t)
 
 
 # ---------------------------------------------------------------------------
@@ -905,6 +924,165 @@ def load_session(cur, session_id, now=None):
 
 def delete_session(cur, session_id):
     cur.execute("DELETE FROM auth_session WHERE session_id=%s", (session_id,))
+
+
+# ---------------------------------------------------------------------------
+# Per-screen permissions (Round 26). Nothing reads these for enforcement
+# yet - Round 27 moves the gates onto them, Round 28 adds the screen that
+# edits them. This round only makes them exist and seeds them so that they
+# say exactly what each account's role already grants.
+# ---------------------------------------------------------------------------
+
+_ROLE_VIEWS = None
+
+
+def _role_views():
+    """{role: set(screen_id)} - what each role reaches TODAY, read out of
+    the files that decide it, once per process.
+
+    Not icon_trace.html's ROLES alone, although that is where the object is
+    declared: the live layer rewrites it at runtime, and reading only v4's
+    copy would give nobody Indent or Loading Verification, drop Needs Review
+    from Production Incharge, and have no Quality role at all. So the same
+    four sources the running page applies, in the same order:
+
+      1. v4's ROLES literal in icon_trace.html
+      2. NEW_VIEWS in icon_live.js - each new screen's own roles list
+      3. ROLES['X'].views.push('y') - the one-off grants
+      4. ROLES['X'] = { home: .., views: [..] } - roles the layer creates
+
+    then sub-views folded into their parent screens, admin/items dropped,
+    and Super Admin given Admin's list, as ensureRoleEntry() does.
+
+    Parsed rather than copied out by hand, because a hand copy drifts the
+    first time a screen is added to a role - and test_screen_perms.py fails
+    if this and the page ever disagree."""
+    global _ROLE_VIEWS
+    if _ROLE_VIEWS is not None:
+        return _ROLE_VIEWS
+    import re
+    base = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(base, "templates", "icon_trace.html"), encoding="utf-8") as f:
+        v4 = f.read()
+    with open(os.path.join(base, "static", "icon_live.js"), encoding="utf-8") as f:
+        live = f.read()
+
+    def names(s):
+        return set(re.findall(r"'([^']+)'", s))
+
+    roles = {}
+    literal = re.search(r"var ROLES=\{(.*?)\};", v4, re.S).group(1)
+    for role, views in re.findall(r"'([^']+)':\{home:'[^']*',\s*views:\[([^\]]*)\]",
+                                  literal, re.S):
+        roles[role] = names(views)
+
+    block = re.search(r"var NEW_VIEWS = \[(.*?)\n  \];", live, re.S).group(1)
+    for vid, who in re.findall(r"\{ id: '([^']+)'.*?roles: \[([^\]]*)\]", block, re.S):
+        for role in names(who):
+            roles.setdefault(role, set()).add(vid)
+
+    for role, vid in re.findall(r"ROLES\['([^']+)'\]\.views\.push\('([^']+)'\)", live):
+        roles.setdefault(role, set()).add(vid)
+
+    for role, views in re.findall(
+            r"ROLES\['([^']+)'\] = \{ home: '[^']*', views: \[([^\]]*)\]", live):
+        roles[role] = names(views)
+
+    resolved = {}
+    for role, views in roles.items():
+        resolved[role] = {SUBVIEWS.get(v, v) for v in views} & SCREEN_IDS
+    resolved["Super Admin"] = set(resolved.get("Admin", ()))
+    _ROLE_VIEWS = resolved
+    return resolved
+
+
+def default_perms_for_role(role):
+    """The starting {screen_id: {"view": bool, "write": bool}} map a role
+    produces today. Every screen the role reaches is viewable, and writable
+    unless it is in READ_ONLY_SCREENS. A role the page does not know gets
+    nothing - the server's own role gates would refuse it everything too."""
+    views = _role_views().get(role, set())
+    return {sid: {"view": sid in views,
+                  "write": sid in views and sid not in READ_ONLY_SCREENS}
+            for sid in SCREEN_IDS}
+
+
+def _write_screen_perms(cur, user_id, perms):
+    for sid, p in perms.items():
+        cur.execute(
+            "INSERT INTO user_screen_perm (user_id, screen_id, can_view, can_write) "
+            "VALUES (%s, %s, %s, %s) ON CONFLICT(user_id, screen_id) DO UPDATE SET "
+            "can_view=excluded.can_view, can_write=excluded.can_write",
+            (user_id, sid, 1 if p["view"] else 0, 1 if p["write"] else 0))
+
+
+def _validate_perms(perms):
+    """A typo must not quietly grant nothing while looking like it worked,
+    so an unknown screen is an error, not a skipped key. And write without
+    view is refused rather than silently widened into view+write: which of
+    the two was meant cannot be known from here."""
+    if not isinstance(perms, dict):
+        raise AuthError("Permissions must be a map of screen to access.")
+    unknown = sorted(set(perms) - SCREEN_IDS)
+    if unknown:
+        raise AuthError("Unknown screen: %s." % ", ".join(unknown))
+    clean = {}
+    for sid, p in perms.items():
+        if not isinstance(p, dict):
+            raise AuthError("Access for %s must say view and write." % sid)
+        view, write = bool(p.get("view")), bool(p.get("write"))
+        if write and not view:
+            raise AuthError("%s: write access without view access." % sid)
+        clean[sid] = {"view": view, "write": write}
+    return clean
+
+
+def set_screen_perms(cur, actor_login_id, target_login_id, perms, ip=None, now=None):
+    """Upsert the screens named in `perms` for one account. Screens not named
+    are left exactly as they were - a partial map changes only what it
+    names, so a caller that sends one screen cannot wipe the other nineteen
+    by accident.
+
+    Same hierarchy as every other function that touches another account:
+    _require_can_act_on() refuses an Admin acting on another Admin or a
+    Super Admin with the usual "Not found.". Nobody may change their OWN
+    permissions either - that check allows acting on yourself, and here
+    that would be the one way an account restricted from a screen could
+    simply give it back to itself."""
+    t = _now(now)
+    actor = _get_user(cur, actor_login_id) if actor_login_id != "cli" else {"role": "Super Admin"}
+    if not actor:
+        raise AuthError("Actor not found.")
+    u = _get_user(cur, target_login_id)
+    _require_can_act_on(actor, u)
+    if get_rank(actor["role"]) < 2:
+        raise AuthError("Not authorized.")
+    if actor_login_id != "cli" and u["login_id"] == actor_login_id:
+        raise AuthError("Cannot change your own permissions.")
+
+    clean = _validate_perms(perms)
+    _write_screen_perms(cur, u["user_id"], clean)
+    granted = sorted(s for s, p in clean.items() if p["view"])
+    log_event(cur, target_login_id, "screen_perms_set", ip,
+              "by %s: %d screen(s) set, %d viewable" % (actor_login_id, len(clean),
+                                                        len(granted)), t)
+
+
+def get_screen_perms(cur, login_id):
+    """Every screen in the registry, for one account. A screen with no row -
+    or an account with none at all - is {view: False, write: False}: the
+    absence of a row is no access, never "fall back to the role"."""
+    out = {sid: {"view": False, "write": False} for sid in SCREEN_IDS}
+    u = _get_user(cur, login_id)
+    if not u:
+        return out
+    cur.execute("SELECT screen_id, can_view, can_write FROM user_screen_perm "
+                "WHERE user_id=%s", (u["user_id"],))
+    for r in cur.fetchall():
+        if r["screen_id"] in out:        # a screen since removed is ignored
+            out[r["screen_id"]] = {"view": bool(r["can_view"]),
+                                   "write": bool(r["can_write"])}
+    return out
 
 
 def sntp_drift(server=None, timeout=2):

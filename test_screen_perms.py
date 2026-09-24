@@ -100,6 +100,181 @@ def t_subviews_resolve():
     assert not stray, "views in ROLES with no screen to belong to: %s" % sorted(stray)
 
 
+# --------------------------------------------------------------------------
+# Section 2 - the table and its functions
+# --------------------------------------------------------------------------
+
+def fresh():
+    store.DB_PATH = os.path.join(TMP, "t%d.db" % len(os.listdir(TMP)))
+    with store.conn() as (cx, cur):
+        icon_auth.ensure_schema(cur)
+        icon_auth.create_superadmin(cur, "sa1", "Super One")
+        icon_auth.create_admin(cur, "cli", "admin1", "Admin One")
+        icon_auth.create_admin(cur, "cli", "admin2", "Admin Two")
+        icon_auth.create_operator(cur, "admin1", "op1", "Op One",
+                                  "Dispatch Operator", "CorrectHorse99")
+
+
+def live_roles_from_the_page():
+    """ROLES exactly as the running page holds it after sign-in - v4's
+    literal, plus every runtime change the live layer makes - read out of a
+    real browser. The independent answer default_perms_for_role() is checked
+    against, rather than re-running the same parser and agreeing with it."""
+    import ui_harness as H
+    import auth_test_helper as AUTH
+    store.wipe()
+    AUTH.ensure_auth_schema()
+    try:
+        with H.browser() as b:
+            pg = H.open_page(b, wait_ms=1200, role="Super Admin")
+            return pg.evaluate(
+                "Object.fromEntries(Object.entries(ROLES).map("
+                "([k, v]) => [k, v.views.slice()]))")
+    finally:
+        H.cleanup()
+
+
+@test("default_perms_for_role() matches ROLES as the RUNNING page builds it, "
+     "role by role and screen by screen - read out of a real browser after "
+     "sign-in, so the live layer's runtime additions are included")
+def t_defaults_match_the_running_page():
+    page = live_roles_from_the_page()
+    assert "Quality" in page, "the live layer's Quality role is missing from the page"
+    for role, views in page.items():
+        want_view = {icon_auth.SUBVIEWS.get(v, v) for v in views} & icon_auth.SCREEN_IDS
+        got = icon_auth.default_perms_for_role(role)
+        for sid in icon_auth.SCREEN_IDS:
+            assert got[sid]["view"] == (sid in want_view), \
+                "%s / %s: default says view=%s, the page says %s" % (
+                    role, sid, got[sid]["view"], sid in want_view)
+            assert got[sid]["write"] == (sid in want_view and
+                                         sid not in icon_auth.READ_ONLY_SCREENS), (role, sid)
+
+
+@test("the read-only screens default to write:false for every role; review "
+     "does not, because it is where Quality resolves items")
+def t_read_only_defaults():
+    for role in ("Admin", "Production Incharge", "FQC Operator", "Packing Operator",
+                 "Dispatch Operator", "Quality", "Super Admin"):
+        d = icon_auth.default_perms_for_role(role)
+        for sid in icon_auth.READ_ONLY_SCREENS:
+            assert d[sid]["write"] is False, (role, sid)
+    assert icon_auth.default_perms_for_role("Quality")["review"] == \
+        {"view": True, "write": True}
+
+
+@test("an unknown role gets no screens at all rather than an error or a "
+     "guess")
+def t_unknown_role_gets_nothing():
+    d = icon_auth.default_perms_for_role("Wizard")
+    assert set(d) == icon_auth.SCREEN_IDS
+    assert not any(p["view"] or p["write"] for p in d.values())
+
+
+@test("an account with no rows at all reads as every screen closed - the "
+     "safe default, not an error and not open access")
+def t_no_rows_is_no_access():
+    fresh()
+    with store.conn() as (cx, cur):
+        cur.execute("INSERT INTO app_user (login_id, display_name, role, created_at) "
+                    "VALUES ('bare', 'Bare', 'Admin', 1)")
+        p = icon_auth.get_screen_perms(cur, "bare")
+        ghost = icon_auth.get_screen_perms(cur, "nobody-at-all")
+    for got in (p, ghost):
+        assert set(got) == icon_auth.SCREEN_IDS
+        assert not any(v["view"] or v["write"] for v in got.values()), got
+
+
+@test("create_operator, create_admin and create_superadmin each leave a full "
+     "row per screen behind, equal to their role's defaults - read back from "
+     "the table, not inferred from the call not raising")
+def t_new_accounts_are_seeded():
+    fresh()
+    with store.conn() as (cx, cur):
+        for login_id, role in (("op1", "Dispatch Operator"), ("admin1", "Admin"),
+                               ("sa1", "Super Admin")):
+            n = store.one(cur, "SELECT COUNT(*) AS n FROM user_screen_perm p "
+                               "JOIN app_user u ON u.user_id=p.user_id "
+                               "WHERE u.login_id=%s", (login_id,))["n"]
+            assert n == len(icon_auth.SCREEN_IDS), (login_id, n)
+            assert icon_auth.get_screen_perms(cur, login_id) == \
+                icon_auth.default_perms_for_role(role), login_id
+
+
+@test("hierarchy: an Admin may set an operator's screens, and gets the same "
+     "'Not found.' as everywhere else for another Admin, a Super Admin or a "
+     "ghost")
+def t_set_perms_hierarchy():
+    fresh()
+    with store.conn() as (cx, cur):
+        icon_auth.set_screen_perms(cur, "admin1", "op1",
+                                   {"challan": {"view": True, "write": False}})
+        assert icon_auth.get_screen_perms(cur, "op1")["challan"] == \
+            {"view": True, "write": False}
+        for target in ("admin2", "sa1", "no-such-person"):
+            try:
+                icon_auth.set_screen_perms(cur, "admin1", target,
+                                           {"gp": {"view": False, "write": False}})
+                assert False, "an Admin changed %s's permissions" % target
+            except icon_auth.AuthError as e:
+                assert str(e) == "Not found.", (target, str(e))
+        # a Super Admin can
+        icon_auth.set_screen_perms(cur, "sa1", "admin2",
+                                   {"gp": {"view": False, "write": False}})
+        assert icon_auth.get_screen_perms(cur, "admin2")["gp"]["view"] is False
+
+
+@test("nobody can change their own permissions - the hierarchy check allows "
+     "acting on yourself, and here that would let a restricted account "
+     "simply give itself the screen back")
+def t_no_self_grant():
+    fresh()
+    with store.conn() as (cx, cur):
+        try:
+            icon_auth.set_screen_perms(cur, "admin1", "admin1",
+                                       {"gp": {"view": True, "write": True}})
+            assert False, "an Admin changed its own permissions"
+        except icon_auth.AuthError as e:
+            assert str(e) == "Cannot change your own permissions.", str(e)
+
+
+@test("an unknown screen, a write-without-view and a malformed entry are "
+     "refused outright - and refused BEFORE anything is written, so a typo "
+     "does not half-apply")
+def t_bad_input_refused():
+    fresh()
+    with store.conn() as (cx, cur):
+        before = icon_auth.get_screen_perms(cur, "op1")
+        for perms, want in (
+            ({"chalan": {"view": True, "write": True}}, "Unknown screen: chalan."),
+            ({"admin": {"view": True, "write": True}}, "Unknown screen: admin."),
+            ({"gp": {"view": False, "write": True}}, "gp: write access without view access."),
+            ({"gp": True}, "Access for gp must say view and write."),
+            ({"gp": {"view": False, "write": False},
+              "typo": {"view": True, "write": True}}, "Unknown screen: typo."),
+        ):
+            try:
+                icon_auth.set_screen_perms(cur, "admin1", "op1", perms)
+                assert False, "accepted %r" % perms
+            except icon_auth.AuthError as e:
+                assert str(e) == want, (perms, str(e))
+        assert icon_auth.get_screen_perms(cur, "op1") == before, \
+            "a refused call still changed something"
+
+
+@test("a partial map changes only the screens it names - sending one "
+     "screen cannot wipe the other nineteen")
+def t_partial_map_is_a_merge():
+    fresh()
+    with store.conn() as (cx, cur):
+        before = icon_auth.get_screen_perms(cur, "op1")
+        icon_auth.set_screen_perms(cur, "admin1", "op1",
+                                   {"invoice": {"view": False, "write": False}})
+        after = icon_auth.get_screen_perms(cur, "op1")
+    changed = {s for s in icon_auth.SCREEN_IDS if before[s] != after[s]}
+    assert changed == {"invoice"}, changed
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)
