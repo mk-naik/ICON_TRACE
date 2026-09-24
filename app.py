@@ -1120,7 +1120,10 @@ def api_users_perms_set(login_id):
 
 @app.route("/")
 def root():
-    return render_template("icon_trace.html", boot=boot_payload())
+    # The sign-in page and the app are one document, served to anybody who
+    # asks - so it carries boot_public() only, never the data. The page
+    # fetches boot_private() from /api/boot once somebody has signed in.
+    return render_template("icon_trace.html", boot=boot_public())
 
 
 TC = {"G12R": "R", "G2X": "G", "BI": "B"}
@@ -1163,7 +1166,29 @@ def _line_state(cur, line_id):
     return p
 
 
-def boot_payload():
+def boot_public():
+    """What the page reads before anybody has signed in - and nothing more
+    (Round 29). Until then GET / embedded the full payload, so the sign-in
+    page handed every visitor every indent with its customer and delivery
+    date, the BOM, cell efficiencies, open pallets and customers with GSTIN.
+
+    Found by wrapping ICON_BOOT in a Proxy and loading the page signed out -
+    the only keys read before sign-in are these three:
+      build    cache-busting icon_add.css, the three script tags in the
+               template, and the service worker's URL
+      live     the load-time console line ("live layer active ... SQLite")
+      db_file  the same console line - the database file's NAME, which
+               /healthz already publishes to anyone ("store")
+    None of it is data. Everything else is boot_private()."""
+    return {"build": build_id(), "live": True,
+            "db_file": os.path.basename(store.DB_PATH)}
+
+
+def boot_private():
+    """The full payload every screen is built from - served by /api/boot to
+    a signed-in session only (Round 29). Same shape as it has always been,
+    and the same for every account: filtering it per account was
+    considered and deliberately deferred (BACKLOG, Round 29)."""
     import icon_models as M
     with store.conn() as (cx, cur):
         indents = []
@@ -5355,7 +5380,13 @@ def api_indents():
 
 @app.route("/api/boot")
 def api_boot():
-    return jsonify(boot_payload())
+    """Every screen's data at once, fetched by the page at sign-in. It was
+    entirely ungated until Round 29 - the same leak as GET /, on a second
+    route. A session is the bar, not a screen gate: this serves every
+    screen together, so require_screen_view() would be the wrong question."""
+    if not g.icon_session:
+        return jsonify({"ok": False, "why": "Sign in required."}), 401
+    return jsonify(boot_private())
 
 
 @app.route("/api/db/stats")
