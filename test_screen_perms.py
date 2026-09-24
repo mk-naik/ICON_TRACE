@@ -406,6 +406,113 @@ def t_migration_is_safe_to_rerun():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def set_file_age(path, seconds_ago):
+    """Make `path` look `seconds_ago` old by BOTH clocks the script reads -
+    modified time via os.utime, and on Windows the created time too, which
+    os.utime cannot touch, via SetFileTime."""
+    import time
+    t = time.time() - seconds_ago
+    os.utime(path, (t, t))
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.CreateFileW.restype = wintypes.HANDLE
+        k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.HANDLE]
+        k.SetFileTime.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 3
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        ticks = int((t + 11644473600) * 10 ** 7)
+        ft = wintypes.FILETIME(ticks & 0xFFFFFFFF, ticks >> 32)
+        h = k.CreateFileW(path, 0x100, 0, None, 3, 0x80, None)   # FILE_WRITE_ATTRIBUTES
+        assert h and h != wintypes.HANDLE(-1).value, ctypes.get_last_error()
+        try:
+            assert k.SetFileTime(h, ctypes.byref(ft), None, None), ctypes.get_last_error()
+        finally:
+            k.CloseHandle(h)
+    st = os.stat(path)
+    assert max(st.st_mtime, getattr(st, "st_birthtime", 0) or 0) <= t + 1, \
+        "could not age the file"
+
+
+@test("migration: a FRESH backup (just copied) is accepted, and the output "
+     "says how old it is")
+def t_migration_fresh_backup_passes():
+    d, path = old_shaped_db()
+    try:
+        shutil.copyfile(path, path + ".bak")
+        out = run_script(path, "--apply")
+        assert out.returncode == 0, out.stdout + out.stderr
+        line = next(l for l in out.stdout.splitlines() if l.startswith("Backup found"))
+        assert "seconds old" in line, line
+        print("      " + line)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@test("migration: a backup 20 minutes old is refused with a message naming "
+     "its age, and nothing is written")
+def t_migration_stale_backup_refused():
+    d, path = old_shaped_db()
+    try:
+        shutil.copyfile(path, path + ".bak")
+        set_file_age(path + ".bak", 20 * 60)
+        out = run_script(path, "--apply")
+        assert out.returncode == 1, out.stdout
+        line = next(l for l in out.stdout.splitlines() if l.startswith("Refusing"))
+        assert "is 20 minutes old" in line and "10 minutes allowed" in line, line
+        assert not table_exists(path), "a refused apply still wrote"
+        print("      " + line)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@test("migration: the age limit is configurable (ICON_BACKUP_MAX_AGE_S) - "
+     "the same 20-minute-old copy passes under a one-hour limit, and a "
+     "2-minute-old one fails under a one-minute limit")
+def t_migration_backup_age_configurable():
+    d, path = old_shaped_db()
+    try:
+        shutil.copyfile(path, path + ".bak")
+        set_file_age(path + ".bak", 20 * 60)
+        os.environ["ICON_BACKUP_MAX_AGE_S"] = "3600"
+        try:
+            out = run_script(path, "--apply")
+            assert out.returncode == 0, out.stdout
+            assert "Backup found" in out.stdout and "20 minutes old" in out.stdout
+            set_file_age(path + ".bak", 2 * 60)
+            os.environ["ICON_BACKUP_MAX_AGE_S"] = "60"
+            out = run_script(path, "--apply")
+            assert out.returncode == 1 and "is 2 minutes old" in out.stdout, out.stdout
+        finally:
+            os.environ.pop("ICON_BACKUP_MAX_AGE_S", None)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@test("migration: the NEWEST backup is the one judged - an old one lying "
+     "beside a fresh one does not block, and a copy that kept its source's "
+     "old modified time (Windows `copy` does) still counts as fresh")
+def t_migration_newest_backup_and_copy_mtime():
+    d, path = old_shaped_db()
+    try:
+        shutil.copyfile(path, path + ".bak.old")
+        set_file_age(path + ".bak.old", 3 * 24 * 3600)
+        shutil.copyfile(path, path + ".bak")
+        if os.name == "nt":
+            import time
+            old = time.time() - 3600
+            os.utime(path + ".bak", (old, old))   # modified: an hour ago; created: now
+        out = run_script(path, "--apply")
+        assert out.returncode == 0, out.stdout
+        line = next(l for l in out.stdout.splitlines() if l.startswith("Backup found"))
+        assert line.split(": ", 1)[1].startswith(path + ".bak ("), line
+        print("      " + line)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

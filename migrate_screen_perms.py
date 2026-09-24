@@ -26,12 +26,15 @@ SAFETY
     The dry run opens the database READ-ONLY, so "prints what it would do
     and changes nothing" is enforced by SQLite rather than by care.
     --apply refuses to run unless a backup of the database sits beside it:
-    an auth_backup_*/ directory holding a copy, or a <name>.bak* file.
+    an auth_backup_*/ directory holding a copy, or a <name>.bak* file - and,
+    since Round 27, unless the newest one is under ten minutes old
+    (ICON_BACKUP_MAX_AGE_S overrides, for tests).
 """
 
 import os
 import sqlite3
 import sys
+import time
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 
@@ -41,15 +44,57 @@ def _db_path():
                                           os.path.join(BASE, "icontrace.db")))
 
 
-def _backup_present(db_path):
+# A backup older than this is refused (Round 27): one taken last week, or
+# before this morning's shift, sits beside the database just as well as one
+# taken a minute ago, and restoring it would lose everything since. Ten
+# minutes, overridable for tests.
+MAX_BACKUP_AGE_S = 600
+
+
+def _max_backup_age():
+    return int(os.environ.get("ICON_BACKUP_MAX_AGE_S", MAX_BACKUP_AGE_S))
+
+
+def _backup_time(path):
+    """When this copy was made. The later of modified and created, because
+    Windows' `copy` keeps the SOURCE's modified time - a copy taken a
+    moment ago of a database last written an hour ago would otherwise look
+    an hour old, and taking it again would never help. Created time is when
+    the copy itself came into being; where the platform has none, modified
+    time is all there is (and cp without -p sets it to now)."""
+    st = os.stat(path)
+    return max(st.st_mtime, getattr(st, "st_birthtime", 0) or 0)
+
+
+def _backup_present(db_path, now=None):
+    """(path, age_in_seconds) of the NEWEST backup beside db_path - a
+    <name>.bak* file or an auth_backup_*/<name> copy - or None when there
+    is none at all. Whether it is fresh enough is the caller's call."""
     here, name = os.path.split(db_path)
+    found = []
     for entry in os.listdir(here):
         full = os.path.join(here, entry)
         if entry.startswith(name + ".bak") and os.path.isfile(full):
-            return full
-        if entry.startswith("auth_backup_") and os.path.isfile(os.path.join(full, name)):
-            return os.path.join(full, name)
-    return None
+            found.append(full)
+        elif entry.startswith("auth_backup_") and os.path.isfile(os.path.join(full, name)):
+            found.append(os.path.join(full, name))
+    if not found:
+        return None
+    newest = max(found, key=_backup_time)
+    now = time.time() if now is None else now
+    return newest, max(0.0, now - _backup_time(newest))
+
+
+def _age_words(seconds):
+    m = int(seconds // 60)
+    if m < 1:
+        return "%d seconds" % int(seconds)
+    if m < 120:
+        return "%d minute%s" % (m, "" if m == 1 else "s")
+    h = m // 60
+    if h < 48:
+        return "%d hours" % h
+    return "%d days" % (h // 24)
 
 
 def _read_state(db_path):
@@ -102,13 +147,21 @@ def main(argv):
               % len(todo))
         return 0
 
-    backup = _backup_present(db_path)
-    if not backup:
-        print("\nRefusing to run: no backup of %s beside it." % os.path.basename(db_path))
-        print("Copy it first, e.g.  copy %s %s.bak"
-              % (os.path.basename(db_path), os.path.basename(db_path)))
+    name = os.path.basename(db_path)
+    found = _backup_present(db_path)
+    if not found:
+        print("\nRefusing to run: no backup of %s beside it." % name)
+        print("Copy it first, e.g.  copy %s %s.bak" % (name, name))
         return 1
-    print("\nBackup found: %s" % backup)
+    backup, age = found
+    limit = _max_backup_age()
+    if age > limit:
+        print("\nRefusing to run: the newest backup, %s, is %s old - "
+              "older than the %s allowed." % (backup, _age_words(age),
+                                              _age_words(limit)))
+        print("Take a fresh copy first, e.g.  copy %s %s.bak" % (name, name))
+        return 1
+    print("\nBackup found: %s (%s old)" % (backup, _age_words(age)))
 
     import store
     store.DB_PATH = db_path
