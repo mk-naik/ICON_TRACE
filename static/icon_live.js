@@ -153,10 +153,19 @@
       .join('').slice(0, 2).toUpperCase();
   }
 
-  function _canAct(viewerRole, targetRole) {
-    /* Mirrors icon_auth's own rule: an Admin may act on rank 1 only. A
-       Super Admin may act on anyone this screen shows - and it never
-       shows a Super Admin. */
+  function _isMe(targetLoginId) {
+    var me = (typeof USER !== 'undefined' && USER) ? USER.login_id : '';
+    return !!me && !!targetLoginId && me === targetLoginId;
+  }
+
+  function _canAct(viewerRole, targetRole, targetLoginId) {
+    /* Mirrors icon_auth's own rule: an Admin may act on rank 1 only, OR on
+       themselves - _require_can_act_on() exempts the actor from its own
+       rank check. That last part was missing here, so an Admin looking at
+       their own row saw "View only" and had no way to re-enrol their own
+       authenticator after losing a phone, even though the server would
+       have allowed it. */
+    if (_isMe(targetLoginId)) return true;
     if (targetRole === 'Admin' || targetRole === 'Super Admin') {
       return viewerRole === 'Super Admin';
     }
@@ -173,7 +182,7 @@
   }
 
   function _actionsCell(u, viewerRole) {
-    if (!_canAct(viewerRole, u.role)) {
+    if (!_canAct(viewerRole, u.role, u.login_id)) {
       return '<span class="sp hint">View only</span>';
     }
     var id = fqcEsc(u.login_id), btns = [];
@@ -188,51 +197,92 @@
       btns.push('<button class="btn btn-ghost btn-sm" onclick="usrUnlock(\'' +
                 id + '\')">Unlock</button>');
     }
-    btns.push(u.active
-      ? '<button class="btn btn-ghost btn-sm" onclick="usrDeactivate(\'' + id +
-        '\')">Deactivate</button>'
-      : '<button class="btn btn-ghost btn-sm" onclick="usrReactivate(\'' + id +
-        '\')">Reactivate</button>');
+    /* Not on your own row: icon_auth refuses "Cannot deactivate yourself."
+       and would refuse the reverse too, so offering either would be
+       offering a refusal. Re-enrolling your own authenticator above is the
+       one thing self-service genuinely permits. */
+    if (!_isMe(u.login_id)) {
+      btns.push(u.active
+        ? '<button class="btn btn-ghost btn-sm" onclick="usrDeactivate(\'' + id +
+          '\')">Deactivate</button>'
+        : '<button class="btn btn-ghost btn-sm" onclick="usrReactivate(\'' + id +
+          '\')">Reactivate</button>');
+    }
     return btns.join(' ');
   }
 
-  function _usersTableHtml(rows, viewerRole) {
+  function _usersCardsHtml(rows, viewerRole) {
     if (!rows.length) {
-      return '<tr><td colspan="4" style="text-align:center;padding:18px;' +
-             'color:var(--ink3)">No accounts yet.</td></tr>';
+      return '<p class="sp hint" style="padding:18px;text-align:center">' +
+             'No accounts yet.</p>';
     }
-    return rows.map(function (u) {
-      return '<tr>' +
-        '<td><div style="display:flex;align-items:center;gap:9px">' +
-          '<span style="flex:none;width:30px;height:30px;border-radius:50%;' +
-            'background:var(--brand,#1b4f7e);color:#fff;font-size:11px;' +
-            'font-weight:700;display:flex;align-items:center;' +
-            'justify-content:center">' + fqcEsc(_initials(u.display_name)) +
-          '</span>' +
-          '<span><b>' + fqcEsc(u.display_name) + '</b><br>' +
-          '<span class="mono sp hint">' + fqcEsc(u.login_id) + '</span></span>' +
-        '</div></td>' +
-        '<td>' + fqcEsc(u.role) +
-          (u.station ? '<br><span class="sp hint mono">' + fqcEsc(u.station) +
-                       '</span>' : '') + '</td>' +
-        '<td>' + _statusCell(u) + '</td>' +
-        '<td>' + _actionsCell(u, viewerRole) + '</td></tr>';
+    return rows.map(function (u, i) {
+      var actions = _actionsCell(u, viewerRole);
+      var viewOnly = actions.indexOf('<button') < 0;
+      return '<div class="usr-card">' +
+        '<span class="usr-av">' + fqcEsc(_initials(u.display_name)) + '</span>' +
+        '<div class="usr-who"><b>' + fqcEsc(u.display_name) + '</b>' +
+          '<span class="mono sp hint">' + fqcEsc(u.login_id) + '</span></div>' +
+        '<div class="usr-role">' + fqcEsc(u.role) +
+          (u.station ? '<span class="sp hint mono">' + fqcEsc(u.station) +
+                       '</span>' : '') + '</div>' +
+        '<div class="usr-status">' + _statusCell(u) + '</div>' +
+        '<div class="usr-actions">' +
+          (viewOnly ? actions
+                    : '<button class="btn btn-ghost btn-sm usr-kebab" ' +
+                        'aria-label="Actions for ' + fqcEsc(u.login_id) + '" ' +
+                        'data-usr-menu="' + i + '">&#8942;</button>' +
+                      '<div class="usr-menu" data-usr-menu-for="' + i + '">' +
+                        actions + '</div>') +
+        '</div></div>';
     }).join('');
   }
 
-  function _usersHead() {
-    /* v4's own header says User ID / Name / Role / Line / Shift / Last
-       sign-in / Status - three of which describe nothing an account
-       carries. Replaced to match what is actually known. */
-    var head = document.querySelector('#ad-users thead');
-    if (head) {
-      head.innerHTML = '<tr><th>Person</th><th>Role &amp; station</th>' +
-                       '<th>Status</th><th>Actions</th></tr>';
-    }
+  function _closeUserMenus(except) {
+    Array.prototype.forEach.call(
+      document.querySelectorAll('.usr-menu.on'), function (m) {
+        if (m !== except) m.classList.remove('on');
+      });
+  }
+
+  function _wireKebabs() {
+    Array.prototype.forEach.call(
+      document.querySelectorAll('.usr-kebab'), function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var menu = document.querySelector(
+            '.usr-menu[data-usr-menu-for="' + btn.getAttribute('data-usr-menu') + '"]');
+          if (!menu) return;
+          var open = menu.classList.contains('on');
+          _closeUserMenus();
+          if (!open) menu.classList.add('on');
+        });
+      });
+  }
+
+  /* One listener for the whole document, added once: a menu left open
+     while somebody clicks elsewhere is how two of them end up on screen
+     at the same time. */
+  if (!window.__usrMenuWired) {
+    document.addEventListener('click', function () { _closeUserMenus(); });
+    window.__usrMenuWired = true;
+  }
+
+  function _ensureUsersShell() {
+    /* v4's markup here is a table whose columns are User ID / Name / Role /
+       Line / Shift / Last sign-in - three of which describe nothing an
+       account carries. Replaced wholesale with the card list from the
+       approved mockup. The filter box and count in the card header are
+       v4's own and are left alone; userFilter() is already overridden. */
+    var pane = document.querySelector('#ad-users .wmain .card-b');
+    if (!pane || document.getElementById('usrCards')) return;
+    pane.classList.remove('flush');
+    pane.innerHTML = '<div id="usrCards" class="usr-cards"></div>';
   }
 
   function _paintUsers() {
-    var body = document.getElementById('userRows');
+    _ensureUsersShell();
+    var body = document.getElementById('usrCards');
     if (!body) return;
     var viewerRole = (typeof USER !== 'undefined' && USER) ? USER.role : '';
     var q = (_users.q || '').toUpperCase();
@@ -240,8 +290,8 @@
       return !q || (u.login_id || '').toUpperCase().indexOf(q) >= 0 ||
              (u.display_name || '').toUpperCase().indexOf(q) >= 0;
     });
-    _usersHead();
-    body.innerHTML = _usersTableHtml(rows, viewerRole);
+    body.innerHTML = _usersCardsHtml(rows, viewerRole);
+    _wireKebabs();
     var count = document.getElementById('uCount');
     if (count) count.textContent = rows.length + ' of ' + _users.rows.length;
   }
@@ -259,7 +309,10 @@
      and from its own filter box, so building the create form here means
      the whole screen comes up through the call sites that already exist. */
   window.renderUsers = function () {
-    if (!document.getElementById('userRows')) return;
+    /* v4's #userRows tbody is what the pane ships with; its presence is
+       still the signal that this screen exists, even though the table
+       around it is replaced by the card list below. */
+    if (!document.querySelector('#ad-users .wmain .card-b')) return;
     _buildCreateForm();
     if (_users.loaded) _paintUsers();
     usersLoad();
@@ -640,7 +693,11 @@
   function enterApp(who) {
     /* From the SERVER's answer, never from anything picked on this page -
        that is the whole point of the change. */
-    USER = { name: who.name, role: who.role, station: who.station || '' };
+    USER = { name: who.name, role: who.role, station: who.station || '',
+             /* v4's USER never had one - it was a display name and a role
+                picked from a dropdown. The Users screen needs it to tell
+                the viewer's own row from anybody else's. */
+             login_id: who.login_id || '' };
     ensureRoleEntry(USER.role);
 
     /* A temporary password is one somebody else chose and still knows.

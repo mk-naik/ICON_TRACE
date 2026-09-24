@@ -560,6 +560,7 @@ def api_login():
                   "display_name": u["display_name"], "role": u["role"]},
             station=u.get("station"), ip=request.remote_addr)
     resp = jsonify({"ok": True, "name": u["display_name"], "role": u["role"],
+                    "login_id": u["login_id"],
                     "station": u.get("station"),
                     # icon_auth has always returned this; nothing was
                     # reading it, so an operator handed a temporary password
@@ -632,6 +633,8 @@ def api_session_info():
     s = g.icon_session
     return jsonify({"signed_in": True, "name": s["display_name"],
                     "role": s["role"], "station": s["station"],
+                    # the screen needs it to recognise the viewer's OWN row
+                    "login_id": s["login_id"],
                     "expires_at": s["expires_at"],
                     # so a RELOAD lands back on the change-password step
                     # rather than slipping past it into the app

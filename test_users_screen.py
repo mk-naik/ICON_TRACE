@@ -47,7 +47,7 @@ def base():
 
 def users_page(b, role="Super Admin", login_id=None):
     pg = H.open_page(b, "admin", wait_ms=1200, role=role, login_id=login_id)
-    pg.wait_for_selector("#userRows tr", timeout=15000)
+    pg.wait_for_selector(".usr-card", timeout=15000)
     return pg
 
 
@@ -104,9 +104,9 @@ def t_create_operator_weak_then_strong():
 
         pg.fill("#usrNewPw", "CorrectHorse99")
         pg.click("#usrNewBtn")
-        pg.wait_for_selector("#userRows tr:has-text('newop')", timeout=10000)
+        pg.wait_for_selector(".usr-card:has-text('newop')", timeout=10000)
         assert user_row("newop")["role"] == "Packing Operator"
-        assert "New Operator" in pg.inner_text("#userRows")
+        assert "New Operator" in pg.inner_text("#usrCards")
 
 
 @test("creating an Admin offers no password field at all and shows a "
@@ -138,7 +138,7 @@ def t_admin_sees_only_what_it_may_do():
     AUTH.make_user("Admin", login_id="admin2", name="Admin Two")
     with H.browser() as b:
         pg = users_page(b, role="Admin", login_id="admin1")
-        text = pg.inner_text("#userRows")
+        text = pg.inner_text("#usrCards")
         assert "Super One" not in text, "an Admin saw a Super Admin"
         assert "Admin Two" not in text, \
             "an Admin saw another Admin's row: %s" % text
@@ -148,12 +148,18 @@ def t_admin_sees_only_what_it_may_do():
             "an Admin is offered a role the server will refuse: %s" % roles
         assert "Super Admin" not in roles, roles
 
-        # their OWN row is view-only rather than showing a button that lies
-        own = pg.eval_on_selector_all(
-            "#userRows tr", "trs => trs.map(t => t.textContent)")
-        mine = [t for t in own if "admin1" in t][0]
-        assert "View only" in mine, mine
-        pg.screenshot(path=os.path.join(SHOTS, "4_admin_view_only.png"))
+        # Their OWN row offers Reset TOTP (Round 25): _require_can_act_on()
+        # exempts the actor from its own rank check, so re-enrolling your
+        # own authenticator is genuinely permitted - it read "View only"
+        # until then, leaving an Admin who lost a phone with no way back.
+        pg.click(".usr-card:has-text('admin1') .usr-kebab")
+        pg.wait_for_selector(".usr-menu.on", timeout=5000)
+        mine = pg.eval_on_selector_all(".usr-menu.on .btn",
+                                       "e => e.map(b => b.textContent.trim())")
+        assert "Reset TOTP" in mine, mine
+        # ...but not Deactivate, which icon_auth refuses on yourself
+        assert "Deactivate" not in mine, mine
+        pg.screenshot(path=os.path.join(SHOTS, "4_admin_own_row.png"))
 
 
 @test("an Admin calling the API directly - not through a button - still "
@@ -196,16 +202,22 @@ def t_deactivate_then_reactivate_from_the_screen():
     with H.browser() as b:
         pg = users_page(b)
         pg.on("dialog", lambda d: d.accept())      # the Deactivate confirm
-        pg.click("#userRows tr:has-text('op1') >> text=Deactivate")
-        pg.wait_for_selector("#userRows tr:has-text('op1') >> text=Reactivate",
-                             timeout=10000)
+        pg.click(".usr-card:has-text('op1') .usr-kebab")
+        pg.click(".usr-menu.on >> text=Deactivate")
+        pg.wait_for_selector(".usr-card:has-text('op1')", timeout=10000)
+        pg.wait_for_function(
+            "document.querySelector('.usr-card') && "
+            "document.querySelector('#usrCards').textContent.indexOf('Deactivated') >= 0",
+            timeout=10000)
         assert user_row("op1")["active"] == 0
         assert not can_sign_in(), "a deactivated operator still signed in"
         pg.screenshot(path=os.path.join(SHOTS, "5_deactivated.png"))
 
-        pg.click("#userRows tr:has-text('op1') >> text=Reactivate")
-        pg.wait_for_selector("#userRows tr:has-text('op1') >> text=Deactivate",
-                             timeout=10000)
+        pg.click(".usr-card:has-text('op1') .usr-kebab")
+        pg.click(".usr-menu.on >> text=Reactivate")
+        pg.wait_for_function(
+            "document.querySelector('#usrCards').textContent.indexOf('Deactivated') < 0",
+            timeout=10000)
         assert user_row("op1")["active"] == 1
         assert can_sign_in(), "a reactivated operator still could not sign in"
 
