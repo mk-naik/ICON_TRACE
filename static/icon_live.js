@@ -261,10 +261,10 @@
         }).join('');
     }).join('');
     var n = _pe.screens.filter(function (s) { return _peChanged(s.id); }).length;
-    host.querySelector('#peBody').innerHTML = rows;
-    host.querySelector('#peCount').textContent =
+    host.querySelector('#permEdBody').innerHTML = rows;
+    host.querySelector('#permEdCount').textContent =
       n ? n + ' screen' + (n === 1 ? '' : 's') + ' changed - not saved yet' : 'No changes';
-    host.querySelector('#peSave').disabled = !n;
+    host.querySelector('#permEdSave').disabled = !n;
   }
 
   function _peTick(e) {
@@ -305,22 +305,22 @@
             '<span class="sp hint">' + fqcEsc(d.role) + '</span></div>' +
           '<div class="card-b scroll"><table class="pe-tbl"><thead><tr><th>Screen</th>' +
             '<th class="pe-c">View</th><th class="pe-c">Write</th><th></th></tr></thead>' +
-            '<tbody id="peBody"></tbody></table></div>' +
-          '<div class="card-f"><button class="btn btn-ghost btn-sm" id="peReset" ' +
+            '<tbody id="permEdBody"></tbody></table></div>' +
+          '<div class="card-f"><button class="btn btn-ghost btn-sm" id="permEdReset" ' +
               'title="Every screen back to what the ' + fqcEsc(d.role) + ' role starts with">' +
               'Reset to role defaults</button>' +
-            '<span class="sp hint" id="peCount"></span>' +
-            '<button class="btn btn-ghost btn-sm" id="peCancel">Cancel</button>' +
-            '<button class="btn btn-primary btn-sm" id="peSave">Save permissions</button></div>' +
+            '<span class="sp hint" id="permEdCount"></span>' +
+            '<button class="btn btn-ghost btn-sm" id="permEdCancel">Cancel</button>' +
+            '<button class="btn btn-primary btn-sm" id="permEdSave">Save permissions</button></div>' +
         '</div>';
       document.body.appendChild(host);
       host.addEventListener('change', _peTick);
-      host.querySelector('#peReset').onclick = function () {
+      host.querySelector('#permEdReset').onclick = function () {
         _pe.cur = _peClone(_pe.defaults);
         _pePaint();
       };
-      host.querySelector('#peCancel').onclick = _peClose;
-      host.querySelector('#peSave').onclick = function () {
+      host.querySelector('#permEdCancel').onclick = _peClose;
+      host.querySelector('#permEdSave').onclick = function () {
         var btn = this;
         btn.disabled = true;
         api('users/' + encodeURIComponent(_pe.login_id) + '/perms', {

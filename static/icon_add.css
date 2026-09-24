@@ -241,7 +241,7 @@ a.nav-i{text-decoration:none}
   display: flex; flex-direction: column; margin: 0; }
 .pe-card .card-b { overflow: auto; padding: 0; }
 .pe-card .card-f { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.pe-card #peCount { flex: 1; text-align: right; }
+.pe-card #permEdCount { flex: 1; text-align: right; }
 .pe-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .pe-tbl th, .pe-tbl td { padding: 6px 12px; border-bottom: 1px solid var(--line); text-align: left; }
 .pe-tbl th { position: sticky; top: 0; z-index: 1; }

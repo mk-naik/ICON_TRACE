@@ -357,6 +357,11 @@ function api(path, opts) {
   });
 }
 function toast(t) { toasts.push(t); }
+/* Round 28: the functions under test ask can()/canWrite() before they
+   load or save, as the page's access map decides. Here the operator
+   may view and write the screen under test. */
+function can(v) { return true; }
+function canWrite(v) { return true; }
 function fqcEsc(v) {
   return String(v === null || v === undefined ? '' : v)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

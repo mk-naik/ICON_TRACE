@@ -182,6 +182,11 @@ function makeChallanView() {
 
 var toasts = [], confirms = [];
 function toast(t) { toasts.push(t); }
+/* Round 28: the functions under test ask can()/canWrite() before they
+   load or save, as the page's access map decides. Here the operator
+   may view and write the screen under test. */
+function can(v) { return true; }
+function canWrite(v) { return true; }
 var CONFIRM_RETURNS = true;
 function confirm(msg) { confirms.push(msg); return CONFIRM_RETURNS; }
 function fqcEsc(v) {
