@@ -1101,6 +1101,35 @@
     var splash = window.EnIconSplash;
     if (splash) splash.show();
 
+    /* Round 29: the page no longer arrives carrying the data. GET / is the
+       sign-in page too, served to anybody, so it embeds boot_public() only
+       (build, live, db_file) and the rest comes from /api/boot - which
+       needs a session - fetched HERE, once the server has said who this
+       is. Here and not in the /login handler, because this is the one
+       funnel both ways in go through: a fresh sign-in, and a reload with a
+       live cookie. Fetched in the login handler alone, a reload would come
+       up with an empty B and blank screens.
+
+       Everything below - signIn()'s wrapper, applyBoot(), addScreens(), the
+       wirings, all 60-odd reads of B - then runs against the full payload,
+       synchronously, exactly as it did when the payload was in the page.
+       The splash is already up and already means "you are in and the app
+       is assembling itself". Keys are merged into B rather than B being
+       replaced, as iconRefresh() does, so nothing holding the object misses
+       them. */
+    fetch('/api/boot', { cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('boot ' + r.status);
+        return r.json();
+      })
+      .then(function (d) {
+        Object.keys(d).forEach(function (k) { B[k] = d[k]; });
+        _enterBuilt(splash);
+      })
+      .catch(function () { _bootFailed(splash); });
+  }
+
+  function _enterBuilt(splash) {
     window.signIn();          /* the live layer's wrapper, by now */
     applyWriteLocks();
     startIdleWatch();
@@ -1111,6 +1140,19 @@
       if (document.readyState === 'complete') splash.hide();
       else window.addEventListener('load', function () { splash.hide(); });
     }
+  }
+
+  /* No data, no app: a half-built screen that looks live is worse than
+     none. Back to the sign-in card with the reason, as a refused sign-in
+     is - and nothing of the app was entered, so there is nothing to undo. */
+  function _bootFailed(splash) {
+    if (splash) splash.hide();
+    var login = document.getElementById('login');
+    if (login) { login.classList.remove('gone'); login.classList.add('icon-ready'); }
+    var app = document.getElementById('app');
+    if (app) app.classList.remove('on');
+    setLoginMsg('Signed in, but the app’s data could not be loaded. ' +
+                'Try again in a moment.');
   }
 
   /* The change-password step. Rendered into the login card rather than as
