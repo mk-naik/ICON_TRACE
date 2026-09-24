@@ -544,6 +544,14 @@ def _require_role(*allowed_roles, why="Not permitted for your role."):
 # rule that master data is writable only there while Admin can still read it.
 # ---------------------------------------------------------------------------
 
+# Round 27: every endpoint of an ordinary screen now sits on
+# require_screen_write(<screen>) - the account's own write flag - instead.
+# What stays on these role sets: the admin and items surface (_R_MASTER,
+# _R_ADMIN, never per-user - icon_auth.EXCLUDED_SCREENS), Export (_R_EVERY)
+# and /api/quality (_R_QUALITY), each with its reason beside it, and the
+# inline _require_role checks inside individual endpoints, which are
+# additional to the screen gate and untouched by it.
+
 _R_MASTER   = ("Super Admin",)
 _R_ADMIN    = ("Admin", "Super Admin")
 _R_PACK     = ("Packing Operator", "Admin", "Super Admin")
@@ -1173,7 +1181,7 @@ def api_customer_resolve():
 
 
 @app.route("/api/box/open", methods=["POST"])
-@require_role(*_R_PACK)
+@require_screen_write("pack")
 @_sync_guard
 def api_box_open():
     d = request.get_json(force=True)
@@ -1226,7 +1234,7 @@ def api_box_open():
 
 
 @app.route("/api/box/<int:box_id>/scan", methods=["POST"])
-@require_role(*_R_PACK)
+@require_screen_write("pack")
 @_sync_guard
 def api_box_scan(box_id):
     serial = (request.get_json(force=True).get("serial") or "").strip().upper()
@@ -1388,7 +1396,7 @@ def api_box_check():
 
 
 @app.route("/api/box/<int:box_id>/remove", methods=["POST"])
-@require_role(*_R_PACK)
+@require_screen_write("pack")
 @_sync_guard
 def api_box_remove(box_id):
     """Take a module back out of an open box. The slot is pulled on screen,
@@ -1623,7 +1631,7 @@ def _repack(cur, box_ids, groups, release, reason):
 
 
 @app.route("/api/repack", methods=["POST"])
-@require_role(*_R_PACK)
+@require_screen_write("repack")
 @_sync_guard
 def api_repack():
     """Several pallets opened at once - the Repack screen's own workflow."""
@@ -1639,7 +1647,7 @@ def api_repack():
 
 
 @app.route("/api/box/<int:box_id>/repack", methods=["POST"])
-@require_role(*_R_PACK)
+@require_screen_write("pack")
 @_sync_guard
 def api_box_repack(box_id):
     """One closed pallet, opened from the Packing screen."""
@@ -1654,7 +1662,7 @@ def api_box_repack(box_id):
 
 
 @app.route("/api/box/<int:box_id>/close", methods=["POST"])
-@require_role(*_R_PACK)
+@require_screen_write("pack")
 @_sync_guard
 def api_box_close(box_id):
     """A pallet less than its own declared capacity is not "partial" - it is
@@ -1689,7 +1697,7 @@ def api_box_close(box_id):
 
 
 @app.route("/api/box/<int:box_id>/capacity", methods=["POST"])
-@require_role(*_R_PACK)
+@require_screen_write("pack")
 @_sync_guard
 def api_box_capacity(box_id):
     """Change what an OPEN box has declared it will hold.
@@ -1731,7 +1739,7 @@ def api_box_capacity(box_id):
 
 
 @app.route("/api/box/<int:box_id>/abandon", methods=["POST"])
-@require_role(*_R_PACK)
+@require_screen_write("pack")
 @_sync_guard
 def api_box_abandon(box_id):
     """Give up a box that was opened and never packed.
@@ -1979,7 +1987,7 @@ def api_loading_get(challan_id):
 
 
 @app.route("/api/loading/<int:challan_id>/confirm", methods=["POST"])
-@require_role(*_R_LOADING)
+@require_screen_write("loadver")
 @_sync_guard
 def api_loading_confirm(challan_id):
     """Space, in the session screen, on a pallet the lookup already found.
@@ -2012,7 +2020,7 @@ def api_loading_confirm(challan_id):
 
 
 @app.route("/api/loading/<int:challan_id>/submit", methods=["POST"])
-@require_role(*_R_LOADING)
+@require_screen_write("loadver")
 @_sync_guard
 def api_loading_submit(challan_id):
     """Refuses unless every pallet has been confirmed; promotes every one
@@ -2366,7 +2374,7 @@ def _challan_precheck(cur, box_ids, invoice_id, exclude_challan_id=None):
 
 
 @app.route("/api/challan/checks", methods=["POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("challan")
 def api_challan_checks():
     """The rail, live: the same refusal Create would give, before the click."""
     d = request.get_json(force=True) or {}
@@ -2510,7 +2518,7 @@ class _ChallanRefused(Exception):
 
 
 @app.route("/api/challan", methods=["POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("challan")
 @_sync_guard
 def api_challan_create():
     """Save as draft, or Create outright.
@@ -2535,7 +2543,7 @@ def api_challan_create():
 
 
 @app.route("/api/challan/<int:challan_id>/submit", methods=["POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("challan")
 @_sync_guard
 def api_challan_submit(challan_id):
     """Turn an existing draft into the real thing.
@@ -2582,7 +2590,7 @@ def api_challan_submit(challan_id):
 
 
 @app.route("/api/challan/<int:challan_id>/discard", methods=["POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("challan")
 @_sync_guard
 def api_challan_discard(challan_id):
     body = request.get_json(silent=True) or {}
@@ -2685,7 +2693,7 @@ def api_challan_get(challan_id):
 
 
 @app.route("/api/challan/<int:challan_id>/cancel", methods=["POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("challan")
 @_sync_guard
 def api_challan_cancel(challan_id):
     """Cancel an ISSUED challan.
@@ -2765,7 +2773,7 @@ def _next_edit_suffix(cur, fy, seq):
 
 
 @app.route("/api/challan/<int:challan_id>/edit-draft", methods=["POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("challan")
 def api_challan_edit_draft(challan_id):
     """What Edit needs to pre-fill the Create screen - resolved here,
     server-side, never guessed by the client.
@@ -2829,7 +2837,7 @@ def api_challan_edit_draft(challan_id):
 
 
 @app.route("/api/challan/<int:challan_id>/edit-save", methods=["POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("challan")
 @_sync_guard
 def api_challan_edit_save(challan_id):
     """Save an edit: a NEW challan row, same (fy, seq), the next 'M' suffix.
@@ -3296,7 +3304,7 @@ def api_prodentries():
 
 
 @app.route("/api/prodentry", methods=["POST"])
-@require_role(*_R_PROD)
+@require_screen_write("prodentry")
 @_sync_guard
 def api_prodentry():
     d = request.get_json(force=True)
@@ -3458,7 +3466,7 @@ def api_loss_events():
 
 
 @app.route("/api/loss_event", methods=["POST"])
-@require_role(*_R_PROD)
+@require_screen_write("loss")
 @_sync_guard
 def api_loss_event_open():
     d = request.get_json(force=True) or {}
@@ -3511,7 +3519,7 @@ def api_loss_event_open():
 
 
 @app.route("/api/loss_event/<int:event_id>/close", methods=["POST"])
-@require_role(*_R_PROD)
+@require_screen_write("loss")
 @_sync_guard
 def api_loss_event_close(event_id):
     with store.conn() as (cx, cur):
@@ -3857,7 +3865,7 @@ def api_settings():
 
 
 @app.route("/api/indent", methods=["POST"])
-@require_role(*_R_PROD)
+@require_screen_write("indent")
 def api_indent_create():
     d = request.get_json(force=True)
     errors, lines = [], []
@@ -3934,7 +3942,7 @@ def api_indent_line(line_id):
 
 
 @app.route("/api/allocation", methods=["POST"])
-@require_role(*_R_PROD)
+@require_screen_write("plan")
 @_sync_guard
 def api_allocation_create():
     """Allocate a serial range against an indent line.
@@ -4015,7 +4023,7 @@ def api_allocation_create():
 
 
 @app.route("/api/allocation/<int:alloc_id>/update", methods=["PUT"])
-@require_role(*_R_PROD)
+@require_screen_write("plan")
 def api_allocation_update(alloc_id):
     d = request.get_json(force=True)
     try:
@@ -4113,7 +4121,7 @@ def api_allocation_get(alloc_id):
 
 
 @app.route("/api/allocation/<int:alloc_id>", methods=["DELETE"])
-@require_role(*_R_PROD)
+@require_screen_write("plan")
 def api_allocation_cancel(alloc_id):
     """An allocation can be withdrawn while every serial in it is still
     'planned'. Once one has been graded, production has acted on it and the
@@ -4285,6 +4293,9 @@ def _sheet_title(raw, used):
 
 
 @app.route("/api/export/xlsx", methods=["POST"])
+# Still on its role gate after Round 27: Export is every screen's own
+# download button, including the read-only ones, so tying it to any one
+# screen's write flag would take Export away from exactly those screens.
 @require_role(*_R_EVERY)
 def api_export_xlsx():
     """Every Export button on every screen, in one endpoint.
@@ -5038,7 +5049,7 @@ def api_indent_get(indent_no):
 
 
 @app.route("/api/indent/<path:indent_no>", methods=["PUT"])
-@require_role(*_R_PROD)
+@require_screen_write("indent")
 def api_indent_update(indent_no):
     d = request.get_json(force=True)
     with store.conn() as (cx, cur):
@@ -5182,7 +5193,7 @@ def api_db_reset():
 
 
 @app.route("/api/invoice/parse", methods=["POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("invoice")
 def api_invoice_parse():
     f = request.files.get("pdf")
     if not f or not f.filename:
@@ -5205,7 +5216,7 @@ def api_invoice_parse():
 
 
 @app.route("/api/invoice/confirm", methods=["POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("invoice")
 def api_invoice_confirm():
     pend = session.get("pending")
     if not pend or not os.path.exists(pend["tmp"]):
@@ -5375,7 +5386,7 @@ def invoice_upload():
 
 
 @app.route("/invoice/parse", methods=["POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("invoice")
 def invoice_parse():
     f = request.files.get("pdf")
     if not f or not f.filename:
@@ -5437,7 +5448,7 @@ def invoice_parse():
 # --------------------------------------------------------------------------
 
 @app.route("/invoice/confirm", methods=["POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("invoice")
 def invoice_confirm():
     pend = session.get("pending")
     if not pend or not os.path.exists(pend["tmp"]):
@@ -5518,7 +5529,7 @@ def invoice_confirm():
 
 
 @app.route("/invoice/cancel", methods=["POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("invoice")
 def invoice_cancel():
     pend = session.pop("pending", None)
     if pend and os.path.exists(pend["tmp"]):
@@ -5657,7 +5668,7 @@ def indent_list():
 
 
 @app.route("/indent/new", methods=["GET", "POST"])
-@require_role(*_R_PROD)
+@require_screen_write("indent")
 def indent_new():
     with db.conn() as (cx, cur):
         known = db.known_customers(cur)
@@ -5765,7 +5776,7 @@ def indent_new():
 # --------------------------------------------------------------------------
 
 @app.route("/planning", methods=["GET", "POST"])
-@require_role(*_R_PROD)
+@require_screen_write("plan")
 def planning():
     with db.conn() as (cx, cur):
         prog = db.indent_progress(cur)
@@ -6153,7 +6164,7 @@ def _other_needs_note(defect, note):
 
 
 @app.route("/api/fqc", methods=["POST"])
-@require_role(*_R_FQC)
+@require_screen_write("fqc")
 @_sync_guard
 def api_fqc_grade():
     """The operator supplies the JUDGEMENT. The server reads the MEASUREMENT.
@@ -6345,6 +6356,11 @@ def _grade_quality(cur, serial, grade, note, decided_by):
 
 
 @app.route("/api/quality", methods=["POST"])
+# Still on its role gate after Round 27, deliberately. Its screen (Quality
+# Decision) was retired into Needs Review, so it has no screen of its own,
+# and gating it on review's write flag would let every role that can
+# write on Needs Review - Production Incharge, FQC Operator - grade
+# quality here, past the _QUALITY_ROLES check the review path keeps.
 @require_role(*_R_QUALITY)
 @_sync_guard
 def api_quality_grade():
@@ -6515,7 +6531,7 @@ def _resolve_duplicate_scan(cur, review_id, resolution, reason):
 
 
 @app.route("/api/review/resolve", methods=["POST"])
-@require_role(*_R_EVERY)
+@require_screen_write("review")
 @_sync_guard
 def api_review_resolve():
     """One endpoint behind every resolve action in Needs Review, whatever
@@ -6524,9 +6540,10 @@ def api_review_resolve():
     resolves anything. Role is re-checked here regardless of what the
     calling screen already hid.
 
-    The decorator here only proves there IS a session, in some known role,
-    so this endpoint answers 401 the same way every other write does - the
-    role that actually matters is checked per branch below (_require_role),
+    The decorator here only proves there IS a session whose account may
+    write on Needs Review (Round 27 - it was every role before), so this
+    endpoint answers 401 the same way every other write does - the role
+    that actually matters is still checked per branch below (_require_role),
     because which one is allowed depends on the item's type and, for a
     duplicate scan, on whether the serial has already been dispatched. A
     single fixed set on the decorator could not say that.
@@ -6777,7 +6794,7 @@ def api_fqc_dashboard_modules():
     return jsonify(out)
 
 @app.route("/fqc", methods=["GET", "POST"])
-@require_role(*_R_FQC)
+@require_screen_write("fqc")
 def fqc():
     serial = (request.values.get("serial") or "").strip().upper()
     rec = evidence = None
@@ -6845,7 +6862,7 @@ _COUNTER = bx.DailyCounter()
 
 
 @app.route("/packing", methods=["GET", "POST"])
-@require_role(*_R_PACK)
+@require_screen_write("pack")
 def packing():
     msg = None
     act = request.form.get("action")
@@ -6922,7 +6939,7 @@ def packing_label(box_no):
 # --------------------------------------------------------------------------
 
 @app.route("/dispatch", methods=["GET", "POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("disp")
 def dispatch():
     closed = [b for b in _BOXES.values() if b.state == bx.Box.CLOSED]
     with db.conn() as (cx, cur):
@@ -6967,7 +6984,7 @@ def dispatch():
 # --------------------------------------------------------------------------
 
 @app.route("/gatepass", methods=["GET", "POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("gp")
 def gatepass():
     with db.conn() as (cx, cur):
         rows = db.gatepasses(cur)
@@ -7259,7 +7276,7 @@ def api_gatepass_get(gatepass_id):
 
 
 @app.route("/api/gatepass", methods=["POST"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("gp")
 @_sync_guard
 def api_gatepass():
     body = request.get_json(force=True)
@@ -7352,7 +7369,7 @@ def api_gatepass():
 
 
 @app.route("/api/gatepass/<int:gatepass_id>", methods=["PUT"])
-@require_role(*_R_DISPATCH)
+@require_screen_write("gp")
 @_sync_guard
 def api_gatepass_update(gatepass_id):
     """Standalone only. A module-linked gate pass is the automatic output

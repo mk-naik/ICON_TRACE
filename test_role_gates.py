@@ -82,6 +82,13 @@ def _concrete(path):
     return re.sub(r"<(?:(\w+):)?\w+>", sub, path)
 
 
+def _screen_roles(screen_id):
+    import icon_auth
+    sid = icon_auth.SUBVIEWS.get(screen_id, screen_id)
+    return tuple(r for r in ALL_ROLES
+                 if icon_auth.default_perms_for_role(r)[sid]["write"])
+
+
 def read_map():
     """[(path, methods, allowed_roles_tuple)] straight from the source."""
     out, i = [], 0
@@ -99,7 +106,16 @@ def read_map():
             j += 1
         window = "\n".join(_SRC[j:j + 14])
         g = re.search(r"@require_role\((\*?[A-Za-z_][\w]*|[^)]*)\)", window)
+        sg = re.search(r'@require_screen_write\("([\w-]+)"\)', window)
         roles = None
+        if sg and (not g or sg.start() < g.start()):
+            # Round 27: gated on the account's own write flag for a screen.
+            # Every test account is seeded with its role's defaults (as a
+            # real new account is), so the roles that pass are exactly the
+            # roles whose defaults grant write there - and every assertion
+            # below still holds with no change to what it means.
+            g = None
+            roles = _screen_roles(sg.group(1)) or None
         if g:
             token = g.group(1).strip()
             if token.startswith("*"):
@@ -160,7 +176,8 @@ def t_every_write_endpoint_is_gated():
     # /api/review/resolve is gated per-branch inside the handler (the
     # allowed role depends on the item type), but still carries a blanket
     # decorator, so it is not expected here.
-    assert not ungated, "write endpoints with no @require_role: %s" % ungated
+    assert not ungated, ("write endpoints with no @require_role or "
+                         "@require_screen_write: %s" % ungated)
     assert len(ENDPOINTS) >= 45, \
         "only found %d write endpoints - the reader is broken" % len(ENDPOINTS)
 

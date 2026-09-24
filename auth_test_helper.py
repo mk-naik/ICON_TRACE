@@ -77,6 +77,12 @@ def make_user(role="Super Admin", login_id=None, name=None, station=None):
                 (login_id, name, role, station, 1000000, "test"))
             row = store.one(cur, "SELECT * FROM app_user WHERE login_id=%s",
                             (login_id,))
+            # The same starting permissions create_operator() and friends
+            # give a real new account (Round 26) - since Round 27 the write
+            # gates read these rows, not the role. Only on creation: a test
+            # that has since set its own rows keeps them.
+            icon_auth.set_screen_perms(cur, "cli", login_id,
+                                       icon_auth.default_perms_for_role(role))
         return dict(row)
 
 
