@@ -53,7 +53,7 @@ def browser():
             b.close()
 
 
-def open_page(b, view=None, wait_ms=700, role="Super Admin"):
+def open_page(b, view=None, wait_ms=700, role="Super Admin", login_id=None):
     """A fresh page, signed in, optionally already on a screen. Errors the
     page throws are collected on page.errors so a test can say so.
 
@@ -69,7 +69,7 @@ def open_page(b, view=None, wait_ms=700, role="Super Admin"):
     pg = b.new_page(viewport={"width": 1500, "height": 950})
     pg.errors = []
     pg.on("pageerror", lambda e: pg.errors.append(str(e)))
-    sid = AUTH.make_session_id(role=role)
+    sid = AUTH.make_session_id(role=role, login_id=login_id)
     pg.context.add_cookies([{"name": "icon_sid", "value": sid,
                              "domain": "127.0.0.1", "path": "/"}])
     pg.goto(base_url() + "/")

@@ -118,6 +118,330 @@
   window.iconApi = api;
 
   /* ====================================================================
+     USERS (Round 24)
+
+     v4's Users screen rendered fourteen fictional people out of a static
+     USERS array - every one of them shown "Active", with an Edit button
+     that opened a form over a record no server had ever heard of - while
+     the accounts that could actually sign in were nowhere on it. Since
+     Round 23 made roles real, that screen was not merely decorative, it
+     was misleading: an Admin could reasonably believe they had just
+     changed a real account.
+
+     renderUsers() is REPLACED rather than patched: nothing of the old
+     one's behaviour is wanted. The markup is rebuilt too, because v4's
+     columns (Line, Shift, Last sign-in) describe fields no account has.
+
+     Which actions appear is decided from the viewer's own role, to match
+     what the server will actually allow. A button that 403s when pressed
+     is worse than no button - it tells somebody they have a power they do
+     not have. Rank-2 targets therefore render "View only" rather than a
+     disabled menu.
+     ==================================================================== */
+
+  var _users = { rows: [], q: '', loaded: false };
+
+  /* Derived from icon_auth.check_password_policy(), which is the thing
+     that actually enforces it - the refusals it returns are surfaced
+     verbatim by /api/users, so this hint and that sentence cannot drift
+     into disagreeing about the same rule. */
+  var PW_HINT = 'At least 8 characters. Not six digits, and not shaped ' +
+                'like a recovery code (ABCD-1234).';
+
+  function _initials(name) {
+    return (name || '').split(' ').map(function (w) { return w[0] || ''; })
+      .join('').slice(0, 2).toUpperCase();
+  }
+
+  function _canAct(viewerRole, targetRole) {
+    /* Mirrors icon_auth's own rule: an Admin may act on rank 1 only. A
+       Super Admin may act on anyone this screen shows - and it never
+       shows a Super Admin. */
+    if (targetRole === 'Admin' || targetRole === 'Super Admin') {
+      return viewerRole === 'Super Admin';
+    }
+    return viewerRole === 'Admin' || viewerRole === 'Super Admin';
+  }
+
+  function _statusCell(u) {
+    if (!u.active) return '<span class="tag t-mute">Deactivated</span>';
+    if (u.locked_minutes > 0) {
+      return '<span class="tag t-fail">Locked &middot; ' + u.locked_minutes +
+             ' min left</span>';
+    }
+    return '<span class="tag t-pass">Active</span>';
+  }
+
+  function _actionsCell(u, viewerRole) {
+    if (!_canAct(viewerRole, u.role)) {
+      return '<span class="sp hint">View only</span>';
+    }
+    var id = fqcEsc(u.login_id), btns = [];
+    if (u.role === 'Admin') {
+      btns.push('<button class="btn btn-ghost btn-sm" onclick="usrResetTotp(\'' +
+                id + '\')">Reset TOTP</button>');
+    } else {
+      btns.push('<button class="btn btn-ghost btn-sm" onclick="usrResetPw(\'' +
+                id + '\')">Reset password</button>');
+    }
+    if (u.locked_minutes > 0) {
+      btns.push('<button class="btn btn-ghost btn-sm" onclick="usrUnlock(\'' +
+                id + '\')">Unlock</button>');
+    }
+    btns.push(u.active
+      ? '<button class="btn btn-ghost btn-sm" onclick="usrDeactivate(\'' + id +
+        '\')">Deactivate</button>'
+      : '<button class="btn btn-ghost btn-sm" onclick="usrReactivate(\'' + id +
+        '\')">Reactivate</button>');
+    return btns.join(' ');
+  }
+
+  function _usersTableHtml(rows, viewerRole) {
+    if (!rows.length) {
+      return '<tr><td colspan="4" style="text-align:center;padding:18px;' +
+             'color:var(--ink3)">No accounts yet.</td></tr>';
+    }
+    return rows.map(function (u) {
+      return '<tr>' +
+        '<td><div style="display:flex;align-items:center;gap:9px">' +
+          '<span style="flex:none;width:30px;height:30px;border-radius:50%;' +
+            'background:var(--brand,#1b4f7e);color:#fff;font-size:11px;' +
+            'font-weight:700;display:flex;align-items:center;' +
+            'justify-content:center">' + fqcEsc(_initials(u.display_name)) +
+          '</span>' +
+          '<span><b>' + fqcEsc(u.display_name) + '</b><br>' +
+          '<span class="mono sp hint">' + fqcEsc(u.login_id) + '</span></span>' +
+        '</div></td>' +
+        '<td>' + fqcEsc(u.role) +
+          (u.station ? '<br><span class="sp hint mono">' + fqcEsc(u.station) +
+                       '</span>' : '') + '</td>' +
+        '<td>' + _statusCell(u) + '</td>' +
+        '<td>' + _actionsCell(u, viewerRole) + '</td></tr>';
+    }).join('');
+  }
+
+  function _usersHead() {
+    /* v4's own header says User ID / Name / Role / Line / Shift / Last
+       sign-in / Status - three of which describe nothing an account
+       carries. Replaced to match what is actually known. */
+    var head = document.querySelector('#ad-users thead');
+    if (head) {
+      head.innerHTML = '<tr><th>Person</th><th>Role &amp; station</th>' +
+                       '<th>Status</th><th>Actions</th></tr>';
+    }
+  }
+
+  function _paintUsers() {
+    var body = document.getElementById('userRows');
+    if (!body) return;
+    var viewerRole = (typeof USER !== 'undefined' && USER) ? USER.role : '';
+    var q = (_users.q || '').toUpperCase();
+    var rows = _users.rows.filter(function (u) {
+      return !q || (u.login_id || '').toUpperCase().indexOf(q) >= 0 ||
+             (u.display_name || '').toUpperCase().indexOf(q) >= 0;
+    });
+    _usersHead();
+    body.innerHTML = _usersTableHtml(rows, viewerRole);
+    var count = document.getElementById('uCount');
+    if (count) count.textContent = rows.length + ' of ' + _users.rows.length;
+  }
+
+  function usersLoad() {
+    return api('users').then(function (d) {
+      if (!d || !d.users) return;
+      _users.rows = d.users;
+      _users.loaded = true;
+      _paintUsers();
+    }).catch(function () { /* the conn chip already says the server is down */ });
+  }
+
+  /* Replaced outright - see the banner above. v4 calls this from initAll()
+     and from its own filter box, so building the create form here means
+     the whole screen comes up through the call sites that already exist. */
+  window.renderUsers = function () {
+    if (!document.getElementById('userRows')) return;
+    _buildCreateForm();
+    if (_users.loaded) _paintUsers();
+    usersLoad();
+  };
+
+  window.userFilter = function (v) {
+    _users.q = v || '';
+    _paintUsers();
+  };
+
+  /* ---- actions. Each waits for the server's real answer before the row
+     moves: an optimistic flip to "Deactivated" that silently reverts is
+     how somebody comes to believe an account is off when it is not. ---- */
+
+  function _usrAction(loginId, action, body) {
+    return api('users/' + encodeURIComponent(loginId) + '/' + action, {
+      method: 'POST', body: JSON.stringify(body || {})
+    }).then(function (d) {
+      if (!d || d.ok !== true) {
+        toast((d && d.why) || 'That did not work.');
+        return false;
+      }
+      return usersLoad().then(function () { return true; });
+    });
+  }
+
+  window.usrUnlock = function (id) {
+    _usrAction(id, 'unlock').then(function (ok) { if (ok) toast(id + ' unlocked.'); });
+  };
+
+  window.usrDeactivate = function (id) {
+    /* The one action worth a pause. Easily undone, but it stops somebody
+       signing in, and that is not something to discover by accident. */
+    if (!confirm('Deactivate ' + id + '?\n\nThey will not be able to sign in ' +
+                 'until the account is reactivated.')) return;
+    _usrAction(id, 'deactivate').then(function (ok) {
+      if (ok) toast(id + ' deactivated.');
+    });
+  };
+
+  window.usrReactivate = function (id) {
+    _usrAction(id, 'reactivate').then(function (ok) {
+      if (ok) toast(id + ' reactivated.');
+    });
+  };
+
+  window.usrResetPw = function (id) {
+    var pw = prompt('Temporary password for ' + id + '\n\n' + PW_HINT);
+    if (!pw) return;
+    _usrAction(id, 'reset-password', { temp_password: pw }).then(function (ok) {
+      if (ok) toast(id + ' must set a new password at next sign-in.');
+    });
+  };
+
+  window.usrResetTotp = function (id) {
+    api('users/' + encodeURIComponent(id) + '/reset-totp', { method: 'POST' })
+      .then(function (d) {
+        if (!d || d.ok !== true) { toast((d && d.why) || 'That did not work.'); return; }
+        usersLoad();
+        _showEnrol(id, d);
+      });
+  };
+
+  function _showEnrol(loginId, d) {
+    /* Shown once, and copyable: this link is the only way that account can
+       set up an authenticator, and it expires. */
+    var box = document.getElementById('usrEnrolBox');
+    if (!box) return;
+    box.style.display = '';
+    box.innerHTML =
+      '<div class="note n-warn"><span>!</span><span><b>Enrolment link for ' +
+      fqcEsc(loginId) + '</b><br>Give this to them now - it expires, and it ' +
+      'is not shown again.</span></div>' +
+      '<div class="fld"><label>Enrolment link</label>' +
+      '<input class="mono" id="usrEnrolUrl" readonly value="' +
+      fqcEsc(d.enrol_url || '') + '"></div>' +
+      '<button class="btn btn-ghost btn-sm" id="usrEnrolCopy">Copy link</button>';
+    var copy = document.getElementById('usrEnrolCopy');
+    if (copy) {
+      copy.addEventListener('click', function () {
+        var f = document.getElementById('usrEnrolUrl');
+        if (!f) return;
+        f.select();
+        try { document.execCommand('copy'); toast('Link copied.'); }
+        catch (e) { toast('Select the link and copy it.'); }
+      });
+    }
+  }
+
+  /* ---- the create form, replacing v4's unwired "Add user" card ------- */
+
+  function _buildCreateForm() {
+    var rail = document.querySelector('#ad-users .rail');
+    if (!rail || document.getElementById('usrNewRole')) return;
+    var viewerRole = (typeof USER !== 'undefined' && USER) ? USER.role : '';
+    var roles = ['Production Incharge', 'FQC Operator', 'Packing Operator',
+                 'Dispatch Operator', 'Quality'];
+    /* Only a Super Admin may create an Admin, and the server says so too -
+       offering the option to an Admin would be offering a refusal. */
+    if (viewerRole === 'Super Admin') roles.unshift('Admin');
+
+    rail.innerHTML =
+      '<div class="card"><div class="card-h"><h3>New account</h3></div>' +
+      '<div class="card-b">' +
+        '<div class="fld req"><label>Login ID</label>' +
+          '<input class="mono" id="usrNewId" placeholder="amit.sharma"></div>' +
+        '<div class="fld req"><label>Full name</label>' +
+          '<input id="usrNewName" placeholder="Amit Sharma"></div>' +
+        '<div class="fld req"><label>Role</label><select id="usrNewRole">' +
+          roles.map(function (r) {
+            return '<option' + (r === 'FQC Operator' ? ' selected' : '') + '>' +
+                   r + '</option>'; }).join('') +
+        '</select></div>' +
+        '<div class="fld"><label>Station</label>' +
+          '<input class="mono" id="usrNewStation" placeholder="FQC-01"></div>' +
+        '<div class="fld" id="usrNewPwWrap"><label>Temporary password</label>' +
+          '<input type="password" id="usrNewPw">' +
+          '<span class="sp hint">' + PW_HINT + '</span></div>' +
+        '<div id="usrNewMsg" class="sp" style="color:var(--fail)"></div>' +
+      '</div></div>' +
+      '<div class="rail-acts"><button class="btn btn-primary" ' +
+        'id="usrNewBtn">Create account</button></div>' +
+      '<div id="usrEnrolBox" style="display:none;margin-top:12px"></div>';
+
+    var roleSel = document.getElementById('usrNewRole');
+    roleSel.addEventListener('change', _syncCreateForm);
+    document.getElementById('usrNewBtn').addEventListener('click', _submitCreate);
+    _syncCreateForm();
+  }
+
+  function _syncCreateForm() {
+    /* An Admin account has no password at all - it signs in by
+       authenticator code - so the field is removed rather than disabled,
+       and an enrolment link takes its place after creation. */
+    var isAdmin = document.getElementById('usrNewRole').value === 'Admin';
+    var wrap = document.getElementById('usrNewPwWrap');
+    if (wrap) wrap.style.display = isAdmin ? 'none' : '';
+  }
+
+  function _submitCreate() {
+    var msg = document.getElementById('usrNewMsg');
+    var btn = document.getElementById('usrNewBtn');
+    var payload = {
+      login_id: document.getElementById('usrNewId').value.trim(),
+      display_name: document.getElementById('usrNewName').value.trim(),
+      role: document.getElementById('usrNewRole').value,
+      station: document.getElementById('usrNewStation').value.trim()
+    };
+    if (payload.role !== 'Admin') {
+      payload.temp_password = document.getElementById('usrNewPw').value;
+    }
+    msg.textContent = '';
+    btn.disabled = true;
+    api('users', { method: 'POST', body: JSON.stringify(payload) })
+      .then(function (d) {
+        btn.disabled = false;
+        if (!d || d.ok !== true) {
+          /* The server's own sentence - including the password policy's -
+             rather than a paraphrase of it. */
+          msg.textContent = (d && d.why) || 'That did not work.';
+          return;
+        }
+        ['usrNewId', 'usrNewName', 'usrNewStation', 'usrNewPw'].forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el) el.value = '';
+        });
+        toast(payload.login_id + ' created.');
+        usersLoad();
+        if (d.enrol_url) _showEnrol(payload.login_id, d);
+      })
+      .catch(function () {
+        btn.disabled = false;
+        msg.textContent = 'The server did not answer.';
+      });
+  }
+
+  window.usersBuildScreen = function () {
+    _buildCreateForm();
+    window.renderUsers();
+  };
+
+  /* ====================================================================
      REAL SIGN-IN (Round 23)
 
      v4's login screen is a dropdown of fourteen names and a password box
