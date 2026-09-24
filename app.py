@@ -470,6 +470,18 @@ def require_role(*allowed_roles):
     return deco
 
 
+def _screen_id(screen_id):
+    """A registry screen id, resolved from a sub-view where it is one - and
+    a ValueError at import time for admin, items or a typo, never a gate
+    that quietly refuses (or admits) everyone at run time."""
+    sid = icon_auth.SUBVIEWS.get(screen_id, screen_id)
+    if sid in icon_auth.EXCLUDED_SCREENS:
+        raise ValueError("%s stays role-gated - never a per-user screen" % sid)
+    if sid not in icon_auth.SCREEN_IDS:
+        raise ValueError("unknown screen: %s" % screen_id)
+    return sid
+
+
 def require_screen_write(screen_id):
     """Gate a write endpoint by the account's own write flag for the screen
     it belongs to (Round 27) - the per-user table Round 26 built and seeded
@@ -483,11 +495,7 @@ def require_screen_write(screen_id):
     they must. admin and items are refused at import time: they are the
     critical surface, deliberately kept on role gates (_R_MASTER/_R_ADMIN),
     and a typo that moved one of them onto a per-user flag must not start."""
-    sid = icon_auth.SUBVIEWS.get(screen_id, screen_id)
-    if sid in icon_auth.EXCLUDED_SCREENS:
-        raise ValueError("%s stays role-gated - never a per-user screen" % sid)
-    if sid not in icon_auth.SCREEN_IDS:
-        raise ValueError("unknown screen: %s" % screen_id)
+    sid = _screen_id(screen_id)
 
     def deco(fn):
         @functools.wraps(fn)
@@ -508,6 +516,48 @@ def require_screen_write(screen_id):
                     "why": "Not permitted for your role."}), 403
             return fn(*a, **kw)
         inner.icon_screen = sid
+        return inner
+    return deco
+
+
+def _session_can_view(*sids):
+    """True when the signed-in account may view at least one of sids. Reads
+    the table on every call, like the write gate - so a change made in the
+    permission editor applies from the account's very next request."""
+    with store.conn() as (cx, cur):
+        perms = icon_auth.get_screen_perms(cur, g.icon_session["login_id"])
+    return any(perms[s]["view"] for s in sids)
+
+
+def require_screen_view(*screen_ids):
+    """Gate a read endpoint by the account's own VIEW flag (Round 28) - the
+    read counterpart of require_screen_write(), with the same 401 and 403.
+    Until this round can_view was written for every account and read by
+    nothing: any signed-in account, and any signed-out caller, could read
+    every screen's data straight from its endpoint.
+
+    Several screen ids mean "view on ANY of them": /api/boxes backs Packing
+    Log, New Pallet and Repack alike, and refusing it to someone who can
+    view one of those would break a screen they are allowed; leaving it
+    open would make the View column meaningless for all three.
+
+    Deliberately NOT refused while must_change_pw stands: since Round 25 a
+    temporary-password account may read and may not write, and a read gate
+    that also checked it would take the reading away too."""
+    sids = tuple(_screen_id(s) for s in screen_ids)
+    if not sids:
+        raise ValueError("require_screen_view needs at least one screen")
+
+    def deco(fn):
+        @functools.wraps(fn)
+        def inner(*a, **kw):
+            if not g.icon_session:
+                return jsonify({"ok": False, "why": "Sign in required."}), 401
+            if not _session_can_view(*sids):
+                return jsonify({"ok": False,
+                    "why": "Not permitted for your role."}), 403
+            return fn(*a, **kw)
+        inner.icon_view_screens = sids
         return inner
     return deco
 
