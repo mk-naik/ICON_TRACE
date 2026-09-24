@@ -634,6 +634,27 @@ def deactivate_user(cur, actor_login_id, target_login_id, ip=None, now=None):
     cur.execute("UPDATE app_user SET active=0 WHERE user_id=%s", (u["user_id"],))
     log_event(cur, target_login_id, "deactivated", ip, f"by {actor_login_id}", t)
 
+def reactivate_user(cur, actor_login_id, target_login_id, ip=None, now=None):
+    """The exact mirror of deactivate_user, so that whoever could switch an
+    account off is the one who can switch it back on - and nobody else. The
+    self check is kept for symmetry rather than because it can be reached: a
+    deactivated account cannot sign in, so it has no session to call this
+    with in the first place."""
+    t = _now(now)
+    actor = _get_user(cur, actor_login_id) if actor_login_id != "cli" else {"role": "Super Admin"}
+    if not actor: raise AuthError("Actor not found.")
+    u = _get_user(cur, target_login_id)
+    _require_can_act_on(actor, u)
+
+    if get_rank(actor["role"]) < 2:
+        raise AuthError("Not authorized.")
+
+    if u["login_id"] == actor_login_id:
+        raise AuthError("Cannot reactivate yourself.")
+
+    cur.execute("UPDATE app_user SET active=1 WHERE user_id=%s", (u["user_id"],))
+    log_event(cur, target_login_id, "reactivated", ip, f"by {actor_login_id}", t)
+
 def unlock_user(cur, actor_login_id, target_login_id, ip=None, now=None):
     t = _now(now)
     actor = _get_user(cur, actor_login_id) if actor_login_id != "cli" else {"role": "Super Admin"}

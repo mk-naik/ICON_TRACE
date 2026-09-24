@@ -149,6 +149,159 @@ def t_list_is_gated():
     assert anon.status_code == 401, anon.status_code
 
 
+# --------------------------------------------------------------------------
+# 2 - the four account actions
+# --------------------------------------------------------------------------
+
+# The one refusal every hierarchy violation must produce. Sharing the
+# constant is the point: if any endpoint ever answers something more
+# specific, the tests below stop matching and the leak is caught.
+HIERARCHY_REFUSAL = "Not found."
+
+
+@test("reset-password works on an operator, and surfaces icon_auth's own "
+     "policy message for a weak one rather than a paraphrase of it")
+def t_reset_password_operator():
+    base()
+    c = as_super()
+    before = user_row(OP)["pw_hash"]
+    r = c.post("/api/users/%s/reset-password" % OP,
+              json={"temp_password": "CorrectHorse99"})
+    assert r.status_code == 200, r.get_json()
+    assert user_row(OP)["pw_hash"] != before, "the password was not changed"
+    assert user_row(OP)["must_change_pw"] == 1, "operator not forced to change it"
+
+    weak = c.post("/api/users/%s/reset-password" % OP, json={"temp_password": "abc"})
+    assert weak.status_code == 403, weak.status_code
+    assert weak.get_json()["why"] == "Password must be at least 8 characters.", \
+        weak.get_json()
+
+
+@test("reset-password on an Admin target says to use Reset TOTP instead - "
+     "but only for someone allowed to act on them; an Admin asking about "
+     "another Admin still just gets 'Not found.'")
+def t_reset_password_refuses_totp_roles():
+    base()
+    AUTH.make_user("Admin", login_id="admin2", name="Admin Two")
+
+    r = as_super().post("/api/users/admin2/reset-password",
+                        json={"temp_password": "CorrectHorse99"})
+    assert r.status_code == 400, r.status_code
+    assert "use Reset TOTP instead" in r.get_json()["why"], r.get_json()
+
+    # the same request from an Admin must NOT reveal that admin2 exists or
+    # what role it holds
+    r2 = as_admin().post("/api/users/admin2/reset-password",
+                         json={"temp_password": "CorrectHorse99"})
+    assert r2.get_json()["why"] == HIERARCHY_REFUSAL, r2.get_json()
+
+
+@test("every hierarchy violation is indistinguishable from a login_id that "
+     "does not exist - another Admin, a Super Admin and a ghost all give "
+     "the byte-identical refusal, on every action")
+def t_hierarchy_refusals_are_identical():
+    base()
+    AUTH.make_user("Admin", login_id="admin2", name="Admin Two")
+    c = as_admin()
+    for action in ("reset-password", "reset-totp", "unlock",
+                   "deactivate", "reactivate"):
+        seen = []
+        for target in ("admin2", SA, "no-such-person"):
+            r = c.post("/api/users/%s/%s" % (target, action),
+                      json={"temp_password": "CorrectHorse99"})
+            seen.append((r.status_code, r.get_json()["why"]))
+        assert len(set(seen)) == 1, \
+            "%s leaks which target is which: %s" % (action, seen)
+        assert seen[0] == (403, HIERARCHY_REFUSAL), (action, seen[0])
+
+
+@test("reset-totp issues a real enrolment token for an Admin target, and "
+     "refuses an operator, who has no authenticator to reset")
+def t_reset_totp():
+    base()
+    AUTH.make_user("Admin", login_id="admin2", name="Admin Two")
+    r = as_super().post("/api/users/admin2/reset-totp")
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()
+    assert len(d["token"]) == 32, d
+    assert "admin2" in d["enrol_url"] and d["token"] in d["enrol_url"], d
+    assert user_row("admin2")["must_reenrol"] in (0, 1)
+
+    op = as_super().post("/api/users/%s/reset-totp" % OP)
+    assert op.get_json()["why"] == "Operators do not use TOTP.", op.get_json()
+
+
+@test("unlock clears a real lock, and the account stops reporting minutes "
+     "left on the list afterwards")
+def t_unlock():
+    base()
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE app_user SET locked_until=%s, failed_count=9 "
+                    "WHERE login_id=%s", (int(time.time()) + 600, OP))
+    c = as_admin()
+    assert {u["login_id"]: u for u in c.get("/api/users").get_json()["users"]}[OP]["locked_minutes"] == 10
+
+    assert c.post("/api/users/%s/unlock" % OP).status_code == 200
+    row = user_row(OP)
+    assert row["locked_until"] == 0 and row["failed_count"] == 0, row
+    assert {u["login_id"]: u for u in c.get("/api/users").get_json()["users"]}[OP]["locked_minutes"] == 0
+
+
+@test("deactivate stops the account signing in, reactivate lets it back - "
+     "including an account that was deactivated before reactivate existed")
+def t_deactivate_reactivate_round_trip():
+    base()
+    c = as_admin()
+    assert c.post("/api/users/%s/deactivate" % OP).status_code == 200
+    assert user_row(OP)["active"] == 0
+
+    # deactivated accounts really are refused at login, not merely flagged
+    with store.conn() as (cx, cur):
+        icon_auth.set_temp_password(cur, SA, OP, "CorrectHorse99")
+    login = APP.app.test_client().post(
+        "/login", json={"login_id": OP, "credential": "CorrectHorse99"})
+    assert login.status_code == 401, "a deactivated account signed in"
+
+    assert c.post("/api/users/%s/reactivate" % OP).status_code == 200
+    assert user_row(OP)["active"] == 1
+    back = APP.app.test_client().post(
+        "/login", json={"login_id": OP, "credential": "CorrectHorse99"})
+    assert back.status_code == 200 and back.get_json()["ok"], back.get_json()
+
+
+@test("an account switched off directly in the database - as one "
+     "deactivated before this round would be - reactivates the same way")
+def t_reactivate_pre_existing():
+    base()
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE app_user SET active=0 WHERE login_id=%s", (OP,))
+    assert as_admin().post("/api/users/%s/reactivate" % OP).status_code == 200
+    assert user_row(OP)["active"] == 1
+
+
+@test("nobody can deactivate or reactivate themselves out of the hierarchy")
+def t_no_self_service():
+    base()
+    r = as_admin().post("/api/users/%s/deactivate" % ADMIN)
+    assert r.get_json()["why"] == "Cannot deactivate yourself.", r.get_json()
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE app_user SET active=0 WHERE login_id=%s", (ADMIN,))
+    r2 = as_admin().post("/api/users/%s/reactivate" % ADMIN)
+    assert r2.get_json()["why"] == "Cannot reactivate yourself.", r2.get_json()
+
+
+@test("every action is gated to Admin and Super Admin - an operator is "
+     "refused, an anonymous caller gets 401")
+def t_actions_are_gated():
+    base()
+    op = client_as(OP, "FQC Operator")
+    anon = APP.app.test_client()
+    for action in ("reset-password", "reset-totp", "unlock",
+                   "deactivate", "reactivate"):
+        assert op.post("/api/users/%s/%s" % (OP, action), json={}).status_code == 403
+        assert anon.post("/api/users/%s/%s" % (OP, action), json={}).status_code == 401
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

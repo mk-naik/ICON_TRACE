@@ -600,6 +600,15 @@ def api_session_info():
 # reimplemented here; it is called and its refusal passed through unchanged.
 # --------------------------------------------------------------------------
 
+def _enrol_url(login_id, token):
+    """Enrolment is still served by auth_lab/lab_app.py - app.py has no
+    /enrol route. Its own variable rather than the CLI's ICON_HOST/ICON_PORT,
+    which in this process already mean the app's own host and port and would
+    build a URL pointing at a route that does not exist here."""
+    base = os.environ.get("ICON_ENROL_URL", "http://127.0.0.1:8091").rstrip("/")
+    return "%s/enrol?login_id=%s&token=%s" % (base, login_id, token)
+
+
 def _locked_minutes(locked_until, now=None):
     """Minutes left on a lock, rounded up so it reads "1 min left" until the
     lock is genuinely over. 0 when not locked. The raw epoch never reaches
@@ -641,6 +650,110 @@ def api_users_list():
     users = [_user_row(u, stations.get(u["login_id"]))
              for u in rows if u["role"] != "Super Admin"]
     return jsonify({"users": users})
+
+
+def _users_action(fn):
+    """Every action below refuses the same way: icon_auth raises AuthError,
+    and its own wording is passed straight through.
+
+    That wording matters and is not improved on here. For a hierarchy
+    violation _require_can_act_on() raises "Not found." - the same thing a
+    genuinely non-existent login_id produces - so an Admin probing for
+    another Admin or a Super Admin cannot tell the difference between "that
+    account is above you" and "no such account". Same status, same body,
+    either way."""
+    @functools.wraps(fn)
+    def inner(*a, **kw):
+        try:
+            return fn(*a, **kw)
+        except icon_auth.AuthError as e:
+            return jsonify({"ok": False, "why": str(e)}), 403
+    return inner
+
+
+def _target(cur, login_id):
+    """The target row, with the hierarchy already enforced - icon_auth's own
+    check, called rather than restated. Anything this returns is something
+    the caller is genuinely allowed to act on, so a role-specific message
+    afterwards cannot become a way of discovering who exists above you.
+
+    Returns the target alone, deliberately: binding the actor row to a local
+    named `actor` here shadows the actor() function every audit call in this
+    file uses, and the failure is a TypeError deep inside db.audit rather
+    than anywhere near the mistake."""
+    target = icon_auth._get_user(cur, login_id)
+    icon_auth._require_can_act_on(icon_auth._get_user(cur, actor_login_id()),
+                                  target)
+    return target
+
+
+@app.route("/api/users/<login_id>/reset-password", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_users_action
+def api_users_reset_password(login_id):
+    body = request.get_json(force=True) or {}
+    with store.conn() as (cx, cur):
+        target = _target(cur, login_id)
+        # Checked only AFTER the hierarchy check above, so that this
+        # friendlier message cannot be used to find out that an account
+        # exists and outranks you - that case has already returned
+        # "Not found.".
+        if icon_auth.get_rank(target["role"]) >= 2:
+            return jsonify({"ok": False, "why":
+                "Admin and Super Admin sign in by authenticator code, not a "
+                "password - use Reset TOTP instead."}), 400
+        icon_auth.set_temp_password(cur, actor_login_id(), login_id,
+                                    str(body.get("temp_password") or ""),
+                                    ip=request.remote_addr)
+        db.audit(cur, actor(), "user.reset_password", "app_user", login_id, {})
+    return jsonify({"ok": True, "login_id": login_id})
+
+
+@app.route("/api/users/<login_id>/reset-totp", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_users_action
+def api_users_reset_totp(login_id):
+    """issue_enrol_token() enforces both halves itself: the hierarchy (so an
+    Admin cannot reset another Admin's authenticator) and the target's role
+    (an operator has no TOTP to reset). Neither is restated here."""
+    with store.conn() as (cx, cur):
+        token = icon_auth.issue_enrol_token(cur, actor_login_id(), login_id)
+        db.audit(cur, actor(), "user.reset_totp", "app_user", login_id, {})
+    return jsonify({"ok": True, "login_id": login_id, "token": token,
+                    "enrol_url": _enrol_url(login_id, token)})
+
+
+@app.route("/api/users/<login_id>/unlock", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_users_action
+def api_users_unlock(login_id):
+    with store.conn() as (cx, cur):
+        icon_auth.unlock_user(cur, actor_login_id(), login_id,
+                              ip=request.remote_addr)
+        db.audit(cur, actor(), "user.unlock", "app_user", login_id, {})
+    return jsonify({"ok": True, "login_id": login_id})
+
+
+@app.route("/api/users/<login_id>/deactivate", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_users_action
+def api_users_deactivate(login_id):
+    with store.conn() as (cx, cur):
+        icon_auth.deactivate_user(cur, actor_login_id(), login_id,
+                                  ip=request.remote_addr)
+        db.audit(cur, actor(), "user.deactivate", "app_user", login_id, {})
+    return jsonify({"ok": True, "login_id": login_id, "active": False})
+
+
+@app.route("/api/users/<login_id>/reactivate", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_users_action
+def api_users_reactivate(login_id):
+    with store.conn() as (cx, cur):
+        icon_auth.reactivate_user(cur, actor_login_id(), login_id,
+                                  ip=request.remote_addr)
+        db.audit(cur, actor(), "user.reactivate", "app_user", login_id, {})
+    return jsonify({"ok": True, "login_id": login_id, "active": True})
 
 
 # --------------------------------------------------------------------------
