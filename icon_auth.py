@@ -183,6 +183,79 @@ CREATE TABLE IF NOT EXISTS auth_attempt (
     if "station" not in cols:
         cur.execute("ALTER TABLE app_user ADD COLUMN station TEXT")
 
+# ---------------------------------------------------------------------------
+# The screen registry (Round 26). Every screen a person can be given or
+# refused, per account, once per-user permissions replace role buckets.
+#
+# (id, label as the nav button reads, the nav-sec it sits under). Checked
+# against the live nav rather than transcribed: test_screen_perms.py reads
+# every data-v in icon_trace.html and every NEW_VIEWS entry in icon_live.js
+# and fails if this list and those disagree.
+#
+# admin and items are NOT here, deliberately. They are the Super-Admin-only
+# critical surface and stay role-gated exactly as Round 23 built them - no
+# per-user toggle may ever reach them.
+# ---------------------------------------------------------------------------
+
+SCREENS = (
+    ("mgmt",      "Management Overview",  "Overview"),
+    ("search",    "Search & Trace",       "Overview"),
+    ("proddash",  "Production Dashboard", "Production"),
+    ("indent",    "Indent",               "Production"),
+    ("plan",      "Planning",             "Production"),
+    ("prodentry", "Production Entry",     "Production"),
+    ("loss",      "Loss & Breakdown",     "Production"),
+    ("dash",      "FQC Dashboard",        "FQC"),
+    ("fqc",       "FQC Entry",            "FQC"),
+    ("pack",      "New Pallet",           "Packing"),
+    ("repack",    "Repack",               "Packing"),
+    ("packdash",  "Packing Log",          "Packing"),
+    ("disp",      "Stock & Dispatch",     "Dispatch"),
+    ("invoice",   "Tax Invoice",          "Dispatch"),
+    ("challan",   "Challan",              "Dispatch"),
+    ("loadver",   "Loading Verification", "Dispatch"),
+    ("gp",        "Gate Pass",            "Dispatch"),
+    ("drafts",    "Drafts",               "Control"),
+    ("hold",      "Hold & Deviation",     "Control"),
+    ("review",    "Needs Review",         "Control"),
+)
+SCREEN_IDS = frozenset(s[0] for s in SCREENS)
+
+# Never per-user. See the banner above.
+EXCLUDED_SCREENS = frozenset(("admin", "items"))
+
+# View ids that are parts of a screen rather than screens of their own. The
+# live layer adds them to ROLES at runtime so v4's go() will navigate to
+# them; for permissions they belong to their parent, and Round 27's
+# enforcement must treat them that way.
+SUBVIEWS = {
+    "challan-list":   "challan",
+    "gp-list":        "gp",
+    "gp-new":         "gp",
+    "loading-list":   "loadver",
+    "loadsession":    "loadver",
+    "invoice-parser": "invoice",
+}
+
+# Screens nobody writes from, by default. Each checked against the code
+# rather than assumed from its name - see BACKLOG.md, Round 26.
+#   mgmt, search, proddash, dash, packdash - no write call anywhere in
+#       their wiring. (Export is a POST, but it is every screen's own
+#       download button and is gated as a read by Round 23 - Round 27 must
+#       not tie it to these flags.)
+#   hold - GET /api/hold only; holds clear by themselves when evidence
+#       arrives, or through Needs Review.
+#   drafts - still v4's own sample-data screen, never overridden, no server
+#       call at all.
+# review is NOT here, although the brief listed it: Needs Review is where a
+# Quality, Production Incharge or Admin RESOLVES an item, through
+# POST /api/review/resolve - it is the Quality role's entire job. Marking it
+# read-only would, the moment Round 27 enforces this table, take that job
+# away, which this round's own rule forbids: nobody's access changes.
+READ_ONLY_SCREENS = frozenset(("mgmt", "search", "proddash", "dash",
+                               "packdash", "hold", "drafts"))
+
+
 def log_event(cur, login_id, event, ip=None, detail=None, now=None):
     cur.execute("INSERT INTO auth_event (at, login_id, event, ip, detail) VALUES (%s, %s, %s, %s, %s)",
                 (_now(now), login_id or "", event, ip, detail))
