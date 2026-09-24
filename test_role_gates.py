@@ -54,10 +54,22 @@ def test(name):
 BASE = os.path.dirname(os.path.abspath(__file__))
 _SRC = open(os.path.join(BASE, "app.py"), encoding="utf-8").read().split("\n")
 
-# The auth routes are not role-gated by design: /login is public, /logout
-# kills its own session, /api/session/extend is role-independent and does
-# its own 401. They are covered by test_session_auth.py instead.
-_AUTH_ROUTES = {"/login", "/logout", "/api/session/extend"}
+# Not role-gated by design, each for its own reason, and each covered by
+# its own test file instead of this one:
+#   /login                        public - there is no session yet
+#   /logout                       kills its own session
+#   /api/session/extend           role-independent, does its own 401
+#   /api/session/change-password  the ONE thing an account holding a
+#                                 temporary password may do; require_role()
+#                                 refuses everything else while
+#                                 must_change_pw stands, so gating this
+#                                 would lock such an account out entirely
+#   /enrol                        public by necessity - this is what
+#                                 somebody does BEFORE they can sign in,
+#                                 and the enrolment token is the whole of
+#                                 the authorisation
+_AUTH_ROUTES = {"/login", "/logout", "/api/session/extend",
+                "/api/session/change-password", "/enrol"}
 
 _PARAM = {"int": "1", "path": "X-1", "string": "X-1"}
 

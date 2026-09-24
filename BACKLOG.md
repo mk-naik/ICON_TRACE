@@ -3259,3 +3259,81 @@ carried forward, not a considered decision, and it is recorded here so it
 is not mistaken for one. If Unit-2 ever wants an FQC line lead who
 administers only their own line's operators, this is the thing to revisit.
 
+
+---
+
+## Round 25 - a security fix, real enrolment, forced password change, card Users
+
+### Section 1 is a security fix, not a feature
+
+`create_admin()` never called `_require_can_act_on()`. It gated on
+`actor_rank >= 2` alone, so an Admin could create a rank-2 peer - an
+account it was then forbidden to touch, by the same rule that should have
+stopped it creating one. `set_temp_password()`, `unlock_user()` and
+`deactivate_user()` all call that check; this one did not.
+
+Worse than a plain gap: `test_icon_auth.py` asserted **"Admin can create
+admin"** with a comment saying so, which reads as a decision rather than
+an oversight - and Round 24 left it alone for exactly that reason, putting
+the Super-Admin-only gate in its endpoint instead. It was the gap, written
+down and locked in by its own test. The assertion is inverted here rather
+than deleted, and now also checks nothing was created by the attempt. The
+refusal is the existing `"Not found."`, so it discloses no more than any
+other hierarchy refusal.
+
+Round 24's endpoint keeps its own Super-Admin-only gate, now redundant.
+Left in place as defence in depth, and backed by the library rather than
+standing alone.
+
+### The other three came from using Round 24, not re-reading it
+
+**The enrolment link pointed at nothing.** Creating an Admin, or resetting
+one's TOTP, produced a link to `127.0.0.1:8091` - auth_lab's port, where
+nothing runs on a real deployment. `app.py` now serves `/enrol` itself,
+calling `icon_auth.enrol_begin()/enrol_commit()` directly rather than
+reimplementing them, and `_enrol_url()` is derived from the request so it
+is right on any host (`ICON_PUBLIC_URL` overrides it behind a proxy).
+
+Two things were deliberately NOT ported from the lab. `enrol_begin()`
+accepts no token at all when the account carries `must_reenrol`, and the
+lab reaches that path from a plain URL - so anyone who knows a login_id
+can enrol an account whose TOTP was just reset, before its owner gets
+there. **A token is required here, always.** And a wrong code re-renders
+the form without calling `enrol_begin()` again, which would mint a new
+secret and silently invalidate the QR already scanned.
+
+**A temporary password was forever.** `icon_auth.login()` has always
+returned `must_change_pw`; nothing read it, so a new operator signed in on
+the password an Admin chose and stayed on it. The gate lives in
+`require_role()`, which every write endpoint already carries, so it covers
+all of them at once: such an account may read, but writes nothing into the
+record under a credential somebody else still knows. The flag is read from
+`app_user` per request rather than copied onto the session, so an account
+reset *while signed in* is stopped on its next action.
+
+**The Users screen was v4's table.** Replaced with the approved card
+layout - avatar, name over login_id, role over station, status, and a
+kebab menu. Presentation only: `_actionsCell()`, `_canAct()`,
+`_statusCell()`, `usersLoad()` and every Round 24 endpoint are unchanged.
+
+**An Admin could not re-enrol themselves.** `_canAct()` returned false for
+any rank-2 target including the viewer's own row, so an Admin who lost a
+phone saw "View only" - while `_require_can_act_on()` would have allowed
+it, since it exempts the actor from its own rank check. Their own row now
+offers Reset TOTP, and deliberately not Deactivate, which icon_auth
+refuses on yourself.
+
+### Which test proves what
+
+`test_icon_auth.py` (19) - the inverted create_admin assertion, plus the
+whole file to confirm nothing else depended on the old behaviour.
+`test_users_admin.py` (21) - create_admin called directly with no endpoint
+in front of it, for all three actors: Admin refused, Super Admin and cli
+unaffected. `test_enrol_screen.py` (5) - the link resolves here, the full
+flow in real Chromium, a used token dead and answering identically to a
+bad one, recovery codes shown once, and a tokenless request starting
+nothing. `test_change_password.py` (5) - forced onto the step, a reload
+not slipping past, writes refused meanwhile, the policy's own sentence on
+a weak password, the temporary one dead afterwards, and an account reset
+mid-session stopped on its next action. `test_users_screen.py` (6) - the
+card layout and the self-row Reset TOTP.

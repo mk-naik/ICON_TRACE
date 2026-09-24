@@ -275,10 +275,15 @@ def t_full_login_logout_flow():
     assert r.status_code == 200 and r.get_json()["ok"], r.get_json()
     assert c.get_cookie("icon_sid") is not None
 
-    r2 = c.get("/api/session")
-    assert r2.get_json() == {"signed_in": True, "name": "Flow User",
-                             "role": "Dispatch Operator", "station": None,
-                             "expires_at": r2.get_json()["expires_at"]}
+    # The fields that matter, rather than the exact dict: this asserted
+    # equality against the whole payload, so Round 25 adding login_id and
+    # must_change_pw to it broke a test of something else entirely.
+    s = r2 = c.get("/api/session").get_json()
+    assert s["signed_in"] is True
+    assert s["name"] == "Flow User"
+    assert s["role"] == "Dispatch Operator"
+    assert s["station"] is None
+    assert s["expires_at"]
 
     r3 = c.post("/logout")
     assert r3.get_json()["ok"] is True
