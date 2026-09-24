@@ -3968,3 +3968,22 @@ Full suite after this round: 43 files pass outright; the rest is the set
 that already failed at d9574c2 - `test_fqc.py`'s one, `test_build_banner_live.py`,
 `test_js.js`, `test_fqc_dashboard.js` 2/16, and the UI files that expect a
 server already running on 8090 or 5000.
+
+## Overnight review (2026-09-25, unattended)
+
+Worked alone overnight at Mukesh's request: long-standing test failures
+first, then misleading UI, then a hunt for more of the same. Each fix is its
+own commit with a test; nothing here was pushed - review, then push.
+Questions that need Mukesh are marked **Decide:**.
+
+### Fixed
+
+- **test_fqc.py "the module journey says what happened at FQC" - test out
+  of date, not a bug.** 921e029 (13 Sep) redesigned the journey: FQC reads
+  Pass/Reject and Quality's call is its own "Quality Decision" stage. The
+  test still expected one FQC stage carrying the grade. Updated to the
+  current design, keeping its point (never "None"; Quality's grade shows
+  once given). test_fqc.py 57/57 - green for the first time since 13 Sep.
+  **Decide:** the same redesign dropped a PASSED module's grade band from
+  the journey - it reads "Pass", where it used to read "A" or "B". If the
+  band matters on Search & Trace, it belongs in that step's detail.

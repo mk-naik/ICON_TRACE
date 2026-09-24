@@ -554,24 +554,35 @@ def t_queue_not_doubled():
 def t_journey_reads():
     c = setup()
 
-    def fqc_stage(s):
+    # Since 921e029 (13 Sep) the journey reads FQC as the outcome - Pass or
+    # Reject - and Quality's call as a stage of its own, rather than one FQC
+    # stage carrying the grade. This test was not updated with it; it
+    # asserts that design now, and still its original point: a rejected
+    # module never reads "None" anywhere, and Quality's grade shows once
+    # given.
+    def stage(s, name):
         d = c.get("/api/trace/serial/" + s).get_json()
-        return [j for j in d["journey"] if j["stage"] == "FQC"][0]
+        hits = [j for j in d["journey"] if j["stage"] == name]
+        return hits[0] if hits else None
 
     c.post("/api/fqc", json={"serial": FULL, "outcome": "pass"})
-    assert fqc_stage(FULL)["value"] == "A", fqc_stage(FULL)
+    assert stage(FULL, "FQC")["value"] == "Pass", stage(FULL, "FQC")
+    assert stage(FULL, "Quality Decision") is None, "a pass has no quality step"
 
     c.post("/api/fqc", json={"serial": SHORT, "outcome": "reject"})
-    stage = fqc_stage(SHORT)
-    assert stage["value"] == "Rejected", \
-        "a rejected module's journey read %r - the grade column is empty " \
-        "until Quality calls it" % stage["value"]
+    assert stage(SHORT, "FQC")["value"] == "Reject", stage(SHORT, "FQC")
+    q = stage(SHORT, "Quality Decision")
+    assert q["value"] == "—" and q["done"] is False, q
+    assert q["detail"] == ["awaiting a quality decision"], q
+    for j in c.get("/api/trace/serial/" + SHORT).get_json()["journey"]:
+        assert "None" not in str(j["value"]), j
 
     c.post("/api/quality", json={"serial": SHORT, "grade": "GY",
                                  "note": "edge chip, cosmetic"})
-    assert "GY" in fqc_stage(SHORT)["value"], fqc_stage(SHORT)
+    q = stage(SHORT, "Quality Decision")
+    assert q["value"] == "GY" and q["done"] is True, q
 
-    assert fqc_stage(CRACKED)["done"] is False, "never judged, but shown as done"
+    assert stage(CRACKED, "FQC")["done"] is False, "never judged, but shown as done"
 
 
 @test("a packed module is never silently re-judged where it stands")
