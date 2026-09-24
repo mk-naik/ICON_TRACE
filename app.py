@@ -665,7 +665,8 @@ def api_login():
                     # icon_auth has always returned this; nothing was
                     # reading it, so an operator handed a temporary password
                     # signed in on it and stayed on it indefinitely.
-                    "must_change_pw": bool(res.get("must_change_pw"))})
+                    "must_change_pw": bool(res.get("must_change_pw")),
+                    **_access_payload(u["login_id"])})
     resp.set_cookie(SESSION_COOKIE, session_id, httponly=True, samesite="Lax")
     return resp
 
@@ -723,6 +724,19 @@ def api_session_extend():
     return jsonify({"ok": True, "expires_at": row["expires_at"]})
 
 
+def _access_payload(login_id):
+    """What the page needs to decide which screens to show and which to let
+    save (Round 28): the account's OWN permission map, read from the table
+    on every call, and the sub-view ids that belong to a screen rather than
+    being screens themselves. Nothing here is a control - every read and
+    write is gated on the server regardless - it is how the page avoids
+    offering what the server would refuse."""
+    with store.conn() as (cx, cur):
+        perms = icon_auth.get_screen_perms(cur, login_id)
+    return {"perms": perms, "subviews": dict(icon_auth.SUBVIEWS),
+            "read_only": sorted(icon_auth.READ_ONLY_SCREENS)}
+
+
 @app.route("/api/session")
 def api_session_info():
     """Drives the client's logged-in UI state and the idle-warning
@@ -738,7 +752,8 @@ def api_session_info():
                     "expires_at": s["expires_at"],
                     # so a RELOAD lands back on the change-password step
                     # rather than slipping past it into the app
-                    "must_change_pw": bool(getattr(g, "icon_must_change_pw", False))})
+                    "must_change_pw": bool(getattr(g, "icon_must_change_pw", False)),
+                    **_access_payload(s["login_id"])})
 
 
 # --------------------------------------------------------------------------

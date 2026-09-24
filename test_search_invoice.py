@@ -339,6 +339,9 @@ def t_no_fabrication():
             assert r.get_json()["ok"] is False and r.get_json()["why"], q
         if empty:
             seed()          # and again with a database that has real records in it
+            # seed() wipes the database, sessions included - and since
+            # Round 28 Search needs one to read at all
+            AUTH.test_login(c)
 
 
 # --------------------------------------------------------------------------

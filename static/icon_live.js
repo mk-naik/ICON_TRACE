@@ -297,6 +297,7 @@
   }
 
   function usersLoad() {
+    if (!can('admin')) return Promise.resolve();   /* Round 28 */
     return api('users').then(function (d) {
       if (!d || !d.users) return;
       _users.rows = d.users;
@@ -690,6 +691,114 @@
     if (typeof go === 'function') go(home);
   };
 
+  /* ---- Screen access comes from the account's own permissions (Round 28)
+   *
+   * v4's can(v) asked ROLES[USER.role].views, so two people in the same
+   * role could never see different screens. It now asks the account's own
+   * {screen: {view, write}} map, which the server sends with /login and
+   * /api/session. go(), applyRole() and every nav button already call
+   * can() by name, so replacing it here is the whole switch - v4 keeps
+   * refusing an unviewable screen with its own toast, hiding its button,
+   * and leaving it if it was open.
+   *
+   * ROLES still supplies each role's home screen and the "Can access"
+   * labels. It no longer decides access - except for admin and items,
+   * which are never per-user and stay on the role, as on the server.
+   * None of this is the control: every read and write is refused by the
+   * server regardless. It is how the page avoids offering what the
+   * server would refuse. */
+  var _roleCan = window.can;
+  function _screenOf(v) {
+    return (USER.subviews && USER.subviews[v]) || v;
+  }
+  function _perm(v) {
+    return (USER.perms && USER.perms[_screenOf(v)]) || { view: false, write: false };
+  }
+  window.can = function (v) {
+    if (v === 'admin' || v === 'items') {
+      return typeof _roleCan === 'function' ? _roleCan(v) : false;
+    }
+    return !!_perm(v).view;
+  };
+  window.canWrite = function (v) { return !!_perm(v).write; };
+
+  /* ---- A screen the account may view but not write --------------------
+   *
+   * Its save/create controls are disabled, with the reason on hover and a
+   * note across the top. A live-looking Save that answers 403 is the same
+   * misleading screen Round 24 removed from Users: the server refuses it
+   * either way, the page just should not offer it.
+   *
+   * Controls are recognised by what they say they do. Reading, filtering,
+   * exporting, printing and navigating are left alone; anything whose
+   * label starts with one of the verbs below writes (checked against every
+   * writable screen's buttons). A MutationObserver re-applies it, because
+   * these screens re-render their own controls as data arrives. */
+  var RO_REASON = 'Your account can view this screen but not save changes.';
+  var WRITE_LABEL = /^(\+ ?)?(new |save|create|record|submit|issue|open event|upload|complete|start scanning|load into master|fill active|add\b|clear pallet|enter range|confirm|resolve|keep|acknowledge|cancel|discard|edit|abandon|repack|validate|copy from last|pass\b|reject\b)|^(a|gy|bgy)$/i;
+  var _roObservers = {};
+
+  function _viewOnly(sid) {
+    /* admin and items are not in the map at all - they are role-gated,
+       never per-user, and the server decides their writes by role */
+    if (!USER.perms || !USER.perms[sid]) return false;
+    return can(sid) && !canWrite(sid) &&
+      (USER.read_only || []).indexOf(sid) < 0;
+  }
+
+  function _lockSection(sec, sid) {
+    if (!_viewOnly(sid)) return;
+    if (!sec.querySelector(':scope > .ro-note')) {
+      var n = document.createElement('div');
+      n.className = 'note n-info ro-note';
+      n.innerHTML = '<span>i</span><span>' + RO_REASON + '</span>';
+      sec.insertBefore(n, sec.firstChild);
+    }
+    sec.querySelectorAll('button, input[type=file], input[id$="Scan"]').forEach(function (el) {
+      if (el.closest('.ro-note')) return;
+      var label = (el.tagName === 'BUTTON' ? el.textContent : 'upload')
+        .replace(/\s+/g, ' ').trim();
+      var writes = el.tagName !== 'BUTTON' || WRITE_LABEL.test(label);
+      if (!writes || el.disabled && el.classList.contains('ro-locked')) return;
+      el.disabled = true;
+      el.classList.add('ro-locked');
+      el.title = RO_REASON;
+    });
+  }
+
+  /* every section belonging to a view-only screen, sub-views included */
+  function applyWriteLocks() {
+    document.querySelectorAll('section.view[id^="v-"]').forEach(function (sec) {
+      var sid = _screenOf(sec.id.slice(2));
+      if (!_viewOnly(sid)) return;
+      _lockSection(sec, sid);
+      if (_roObservers[sec.id] || typeof MutationObserver === 'undefined') return;
+      var busy = false;
+      _roObservers[sec.id] = new MutationObserver(function () {
+        if (busy) return;
+        busy = true;
+        try { _lockSection(sec, sid); } finally { busy = false; }
+      });
+      _roObservers[sec.id].observe(sec, { childList: true, subtree: true,
+        attributes: true, attributeFilter: ['disabled'] });
+    });
+  }
+  window.applyWriteLocks = applyWriteLocks;
+
+  /* The role's home when the account can view it, else the first screen
+     in nav order it can. A home the account cannot open would greet every
+     sign-in with "no access" and an empty page. */
+  function _homeFor(role) {
+    var r = ROLES[role] || {};
+    if (r._home0 === undefined) r._home0 = r.home;
+    if (r._home0 && can(r._home0)) return r._home0;
+    var btns = document.querySelectorAll('#sidenav .nav-i[data-v]');
+    for (var i = 0; i < btns.length; i++) {
+      if (can(btns[i].getAttribute('data-v'))) return btns[i].getAttribute('data-v');
+    }
+    return r._home0 || 'search';
+  }
+
   function enterApp(who) {
     /* From the SERVER's answer, never from anything picked on this page -
        that is the whole point of the change. */
@@ -697,8 +806,12 @@
              /* v4's USER never had one - it was a display name and a role
                 picked from a dropdown. The Users screen needs it to tell
                 the viewer's own row from anybody else's. */
-             login_id: who.login_id || '' };
+             login_id: who.login_id || '',
+             perms: who.perms || {}, subviews: who.subviews || {},
+             read_only: who.read_only || [] };
     ensureRoleEntry(USER.role);
+    /* v4's applyRole() and signIn() both go(ROLES[role].home) */
+    if (ROLES[USER.role]) ROLES[USER.role].home = _homeFor(USER.role);
 
     /* A temporary password is one somebody else chose and still knows.
        Nothing else loads until it has been replaced - and the server
@@ -719,6 +832,7 @@
     if (splash) splash.show();
 
     window.signIn();          /* the live layer's wrapper, by now */
+    applyWriteLocks();
     startIdleWatch();
 
     /* hide() honours its own minimum, so a bootstrap faster than the
@@ -1080,6 +1194,7 @@
   window.wireMgmt = wireMgmt;
 
   function renderMgmt() {
+    if (!can('mgmt')) return;   /* Round 28: the server would refuse it */
     var g = function(id) { var e = document.getElementById(id); return e ? (e.value === 'All customers' || e.value.startsWith('All') || e.value.startsWith('Both') ? '' : e.value) : ''; };
     var f = {
       from: g('mgFrom'), to: g('mgTo') || g('mgFrom'),
@@ -1250,10 +1365,18 @@
     }
   }
 
+  /* which screen each renderer paints - one the account cannot view is
+     not rendered, since its reads would be refused (Round 28) */
+  var RENDER_SCREEN = { renderMgmt: 'mgmt', renderProd: 'proddash',
+    renderFqcDash: 'dash', renderLiveFqcDash: 'dash',
+    renderLiveFqcRecent: 'fqc', renderPackLog: 'packdash',
+    renderStock: 'disp', renderPlan: 'plan' };
+
   function rerender() {
     ['renderMgmt', 'renderProd', 'renderFqcDash', 'renderLiveFqcDash',
      'renderLiveFqcRecent', 'renderPackLog',
      'renderStock', 'renderPlan'].forEach(function (fn) {
+      if (typeof can === 'function' && !can(RENDER_SCREEN[fn])) return;
       try { if (typeof window[fn] === 'function') window[fn](); }
       catch (e) { /* a screen that is not on the page yet */ }
     });
@@ -1687,6 +1810,7 @@ function wireFqcAnomalies() {
   window.wireFqcAnomalies = wireFqcAnomalies;
 
   window.renderPackLog = function() {
+    if (!can('packdash')) return;   /* Round 28: the server would refuse it */
     fetch('/api/boxes', {cache: 'no-store'})
       .then(function (r) { return r.json(); })
       .then(function (rows) {
@@ -1928,6 +2052,7 @@ function wireFqcAnomalies() {
   window.wireProdDash = wireProdDash;
 
   function renderLiveProdDash() {
+    if (!can('proddash')) return;   /* Round 28: the server would refuse it */
     var g = function(id) { var e = document.getElementById(id); return e ? e.value : ''; };
     var f = {
       from: g('pdFrom'),
@@ -2037,6 +2162,7 @@ function wireFqcAnomalies() {
   window.wirePackLog = wirePackLog;
 
   function renderLivePackLog() {
+    if (!can('packdash')) return;   /* Round 28: the server would refuse it */
     var g = function(id) { var e = document.getElementById(id); return e ? e.value : ''; };
     var f = {
       from: g('plFrom') || g('pkDate'), // handle whatever ID it got
@@ -2154,6 +2280,7 @@ function wireFqcAnomalies() {
   window.packApply = renderLivePackLog;
 
   function renderLiveFqcDash() {
+    if (!can('dash')) return;   /* Round 28: the server would refuse it */
     var f = fqcDashFilters();
     console.log("fetching dashboard with f=", f);
     fetch('/api/fqc/dashboard' + fqcDashQuery(f), { cache: 'no-store' })
@@ -3932,6 +4059,7 @@ function wireFqcAnomalies() {
   /* Restore whatever is still open, so a refresh mid-pallet does not lose
      the work - the whole reason boxes are rows and not an array. */
   function packRestore() {
+    if (!can('pack')) return;   /* Round 28: the server would refuse it */
     var view = document.getElementById('v-pack');
     if (!view || view.__restored) return;
     view.__restored = true;
@@ -4913,7 +5041,11 @@ function wireFqcAnomalies() {
      changing the home afterwards would be a screen too late. */
   function packingOrder() {
     if (typeof ROLES !== 'undefined' && ROLES['Packing Operator']) {
-      ROLES['Packing Operator'].home = 'packdash';
+      /* the role's preferred home - still subject to the account being
+         able to view it (Round 28), so resolved rather than assigned */
+      ROLES['Packing Operator']._home0 = 'packdash';
+      ROLES['Packing Operator'].home = USER.role === 'Packing Operator'
+        ? _homeFor('Packing Operator') : 'packdash';
     }
     var nav = document.getElementById('sidenav');
     if (!nav || nav.__packOrder) return;
@@ -4929,6 +5061,7 @@ function wireFqcAnomalies() {
     packingOrder();
     if (_origSignIn) _origSignIn.apply(this, arguments);
     applyBoot();
+    _loadViewableScreens();
     addScreens();
     sidebarToggle();
     wireDateResets();
@@ -5044,12 +5177,16 @@ function wireFqcAnomalies() {
       try { chAbandonEdit(); } catch (e) {}
     }
     if (_origGo) _origGo.apply(this, arguments);
+    /* v4's go() has just refused a screen this account cannot view - its
+       data loads below would only be refused by the server as well */
+    if (!can(id)) return;
+    applyWriteLocks();
     if (id === 'search') clearSearch();
     if (id === 'plan') {
       try { wirePlanChecks(); renderAllocations(); } catch (e) {}
     }
-    if (id === 'repack') { try { wireRepack(); } catch (e) {} }
-    if (id === 'challan') { try { wireChallan(); } catch (e) {} }
+    if (id === 'repack' && can('repack')) { try { wireRepack(); } catch (e) {} }
+    if (id === 'challan' && can('challan')) { try { wireChallan(); } catch (e) {} }
     if (id === 'review') {
       try { reviewWireFilters(); window.iconReviewRefresh(); } catch (e) {}
     }
@@ -5643,6 +5780,7 @@ function wireFqcAnomalies() {
      batch list scrolls inside the card so the page does not grow past the
      buttons above it. */
   function renderAllocations() {
+    if (!can('plan')) return;   /* Round 28: the server would refuse it */
     var view = document.getElementById('v-plan');
     if (!view) return;
     var card = document.getElementById('allocCard');
@@ -6049,7 +6187,9 @@ function wireFqcAnomalies() {
     });
     if (typeof applyRole === 'function') applyRole();
     NEW_VIEWS.forEach(function (v) {
-      if (v.url) loadView(v.id, v.url);
+      /* a screen the account cannot view is not fetched: the server would
+         refuse it, and the refusal is not markup to drop into a section */
+      if (v.url && can(v.id)) loadView(v.id, v.url);
     });
   }
 
@@ -6058,10 +6198,10 @@ function wireFqcAnomalies() {
      every other screen, so it cannot drift into looking like a second app. */
   function loadView(id, url) {
     fetch(url, { cache: 'no-store' })
-      .then(function (r) { return r.text(); })
+      .then(function (r) { return r.ok ? r.text() : null; })
       .then(function (html) {
         var el = document.getElementById('v-' + id);
-        if (!el) return;
+        if (!el || html === null) return;
         el.innerHTML = html;
         el.querySelectorAll('script').forEach(function (old) {
           var n = document.createElement('script');
@@ -6179,6 +6319,7 @@ function wireFqcAnomalies() {
   }
 
   window.iconReviewRefresh = function () {
+    if (!can('review')) return;   /* Round 28: the server would refuse it */
     if (!document.getElementById('rvRows')) return;
     api('review').then(function (rows) {
       rows = rows || [];
@@ -6546,6 +6687,7 @@ function wireFqcAnomalies() {
   };
 
   window.iconHoldRefresh = function (say) {
+    if (!can('hold')) return;   /* Round 28: the server would refuse it */
     return fetch('/api/hold', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
@@ -6632,6 +6774,7 @@ function wireFqcAnomalies() {
    * it here. Its page heading comes off: the tab is already the heading.
    */
   function mergeEvidenceSources() {
+    if (!can('admin')) return;   /* Round 28: the server would refuse it */
     var pane = document.getElementById('ad-stations');
     if (!pane || document.getElementById('v-settings')) return;
     var host = document.createElement('div');
@@ -6651,6 +6794,7 @@ function wireFqcAnomalies() {
      describing somewhere it does not come from. It lists what is actually
      configured, and says plainly when a line has nothing. */
   function loadSources() {
+    if (!can('admin')) return;   /* Round 28: the server would refuse it */
     var body = document.getElementById('sourceRows');
     if (!body) return;
     fetch('/api/evidence/sources', { cache: 'no-store' })
@@ -8122,6 +8266,7 @@ function wireFqcAnomalies() {
   }
 
   function chRunChecksNow() {
+    if (!canWrite('challan')) return;   /* Round 28: the server would refuse it */
     if (chChallan) return;          // nothing left to check once written
     fetch('/api/challan/checks', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -9582,19 +9727,23 @@ function wireFqcAnomalies() {
       })
       .catch(function () {});
   }
-  try { clAddDashKpis(); } catch (e) {}
-
   /* delegated, so a screen rendered later gets it too */
   wireExports();
   pruneDemoControls();
   wireSearchOrder();
-  /* v4 paints its five demo pallets into Repack during page load, before
-     this file runs. Wiring it here replaces them at once, so the screen is
-     never briefly showing pallets that do not exist. */
-  try { wireRepack(); } catch (e) {}
-  /* same reasoning: the Challan screen's real boxes and invoice list replace
-     v4's demo arrays the instant this file runs, not on first navigation. */
-  try { wireChallan(); } catch (e) {}
+  /* Screens whose real data replaces v4's demo arrays up front rather than
+     on first navigation - Repack's pallets, Challan's boxes and invoices,
+     Stock & Dispatch's challan KPIs. Until Round 28 this ran the moment
+     the file loaded, before anyone had signed in, and the server answered
+     those reads for nobody. Every read now needs a session and view on
+     its screen, so it runs once the account is known (the signIn wrapper
+     calls it) and only for the screens that account can view. The demo
+     rows it replaces sit behind the sign-in card until then. */
+  function _loadViewableScreens() {
+    if (can('disp')) { try { clAddDashKpis(); } catch (e) {} }
+    if (can('repack')) { try { wireRepack(); } catch (e) {} }
+    if (can('challan')) { try { wireChallan(); } catch (e) {} }
+  }
 
   window.renderInvoiceList = function() {
     var tbody = document.getElementById('invoiceListBody');
@@ -10572,6 +10721,7 @@ window.gpSetKind = function(k) {
   };
 
   window.renderPE = function() {
+    if (!can('prodentry')) return;   /* Round 28: the server would refuse it */
     var view = document.getElementById('v-prodentry');
     if (!view) return;
     window.peWireFilters();
