@@ -601,12 +601,75 @@ def api_session_info():
 # --------------------------------------------------------------------------
 
 def _enrol_url(login_id, token):
-    """Enrolment is still served by auth_lab/lab_app.py - app.py has no
-    /enrol route. Its own variable rather than the CLI's ICON_HOST/ICON_PORT,
-    which in this process already mean the app's own host and port and would
-    build a URL pointing at a route that does not exist here."""
-    base = os.environ.get("ICON_ENROL_URL", "http://127.0.0.1:8091").rstrip("/")
-    return "%s/enrol?login_id=%s&token=%s" % (base, login_id, token)
+    """Points at THIS app, which now serves /enrol itself (Round 25).
+
+    It used to hard-code the standalone lab's 127.0.0.1:8091, which is
+    nothing on a real deployment - the link an Admin was handed after
+    creating an account simply did not resolve. Derived from the request so
+    it is correct whether this is 127.0.0.1:8080 in a workshop or a real
+    hostname later; ICON_PUBLIC_URL overrides it for a deployment behind a
+    proxy, where the host the app sees is not the host the person typed."""
+    from urllib.parse import quote
+    base = (os.environ.get("ICON_PUBLIC_URL") or request.host_url).rstrip("/")
+    return "%s/enrol?login_id=%s&token=%s" % (base, quote(login_id), quote(token))
+
+
+_ENROL_REFUSED = "That enrolment link is not valid, or it has expired."
+
+
+@app.route("/enrol", methods=["GET", "POST"])
+def enrol():
+    """Setting up an authenticator, for an account that cannot sign in yet.
+
+    Public by necessity - this is what somebody does BEFORE they have a
+    session - and the enrolment token is the whole of the authorisation.
+    icon_auth.enrol_begin()/enrol_commit() are called directly rather than
+    reimplemented; they verify the token (hashed, unused, unexpired) and
+    own every state change.
+
+    One deliberate difference from auth_lab's version: a token is required
+    here, always. enrol_begin() also accepts no token at all when the
+    account carries must_reenrol, and the lab reaches that path from a
+    plain URL - which means anyone who knows a login_id can enrol an
+    account whose TOTP was just reset, before its owner gets there. Not
+    ported. Every route into this page carries a token.
+    """
+    login_id = (request.values.get("login_id") or "").strip()
+    token = (request.values.get("token") or "").strip()
+    if not login_id or not token:
+        return render_template("enrol.html", error=_ENROL_REFUSED), 400
+
+    if request.method == "POST":
+        code = (request.form.get("code") or "").strip()
+        with store.conn() as (cx, cur):
+            codes = icon_auth.enrol_commit(cur, login_id, token, code,
+                                           ip=request.remote_addr)
+        # `is False` on purpose: enrol_commit returns an EMPTY LIST for a
+        # successful enrolment of anyone who gets no recovery codes, and an
+        # empty list is falsy. Testing truthiness here would report every
+        # Admin's successful enrolment as a failure.
+        if codes is False:
+            # The pending secret is left alone so a mistyped code can
+            # simply be retyped - calling enrol_begin() again would mint a
+            # new secret and silently invalidate the QR already scanned.
+            return render_template("enrol.html", login_id=login_id, token=token,
+                                   retry=True,
+                                   error="That code was not accepted. Check "
+                                         "your authenticator and try again."), 400
+        return render_template("enrol.html", done=True, login_id=login_id,
+                               codes=codes)
+
+    with store.conn() as (cx, cur):
+        started = icon_auth.enrol_begin(cur, login_id, token,
+                                        ip=request.remote_addr)
+    if not started:
+        # One sentence for a bad token, an expired token, a used token and
+        # an unknown account alike - the same reason every other refusal in
+        # this system is uninformative.
+        return render_template("enrol.html", error=_ENROL_REFUSED), 400
+    return render_template("enrol.html", login_id=login_id, token=token,
+                           secret=started["secret"],
+                           qr=bc.qr_svg(started["url"], module=5))
 
 
 def _locked_minutes(locked_until, now=None):

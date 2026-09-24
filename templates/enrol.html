@@ -1,0 +1,97 @@
+{#  Enrolment - setting up an authenticator for an account that cannot sign
+    in yet. Standalone rather than extending base.html: that template opens
+    with a nav rail into the app, and everybody who reaches this page is by
+    definition not signed in to use it. Styled with v4's own stylesheet and
+    classes so it belongs to this app rather than looking like the lab it
+    replaces.                                                             #}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Set up your authenticator &middot; ICON TRACE</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='icon.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='icon_add.css') }}">
+<style>
+  body{min-height:100vh;display:flex;align-items:center;justify-content:center;
+       background:var(--bg,#0e2338);padding:24px}
+  .enrol-card{width:460px;max-width:100%;background:var(--panel,#fff);
+       border-radius:var(--r,10px);padding:34px 32px;
+       box-shadow:0 10px 40px rgba(0,0,0,.25)}
+  .enrol-mark{display:flex;align-items:center;gap:9px;margin-bottom:4px}
+  .enrol-sun{width:22px;height:22px;border-radius:50%;background:var(--sun,#f5a623)}
+  .enrol-card h1{font-size:19px;font-weight:700;letter-spacing:-.3px;margin:0}
+  .enrol-card h1 span{color:var(--brand,#1b4f7e)}
+  .enrol-sub{color:var(--ink3,#7a8b9c);font-size:12.5px;margin:0 0 20px}
+  .qr-holder{display:flex;justify-content:center;padding:14px;background:#fff;
+       border:1px solid var(--line,#dbe3ea);border-radius:8px;margin-bottom:14px}
+  .qr-holder svg{width:190px;height:190px}
+  .secret{font-family:var(--f-mono,monospace);font-size:13px;word-break:break-all;
+       background:var(--bg2,#f5f8fa);border:1px solid var(--line,#dbe3ea);
+       border-radius:6px;padding:9px 11px;margin-bottom:16px}
+  .codes{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:14px 0}
+  .codes span{font-family:var(--f-mono,monospace);font-size:14px;font-weight:700;
+       background:var(--bg2,#f5f8fa);border:1px solid var(--line,#dbe3ea);
+       border-radius:6px;padding:8px;text-align:center}
+  .enrol-note{color:var(--ink3,#7a8b9c);font-size:11.5px;line-height:1.55;
+       margin-top:18px;border-top:1px solid var(--line,#dbe3ea);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="enrol-card">
+  <div class="enrol-mark"><div class="enrol-sun"></div>
+    <h1>ICON <span>TRACE</span></h1></div>
+
+  {% if error and not retry %}
+    <p class="enrol-sub">Set up your authenticator</p>
+    <div class="note n-bad"><span>!</span><span>{{ error }}</span></div>
+    <p class="enrol-note">Ask whoever created the account for a fresh link.
+      Enrolment links are single use and expire shortly after they are
+      issued.</p>
+
+  {% elif done %}
+    <p class="enrol-sub">{{ login_id }}</p>
+    <div class="note n-info"><span>&#10003;</span><span><b>Your authenticator
+      is set up.</b> Sign in with your ID and the six-digit code it
+      shows.</span></div>
+
+    {% if codes %}
+      <div class="note n-warn" style="margin-top:14px"><span>!</span>
+        <span><b>Save these recovery codes now.</b> They are shown once and
+        never again. Each one works a single time, if you ever lose the
+        authenticator.</span></div>
+      <div class="codes">
+        {% for c in codes %}<span>{{ c }}</span>{% endfor %}
+      </div>
+    {% endif %}
+
+    <a class="btn btn-primary btn-full" href="/">Go to sign in</a>
+
+  {% else %}
+    <p class="enrol-sub">Set up your authenticator for <b>{{ login_id }}</b></p>
+
+    {% if retry %}
+      <div class="note n-bad" style="margin-bottom:14px"><span>!</span>
+        <span>{{ error }}</span></div>
+    {% else %}
+      <div class="qr-holder">{{ qr | safe }}</div>
+      <div class="fld"><label>Or type this secret in by hand</label>
+        <div class="secret">{{ secret }}</div></div>
+    {% endif %}
+
+    <form method="POST">
+      <input type="hidden" name="login_id" value="{{ login_id }}">
+      <input type="hidden" name="token" value="{{ token }}">
+      <div class="fld"><label>Six-digit code from your authenticator</label>
+        <input name="code" inputmode="numeric" autocomplete="one-time-code"
+               maxlength="6" autofocus required></div>
+      <button class="btn btn-primary btn-full" type="submit">Confirm</button>
+    </form>
+
+    <p class="enrol-note">Scan the square with Google Authenticator, Authy or
+      any similar app, then type the six digits it shows. The code changes
+      every thirty seconds - if one is refused, wait for the next.</p>
+  {% endif %}
+</div>
+</body>
+</html>
