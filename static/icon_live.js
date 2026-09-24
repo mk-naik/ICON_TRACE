@@ -6376,8 +6376,10 @@ function wireFqcAnomalies() {
 
   function reviewCanActDuplicate(item) {
     if (typeof USER === 'undefined' || !USER) return false;
-    if (item.dispatched) return USER.role === 'Admin';
-    return USER.role === 'Production Incharge' || USER.role === 'Admin';
+    /* the same sets as the server's checks, Super Admin included (Round 28) */
+    var admin = USER.role === 'Admin' || USER.role === 'Super Admin';
+    if (item.dispatched) return admin;
+    return USER.role === 'Production Incharge' || admin;
   }
 
   function reviewRenderKpis(rows) {

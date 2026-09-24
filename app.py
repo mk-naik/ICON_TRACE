@@ -1296,7 +1296,13 @@ def api_customer_resolve():
 @require_screen_write("pack")
 @_sync_guard
 def api_box_open():
-    d = request.get_json(force=True)
+    d = request.get_json(force=True) or {}
+    # Refused here, not left to d["model"] below: a missing model used to
+    # surface as a KeyError and a 500, which reads as the server breaking
+    # rather than as the request lacking something.
+    if not str(d.get("model") or "").strip():
+        return jsonify({"ok": False, "why":
+            "Choose a model before opening a pallet."}), 400
     with store.conn() as (cx, cur):
         ceiling = int(db.get_config(cur).get("pallet_ceiling") or 36)
         try:
@@ -6582,8 +6588,13 @@ def api_quality_grade():
 # "a review item can be seen by both") but not opened or acted on - enforced
 # here, not just by a hidden button, by redacting the evidence a client
 # would need to render the decision popup at all.
-_QUALITY_ROLES = ("Quality", "Admin")
-_INCHARGE_ROLES = ("Production Incharge", "Admin")
+#
+# Super Admin added in Round 28: both sets predated that role, and leaving
+# it out meant the account that can wipe the database and change grading
+# thresholds could not resolve a quality item - an oversight, not a
+# boundary. Every other role group here includes it.
+_QUALITY_ROLES = ("Quality", "Admin", "Super Admin")
+_INCHARGE_ROLES = ("Production Incharge", "Admin", "Super Admin")
 
 
 def _evid_side(r):
@@ -6685,7 +6696,8 @@ def _resolve_duplicate_scan(cur, review_id, resolution, reason):
         bool((srec or {}).get("state") == "dispatched")
 
     if dispatched:
-        _require_role("Admin", why="Only Admin can resolve a conflict on a "
+        _require_role("Admin", "Super Admin",   # Super Admin: Round 28
+                      why="Only Admin can resolve a conflict on a "
                       "serial that has already been dispatched.")
         # TODO(deliberate, future work): a dispatched duplicate-scan conflict
         # may eventually need a replacement-serial workflow - the customer

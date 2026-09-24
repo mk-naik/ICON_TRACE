@@ -12,10 +12,12 @@ never the outer gate's "Not permitted for your role.".
 
     1  api_review_resolve, quality_grade      _QUALITY_ROLES
     2  _resolve_duplicate_scan, not dispatched _INCHARGE_ROLES
-    3  _resolve_duplicate_scan, dispatched     "Admin"
+    3  _resolve_duplicate_scan, dispatched     "Admin", "Super Admin"
     4  _resolve_provisional_mismatch          _QUALITY_ROLES
     5  /admin/challan-import, action=load      _R_MASTER
     6  /settings, POST                         _R_MASTER
+
+(Super Admin joined all three sets in Round 28 - see the last tests.)
 """
 
 import csv, datetime, os, sys, tempfile, traceback
@@ -86,7 +88,7 @@ def add_rescan_row(i, at, pmax):
         csv.writer(fh).writerows(rows)
 
 
-def setup(n=4):
+def setup(n=5):
     fresh()
     with open(SS, "w", newline="", encoding="utf-8") as fh:
         csv.writer(fh).writerows(
@@ -256,6 +258,58 @@ def t_inner_master_checks():
     assert r.status_code == 403, r.status_code
     assert b"Only a Super Admin can change" in r.data
     print("      403 /settings POST")
+
+
+@test("Round 28: a Super Admin resolves every branch that used to leave it "
+     "out - a quality decision, a provisional mismatch, a duplicate scan, "
+     "and a duplicate scan on a dispatched serial")
+def t_super_admin_passes_every_inner_check():
+    c = setup()
+    AUTH.test_login(c)                   # Super Admin (the default)
+    # quality_grade (_QUALITY_ROLES)
+    assert c.post("/api/fqc", json={"serial": serial(0), "outcome": "reject",
+                  "reason": "OV-QUALITY — quality engineer instruction"}
+                  ).status_code == 200
+    AUTH.test_login(c)
+    r = c.post("/api/review/resolve", json={"type": "quality_grade",
+               "id": serial(0), "grade": "GY", "reason": "graded by Super Admin"})
+    assert r.status_code == 200, r.get_json()
+    print("      200 quality_grade")
+    # duplicate scan, not dispatched (_INCHARGE_ROLES)
+    pass_and_pack(c, 1)
+    rid = duplicate_scan(c, 1)
+    AUTH.test_login(c)
+    r = c.post("/api/review/resolve", json={"type": "duplicate_scan", "id": rid,
+               "resolution": "keep_original", "reason": "Super Admin's call"})
+    assert r.status_code == 200, r.get_json()
+    assert review_status(rid) == "resolved"
+    print("      200 duplicate_scan")
+    # duplicate scan on a dispatched serial (was "Admin" alone)
+    dispatch_one(c, 3)
+    rid = duplicate_scan(c, 3)
+    AUTH.test_login(c)
+    r = c.post("/api/review/resolve", json={"type": "duplicate_scan", "id": rid,
+               "resolution": "keep_original", "reason": "already shipped"})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["resolution"] == "acknowledged"
+    print("      200 duplicate_scan, dispatched")
+    # provisional mismatch (_QUALITY_ROLES)
+    assert c.post("/api/fqc", json={"serial": serial(2), "outcome": "pass"}
+                  ).status_code == 200
+    with store.conn() as (cx, cur):
+        f = store.one(cur, "SELECT fqc_id FROM fqc_record WHERE serial=%s",
+                      (serial(2),))
+        rid = db.create_review_item(cur, "provisional_mismatch", serial(2),
+                                    fqc_id=f["fqc_id"], new_fqc_id=f["fqc_id"],
+                                    created_by="system")
+    r = c.post("/api/review/resolve", json={"type": "provisional_mismatch",
+               "id": rid, "resolution": "keep_decision",
+               "reason": "Super Admin's call"})
+    assert r.status_code == 200, r.get_json()
+    print("      200 provisional_mismatch")
+    # and the feed no longer redacts a quality item's evidence from them
+    feed = c.get("/api/review").get_json()
+    assert all(not x.get("locked") for x in feed if x["type"] == "quality_grade"), feed
 
 
 @test("a RIGHT role with its screen write withdrawn is refused at the door - "

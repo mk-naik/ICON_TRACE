@@ -459,6 +459,21 @@ def t_pack_date_malformed_refused():
                                       "capacity": 36, "pack_date": "not-a-date"})
     assert r.status_code == 400, r.get_json()
 
+@test("a pallet with no model is refused with a 400 and a reason - not a 500 "
+      "- and nothing is opened (Round 28)")
+def t_open_without_model_refused():
+    c = setup()
+    with store.conn() as (cx, cur):
+        before = store.one(cur, "SELECT COUNT(*) AS n FROM box")["n"]
+    for body in ({"grade": "A", "capacity": 36}, {"grade": "A", "model": "  "}, {}):
+        r = c.post("/api/box/open", json=body)
+        d = r.get_json()
+        assert r.status_code == 400, (body, r.status_code)
+        assert d["ok"] is False and "model" in d["why"].lower(), d
+    with store.conn() as (cx, cur):
+        assert store.one(cur, "SELECT COUNT(*) AS n FROM box")["n"] == before
+    print("      400 %s" % d["why"])
+
 
 # --------------------------------------------------------------------------
 # a partial pallet is real, but it has to SAY so - capacity is what the
