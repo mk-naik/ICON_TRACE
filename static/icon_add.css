@@ -230,3 +230,25 @@ a.nav-i{text-decoration:none}
   .usr-card { grid-template-columns: 34px 1fr auto; row-gap: 6px; }
   .usr-role, .usr-status { grid-column: 2 / -1; justify-self: start; }
 }
+
+/* ---- Round 28: the permission editor, and view-only screens ---------- */
+.pe-overlay {
+  position: fixed; inset: 0; z-index: 90;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px; background: rgba(15, 23, 42, .38);
+}
+.pe-card { width: min(620px, 100%); max-height: calc(100vh - 32px);
+  display: flex; flex-direction: column; margin: 0; }
+.pe-card .card-b { overflow: auto; padding: 0; }
+.pe-card .card-f { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pe-card #peCount { flex: 1; text-align: right; }
+.pe-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pe-tbl th, .pe-tbl td { padding: 6px 12px; border-bottom: 1px solid var(--line); text-align: left; }
+.pe-tbl th { position: sticky; top: 0; z-index: 1; }
+.pe-tbl .pe-c { text-align: center; width: 84px; white-space: nowrap; }
+.pe-tbl tr.pe-sec td { font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--ink3); background: var(--surface); }
+.pe-tbl tr.pe-changed td { background: rgba(217, 119, 6, .08); }
+.pe-tbl input[type=checkbox] { width: 16px; height: 16px; cursor: pointer; }
+.ro-note { margin-bottom: 12px; }
+.ro-locked { cursor: not-allowed; }

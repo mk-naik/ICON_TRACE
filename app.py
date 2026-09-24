@@ -1060,6 +1060,51 @@ def api_users_reactivate(login_id):
     return jsonify({"ok": True, "login_id": login_id, "active": True})
 
 
+@app.route("/api/users/<login_id>/perms", methods=["GET"])
+@require_role(*_R_ADMIN)
+@_users_action
+def api_users_perms_get(login_id):
+    """What the permission editor opens on (Round 28): the account's own map,
+    its role's defaults for "reset", and the screens grouped as the nav
+    groups them. Behind the same hierarchy as every action here - an Admin
+    asking about another Admin or a Super Admin gets "Not found.", so the
+    editor cannot be used to discover accounts above you either."""
+    with store.conn() as (cx, cur):
+        target = _target(cur, login_id)
+        perms = icon_auth.get_screen_perms(cur, login_id)
+    return jsonify({"ok": True, "login_id": login_id,
+                    "display_name": target["display_name"],
+                    "role": target["role"], "perms": perms,
+                    "defaults": icon_auth.default_perms_for_role(target["role"]),
+                    "screens": [{"id": s[0], "label": s[1], "section": s[2]}
+                                for s in icon_auth.SCREENS],
+                    "read_only": sorted(icon_auth.READ_ONLY_SCREENS)})
+
+
+@app.route("/api/users/<login_id>/perms", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_users_action
+def api_users_perms_set(login_id):
+    """Save the editor's map through icon_auth.set_screen_perms(), which owns
+    every rule: the hierarchy ("Not found."), nobody editing their own,
+    unknown screens and write-without-view refused before anything is
+    written. None of it is restated here.
+
+    Takes effect on the account's next request, with no logout and no push:
+    require_screen_view/_write read the table on every request, and the
+    page reads the map afresh from /api/session on its next load."""
+    body = request.get_json(force=True) or {}
+    perms = body.get("perms")
+    with store.conn() as (cx, cur):
+        icon_auth.set_screen_perms(cur, actor_login_id(), login_id, perms,
+                                   ip=request.remote_addr)
+        saved = icon_auth.get_screen_perms(cur, login_id)
+        db.audit(cur, actor(), "user.perms", "app_user", login_id,
+                 {"view": sorted(s for s, p in saved.items() if p["view"]),
+                  "write": sorted(s for s, p in saved.items() if p["write"])})
+    return jsonify({"ok": True, "login_id": login_id, "perms": saved})
+
+
 # --------------------------------------------------------------------------
 # invoice: upload
 # --------------------------------------------------------------------------

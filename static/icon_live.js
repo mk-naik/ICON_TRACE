@@ -202,6 +202,11 @@
        offering a refusal. Re-enrolling your own authenticator above is the
        one thing self-service genuinely permits. */
     if (!_isMe(u.login_id)) {
+      /* Round 28. Not on your own row either: set_screen_perms() refuses
+         it, because it would be the one way a restricted account could
+         hand itself a screen back. */
+      btns.push('<button class="btn btn-ghost btn-sm" onclick="usrEditPerms(\'' +
+                id + '\')">Edit permissions</button>');
       btns.push(u.active
         ? '<button class="btn btn-ghost btn-sm" onclick="usrDeactivate(\'' + id +
           '\')">Deactivate</button>'
@@ -210,6 +215,130 @@
     }
     return btns.join(' ');
   }
+
+  /* ---- the permission editor (Round 28) --------------------------------
+   *
+   * One account's 20 screens, grouped by section as the nav groups them,
+   * each with View and Write. The rules the server enforces are built into
+   * the ticks, so the editor cannot assemble a map the server would refuse:
+   * ticking Write ticks View, unticking View unticks Write, and a read-only
+   * screen has no Write box at all - there is nothing to write there.
+   * Saves the WHOLE map in one call, so what is on screen is exactly what
+   * is stored. The server applies it from the account's next request. */
+  var _pe = null;   /* {login_id, name, role, saved, defaults, cur, screens, ro} */
+
+  function _peClone(m) {
+    var o = {};
+    Object.keys(m).forEach(function (k) { o[k] = { view: !!m[k].view, write: !!m[k].write }; });
+    return o;
+  }
+
+  function _peChanged(sid) {
+    var a = _pe.cur[sid], b = _pe.saved[sid] || { view: false, write: false };
+    return a.view !== b.view || a.write !== b.write;
+  }
+
+  function _pePaint() {
+    var host = document.getElementById('permEd');
+    if (!host || !_pe) return;
+    var sections = [];
+    _pe.screens.forEach(function (s) {
+      if (sections.indexOf(s.section) < 0) sections.push(s.section);
+    });
+    var rows = sections.map(function (sec) {
+      return '<tr class="pe-sec"><td colspan="4">' + fqcEsc(sec) + '</td></tr>' +
+        _pe.screens.filter(function (s) { return s.section === sec; }).map(function (s) {
+          var p = _pe.cur[s.id], ro = _pe.ro.indexOf(s.id) >= 0;
+          return '<tr data-pe-row="' + s.id + '"' + (_peChanged(s.id) ? ' class="pe-changed"' : '') + '>' +
+            '<td>' + fqcEsc(s.label) + '</td>' +
+            '<td class="pe-c"><input type="checkbox" data-pe="' + s.id + '" data-k="view"' +
+              (p.view ? ' checked' : '') + ' aria-label="View ' + fqcEsc(s.label) + '"></td>' +
+            '<td class="pe-c">' + (ro ? '<span class="sp hint" title="Nothing is saved from ' +
+                'this screen">read only</span>'
+              : '<input type="checkbox" data-pe="' + s.id + '" data-k="write"' +
+                (p.write ? ' checked' : '') + ' aria-label="Write ' + fqcEsc(s.label) + '">') + '</td>' +
+            '<td>' + (_peChanged(s.id) ? '<span class="tag t-rev">changed</span>' : '') + '</td></tr>';
+        }).join('');
+    }).join('');
+    var n = _pe.screens.filter(function (s) { return _peChanged(s.id); }).length;
+    host.querySelector('#peBody').innerHTML = rows;
+    host.querySelector('#peCount').textContent =
+      n ? n + ' screen' + (n === 1 ? '' : 's') + ' changed - not saved yet' : 'No changes';
+    host.querySelector('#peSave').disabled = !n;
+  }
+
+  function _peTick(e) {
+    var t = e.target;
+    if (!t || !t.getAttribute || !t.getAttribute('data-pe')) return;
+    var p = _pe.cur[t.getAttribute('data-pe')];
+    if (t.getAttribute('data-k') === 'write') {
+      p.write = t.checked;
+      if (p.write) p.view = true;          /* write implies view */
+    } else {
+      p.view = t.checked;
+      if (!p.view) p.write = false;        /* no view, no write */
+    }
+    _pePaint();
+  }
+
+  function _peClose() {
+    var host = document.getElementById('permEd');
+    if (host) host.parentNode.removeChild(host);
+    _pe = null;
+  }
+
+  window.usrEditPerms = function (loginId) {
+    _closeUserMenus();
+    api('users/' + encodeURIComponent(loginId) + '/perms').then(function (d) {
+      if (!d || d.ok !== true) { toast((d && d.why) || 'That did not work.'); return; }
+      _peClose();              /* one editor at a time */
+      _pe = { login_id: d.login_id, name: d.display_name, role: d.role,
+              saved: _peClone(d.perms), defaults: _peClone(d.defaults),
+              cur: _peClone(d.perms), screens: d.screens, ro: d.read_only || [] };
+      var host = document.createElement('div');
+      host.id = 'permEd';
+      host.className = 'pe-overlay';
+      host.innerHTML =
+        '<div class="card pe-card" role="dialog" aria-label="Edit permissions">' +
+          '<div class="card-h"><h3>Permissions &middot; ' + fqcEsc(d.display_name) +
+            ' <span class="mono sp hint">' + fqcEsc(d.login_id) + '</span></h3>' +
+            '<span class="sp hint">' + fqcEsc(d.role) + '</span></div>' +
+          '<div class="card-b scroll"><table class="pe-tbl"><thead><tr><th>Screen</th>' +
+            '<th class="pe-c">View</th><th class="pe-c">Write</th><th></th></tr></thead>' +
+            '<tbody id="peBody"></tbody></table></div>' +
+          '<div class="card-f"><button class="btn btn-ghost btn-sm" id="peReset" ' +
+              'title="Every screen back to what the ' + fqcEsc(d.role) + ' role starts with">' +
+              'Reset to role defaults</button>' +
+            '<span class="sp hint" id="peCount"></span>' +
+            '<button class="btn btn-ghost btn-sm" id="peCancel">Cancel</button>' +
+            '<button class="btn btn-primary btn-sm" id="peSave">Save permissions</button></div>' +
+        '</div>';
+      document.body.appendChild(host);
+      host.addEventListener('change', _peTick);
+      host.querySelector('#peReset').onclick = function () {
+        _pe.cur = _peClone(_pe.defaults);
+        _pePaint();
+      };
+      host.querySelector('#peCancel').onclick = _peClose;
+      host.querySelector('#peSave').onclick = function () {
+        var btn = this;
+        btn.disabled = true;
+        api('users/' + encodeURIComponent(_pe.login_id) + '/perms', {
+          method: 'POST', body: JSON.stringify({ perms: _pe.cur })
+        }).then(function (r) {
+          if (!r || r.ok !== true) {
+            toast((r && r.why) || 'That did not work.');
+            btn.disabled = false;
+            return;
+          }
+          toast('Permissions saved for ' + _pe.name +
+                ' - they apply from their next request.');
+          _peClose();
+        });
+      };
+      _pePaint();
+    });
+  };
 
   function _usersCardsHtml(rows, viewerRole) {
     if (!rows.length) {
