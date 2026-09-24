@@ -4000,3 +4000,26 @@ Questions that need Mukesh are marked **Decide:**.
   with snippets pasted in, ending in an unterminated `function check() {`;
   no harness, never passed. Added in 1512063 (12 Sep). Delete it, so the
   suite's only non-server failure stops being noise.
+- **14 routes answered bad input with a 500** - found by calling every
+  route in Flask's url_map with junk as a Super Admin (`test_bad_input.py`,
+  1,378 calls). Three causes: `?limit=abc` into `int()` on
+  `/api/fqc/recent`, `/api/loss_events`, `/api/prodentries` (now
+  `_int_arg()`, falling back to the default); a JSON array or number as the
+  body reaching `.get()` on 10 write routes (now one `before_request`
+  guard: 400 "Expected a JSON object.", only once there is a session so a
+  signed-out caller still gets the gate's 401 first); and **one of mine
+  from Round 28** - `export_csv` had a loop `for g in db.gatepasses(...)`,
+  which made Flask's `g` local to the whole function, so the session check
+  I added crashed with UnboundLocalError for an unknown file name. Renamed
+  `gp`. None of these was reachable from the page itself - it never sends
+  such input - but a 500 is the wrong answer to bad input, and the test now
+  probes every new route the day it is added.
+- **Found: `/api/indent` answers a refusal with 200.** Validation errors come
+  back as `{"errors": [...]}` with status 200. The form reads `errors`, so
+  the screen is right - but `_touch_session` extends the session on any
+  write under 400, and anything keyed on the status (the offline replay's
+  `_sync_guard` included) reads it as success. Not changed overnight: the
+  offline layer's replay semantics depend on status codes and deserve a
+  deliberate look. **Decide:** 400 for validation refusals, and check the
+  other endpoints for the same pattern.
+

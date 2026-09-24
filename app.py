@@ -311,6 +311,31 @@ def _load_session():
             g.icon_must_change_pw = bool(row and row["must_change_pw"])
 
 
+def _int_arg(name, default):
+    """A query-string integer, or the default when it is missing or is not
+    a number - ?limit=abc used to be a ValueError and a 500."""
+    try:
+        return int(request.args.get(name) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+@app.before_request
+def _json_must_be_an_object():
+    """Every JSON body this app accepts is an object, and every handler
+    reads it with .get(). A body that parses to anything else - [] or 5 or
+    "x" - reached .get() as a list or a number and crashed with a 500; it is
+    refused here with a 400 instead. Only once there is a session, so a
+    signed-out caller still gets the gate's 401 first; forms and uploads do
+    not parse as JSON and pass straight through."""
+    if not g.icon_session or request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return None
+    body = request.get_json(force=True, silent=True)
+    if body is not None and not isinstance(body, dict):
+        return jsonify({"ok": False, "why": "Expected a JSON object."}), 400
+    return None
+
+
 @app.after_request
 def _touch_session(resp):
     """Extends the session's idle window, but ONLY for a state-changing
@@ -3425,7 +3450,7 @@ def _prod_payload():
 @app.route("/api/prodentries", methods=["GET"])
 @require_screen_view("prodentry")
 def api_prodentries():
-    limit = int(request.args.get("limit", 100))
+    limit = _int_arg("limit", 100)
     q = (request.args.get("q") or "").strip()
     cust = (request.args.get("cust") or "").strip()
     shift = (request.args.get("shift") or "").strip()
@@ -3590,7 +3615,7 @@ def api_loss_events():
     date_to = (request.args.get("date_to") or "").strip()
     shift = (request.args.get("shift") or "").strip()
     q = (request.args.get("q") or "").strip()
-    limit = int(request.args.get("limit", 200))
+    limit = _int_arg("limit", 200)
 
     sql = ("SELECT e.*, l.event_id AS link_event_id "
            "FROM loss_event e "
@@ -6867,7 +6892,7 @@ def api_el_image():
 @app.route("/api/fqc/recent")
 @require_screen_view("fqc")
 def api_fqc_recent():
-    limit = min(100, max(1, int(request.args.get("limit") or 25)))
+    limit = min(100, max(1, _int_arg("limit", 25)))
     filters = {
         "shift": (request.args.get("shift") or "").strip(),
         "customer": (request.args.get("customer") or "").strip(),
@@ -7406,8 +7431,11 @@ def export_csv(what):
         elif what == "gatepass":
             wr.writerow(["gp_no", "gp_date", "kind", "party", "description",
                          "qty", "expected_return"])
-            for g in db.gatepasses(cur, 100000):
-                wr.writerow([g.get(k) for k in ("gp_no", "gp_date", "kind",
+            # `gp`, not `g`: a loop variable named g made Flask's g local to
+            # this whole function, so the session check above crashed with
+            # UnboundLocalError (a 500) for any unknown file name.
+            for gp in db.gatepasses(cur, 100000):
+                wr.writerow([gp.get(k) for k in ("gp_no", "gp_date", "kind",
                              "party", "description", "qty", "expected_return")])
         else:
             abort(404)
