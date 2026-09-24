@@ -3652,3 +3652,203 @@ and failed 2 of 7 runs here, against 0 of 6 at d9574c2. It measures
 - Round 26's `ensureRoleEntry()` note still stands.
 - Observed, pre-existing, untouched: `POST /api/box/open` with no `model`
   raises a KeyError and answers 500 rather than 400.
+
+## Round 28
+
+**`can_view` was written for every account from Round 26 on, and enforced
+nowhere until this round.** Round 27 moved writes onto the table; reads
+stayed open. Any signed-in account could read any screen's data straight
+from its endpoint whatever its View flag said - and, it turned out, so
+could anybody who was not signed in at all (below). The only thing hiding
+a screen was `ROLES[role].views` on the page, which hides a nav button and
+stops nothing.
+
+**Client-side screen access now comes from the permission map, not from
+`ROLES`.** `/login` and `/api/session` return the account's own
+`{screen: {view, write}}` map; `can(v)` reads it. `ROLES` still supplies
+each role's home screen and the "Can access" labels, and still decides
+`admin` and `items`, which are never per-user.
+
+### Enforcement on reads
+
+`require_screen_view(*screens)` in app.py - the read counterpart of
+`require_screen_write`: 401 with no session, 403 "Not permitted for your
+role." when the account cannot view **any** of the listed screens. Not
+refused while `must_change_pw` stands: since Round 25 a temporary-password
+account may read and may not write, and that asymmetry is now tested.
+Both gates read the table on every request, so a change made in the editor
+applies from the account's next request - no sign-out, no push.
+
+The read map, shown for review before it was applied:
+
+| Gate (view on any of) | Endpoints |
+|---|---|
+| mgmt | `/mgmt` |
+| mgmt, proddash | `/api/prod/dashboard`, `/api/prod` |
+| mgmt, dash | `/api/fqc/dashboard` |
+| mgmt, disp | `/api/stock_dispatch` |
+| search | `/api/trace/find`, `/api/trace/serial/<s>`, `/api/trace/invoice/<no>`, `/search` |
+| proddash | `/dashboard` |
+| indent | `/api/indents`, `/api/indent/<no>`, `/indent`, `/view/indent`, `/view/indent-form` |
+| plan | `/api/allocations`, `/api/allocation/<id>/detail`, `/allocation/<id>/barcodes(.xlsx)`, `/api/indent/line/<id>` |
+| prodentry | `/api/prodentries` |
+| loss | `/api/loss_events` |
+| dash | `/api/fqc/dashboard/modules` |
+| fqc | `/api/fqc/recent`, `/api/fqc/anomalies` |
+| fqc, review | `/api/fqc/lookup`, `/api/el/image` |
+| challan, fqc | `/api/ftr` *(no page caller; flash-test data behind the challan FTR document)* |
+| pack | `/packing/label/<no>` |
+| pack, repack | `/api/box/check`, `/api/box/<id>` |
+| pack, repack, packdash | `/api/boxes`, `/box/<id>/sheet` |
+| packdash | `/api/packing/log` |
+| invoice | `/view/invoice/pdf/<id>` |
+| invoice, challan | `/api/invoices`, `/api/invoice/<id>` |
+| challan | `/api/challan/boxes`, `/api/challan/<id>`, `/api/challans/issued`, `/challan/<fy>/<seq>/print\|excel\|ftr` |
+| challan, gp, pack, repack, packdash | `/api/print/resolve` *(resolves challan, gate-pass and packing-list prints)* |
+| challan, disp | `/api/challans` |
+| loadver | `/api/loading/challans`, `/api/loading/<id>`, `/api/loading/box`, `/loading`, `/view/loading` |
+| gp | `/api/gatepasses`, `/api/gatepass/<id>`, `/gatepass/<no>/print` |
+| hold | `/api/hold` |
+| review | `/api/review`, `/api/quality/pending` |
+
+"Any of" rather than "ungated" for shared reads - Mukesh's call, correcting
+the brief: leaving `/api/boxes` open because three screens use it would
+make the View column meaningless for all three. `/view/<name>` and
+`/export/<what>.csv` serve several screens from one route and are gated
+inside the handler by name (`_FRAGMENT_GATE`, `_EXPORT_GATE`).
+
+Left ungated, one line each: `/` (the page, and the sign-in screen with
+it); `/api/boot` (the boot payload - see below); `/api/session` (the
+session itself, and the one call that must answer a signed-out page);
+`/enrol` (before an account exists); `/healthz` and `/api/sync/status`
+(liveness); `/legacy` (a redirect); `/api/customers*` (a lookup several
+screens' forms share); `/api/export/xlsx` (formats rows the page already
+holds - it reads nothing); static files.
+
+### Gaps found, not new scope
+
+- **Every read answered a signed-out caller.** Round 23 gated writes only.
+  `/api/prod`, `/api/indents`, `/api/challans`, `/api/invoices`,
+  `/api/review`, `/api/hold`, `/api/stock_dispatch` and the rest all
+  returned 200 with no cookie. Now 401.
+- **The Admin surface's reads were open to anyone**, signed out included -
+  the brief assumed they were already role-gated. `/view/settings`,
+  `/view/items`, `/api/db/stats`, `/api/materials`,
+  `/api/evidence/sources`, `/models`. Now `_R_ADMIN`, like the rest of
+  that surface.
+- **`/export/<what>.csv` dumped serials, FQC records, indents and gate
+  passes to anyone.** Not the Export button (`/api/export/xlsx` formats
+  what the screen already has); this one reads the database itself. Now
+  gated per file by the screen its rows belong to. This departs from the
+  reviewed map, which listed it as ungated "export" before its body was
+  read.
+
+### The boot payload - reported, not reshaped
+
+`ICON_BOOT` is rendered into `GET /` - the same page that is the sign-in
+screen, served with no session - and again by `/api/boot`. It carries
+every indent with its lines and customers (Indent, Planning), production
+rows and shift summaries (Production), open pallets (Packing), the bill
+of materials and cell efficiencies (Items), customers with GSTIN, and
+record counts. So a view-restricted account still receives Production and
+Packing data in it, **and so does anybody who opens the sign-in page.**
+Gating the screens' own endpoints does not close that. Reshaping it (a
+signed-in-only payload filtered by view) is the next round's.
+
+### The page
+
+- `can(v)` reads the map; v4's `go()`, `applyRole()` and every nav button
+  call `can` by name, so hiding, refusing with v4's own "Your role does
+  not have access to that screen." toast, and leaving an open screen all
+  follow it. The role's home is used when viewable, else the first
+  viewable screen.
+- A screen the account can view but not write: a note across the top,
+  and its save/create controls disabled with "Your account can view this
+  screen but not save changes." on hover - re-applied by a
+  MutationObserver as the screen re-renders. No live-looking Save that
+  answers 403.
+- **Screen loaders used to run at file load, before sign-in** - Repack's
+  pallets, Challan's boxes and invoices, Stock & Dispatch's KPIs, and a
+  `POST /api/challan/checks` - answered for nobody until this round. They
+  now run after sign-in and only for screens the account can view, as do
+  the renderers, fragment fetches and each screen's refresh. Probed on
+  the real page as all seven roles and a Dashrath-shaped account, visiting
+  every visible screen: no 401/403 and no page errors.
+
+### The editor
+
+Admin > Users, "Edit permissions" in each card's kebab menu, under the
+same hierarchy as the other actions (never on your own card; Super Admin
+rows never listed). The 20 screens grouped by section; Write ticks View,
+unticking View clears Write; the 7 read-only screens have no Write box at
+all; a per-row "changed" marker and a count; "Reset to role defaults"
+(`default_perms_for_role()`); Save sends the whole map in one call to
+`POST /api/users/<login_id>/perms` -> `set_screen_perms()`, audited as
+`user.perms`. `GET` on the same path feeds it, behind the same hierarchy -
+an Admin asking about another Admin gets "Not found." there too.
+
+### Corrections carried from Round 27
+
+- `_QUALITY_ROLES` and `_INCHARGE_ROLES` gain Super Admin; so does the
+  dispatched-duplicate check, a literal `"Admin"` that left it out the same
+  way. The Needs Review buttons' client-side mirror follows, and the feed
+  stops redacting quality evidence from a Super Admin.
+- `POST /api/box/open` without a model: 400 "Choose a model before
+  opening a pallet.", not a 500.
+
+**Other role checks that omit Super Admin - listed, not changed:** all in
+v4's `icon_trace.html`, which is read-only: `.admin-only` elements hidden
+unless `USER.role === 'Admin'` (3031); Drafts' "all sections" view and
+edit rights (5349, 5368, 5371, 5436, 5473); Hold's release button
+(5564); master-data add/edit toasts "Only Admin can add/edit master data"
+(5783, 5917); the Access-review demo table (6043-6060, dead sample data).
+Also `NEW_VIEWS`' Item Master entry lists `['Admin']` only (icon_live.js)
+- harmless, since `ensureRoleEntry()` gives Super Admin Admin's screens.
+Server-side, nothing else omits it.
+
+### What proves it
+
+- `test_screen_view_gates.py` (9) - generated from the decorators and the
+  two inline tables: the map equals the reviewed map; every screen but
+  Drafts has a gated read; view on EACH listed screen passes, view off on
+  all of them and no rows at all are 403, no session is 401 - on all 60
+  read routes; the Admin surface's reads are role-gated; `must_change_pw`
+  blocks writes and not reads; a change applies on the next request.
+- `test_dashrath_case.py` (6) - the acceptance case, on the server and on
+  the running page: Challan and Invoice show real data and refuse every
+  save; Stock & Dispatch and Gate Pass save; Packing, Production and FQC
+  unreachable; the overview shows; exactly six nav buttons, home Stock &
+  Dispatch, no refused request and no page error.
+- `test_permission_editor.py` (6) - the endpoint's hierarchy, self-edit,
+  bad-map and gating refusals; the editor in Chromium, including a save
+  judged by the edited account's next request.
+- `test_inner_role_checks.py` (6 -> 7) - a Super Admin resolves all four
+  branches. `test_packing.py` (33 -> 34) - the model-less 400.
+
+Fixture changes, each because a test now meets a gate it never did:
+`test_fqc.py` reads the Hold list through its own Super Admin client (the
+caller was Quality, who cannot view Hold); `test_build_banner.py` reads
+`/api/db/stats` as Super Admin; `test_search_invoice.py` signs in again
+after `seed()` wipes the database, sessions included; `test_packing.js`
+and `test_challan.js` stub `can()`/`canWrite()` in their sandboxes, as
+the functions they extract now ask them. The editor test also caught a
+real bug: its first ids (`#peSave`, ...) collided with Production Entry's
+own `#peSave` - renamed to `#permEd*`.
+
+Full suite after this round: every Python and JS file passes except the
+set that already failed at d9574c2 (Round 27 checked that in a clean
+worktree) - `test_fqc.py`'s one, `test_build_banner_live.py`,
+`test_js.js`, `test_fqc_dashboard.js` 2/16, and the UI files that expect
+a server already running on 8090 or 5000.
+
+### For Round 29
+
+- Reshape the boot payload (above).
+- The page reads the map at sign-in and on reload. An open page keeps its
+  nav until reloaded after an edit - the server refuses from the next
+  request regardless.
+- Legacy GET/POST form pages (`/packing`, `/fqc`, `/planning`, ...) still
+  need write to open at all; "view" does not reach them. Candidates for
+  removal.
+- Round 26's `ensureRoleEntry()` note narrows to `admin`/`items`: an
+  unknown role is still aliased to Admin's list there.
