@@ -146,6 +146,10 @@
   #enIconSplash #frameLine{stroke-dashoffset:0!important}
   #enIconSplash #discShadow,#enIconSplash #sunFull{opacity:0!important}
   #enIconSplash #tailDetail{opacity:1!important}
+  /* The panel's white fill starts at opacity:0 and only fades in through
+     an animation - with animations off it stayed invisible, leaving the
+     yellow border around a see-through panel. */
+  #enIconSplash #frameFill{opacity:1!important}
   #enIconSplash .stage{animation:enicSoftIn 240ms ease both}
   @keyframes enicSoftIn{from{opacity:0}to{opacity:1}}
   /* The leave scales the stage up by 4.5%. A fade is mild enough to keep,
