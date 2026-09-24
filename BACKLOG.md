@@ -3900,3 +3900,71 @@ no "Only Admin" anywhere; an Admin sees every master control disabled with
 the reason, and a forced save is reported as refused; models/stations/
 reasons offered to nobody; Drafts shows a Super Admin all sections, with
 the role never left swapped.
+
+## Round 29
+
+**The boot payload stops being public.** GET / is the sign-in page and the
+app in one document, and it embedded `boot_payload()` for anybody who
+asked: every indent with its customer and delivery date, the BOM, cell
+efficiencies, open pallets, production and shift rows, customers with
+GSTIN. **`/api/boot` returned the same payload and was entirely ungated
+until this round** - Round 28's read-gating pass missed it, so it was the
+same leak on a second route, open to anyone who could reach the server.
+
+### Two payloads
+
+- `boot_public()` - `build`, `live`, `db_file`, and nothing else. Found by
+  wrapping `ICON_BOOT` in a Proxy and loading the page signed out: those
+  are the only keys read before sign-in. `build` cache-busts
+  `icon_add.css`, the template's three script tags and the service
+  worker; `live` and `db_file` are read by the load-time console line.
+  `db_file` is the database file's name, which `/healthz` already
+  publishes to anyone. (The brief expected `build` alone - the console
+  line was the other reader.) GET / renders with this, always.
+- `boot_private()` - the full payload, unchanged in shape (tested key for
+  key against d9574c2's `boot_payload()`), the same for every account.
+  `/api/boot` serves it to a session only: 401 otherwise. A session is
+  the bar, not a screen gate - it serves every screen at once, so
+  `require_screen_view()` would be the wrong question.
+
+**Per-account filtering of the payload was considered and deliberately
+deferred.** It buys little security - a colleague can mostly reach the
+same data through the screens anyway - and it is where the risk lives,
+since every screen reads `B` synchronously. Mukesh's constraint decides
+the shape: time spent at the login page is acceptable; fetching data in
+the middle of someone's work is not. So the whole payload is fetched once,
+at sign-in, and nothing is fetched later.
+
+### Fetched in enterApp(), not the /login handler
+
+`enterApp()` is the one funnel both ways in go through - a fresh sign-in
+and a reload with a live cookie. A fetch in the /login handler alone would
+leave a signed-in user who reloads with an empty `B` and blank screens.
+Order inside it: `USER` from the server's answer; the `must_change_pw`
+check returns first, so an account replacing a temporary password fetches
+no data; the splash goes up; `/api/boot` is fetched and its keys merged
+into `B` (as `iconRefresh()` already does); only then `signIn()`'s
+wrapper, `applyBoot()`, `addScreens()` and the wirings - every read of `B`
+synchronous against the full payload, as before. If the fetch fails, the
+app is not entered half-built: back to the sign-in card with "Signed in,
+but the app's data could not be loaded."
+
+### What proves it
+
+`test_boot_payload.py` (6): GET / signed out carries none of the seeded
+markers (an indent number, its delivery date, a material, a cell
+efficiency, four customer GSTINs that v4's own markup does not already
+contain) - checked in the response body and in the page Chromium holds -
+while `/api/boot` carries every one for a session; `/api/boot` is 401
+without a session and the full shape with one; on the page, a fresh
+sign-in and a reload are tested separately, each fetching `/api/boot` and
+building Planning's indent list from it (applyBoot builds that list and
+v4's `INDENTS` from `B.indents` alone - the Indent screen loads its own
+list from `/api/indents`, so it would not catch a missing payload); a
+temporary-password account fetches nothing, on sign-in or reload, until
+its new password is set; a failed fetch returns to sign-in.
+
+Full suite after this round: 43 files pass outright; the rest is the set
+that already failed at d9574c2 - `test_fqc.py`'s one, `test_build_banner_live.py`,
+`test_js.js`, `test_fqc_dashboard.js` 2/16, and the UI files that expect a
+server already running on 8090 or 5000.
