@@ -437,7 +437,8 @@ def _G_reset_enabled_mirrors_in_stats():
             tmp = _copy_tree(REPO, tmp)
             env = {"ICON_ALLOW_RESET": val} if val else {}
             mod = _load_app(tmp, env)
-            r = mod.app.test_client().get("/api/db/stats")
+            # Admin-only to read since Round 28, like the rest of Settings
+            r = _super_admin(mod, mod.app.test_client()).get("/api/db/stats")
             d = json.loads(r.data)
             assert "_reset_enabled" in d
             assert d["_reset_enabled"] is expected, (

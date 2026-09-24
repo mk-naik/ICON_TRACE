@@ -774,7 +774,12 @@ def live_records(serial):
 
 
 def hold(c):
-    return c.get("/api/hold").get_json()
+    """The Hold list, read through its own Super Admin client: the caller's
+    session may be a role that cannot view Hold (Quality, since Round 28's
+    read gates), and this is scenery, not the thing under test."""
+    reader = APP.app.test_client()
+    AUTH.test_login(reader)
+    return reader.get("/api/hold").get_json()
 
 
 @test("with the tester unreachable a PASS is recorded provisionally and the "

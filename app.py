@@ -1185,8 +1185,10 @@ def _data_range():
 
 
 def _prod_rows():
-    with app.test_request_context():
-        return api_prod().get_json()
+    # The query itself, not the route: api_prod() carries a read gate since
+    # Round 28, and calling it here under a bare test_request_context (no
+    # session) would get the gate's 401 instead of the rows.
+    return _prod_payload()
 
 
 def _shift_rows():
@@ -1373,6 +1375,7 @@ def _box_label(b):
 
 
 @app.route("/api/boxes")
+@require_screen_view("pack", "repack", "packdash")
 def api_boxes():
     """Boxes, newest first. Packing asks for the open one on load: a box is
     a row from its first scan, so a refresh mid-pallet finds it again
@@ -1410,6 +1413,7 @@ def api_boxes():
 
 
 @app.route("/api/box/check")
+@require_screen_view("pack", "repack")
 def api_box_check():
     """Preview, through the same gate the scan uses.
 
@@ -1836,6 +1840,7 @@ def api_box_abandon(box_id):
 
 
 @app.route("/api/box/<int:box_id>")
+@require_screen_view("pack", "repack")
 def api_box(box_id):
     with store.conn() as (cx, cur):
         b = store.box_row(cur, box_id)
@@ -1856,6 +1861,7 @@ def api_box(box_id):
 
 
 @app.route("/box/<int:box_id>/sheet")
+@require_screen_view("pack", "repack", "packdash")
 def pallet_sheet(box_id):
     """The packing list, in the the other system pallet-sheet layout but with our
     own numbering: ISPL + YYMMDD + grade letter + sequence."""
@@ -1892,11 +1898,13 @@ def pallet_sheet(box_id):
 
 
 @app.route("/loading")
+@require_screen_view("loadver")
 def loading():
     return render_template("loading.html")
 
 
 @app.route("/api/loading/box")
+@require_screen_view("loadver")
 def api_loading_box():
     """Serials as recorded when the pallet was CLOSED.
 
@@ -1951,6 +1959,7 @@ def _loading_agg_status(n_total, n_saved, n_loaded):
 
 
 @app.route("/api/loading/challans")
+@require_screen_view("loadver")
 def api_loading_challans():
     """One row per LIVE challan - issued, not cancelled, not a superseded
     original, the same filter Challan's own issued-list already applies.
@@ -2004,6 +2013,7 @@ def api_loading_challans():
 
 
 @app.route("/api/loading/<int:challan_id>")
+@require_screen_view("loadver")
 def api_loading_get(challan_id):
     """One challan's own pallets, in the same load order Challan itself
     uses. model/grade are resolved from the LIVE box each time, not stored
@@ -2139,6 +2149,7 @@ def api_loading_submit(challan_id):
 
 
 @app.route("/api/challan/boxes")
+@require_screen_view("challan")
 def api_challan_available_boxes():
     """Closed pallets that may go on a challan: not open, not already on a
     live document.
@@ -2681,6 +2692,7 @@ def api_challan_discard(challan_id):
 
 
 @app.route("/api/challans")
+@require_screen_view("challan", "disp")
 def api_challans_list():
     """Challan list for the landing screen. Supports ?q=, ?status=, ?fy=."""
     q = (request.args.get("q") or "").strip() or None
@@ -2701,6 +2713,7 @@ def api_challans_list():
 
 
 @app.route("/api/challan/<int:challan_id>")
+@require_screen_view("challan")
 def api_challan_get(challan_id):
     """Full challan detail for the detail panel."""
     with store.conn() as (cx, cur):
@@ -2970,6 +2983,7 @@ def api_challan_edit_save(challan_id):
 
 
 @app.route("/api/challans/issued")
+@require_screen_view("challan")
 def api_challans_issued():
     """Issued non-cancelled challans, for the Gate Pass 'against' selector."""
     with store.conn() as (cx, cur):
@@ -3039,6 +3053,7 @@ def _loading_incomplete(boxes):
 
 
 @app.route("/challan/<int:fy>/<int:seq>/print")
+@require_screen_view("challan")
 def challan_print(fy, seq):
     """Version 1 - ONE PAGE, no serial list. This is the copy the driver
     carries; the serial list is the soft copy."""
@@ -3064,6 +3079,7 @@ def challan_print(fy, seq):
 
 
 @app.route("/challan/<int:fy>/<int:seq>/excel")
+@require_screen_view("challan")
 def challan_excel(fy, seq):
     """Version 2 - Excel. Sheet 1 the challan WITHOUT the packing list,
     Sheet 2 the Flash Test Report. Not the older packing-list layout."""
@@ -3175,6 +3191,7 @@ def challan_excel(fy, seq):
 
 
 @app.route("/gatepass/<path:gp_no>/print")
+@require_screen_view("gp")
 def gatepass_print(gp_no):
     """Every copy on its own page. NRGP is three (creator + two for the gate);
     RGP is three (creator, gate, and the recipient who returns theirs). The
@@ -3199,6 +3216,7 @@ def gatepass_print(gp_no):
 
 
 @app.route("/challan/<int:fy>/<int:seq>/ftr")
+@require_screen_view("challan")
 def challan_ftr_print(fy, seq):
     with store.conn() as (cx, cur):
         b = _challan_bundle(cur, fy, seq, request.args.get("suffix"))
@@ -3216,6 +3234,7 @@ def challan_ftr_print(fy, seq):
 
 
 @app.route("/api/print/resolve")
+@require_screen_view("challan", "gp", "pack", "repack", "packdash")
 def api_print_resolve():
     """v4 calls printDoc(kind, ref, copies) and then window.print(), which
     prints the screen. This turns a kind and a reference into the URL of the
@@ -3247,6 +3266,7 @@ def api_print_resolve():
 
 
 @app.route("/api/ftr")
+@require_screen_view("challan", "fqc")
 def api_ftr():
     ser = [s.strip() for s in (request.args.get("serials") or "").split(",")
            if s.strip()]
@@ -3266,6 +3286,7 @@ def api_sync_status():
 
 
 @app.route("/api/prod")
+@require_screen_view("proddash", "mgmt")
 def api_prod():
     """One row per customer + model, in the exact shape v4's PROD array uses.
 
@@ -3280,6 +3301,12 @@ def api_prod():
     v4 already handles, showing "No data matches these filters" rather than
     last month's demo numbers.
     """
+    return jsonify(_prod_payload())
+
+
+def _prod_payload():
+    """The rows /api/prod returns, callable without a request - the boot
+    payload needs them too."""
     with store.conn() as (cx, cur):
         rows = store.rows(cur, """
             SELECT COALESCE(s.customer,'ICON STOCK') AS cust, s.model AS model,
@@ -3300,11 +3327,12 @@ def api_prod():
                     "fqc": r["fqc"] or 0, "rej": r["rej"] or 0,
                     "packed": r["packed"] or 0, "disp": r["disp"] or 0,
                     "batches": r["batches"] or 0})
-    return jsonify(out)
+    return out
 
 
 
 @app.route("/api/prodentries", methods=["GET"])
+@require_screen_view("prodentry")
 def api_prodentries():
     limit = int(request.args.get("limit", 100))
     q = (request.args.get("q") or "").strip()
@@ -3464,6 +3492,7 @@ def _loss_display_id(event_id):
 
 
 @app.route("/api/loss_events")
+@require_screen_view("loss")
 def api_loss_events():
     date = (request.args.get("date") or "").strip()
     date_from = (request.args.get("date_from") or "").strip()
@@ -3596,6 +3625,7 @@ def api_loss_event_close(event_id):
 
 
 @app.route("/api/prod/dashboard")
+@require_screen_view("proddash", "mgmt")
 def api_prod_dashboard():
     """Live endpoint for the Production Dashboard, allowing filtering by date,
     shift, customer, and model. It returns both aggregated KPIs and a shift breakdown.
@@ -3685,6 +3715,7 @@ def api_prod_dashboard():
 
 
 @app.route("/api/packing/log")
+@require_screen_view("packdash")
 def api_packing_log():
     frm = (request.args.get("from") or "").strip()
     to = (request.args.get("to") or "").strip() or frm
@@ -3738,6 +3769,42 @@ def api_packing_log():
     return jsonify({"rows": rows})
 
 
+def _read_refusal(screens=(), roles=()):
+    """The read gates' refusal for a route that serves more than one screen
+    and so has to choose its gate inside the handler: None when the caller
+    may read, else the same 401/403 require_screen_view()/require_role()
+    give. `roles` is for the Admin surface, which is never per-user."""
+    if not g.icon_session:
+        return jsonify({"ok": False, "why": "Sign in required."}), 401
+    if roles:
+        ok = g.icon_session["role"] in roles
+    else:
+        ok = _session_can_view(*(_screen_id(s) for s in screens))
+    if not ok:
+        return jsonify({"ok": False, "why": "Not permitted for your role."}), 403
+    return None
+
+
+_FRAGMENT_GATE = {
+    "indent":      {"screens": ("indent",)},
+    "indent-form": {"screens": ("indent",)},
+    "loading":     {"screens": ("loadver",)},
+    # the Admin screen's own fragments - role-gated like the rest of it
+    "items":       {"roles": _R_ADMIN},
+    "settings":    {"roles": _R_ADMIN},
+}
+
+# /export/<what>.csv reads straight from the database, unlike Export on the
+# screens (/api/export/xlsx), which only formats rows the page already has.
+# So it is gated by the screen each file's rows belong to.
+_EXPORT_GATE = {
+    "serials":  ("proddash", "mgmt"),
+    "fqc":      ("fqc", "dash"),
+    "indents":  ("indent",),
+    "gatepass": ("gp",),
+}
+
+
 @app.route("/view/<name>")
 def view_fragment(name):
     """A screen's markup only - no shell. Dropped into a v4 <section class=
@@ -3754,6 +3821,10 @@ def view_fragment(name):
                "settings": "frag_settings.html"}
     if name not in allowed:
         abort(404)
+    # One route, several screens - so gated here by name, not by decorator.
+    refused = _read_refusal(**_FRAGMENT_GATE[name])
+    if refused:
+        return refused
     if name == "items":
         return render_template(allowed[name], items=models.all_items(),
                                models=models.all_models())
@@ -3800,6 +3871,7 @@ def _evidence_probe(cfg):
 
 
 @app.route("/api/evidence/sources")
+@require_role(*_R_ADMIN)
 def api_evidence_sources():
     """The evidence sources as configured, for the Admin data_source card.
 
@@ -3835,6 +3907,7 @@ def api_evidence_sources():
 
 
 @app.route("/api/materials")
+@require_role(*_R_ADMIN)
 def api_materials():
     with store.conn() as (cx, cur):
         db.seed_materials(cur)
@@ -3983,6 +4056,7 @@ def api_indent_create():
 
 
 @app.route("/api/indent/line/<int:line_id>")
+@require_screen_view("plan")
 def api_indent_line(line_id):
     with store.conn() as (cx, cur):
         p = _line_state(cur, line_id)
@@ -4149,6 +4223,7 @@ def api_allocation_update(alloc_id):
 
 
 @app.route("/api/allocation/<int:alloc_id>/detail")
+@require_screen_view("plan")
 def api_allocation_get(alloc_id):
     with store.conn() as (cx, cur):
         a = store.one(cur, "SELECT a.*, il.line_no, i.indent_no "
@@ -4201,6 +4276,7 @@ def api_allocation_cancel(alloc_id):
 
 
 @app.route("/allocation/<int:alloc_id>/barcodes.xlsx")
+@require_screen_view("plan")
 def allocation_barcodes(alloc_id):
     """Serial list in the layout BARCODE.py produced, so the sheet is the one
     the floor already recognises:
@@ -4274,6 +4350,7 @@ def allocation_barcodes(alloc_id):
 
 
 @app.route("/allocation/<int:alloc_id>/barcodes")
+@require_screen_view("plan")
 def allocation_barcodes_print(alloc_id):
     """The same layout on screen, ready to print."""
     with store.conn() as (cx, cur):
@@ -4775,6 +4852,7 @@ _TRACE_MISS = {
 
 
 @app.route("/api/trace/find")
+@require_screen_view("search")
 def api_trace_find():
     """Search & Trace for everything that is not a serial. ?kind= narrows it
     (the screen's "Look in"); without it the number's own shape decides."""
@@ -4802,6 +4880,7 @@ def api_trace_find():
 
 
 @app.route("/api/trace/invoice/<path:invoice_no>")
+@require_screen_view("search")
 def api_trace_invoice(invoice_no):
     """The invoice walk on its own, for a caller that already knows it has an
     invoice number (and for a number that contains a slash)."""
@@ -4816,6 +4895,7 @@ def api_trace_invoice(invoice_no):
 
 
 @app.route("/api/trace/serial/<path:serial>")
+@require_screen_view("search")
 def api_trace_serial(serial):
     """Everything the system actually knows about one module.
 
@@ -5050,6 +5130,7 @@ def batch_no(alloc):
 
 
 @app.route("/api/allocations")
+@require_screen_view("plan")
 def api_allocations():
     with store.conn() as (cx, cur):
         rows = store.rows(cur, """
@@ -5074,6 +5155,7 @@ def api_allocations():
 
 
 @app.route("/api/indent/<path:indent_no>")
+@require_screen_view("indent")
 def api_indent_get(indent_no):
     with store.conn() as (cx, cur):
         i = store.one(cur, "SELECT * FROM indent WHERE indent_no=%s", (indent_no,))
@@ -5181,6 +5263,7 @@ def api_indent_update(indent_no):
 
 
 @app.route("/api/indents")
+@require_screen_view("indent")
 def api_indents():
     with store.conn() as (cx, cur):
         rows = db.indent_progress(cur)
@@ -5210,6 +5293,7 @@ def api_boot():
 
 
 @app.route("/api/db/stats")
+@require_role(*_R_ADMIN)
 def api_db_stats():
     out = store.stats()
     out["_reset_enabled"] = _RESET_ENABLED
@@ -5350,6 +5434,7 @@ def api_invoice_confirm():
 
 
 @app.route("/api/invoices")
+@require_screen_view("invoice", "challan")
 def api_invoices_list():
     q = request.args.get('q', '').strip()
     from_d = request.args.get('from', '').strip()
@@ -5381,6 +5466,7 @@ def api_invoices_list():
     return jsonify({"invoices": invoices})
 
 @app.route("/api/invoice/<int:invoice_id>")
+@require_screen_view("invoice", "challan")
 def api_invoice_get(invoice_id):
     with store.conn() as (cx, cur):
         inv = db.get_invoice_by_id(cur, invoice_id)
@@ -5412,6 +5498,7 @@ def api_invoice_get(invoice_id):
     })
 
 @app.route("/view/invoice/pdf/<int:invoice_id>")
+@require_screen_view("invoice")
 def view_invoice_pdf(invoice_id):
     with store.conn() as (cx, cur):
         inv = db.get_invoice_by_id(cur, invoice_id)
@@ -5710,6 +5797,7 @@ def challan_import():
 # --------------------------------------------------------------------------
 
 @app.route("/indent")
+@require_screen_view("indent")
 def indent_list():
     with db.conn() as (cx, cur):
         rows = db.recent_indents(cur)
@@ -5935,6 +6023,7 @@ def _fqc_payload(cur, serial, sandbox=False, line=None):
 
 
 @app.route("/api/fqc/lookup")
+@require_screen_view("fqc", "review")
 def api_fqc_lookup():
     serial = (request.args.get("serial") or "").strip().upper()
     if not serial:
@@ -6159,6 +6248,7 @@ def _waiting_for(f):
 
 
 @app.route("/api/hold")
+@require_screen_view("hold")
 def api_hold():
     """Hold & Deviation: decisions waiting for evidence, and the ones that
     came back disagreeing. Reconciles first - opening the list is one of the
@@ -6349,6 +6439,7 @@ def api_fqc_grade():
 
 
 @app.route("/api/quality/pending")
+@require_screen_view("review")
 def api_quality_pending():
     """What FQC rejected and Quality has not yet called."""
     with store.conn() as (cx, cur):
@@ -6446,6 +6537,7 @@ def _evid_side(r):
 
 
 @app.route("/api/review")
+@require_screen_view("review")
 def api_review_list():
     """The merged Needs Review feed.
 
@@ -6648,6 +6740,7 @@ def api_review_resolve():
 
 
 @app.route("/api/el/image")
+@require_screen_view("fqc", "review")
 def api_el_image():
     """The EL image itself, for the viewer.
 
@@ -6669,6 +6762,7 @@ def api_el_image():
 
 
 @app.route("/api/fqc/recent")
+@require_screen_view("fqc")
 def api_fqc_recent():
     limit = min(100, max(1, int(request.args.get("limit") or 25)))
     filters = {
@@ -6691,6 +6785,7 @@ def api_fqc_recent():
 
 
 @app.route("/api/fqc/anomalies")
+@require_screen_view("fqc")
 def api_fqc_anomalies():
     """Anomalous unmappable reads from the sun simulator/tester."""
     line = (request.args.get("line") or "").strip().upper()
@@ -6705,6 +6800,7 @@ def api_fqc_anomalies():
 
 
 @app.route("/api/fqc/dashboard")
+@require_screen_view("dash", "mgmt")
 def api_fqc_dashboard():
     """Every number this screen shows - the KPI cards, the shift/model
     table AND ITS OWN TOTAL ROW, the defect breakdown - comes from here,
@@ -6790,6 +6886,7 @@ def api_fqc_dashboard():
                                "result": result}})
 
 @app.route("/api/fqc/dashboard/modules")
+@require_screen_view("dash")
 def api_fqc_dashboard_modules():
     frm = (request.args.get("from") or "").strip()
     to = (request.args.get("to") or "").strip() or frm
@@ -6977,6 +7074,7 @@ def packing():
 
 
 @app.route("/packing/label/<path:box_no>")
+@require_screen_view("pack")
 def packing_label(box_no):
     b = _BOXES.get(box_no)
     if not b:
@@ -7126,6 +7224,7 @@ def settings():
 
 
 @app.route("/dashboard")
+@require_screen_view("proddash")
 def proddash():
     with db.conn() as (cx, cur):
         f = db.production_funnel(cur)
@@ -7134,6 +7233,7 @@ def proddash():
 
 
 @app.route("/mgmt")
+@require_screen_view("mgmt")
 def mgmt():
     with db.conn() as (cx, cur):
         f = db.production_funnel(cur)
@@ -7147,6 +7247,7 @@ def mgmt():
 
 
 @app.route("/search")
+@require_screen_view("search")
 def search():
     q = (request.args.get("q") or "").strip().upper()
     hit = None
@@ -7157,6 +7258,7 @@ def search():
 
 
 @app.route("/models")
+@require_role(*_R_ADMIN)
 def model_master():
     return render_template("models.html", items=models.all_items(),
                            models=models.all_models())
@@ -7166,6 +7268,11 @@ def model_master():
 def export_csv(what):
     """Everything on screen is also available as a file. Export is how a
     number gets checked by someone who does not use the system."""
+    refused = _read_refusal(screens=_EXPORT_GATE[what]) if what in _EXPORT_GATE \
+        else (None if g.icon_session else
+              (jsonify({"ok": False, "why": "Sign in required."}), 401))
+    if refused:
+        return refused
     import csv as _csv
     from flask import Response
     buf = io.StringIO()
@@ -7238,6 +7345,7 @@ def healthz():
 
 
 @app.route("/api/stock_dispatch")
+@require_screen_view("disp", "mgmt")
 def api_stock_dispatch():
     d_date = request.args.get("date", "").strip() or None
     customer = request.args.get("customer", "").strip() or None
@@ -7301,6 +7409,7 @@ def _clamp_gp_date_range():
 
 
 @app.route("/api/gatepasses", methods=["GET"])
+@require_screen_view("gp")
 def api_gatepasses():
     d_from, d_to, why = _clamp_gp_date_range()
     if why:
@@ -7315,6 +7424,7 @@ def api_gatepasses():
 
 
 @app.route("/api/gatepass/<int:gatepass_id>", methods=["GET"])
+@require_screen_view("gp")
 def api_gatepass_get(gatepass_id):
     with store.conn() as (cx, cur):
         gp = store.one(cur, "SELECT * FROM gatepass WHERE gp_id=%s", (gatepass_id,))
