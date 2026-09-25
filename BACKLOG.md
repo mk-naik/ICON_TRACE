@@ -4093,5 +4093,5 @@ Questions that need Mukesh are marked **Decide:**.
   embed `model_json` with `|safe` inside a `<script>`. It comes from the
   item catalog in code, so it is safe today - but `json.dumps` does not
   escape `</script>`, so if the item master ever becomes editable from the
-  screen, that embed must escape `<` (e.g. `.replace("<", "\u003c")`).
+  screen, that embed must escape `<` (in Python: `.replace("<", "\\u003c")`).
 
