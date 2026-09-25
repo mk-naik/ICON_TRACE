@@ -40,6 +40,14 @@ _PATTERNS = [
 _START_B, _STOP = 104, 106
 
 
+def _xml_escape(s):
+    """The human-readable line under a barcode goes into SVG that pages embed
+    with |safe - so it is escaped here. Code128-B carries < > & perfectly
+    well; only serials reach this today, but nothing here should assume so."""
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+             .replace('"', "&quot;"))
+
+
 def code128_svg(text, height=34, module=1.6, show_text=True, font=8):
     """One Code128-B barcode as inline SVG. Serials are A-Z0-9, which sits
     inside subset B, so no subset switching is needed."""
@@ -73,7 +81,7 @@ def code128_svg(text, height=34, module=1.6, show_text=True, font=8):
     th = font + 3 if show_text else 0
     label = ('<text x="%.2f" y="%d" text-anchor="middle" font-size="%d" '
              'font-family="Consolas,monospace">%s</text>'
-             % (total / 2.0, height + font, font, s)) if show_text else ""
+             % (total / 2.0, height + font, font, _xml_escape(s))) if show_text else ""
     return ('<svg xmlns="http://www.w3.org/2000/svg" width="%.2f" height="%d" '
             'viewBox="0 0 %.2f %d" shape-rendering="crispEdges">'
             '<g fill="#000">%s</g>%s</svg>'

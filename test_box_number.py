@@ -417,6 +417,18 @@ def t_seq_ceiling():
         raise AssertionError("v%d accepted seq %d" % (ver, seq))
 
 
+@test("the text under a barcode is escaped - the pallet sheet embeds the SVG "
+      "with |safe, and Code128 carries < > & perfectly well")
+def t_barcode_label_escaped():
+    import icon_barcode as bc
+    svg = bc.code128_svg('A<img src=x onerror=1>&Z')
+    assert "<img" not in svg, svg[-120:]
+    assert "&lt;img src=x onerror=1&gt;&amp;Z" in svg, svg[-120:]
+    # an ordinary serial reads exactly as before
+    assert bc.code128_svg("ICON625R1290710001").endswith(
+        'font-family="Consolas,monospace">ICON625R1290710001</text></svg>')
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0
