@@ -22,6 +22,7 @@ import os, json, datetime, threading
 # db.conn() now delegates to store.conn(). There is one database, and it is
 # the file store.py owns.
 import store as _store
+import icon_clock as clock
 
 MODE = "sqlite"
 
@@ -69,7 +70,7 @@ class conn(_store.conn):
 
 def fin_year(d=None):
     """Indian FY opens 1 April. Returns the opening year."""
-    d = d or datetime.date.today()
+    d = d or clock.today()
     return d.year if d.month >= 4 else d.year - 1
 
 
@@ -205,7 +206,7 @@ def supersede_invoice(cur, old_id, new_id):
 def audit(cur, actor, action, entity, entity_id=None, detail=None):
     if cur is None:
         _demo["audit"].append({
-            "at": datetime.datetime.now(), "actor": actor, "action": action,
+            "at": clock.now(), "actor": actor, "action": action,
             "entity": entity, "entity_id": entity_id, "detail": detail})
         return
     cur.execute(
@@ -772,7 +773,7 @@ def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
            "proposed": evidence.get("proposed"),
            "defect": defect, "reason": reason, "note": note,
            "decided_by": decided_by, "build_instance": build_instance,
-           "at": datetime.datetime.now().isoformat(timespec="seconds")}
+           "at": clock.now().isoformat(timespec="seconds")}
     if cur is None:
         _demo["fqc"].append(rec)
     else:
@@ -808,7 +809,7 @@ def supersede_fqc(cur, fqc_id, by_id):
     or supersede the RETEST (keep the original the box was already built
     from). Whichever way it goes, the losing row is exactly what it always
     was except for these two columns."""
-    at = datetime.datetime.now().isoformat(timespec="seconds")
+    at = clock.now().isoformat(timespec="seconds")
     if cur is not None:
         cur.execute("UPDATE fqc_record SET superseded_by=%s, superseded_at=%s "
                     "WHERE fqc_id=%s", (by_id, at, fqc_id))
@@ -824,7 +825,7 @@ def create_review_item(cur, item_type, serial, fqc_id=None, new_fqc_id=None,
     rec = {"type": item_type, "serial": serial, "status": "open",
            "fqc_id": fqc_id, "new_fqc_id": new_fqc_id,
            "dispatched": 1 if dispatched else 0,
-           "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+           "created_at": clock.now().isoformat(timespec="seconds"),
            "created_by": created_by}
     cur.execute(
         "INSERT INTO review_item (type, serial, status, fqc_id, new_fqc_id, "
@@ -869,7 +870,7 @@ def record_quality(cur, serial, grade, decided_by, note=None):
     grade = (grade or "").strip().upper()
     if grade not in ("A", "GY", "BGY"):
         raise ValueError("Quality decides A, GY or BGY, not %r" % grade)
-    at = datetime.datetime.now().isoformat(timespec="seconds")
+    at = clock.now().isoformat(timespec="seconds")
     if cur is not None:
         # onto the LIVE decision, explicitly. A superseded row is why the
         # module was treated as it was before it came round again, and
@@ -944,9 +945,12 @@ def fqc_recent(cur, n=25, include_superseded=False, filters=None):
     args = []
     
     if filters:
-        if filters.get("shift"):
-            where.append("s.shift = %s")
-            args.append(filters["shift"])
+        # The shift the decision was made in, by the header's clock - the
+        # screen sends A/B/C, which never equalled the serial's 1/2/3, so
+        # picking any shift used to empty the list.
+        if clock.shift_number(filters.get("shift")):
+            where.append(clock.shift_sql("f.at") + " = %s")
+            args.append(clock.shift_number(filters["shift"]))
         if filters.get("customer"):
             where.append("s.customer = %s")
             args.append(filters["customer"])
@@ -1347,7 +1351,7 @@ def materials(cur):
 def save_material(cur, m, actor=None):
     """Insert or update one material, by its number."""
     rec = _mat_in(m)
-    rec["updated_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+    rec["updated_at"] = clock.now().isoformat(timespec="seconds")
     rec["updated_by"] = actor
     cols = list(_MAT_COLS) + ["updated_at", "updated_by"]
     sets = ", ".join("%s=excluded.%s" % (c, c) for c in cols if c != "n")
@@ -1456,11 +1460,25 @@ def shift_performance(cur):
             if s.get("grade") == "A": a["passed"] += 1
             elif s.get("grade") in ("GY", "BGY"): a["rejected"] += 1
         return sorted(agg.values(), key=lambda r: (r["date"], r["shift"]), reverse=True)[:12]
+    # When each module was produced - its production entry, or its first
+    # FQC scan if that came first - on the factory day and shift of that
+    # moment. Never the date and shift printed in the serial.
+    prod_at = ("CASE WHEN pe.created_at IS NULL THEN ff.first_at "
+               "WHEN ff.first_at IS NULL THEN pe.created_at "
+               "WHEN pe.created_at < ff.first_at THEN pe.created_at "
+               "ELSE ff.first_at END")
     cur.execute(
-        "SELECT date_produced AS date, shift, COUNT(*) produced, "
-        "SUM(grade='A') passed, SUM(grade IN ('GY','BGY')) rejected "
-        "FROM serial GROUP BY date_produced, shift "
-        "ORDER BY date_produced DESC, shift DESC LIMIT 12")
+        "SELECT date, shift, COUNT(*) produced, SUM(grade='A') passed, "
+        "SUM(grade IN ('GY','BGY')) rejected FROM ("
+        "  SELECT s.grade, " + clock.shift_day_sql(prod_at) + " AS date, "
+        + clock.shift_sql(prod_at) + " AS shift "
+        "  FROM serial s "
+        "  LEFT JOIN production_entry pe ON pe.entry_id = s.prod_entry_id "
+        "  LEFT JOIN (SELECT serial, MIN(at) AS first_at FROM fqc_record "
+        "             GROUP BY serial) ff ON ff.serial = s.serial "
+        "  WHERE s.build_instance = 1) "
+        "WHERE date IS NOT NULL GROUP BY date, shift "
+        "ORDER BY date DESC, shift DESC LIMIT 12")
     return cur.fetchall()
 
 
@@ -1493,9 +1511,18 @@ def trace_serial(cur, serial):
     out["challan"] = cur.fetchone()
     return out
 
-def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None):
+def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
+                   d_from=None, d_to=None):
     if not cur: return {}
     import icon_customers as customers
+
+    # A box's output is the wattage of the modules in it. It was
+    # capacity x qty / 1000 - the pallet size (36) standing in for the
+    # wattage (625), so a full pallet of 625 W read 1.3 KW, not 22.5.
+    box_watts = ("(SELECT COALESCE(SUM(s.wattage), 0) FROM box_serial bs "
+                 "JOIN serial s ON s.serial = bs.serial "
+                 "AND s.build_instance = COALESCE(bs.build_instance, 1) "
+                 "WHERE bs.box_id = b.box_id)")
     
     bx_conds = []
     bx_params = []
@@ -1514,7 +1541,7 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None):
     # 1. Finished goods
     sql_ready = f"""
         SELECT COUNT(b.box_id) as box_count, COALESCE(SUM(b.qty), 0) as modules,
-               COALESCE(SUM(b.capacity * b.qty) / 1000.0, 0) as kw
+               COALESCE(SUM({box_watts}), 0) / 1000.0 as kw
         FROM box b 
         WHERE b.state = 'closed' AND {bx_where}
           AND b.box_id NOT IN (
@@ -1566,20 +1593,37 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None):
     row = cur.fetchone()
     open_ch["ch_count"] = row["ch_count"] if row else 0
 
-    # 4. Dispatched today
+    # 4. Dispatched in the period - one day (date) or a range (from/to).
+    # Counted per MODULE on the challan, so a box with several of its
+    # modules on it is not multiplied by the join; KW is those modules'
+    # own wattage, which is what "Shipped output" reports.
     sql_disp = f"""
-        SELECT COUNT(DISTINCT b.box_id) as box_count, COALESCE(SUM(b.qty), 0) as modules
+        SELECT COUNT(DISTINCT b.box_id) as box_count,
+               COUNT(DISTINCT bs.serial) as modules,
+               COALESCE(SUM(s.wattage), 0) / 1000.0 as kw
         FROM box b
         JOIN box_serial bs ON bs.box_id = b.box_id
         JOIN challan_serial cs ON cs.serial = bs.serial
         JOIN challan c ON c.challan_id = cs.challan_id
+        LEFT JOIN serial s ON s.serial = bs.serial
+             AND s.build_instance = COALESCE(bs.build_instance, 1)
         WHERE c.status = 'issued' AND {bx_where}
     """
-    if d_date:
-        sql_disp += " AND c.challan_date = %s"
-        params_disp = bx_params + [d_date]
-    else:
-        params_disp = bx_params
+    # Dispatch is counted by when the challan was ISSUED - its modules left
+    # then - on the factory day (06:00 to 06:00), not by the date printed
+    # on the document.
+    issued_day = clock.shift_day_sql("COALESCE(c.issued_at, c.created_at)")
+    params_disp = list(bx_params)
+    if d_from or d_to:
+        if d_from:
+            sql_disp += " AND " + issued_day + " >= %s"
+            params_disp.append(d_from)
+        if d_to:
+            sql_disp += " AND " + issued_day + " <= %s"
+            params_disp.append(d_to)
+    elif d_date:
+        sql_disp += " AND " + issued_day + " = %s"
+        params_disp.append(d_date)
     cur.execute(sql_disp, tuple(params_disp))
     disp_today = dict(cur.fetchone() or {})
     
@@ -1591,8 +1635,13 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None):
         JOIN box b ON b.box_id = bs.box_id
         WHERE c.status = 'issued' AND {bx_where}
     """
-    if d_date:
-        sql_disp_cnt += " AND c.challan_date = %s"
+    if d_from or d_to:
+        if d_from:
+            sql_disp_cnt += " AND " + issued_day + " >= %s"
+        if d_to:
+            sql_disp_cnt += " AND " + issued_day + " <= %s"
+    elif d_date:
+        sql_disp_cnt += " AND " + issued_day + " = %s"
     cur.execute(sql_disp_cnt, tuple(params_disp))
     row = cur.fetchone()
     disp_today["ch_count"] = row["ch_count"] if row else 0
@@ -1601,7 +1650,7 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None):
     sql_table = f"""
         SELECT b.customer, b.model, b.grade, 
                COUNT(b.box_id) as box_count, COALESCE(SUM(b.qty), 0) as modules,
-               COALESCE(SUM(b.capacity * b.qty) / 1000.0, 0) as kw
+               COALESCE(SUM({box_watts}), 0) / 1000.0 as kw
         FROM box b
         WHERE b.state = 'closed' AND {bx_where}
           AND b.box_id NOT IN (
@@ -1644,11 +1693,44 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None):
         d["customer_name"] = cr["name"] if cr else d.get("buyer_name")
         recent.append(d)
         
+    # 7. Modules dispatched per day, the eight days up to the period's end -
+    # Management Overview's "Daily output", which only ever showed v4's
+    # fixed demo bars.
+    end = d_to or d_date or clock.shift_day().isoformat()
+    try:
+        start = (datetime.date.fromisoformat(end) -
+                 datetime.timedelta(days=7)).isoformat()
+    except ValueError:
+        end, start = clock.shift_day().isoformat(), (
+            clock.shift_day() - datetime.timedelta(days=7)).isoformat()
+    cur.execute(f"""
+        SELECT {issued_day} AS day, COUNT(DISTINCT bs.serial) AS modules,
+               COALESCE(SUM(s.wattage), 0) / 1000.0 AS kw
+        FROM box b
+        JOIN box_serial bs ON bs.box_id = b.box_id
+        JOIN challan_serial cs ON cs.serial = bs.serial
+        JOIN challan c ON c.challan_id = cs.challan_id
+        LEFT JOIN serial s ON s.serial = bs.serial
+             AND s.build_instance = COALESCE(bs.build_instance, 1)
+        WHERE c.status = 'issued' AND {bx_where}
+          AND {issued_day} >= %s AND {issued_day} <= %s
+        GROUP BY 1 ORDER BY 1
+    """, tuple(bx_params) + (start, end))
+    got = {r["day"]: r for r in cur.fetchall()}
+    daily = []
+    for i in range(8):
+        day = (datetime.date.fromisoformat(start) +
+               datetime.timedelta(days=i)).isoformat()
+        r = got.get(day) or {}
+        daily.append({"day": day, "modules": r.get("modules") or 0,
+                      "kw": r.get("kw") or 0})
+
     return {
         "fg_ready": fg_ready,
         "rev_stock": rev_stock,
         "open_ch": open_ch,
         "disp_today": disp_today,
+        "daily": daily,
         "table_fg": table_data,
         "recent": recent
     }

@@ -12,10 +12,11 @@ THE RULES THIS FILE DEFENDS
 
   2. ONE ROW PER INDENT ITEM, in the columns a spreadsheet can be filtered
      and pivoted on: indent, customer, item, cell type, ordered, dispatched,
-     remaining. The screen paints for the eye - a customer shown once per
-     indent, an "item 2" note under the number - and a file read by a filter
-     needs both filled on every row, or the second item of an indent drops
-     out of a customer's total.
+     remaining. A file read by a filter needs the indent number and the
+     customer filled on every row, or the second item of an indent drops
+     out of a customer's total. Since 25 Sep the screen fills them on every
+     row too - the second item showed its customer blank, which read as an
+     item with no customer and dropped it from the Customer filter.
 
   3. WHAT A FILTER HID IS NOT IN THE FILE, as everywhere else.
 
@@ -104,12 +105,12 @@ def t_export_rows():
     seed()
     with H.browser() as b:
         pg = open_indent(b)
-        # the screen really does blank the customer on an indent's second
-        # item - which is exactly why the file cannot be a raw copy of it
+        # every item row names its customer on screen, the second item of
+        # an indent included
         shown = pg.eval_on_selector_all(
             "#indRows tr", "rs => rs.map(r => r.cells[1].textContent.trim())")
         assert len(shown) == 4, "the emptied indent is not on the list to leave out: %s" % shown
-        assert shown.count("") == 1, "screen no longer blanks a repeated customer: %s" % shown
+        assert shown[:2] == [CUST_A, CUST_A], "the second item hides its customer: %s" % shown
 
         body = export_request(pg)
         assert len(body["sheets"]) == 1, [s["title"] for s in body["sheets"]]
@@ -150,8 +151,8 @@ def t_workbook():
     assert sum(row[4] for row in cells[1:]) == 216
 
 
-@test("the screen itself is unchanged: the second item still shows no "
-      "customer, and the item note and status are still painted")
+@test("the screen shows the second item's own indent number and customer, "
+      "and the item note and status are still painted")
 def t_screen_unchanged():
     seed()
     with H.browser() as b:
@@ -159,7 +160,8 @@ def t_screen_unchanged():
         rows = pg.eval_on_selector_all(
             "#indRows tr", "rs => rs.map(r => Array.from(r.cells).map(c => c.innerText.trim()))")
         first, second = rows[0], rows[1]
-        assert first[1] == CUST_A and second[1] == "", (first, second)
+        assert first[1] == CUST_A and second[1] == CUST_A, (first, second)
+        assert second[0].splitlines()[0] == first[0].splitlines()[0], (first, second)
         assert "item 2" in second[0], second[0]
         assert second[8].lower() == "open", second      # tags are upper-cased by CSS
         heads = pg.eval_on_selector_all("#v-indent thead th", "ts => ts.map(t => t.textContent.trim())")

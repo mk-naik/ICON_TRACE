@@ -154,6 +154,112 @@ def _migrate(cx, text):
     cx.commit()
 
 
+# What SQLite's CURRENT_TIMESTAMP writes: '2026-09-25 05:07:24', UTC, with a
+# space. Everything the application writes itself is IST with a 'T'
+# (icon_clock.stamp()), so the space is what tells a default apart.
+_UTC_DEFAULT_GLOB = "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:*"
+
+
+def _ist_timestamps(cx):
+    """Every column whose default is CURRENT_TIMESTAMP holds IST, like the
+    rest of the database.
+
+    SQLite's CURRENT_TIMESTAMP is UTC, and SQLite cannot change an existing
+    column's default in place. So each such column gets an AFTER INSERT
+    trigger that turns the UTC default into IST the moment it is written -
+    which covers every INSERT in the codebase, store.insert() or raw SQL,
+    without any of them having to remember. Rows written before the trigger
+    existed are moved once, flagged in app_config so a restart does not
+    scan the tables again.
+
+    Nothing in the application writes a space-separated time into these
+    columns itself (it writes icon_clock.stamp()), which is what makes the
+    space a reliable sign of a UTC default. Keep it that way.
+    """
+    tables = [r[0] for r in cx.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name NOT LIKE 'sqlite_%'")]
+    targets = []
+    for t in tables:
+        for c in cx.execute("PRAGMA table_info(%s)" % t):
+            if str(c[4] or "").upper() == "CURRENT_TIMESTAMP":
+                targets.append((t, c[1]))
+    for t, col in targets:
+        cx.execute(
+            "CREATE TRIGGER IF NOT EXISTS ist_%s_%s AFTER INSERT ON %s "
+            "WHEN NEW.%s GLOB '%s' BEGIN "
+            "UPDATE %s SET %s = strftime('%%Y-%%m-%%dT%%H:%%M:%%S', NEW.%s, "
+            "'+330 minutes') WHERE rowid = NEW.rowid; END"
+            % (t, col, t, col, _UTC_DEFAULT_GLOB, t, col, col))
+    has_config = "app_config" in tables
+    if has_config and cx.execute(
+            "SELECT 1 FROM app_config WHERE k='clock.ist_backfill'").fetchone():
+        cx.commit()
+        return
+    for t, col in targets:
+        cx.execute(
+            "UPDATE %s SET %s = strftime('%%Y-%%m-%%dT%%H:%%M:%%S', %s, "
+            "'+330 minutes') WHERE %s GLOB '%s'"
+            % (t, col, col, col, _UTC_DEFAULT_GLOB))
+    if has_config:
+        cx.execute("INSERT OR REPLACE INTO app_config (k, v) "
+                   "VALUES ('clock.ist_backfill', '1')")
+    cx.commit()
+
+
+def _stamps_from_created(cx):
+    """Once: the date and shift a record carries are the calendar date and
+    the shift it was CREATED in - never the date or shift printed in a
+    serial, and never what a form happened to show.
+
+    Before 25 Sep an allocation took its shift from the first serial's
+    barcode and its date from the day it was keyed; a production entry and
+    a downtime event took both from the form (Production Entry opened on
+    v4's demo 21-08-2026, Loss on shift B whatever the time). Each is
+    re-stamped from its own created_at, which _ist_timestamps() has already
+    put in IST.
+
+    Challans get issued_at - when one became 'issued', which is when its
+    modules were dispatched. Its challan_date is the date printed on the
+    document and is left alone; dispatch is counted by issued_at."""
+    def cols(t):
+        return {r[1] for r in cx.execute("PRAGMA table_info(%s)" % t)}
+    if cols("challan") and "issued_at" not in cols("challan"):
+        cx.execute("ALTER TABLE challan ADD COLUMN issued_at TEXT")
+    if "k" not in cols("app_config"):
+        return
+    if cx.execute("SELECT 1 FROM app_config "
+                  "WHERE k='clock.stamps_from_created'").fetchone():
+        cx.commit()
+        return
+    hour = "CAST(substr(created_at, 12, 2) AS INTEGER)"
+    num = ("(CASE WHEN %s >= 6 AND %s < 14 THEN 1 WHEN %s >= 14 AND %s < 22 "
+           "THEN 2 ELSE 3 END)" % (hour, hour, hour, hour))
+    letter = ("(CASE WHEN %s >= 6 AND %s < 14 THEN 'A' WHEN %s >= 14 AND %s < 22 "
+              "THEN 'B' ELSE 'C' END)" % (hour, hour, hour, hour))
+    if cols("allocation"):
+        cx.execute("UPDATE allocation SET date_produced = substr(created_at, 1, 10), "
+                   "shift = %s WHERE created_at IS NOT NULL" % num)
+    if cols("production_entry"):
+        cx.execute("UPDATE production_entry SET prod_date = substr(created_at, 1, 10), "
+                   "shift = %s WHERE created_at IS NOT NULL" % letter)
+    if cols("loss_event"):
+        cx.execute("UPDATE loss_event SET event_date = substr(created_at, 1, 10), "
+                   "shift = %s WHERE created_at IS NOT NULL" % letter)
+    if cols("challan"):
+        # the audit line written when it was issued, else when it was made
+        cx.execute("""UPDATE challan SET issued_at = COALESCE(
+                        (SELECT MIN(a.at) FROM dispatch_audit a
+                         WHERE a.entity = 'challan'
+                           AND a.entity_id = CAST(challan.challan_id AS TEXT)
+                           AND a.action IN ('challan.issued', 'challan.submit')),
+                        created_at)
+                      WHERE status = 'issued' AND issued_at IS NULL""")
+    cx.execute("INSERT OR REPLACE INTO app_config (k, v) "
+               "VALUES ('clock.stamps_from_created', '1')")
+    cx.commit()
+
+
 def ensure():
     """Create the file and the schema on first use."""
     global _ready
@@ -174,6 +280,8 @@ def ensure():
                 cx.executescript(text)
                 cx.commit()
                 _migrate(cx, text)
+                _ist_timestamps(cx)
+                _stamps_from_created(cx)
         finally:
             cx.close()
         _ready = True

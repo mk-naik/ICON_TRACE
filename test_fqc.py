@@ -657,11 +657,15 @@ def dash_setup():
                 "shift": shift, "sequence": 510 + i,
                 "state": "graded" if outcome == "pass" else "rejected",
                 "grade": "A" if outcome == "pass" else None})
+            # The dashboard's shift is the one FQC inspected in, read from
+            # the time (A 06-14, B 14-22) - so each row is inspected inside
+            # the shift it is meant to count under.
             store.insert(cur, "fqc_record", {
                 "serial": s, "outcome": outcome,
                 "grade": "A" if outcome == "pass" else None,
                 "mode": "confirmed", "decided_by": "operator",
-                "at": day + " 10:00:00", "defect": defect})
+                "at": day + (" 10:00:00" if shift == 1 else " 15:00:00"),
+                "defect": defect})
     c = APP.app.test_client()
     AUTH.test_login(c)          # a real Super Admin session (Round 23)
     return c

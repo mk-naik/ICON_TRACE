@@ -69,7 +69,11 @@
     var tb = root.querySelector('table tbody');
     if (tb) {
       var none = tb.querySelector('[data-none]');
-      if (shown === 0) {
+      /* A screen that drew its own empty row ("Nothing inspected under these
+         filters") has already said why - a second line under it claiming a
+         filter matched nothing, when none is set, only contradicts it. */
+      var said = tb.querySelector('[data-empty]');
+      if (shown === 0 && !said) {
         if (!none) {
           var cols = (root.querySelector('table thead tr') || {cells: []}).cells.length || 6;
           none = tb.insertRow();
@@ -103,8 +107,9 @@
                         { type: 'text/csv;charset=utf-8' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
+    /* the IST date - toISOString() is UTC, yesterday's until 05:30 */
     a.download = 'icontrace_' + name + '_' +
-                 new Date().toISOString().slice(0, 10) + '.csv';
+                 new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10) + '.csv';
     document.body.appendChild(a); a.click(); a.remove();
   }
 

@@ -141,6 +141,9 @@ CREATE TABLE IF NOT EXISTS challan (
   superseded_by      INTEGER NULL,
   superseded_at      TEXT    NULL,
   superseded_by_user TEXT    NULL,
+  -- when it became 'issued', i.e. when its modules left. Dispatch is
+  -- counted by this; challan_date is only what the document says.
+  issued_at          TEXT    NULL,
 
   created_at    TEXT      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_by    TEXT   NOT NULL,

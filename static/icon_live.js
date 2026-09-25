@@ -1458,13 +1458,10 @@
       if (prev) sel.value = prev;
     });
     
-    // Shifts - extract unique shifts
-    var shifts = [];
-    if (B.shifts) {
-      shifts = B.shifts.map(function(s) { return s.shift; }).sort();
-    } else {
-      shifts = [1, 2, 3];
-    }
+    /* Shifts are always A, B and C. This read s.shift off the boot's shift
+       rows, which carry it as s - every option came out "undefined", once
+       per model the shift had inspected. */
+    var shifts = [1, 2, 3];
     var sMap = {1: 'A', 2: 'B', 3: 'C'};
     var shiftSelects = ['fDashShift', 'pkShift'];
     shiftSelects.forEach(function(id) {
@@ -1492,7 +1489,7 @@
     });
     
     window.mgReset = function() {
-      var today = _localDate();
+      var today = _shiftDay();
       ['mgFrom', 'mgTo'].forEach(function(id) {
         var el = document.getElementById(id); if (el) el.value = today;
       });
@@ -1513,13 +1510,15 @@
       cust: g('mgCust'), model: g('mgModel'),
       watt: g('mgWatt'), line: g('mgLine'), shift: g('mgShift')
     };
-    
+    if (typeof mgPeriod === 'function') mgPeriod({ from: f.from, to: g('mgTo') });
+
     var qsProd = '?from='+encodeURIComponent(f.from)+'&to='+encodeURIComponent(f.to)+'&shift='+encodeURIComponent(f.shift)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model);
-    // fqc uses shift 1, 2, 3 instead of A, B, C sometimes? fqcDashQuery handles it but let's just pass raw string and API might handle it. Wait, fqc API takes '1' for A.
-    var fqcShift = f.shift === 'A' ? '1' : (f.shift === 'B' ? '2' : (f.shift === 'C' ? '3' : ''));
-    var qsFqc = '?from='+encodeURIComponent(f.from)+'&to='+encodeURIComponent(f.to)+'&shift='+encodeURIComponent(fqcShift)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model);
-    var qsDisp = '?date='+encodeURIComponent(f.from)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model);
-    
+    /* the FQC API reads a letter or a number - send the letter as picked */
+    var qsFqc = '?from='+encodeURIComponent(f.from)+'&to='+encodeURIComponent(f.to)+'&shift='+encodeURIComponent(f.shift)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model);
+    /* the whole period - this used to send only From, so a range showed
+       the first day's dispatches */
+    var qsDisp = '?from='+encodeURIComponent(f.from)+'&to='+encodeURIComponent(f.to)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model);
+
     var el = function(id, txt) { var e = document.getElementById(id); if(e) e.innerHTML = txt; };
 
     Promise.all([
@@ -1528,77 +1527,191 @@
       fetch('/api/stock_dispatch' + qsDisp).then(function(r) { return r.json(); }).catch(function(){ return {}; })
     ]).then(function(results) {
       var prod = results[0], fqc = results[1], disp = results[2];
-      
+
       var pk = prod.kpi || {};
-      el('mk1', (pk.alloc || 0).toLocaleString());
-      el('mk2', (pk.prod || 0).toLocaleString());
-      el('mk3', (pk.disp || 0).toLocaleString());
-      
+      var alloc = pk.alloc || 0, made = pk.prod || 0, atFqc = pk.fqc || 0,
+          rej = pk.rej || 0, packed = pk.packed || 0, shipped = pk.disp || 0;
+      el('mk1', alloc.toLocaleString());
+      el('mk2', made.toLocaleString());
+      /* each counts what happened in the period, by its own time, on the
+         factory day (06:00 to 06:00) - never a serial's printed date */
+      el('mk2d', (pk.running || 0).toLocaleString() + ' not yet at FQC');
+      el('mk3', shipped.toLocaleString());
+      el('mk3d', (pk.c_packed || 0).toLocaleString() + ' packed, awaiting a vehicle');
+
+      /* shipped in the period - disp_today never carried a KW figure, so
+         this fell back to the KW of the stock still in the yard */
       var dispKW = (disp.disp_today && disp.disp_today.kw) || 0;
-      if (!dispKW && disp.table_fg) {
-        dispKW = disp.table_fg.reduce(function(acc, x){ return acc + (x.kw||0); }, 0);
-      }
       el('mk4', dispKW.toFixed(1));
-      
-      var pendingQual = (fqc.totals && fqc.totals.awaiting_quality) || 0;
-      el('mk5', pendingQual.toLocaleString());
-      
+
+      var ft = fqc.totals || {};
+      var awaiting = ft.awaiting_quality || 0, held = pk.hold || 0,
+          openLoss = (prod.open_loss && prod.open_loss.n) || 0,
+          anomalies = ft.anomalies || 0;
+
+      /* Needs a decision - real counts, every one of them. v4's rows were
+         fixed examples ("Serials in Needs Review 5, 20-08 11:22"). */
+      var blocked = [
+        ['Rejects awaiting Quality’s GY/BGY call', 'FQC', awaiting, '', 'review'],
+        ['Passed modules on hold', 'Quality', held, '', 'hold'],
+        ['Downtime events still open', 'Production', openLoss,
+          prod.open_loss && prod.open_loss.oldest ? fmtDay(prod.open_loss.oldest.slice(0, 10)) +
+          ' ' + prod.open_loss.oldest.slice(11) : '', 'loss'],
+        ['Tester reads that match no serial', 'FQC', anomalies, '', 'dash']
+      ].filter(function (b) { return b[2] > 0 && (typeof can !== 'function' || can(b[4])); });
+      el('mk5', blocked.reduce(function (a, b) { return a + b[2]; }, 0).toLocaleString());
+      el('mgBlocked', blocked.length ? blocked.map(function (b) {
+        return '<tr><td>' + b[0] + '</td><td style="color:var(--ink3)">' + b[1] + '</td>' +
+          '<td class="num" style="font-weight:700;color:var(--fail)">' + b[2].toLocaleString() + '</td>' +
+          '<td class="mono" style="font-size:11px;color:var(--ink3)">' + (b[3] || '—') + '</td>' +
+          '<td style="text-align:center"><button class="btn btn-ghost btn-sm" ' +
+          'onclick="go(\'' + b[4] + '\')">Open</button></td></tr>';
+      }).join('') : '<tr data-empty><td colspan="5"><div class="empty-state"><p>' +
+        'Nothing is waiting on a decision.</p></div></td></tr>');
+
       if (typeof drawDonut === 'function') {
-         drawDonut('mgDonut', 'mgLegend', [
-           {n:'Produced', v:pk.prod||0, c:C.amber},
-           {n:'Passed FQC', v:pk.fqc||0, c:C.navy},
-           {n:'Packed', v:pk.packed||0, c:C.blue},
-           {n:'Dispatched', v:pk.disp||0, c:C.green}
-         ], ((pk.alloc || 0)/1000).toFixed(1)+'k', 'allocated');
-         
-         var ft = fqc.totals || {};
+         /* each module in exactly one slice - the earlier version drew
+            Produced, Passed, Packed and Dispatched side by side, so a
+            dispatched module was counted four times over */
+         var slices = [
+           {n:'Dispatched', v:pk.c_disp || 0, c:C.green},
+           {n:'Packed, awaiting dispatch', v:pk.c_packed || 0, c:C.navy},
+           {n:'Passed FQC, not packed', v:pk.c_passed || 0, c:C.blue},
+           {n:'Rejected at FQC', v:pk.c_rej || 0, c:C.red},
+           {n:'Produced, not yet at FQC', v:pk.c_running || 0, c:C.amber},
+           {n:'Allocated, not yet produced', v:pk.c_unproduced || 0, c:C.grey}
+         ];
+         var moved = slices.reduce(function (a, x) { return a + x.v; }, 0);
+         drawDonut('mgDonut', 'mgLegend', slices,
+           (moved / 1000).toFixed(1) + 'k', 'modules');
+
          drawDonut('mgQDonut', 'mgQLegend', [
            {n:'Passed', v:ft.passed||0, c:C.green},
            {n:'GY', v:ft.gy||0, c:C.amber},
            {n:'BGY', v:ft.bgy||0, c:C.red},
-           {n:'Pending Qual', v:ft.awaiting_quality||0, c:C.navy}
+           {n:'Pending Qual', v:awaiting, c:C.navy}
          ], (ft.inspected||0).toLocaleString(), 'inspected');
       }
-      
+      el('mgYield', ft.inspected ? ((ft.passed || 0) / ft.inspected * 100).toFixed(2) +
+        '% yield' : '—');
+
+      /* Shift-wise production & quality: one row per shift, wattage and
+         model over the period, the shift being the one FQC inspected in.
+         The rows the API sends are per day and customer as well; listing
+         them as they came repeated a shift once per day. */
       var sr = document.getElementById('mgShiftRows');
-      if (sr && fqc.rows) {
+      if (sr) {
+         var agg = {}, keys = [];
+         (fqc.rows || []).forEach(function (r) {
+           var kk = r.shift + '|' + r.wattage + '|' + r.model;
+           if (!agg[kk]) { agg[kk] = { shift: r.shift, wattage: r.wattage, model: r.model,
+                                       t: 0, ok: 0, rj: 0 }; keys.push(kk); }
+           agg[kk].t += r.inspected || 0; agg[kk].ok += r.passed || 0; agg[kk].rj += r.rejected || 0;
+         });
+         keys.sort(function (a, b) {
+           var x = agg[a], y = agg[b];
+           return x.shift - y.shift || (y.wattage || 0) - (x.wattage || 0) ||
+                  (x.model < y.model ? -1 : 1);
+         });
          var mgsT = 0, mgsOK = 0, mgsRej = 0;
-         sr.innerHTML = fqc.rows.map(function(r) {
-            var pct = r.inspected ? (r.rejected / r.inspected * 100).toFixed(2) : '0.00';
-            var sMap = {1: 'A', 2: 'B', 3: 'C'};
-            var sName = sMap[r.shift] || r.shift;
-            mgsT += r.inspected||0; mgsOK += r.passed||0; mgsRej += r.rejected||0;
-            return '<tr><td>'+sName+'</td><td>'+(r.wattage||'')+'</td><td>'+fqcEsc(r.model)+'</td>'+
-                   '<td class="num">'+r.inspected+'</td><td class="num">'+r.passed+'</td><td class="num">'+r.rejected+'</td>'+
-                   '<td><div class="bar-wrap"><div class="bar"><i style="width:'+Math.min(pct*12, 100)+'%"></i></div><span class="mono">'+pct+'%</span></div></td>'+
-                   '<td class="num">'+r.inspected+'</td></tr>';
-         }).join('');
+         sr.innerHTML = keys.length ? keys.map(function (kk) {
+            var r = agg[kk], sName = SHIFT_LETTER[r.shift] || r.shift;
+            var pct = r.t ? (r.rj / r.t * 100).toFixed(2) : '0.00';
+            mgsT += r.t; mgsOK += r.ok; mgsRej += r.rj;
+            return '<tr><td class="s' + sName + '">' + sName + '</td><td class="mono">' +
+                   (r.wattage ? r.wattage + 'W' : '') + '</td><td class="mono">' + fqcEsc(r.model) + '</td>' +
+                   '<td class="num">' + r.t.toLocaleString() + '</td><td class="num">' + r.ok.toLocaleString() +
+                   '</td><td class="num">' + r.rj.toLocaleString() + '</td>' +
+                   '<td><div class="bar-wrap"><div class="bar"><i style="width:' + Math.min(pct*12, 100) +
+                   '%"></i></div><span class="mono">' + pct + '%</span></div></td>' +
+                   '<td style="text-align:center"><button class="btn btn-ghost btn-sm" ' +
+                   'onclick="openModules({title:\'Shift ' + sName + ' · ' + fqcEsc(r.model) +
+                   '\',shift:\'' + sName + '\',model:\'' + fqcEsc(r.model) + '\',from:\'' +
+                   fqcEsc(f.from) + '\',to:\'' + fqcEsc(f.to) + '\',customer:\'' +
+                   fqcEsc(f.cust) + '\'})">View ' + r.t.toLocaleString() + '</button></td></tr>';
+         }).join('') : '<tr data-empty><td colspan="8"><div class="empty-state"><p>' +
+           'Nothing inspected under these filters.</p></div></td></tr>';
          el('mgsT', mgsT.toLocaleString());
          el('mgsOK', mgsOK.toLocaleString());
          el('mgsRej', mgsRej.toLocaleString());
          el('mgsPc', mgsT ? (mgsRej/mgsT*100).toFixed(2)+'%' : '0.00%');
-      } else if (sr) {
-         sr.innerHTML = '<tr><td colspan="8"><div class="empty-state">No shift data found</div></td></tr>';
       }
-      
+
       var stock = document.getElementById('mgStockRows');
-      if (stock && disp.table_fg) {
+      if (stock && disp.table_fg && disp.table_fg.length) {
          stock.innerHTML = disp.table_fg.map(function(r) {
            return '<tr><td>'+fqcEsc(r.customer_name || r.customer || '—')+'</td>'+
                   '<td>'+fqcEsc(r.model)+'</td><td class="num">'+(r.box_count||0)+'</td>'+
                   '<td class="num">'+(r.modules||0)+'</td><td class="num">0</td><td class="num">'+(r.kw||0).toFixed(1)+'</td></tr>';
          }).join('');
       } else if (stock) {
-         stock.innerHTML = '<tr><td colspan="6"><div class="empty-state">No stock data found</div></td></tr>';
+         stock.innerHTML = '<tr data-empty><td colspan="6"><div class="empty-state">No stock data found</div></td></tr>';
       }
-      
+
+      /* Where the plant stands - one row per section, every value counted */
+      var yieldPc = ft.inspected ? (ft.passed || 0) / ft.inspected * 100 : null;
+      var fgBoxes = (disp.fg_ready && disp.fg_ready.box_count) || 0;
+      var dispMods = (disp.disp_today && disp.disp_today.modules) || 0;
+      var SECT = [
+        ['Planning', 'Serials allocated', alloc.toLocaleString(), 'ok', 'plan'],
+        ['Production', 'Produced this period', made.toLocaleString(), 'ok', 'proddash'],
+        ['Loss of production', 'Events still open', String(openLoss), openLoss ? 'bad' : 'ok', 'loss'],
+        ['FQC', 'Yield', yieldPc === null ? '—' : yieldPc.toFixed(2) + '%',
+          yieldPc === null || yieldPc >= 97 ? 'ok' : 'warn', 'dash'],
+        ['Quality', 'Rejects awaiting a call', awaiting.toLocaleString(), awaiting ? 'warn' : 'ok', 'review'],
+        ['Packing', 'Boxes awaiting challan', fgBoxes.toLocaleString(), fgBoxes ? 'warn' : 'ok', 'packdash'],
+        ['Dispatch', 'Dispatched this period', dispMods.toLocaleString(), 'ok', 'disp'],
+        ['Hold & deviation', 'Modules on hold', held.toLocaleString(), held ? 'bad' : 'ok', 'hold']
+      ].filter(function (r) { return typeof can !== 'function' || can(r[4]); });
+      el('mgSections', SECT.map(function (r) {
+        var tag = r[3] === 'ok' ? 't-pass' : r[3] === 'warn' ? 't-rev' : 't-fail';
+        var lbl = r[3] === 'ok' ? 'On track' : r[3] === 'warn' ? 'Watch' : 'Action';
+        return '<tr><td style="font-weight:600">' + r[0] + '</td><td>' + r[1] + '</td>' +
+          '<td class="num" style="font-weight:700">' + r[2] + '</td>' +
+          '<td><span class="tag ' + tag + '">' + lbl + '</span></td>' +
+          '<td style="text-align:center"><button class="btn btn-ghost btn-sm" ' +
+          'onclick="go(\'' + r[4] + '\')">Open</button></td></tr>';
+      }).join(''));
+
+      /* Daily output - modules dispatched, the eight days to the period's end */
+      var trend = document.getElementById('mgTrend');
+      if (trend) {
+        var days = disp.daily || [];
+        var mx = Math.max.apply(null, days.map(function (t) { return t.modules; }).concat([0]));
+        trend.innerHTML = mx ? days.map(function (t) {
+          return '<div class="fstep"><div class="fl mono">' + fmtDay(t.day).slice(0, 5) + '</div>' +
+            '<div class="ft"><i style="width:' + (t.modules / mx * 100).toFixed(1) +
+            '%;background:' + C.navy + '"></i></div>' +
+            '<div class="fv">' + t.modules.toLocaleString() + '</div>' +
+            '<div class="fp">' + (t.kw || 0).toFixed(1) + ' KW</div></div>';
+        }).join('') : '<div class="empty-state"><p>Nothing dispatched in the eight days to ' +
+          fqcEsc(fmtDay(f.to || _shiftDay())) + '.</p></div>';
+      }
+
+      /* active filters, and what the period means, above the cards */
+      var active = [];
+      if (f.cust) active.push(f.cust);
+      if (f.model) active.push(f.model);
+      if (f.shift) active.push('Shift ' + f.shift);
+      /* an empty period says so, and which day last had activity */
+      var quiet = !(alloc || made || atFqc || packed || shipped);
+      var dayNote = (quiet && f.from && prod.latest) ?
+        ' Nothing was recorded on ' + fqcEsc(fmtDay(f.from)) + (f.to && f.to !== f.from ?
+        ' to ' + fqcEsc(fmtDay(f.to)) : '') + '. Everything here counts by the time it ' +
+        'was scanned or entered, on the factory day (06:00 to 06:00); the last day with ' +
+        'activity is <b>' + fqcEsc(fmtDay(prod.latest)) + '</b> (<button class="lnk" ' +
+        'onclick="mgShowDay(\'' + fqcEsc(prod.latest) + '\')">show that day</button>).' : '';
+      el('mgFilterNote', (active.length || dayNote) ?
+        '<div class="note n-info" style="font-size:11.5px"><span>&#9432;</span><span>' +
+        (active.length ? 'Filtered by <b>' + active.map(fqcEsc).join('</b>, <b>') +
+          '</b>. Clear with Reset.' : '') + dayNote + '</span></div>' : '');
+
       var sSet={}, cSet={}, mSet={}, wSet={}, lSet={};
-      if (prod && prod.shifts) prod.shifts.forEach(function(r){ if(r.s) sSet[r.s]=1; });
-      if (fqc && fqc.rows) fqc.rows.forEach(function(r){ 
-        if(r.shift) { var sm = {1:'A', 2:'B', 3:'C'}; sSet[sm[r.shift]||r.shift]=1; }
+      if (fqc && fqc.rows) fqc.rows.forEach(function(r){
         if(r.model) mSet[r.model]=1;
         if(r.wattage) wSet[r.wattage]=1;
       });
+      ['A', 'B', 'C'].forEach(function (s) { sSet[s] = 1; });
       if (disp && disp.table_fg) disp.table_fg.forEach(function(r){
         if(r.customer_name || r.customer) cSet[r.customer_name || r.customer]=1;
         if(r.model) mSet[r.model]=1;
@@ -1606,7 +1719,7 @@
       });
       if (prod && prod.customers) prod.customers.forEach(function(c){ cSet[c]=1; });
       if (prod && prod.models) prod.models.forEach(function(m){ mSet[m]=1; });
-      
+
       var updateSel = function(id, set, def, fVal) {
         var sel = document.getElementById(id);
         if (sel && (!fVal || sel.value === def || sel.value.startsWith('All') || sel.value.startsWith('Both'))) {
@@ -1625,10 +1738,17 @@
       updateSel('mgModel', mSet, 'All models', f.model);
       updateSel('mgWatt', wSet, 'All', f.watt);
       updateSel('mgLine', lSet, 'Both lines', f.line);
-      
+      if (window.iconTable) window.iconTable.wireAll();
     });
   }
   window.renderMgmt = renderMgmt;
+
+  window.mgShowDay = function (day) {
+    var a = document.getElementById('mgFrom'), b = document.getElementById('mgTo');
+    if (a) a.value = day;
+    if (b) b.value = day;
+    renderMgmt();
+  };
 
   /* One rule, called from two places (rerender() below, and the focus
      listener at the bottom of this file): data-future="1" means the field
@@ -1659,11 +1779,109 @@
   function _localDate(d) {
     /* No padStart: the JS tests read functions straight out of this file
        and run them under Windows Script Host where Node is not installed,
-       and JScript has no ES2017 string methods. */
+       and JScript has no ES2017 string methods.
+       IST whatever the PC's own timezone is set to - the server stamps
+       every date in IST (icon_clock.py), so a PC left on another zone
+       must not default a filter to a different day. Shifting the instant
+       by +05:30 and reading it with the UTC getters gives IST's fields
+       exactly; there is no daylight saving to get wrong. */
     d = d || new Date();
-    var m = d.getMonth() + 1, day = d.getDate();
-    return d.getFullYear() + '-' + (m < 10 ? '0' + m : m) +
+    var ist = new Date(d.getTime() + 330 * 60000);
+    var m = ist.getUTCMonth() + 1, day = ist.getUTCDate();
+    return ist.getUTCFullYear() + '-' + (m < 10 ? '0' + m : m) +
            '-' + (day < 10 ? '0' + day : day);
+  }
+
+  /* The IST wall clock as numbers - the same shift of the instant as
+     _localDate(), for the places that need the time too. */
+  function _istParts(d) {
+    var t = new Date((d || new Date()).getTime() + 330 * 60000);
+    return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate(),
+             h: t.getUTCHours(), mi: t.getUTCMinutes(), s: t.getUTCSeconds() };
+  }
+  function _pad2(n) { return (n < 10 ? '0' : '') + n; }
+  /* v4's shiftOf(): A 06-14, B 14-22, C 22-06 - on the IST clock. */
+  function _istShift(d) {
+    var h = _istParts(d).h;
+    return h >= 6 && h < 14 ? 'A' : (h >= 14 && h < 22 ? 'B' : 'C');
+  }
+  var SHIFT_LETTER = { 1: 'A', 2: 'B', 3: 'C' };
+  window.istToday = _localDate;
+
+  /* The factory day it is now. What is stored is the calendar date and IST
+     time; what it COUNTS towards runs 06:00 to 06:00, because C shift
+     crosses midnight - 01:12 on the 26th is C shift of the 25th. Every
+     screen that counts opens on this day (icon_clock.shift_day on the
+     server). */
+  function _shiftDay(d) {
+    return _localDate(new Date((d || new Date()).getTime() - 6 * 3600000));
+  }
+  window.istShiftDay = _shiftDay;
+  window.istShift = _istShift;
+
+  /* v4's header clock and shift pill, its Loss start time (nowHM) and
+     Planning's "prepared at" stamp all read the PC's local clock. They
+     read IST now. tick() runs from a setInterval nothing can reach, so it
+     keeps its three ids on hidden stand-ins and the visible elements are
+     driven from here; nowHM and stampPlanUser are called by name, so
+     replacing them is enough. */
+  function istClock() {
+    var clock = document.getElementById('clock');
+    if (!clock || window.__istClock) return;
+    window.__istClock = true;
+    var pill = document.getElementById('shiftPill');
+    var txt = document.getElementById('shiftTxt');
+    clock.id = 'clockIST';
+    if (pill) pill.id = 'shiftPillIST';
+    if (txt) txt.id = 'shiftTxtIST';
+    var sink = document.createElement('div');
+    sink.style.display = 'none';
+    sink.innerHTML = '<span id="clock"></span>' +
+      '<span id="shiftPill"><span id="shiftTxt"></span></span>';
+    document.body.appendChild(sink);
+    var colour = { A: '#8FBEF2', B: '#C4A3E4', C: '#87D3B4' };
+    function tickIST() {
+      var p = _istParts(), s = _istShift();
+      clock.textContent = _pad2(p.d) + '-' + _pad2(p.m) + '-' + p.y +
+        ' · ' + _pad2(p.h) + ':' + _pad2(p.mi);
+      if (txt) txt.textContent = 'SHIFT ' + s;
+      if (pill) {
+        pill.style.background = 'rgba(255,255,255,.13)';
+        pill.style.color = colour[s];
+      }
+    }
+    tickIST();
+    setInterval(tickIST, 1000);
+
+    window.nowHM = function () {
+      var p = _istParts();
+      return _pad2(p.h) + ':' + _pad2(p.mi);
+    };
+    window.stampPlanUser = function () {
+      var p = _istParts(), by = document.getElementById('pBy'),
+          when = document.getElementById('pWhen');
+      if (by && typeof USER !== 'undefined') by.value = USER.name + ' · ' + USER.role;
+      if (when) when.value = _pad2(p.d) + '-' + _pad2(p.m) + '-' + p.y + ' ' +
+        _pad2(p.h) + ':' + _pad2(p.mi);
+    };
+  }
+  window.istClock = istClock;
+
+  /* v4 ships date fields pre-filled with its demo days. The dashboards'
+     are replaced one by one above; Production Entry's "Production date"
+     never was, so the form opened on 21-08-2026 and a range recorded
+     without noticing was filed a month back. Any date field still
+     showing one of v4's demo days, untouched since the page drew it,
+     opens on today instead - once per field, so a day someone picks is
+     never replaced. */
+  var V4_DEMO_DATES = { '2026-08-01': 1, '2026-08-19': 1, '2026-08-21': 1 };
+  function replaceDemoDates() {
+    var today = _localDate();
+    document.querySelectorAll('input[type="date"]').forEach(function (el) {
+      if (el.__demoSwept) return;
+      el.__demoSwept = true;
+      if (V4_DEMO_DATES[el.value] && el.value === el.defaultValue) el.value = today;
+    });
   }
 
   function _applyDateLimit(el) {
@@ -1685,6 +1903,8 @@
     renderStock: 'disp', renderPlan: 'plan' };
 
   function rerender() {
+    replaceDemoDates();
+    istClock();
     ['renderMgmt', 'renderProd', 'renderFqcDash', 'renderLiveFqcDash',
      'renderLiveFqcRecent', 'renderPackLog',
      'renderStock', 'renderPlan'].forEach(function (fn) {
@@ -2231,7 +2451,7 @@ function wireFqcAnomalies() {
   
   // Default dates for Stock & Dispatch and Packing Log and DOM patches
   (function initUI() {
-    var today = _localDate();
+    var today = _shiftDay();          /* these screens count - factory day */
     
     // Patch v-disp (Stock & Dispatch)
     var dpDate = document.querySelector('#v-disp input[type="date"]');
@@ -2336,35 +2556,117 @@ function wireFqcAnomalies() {
   function wireProdDash() {
     var pd = document.getElementById('v-proddash');
     if (!pd) return;
-    
+
     var flds = pd.querySelectorAll('.filters .fld');
     if (flds.length < 5) return;
-    
+
     // Assign IDs if missing
     var fFrom = flds[0].querySelector('input'); if (!fFrom.id) fFrom.id = 'pdFrom';
     var fTo = flds[1].querySelector('input'); if (!fTo.id) fTo.id = 'pdTo';
     var fShift = flds[2].querySelector('select'); if (!fShift.id) fShift.id = 'pdShift';
     var fCust = flds[3].querySelector('select'); // already has id pdCust
     var fModel = flds[4].querySelector('select'); if (!fModel.id) fModel.id = 'pdModel';
-    
+
     // Wire change events
     [fFrom, fTo, fShift, fCust, fModel].forEach(function(el) {
       if (el) {
         el.onchange = function() { window.renderProd(); };
       }
     });
-    
+
     // Populate dropdowns from models if empty
     if (B.models && fModel && fModel.options.length <= 1) {
       fModel.innerHTML = '<option>All models</option>' + B.models.map(function(m) {
         return '<option value="' + fqcEsc(m.model) + '">' + fqcEsc(m.model) + '</option>';
       }).join('');
     }
+
+    /* The Reset addMissingControls() injects was claimed by the generic
+       wireResets(), which blanks every field - both dates too, so Reset
+       showed every day there has ever been. It goes back to today's
+       factory day, like Management Overview's. Claimed on whichever pass
+       first finds the button - it is injected after this screen's first
+       wiring, and wireResets() runs later in the same pass. */
+    var reset = pd.querySelector('.filters [data-added=reset]');
+    if (reset && !reset.__pdReset) {
+      reset.__pdReset = true;
+      reset.__reset = true;
+      reset.onclick = function (e) {
+        if (e) e.preventDefault();
+        fFrom.value = _shiftDay(); fTo.value = _shiftDay();
+        [fShift, fCust, fModel].forEach(function (s) { if (s) s.selectedIndex = 0; });
+        window.renderProd();
+        if (typeof toast === 'function') toast('Filters reset to today.');
+      };
+    }
+
+    if (pd.__pdWired) return;
+    pd.__pdWired = true;
+
+    /* Opens on today, in IST. initUI() above looks for #pdFrom before this
+       function has given the field that id, so it never reached them. */
+    var today = _shiftDay();
+    if (!fFrom.value || V4_DEMO_DATES[fFrom.value]) fFrom.value = today;
+    if (!fTo.value || V4_DEMO_DATES[fTo.value]) fTo.value = today;
+
+    /* The shift filter keeps v4's A/B/C - the server reads a letter or a
+       number. An earlier version rebuilt it from the serials' shift
+       NUMBERS and showed "2" and "3". */
+    fShift.innerHTML = '<option>All shifts</option><option value="A">A</option>' +
+      '<option value="B">B</option><option value="C">C</option>';
+
+
+    var bar = pd.querySelector('.filters');
+    if (bar && !document.getElementById('pdFilterNote')) {
+      var note = document.createElement('div');
+      note.id = 'pdFilterNote';
+      bar.parentNode.insertBefore(note, bar.nextSibling);
+    }
   }
   window.wireProdDash = wireProdDash;
 
+  /* Modules a closed downtime event cost, by v4's own rule in renderLoss():
+     the machine's share of its line (one of n machines of that type), for
+     the fraction of the scheduled shift it was down, at the ideal rate.
+     Primary events only - an induced stop is the same loss counted twice.
+     Scheduled minutes and ideal rate are the Loss screen's own two fields,
+     both still marked unconfirmed there, so this is indicative too. */
+  function lossModules(e) {
+    var shiftMin = +((document.getElementById('shiftMin') || {}).value) || 480;
+    var tgt = +((document.getElementById('shiftTgt') || {}).value) || 2000;
+    var grp = (typeof MACHINES !== 'undefined') ? MACHINES.filter(function (g) {
+      return (e.machine || '').indexOf(g.type) === 0; })[0] : null;
+    var n = (grp && typeof machCount === 'function') ? machCount(grp) : 1;
+    return { share: 100 / n,
+             lost: e.kind === 'P' ?
+               Math.round(tgt * (100 / n) * ((e.minutes || 0) / shiftMin) / 100) : 0 };
+  }
+
+  function pdLineName(l) {
+    l = (l || '').replace(/-?line$/i, '').trim().toUpperCase();
+    return l ? l + '-Line' : '';
+  }
+
+  function pdBar(pct, ok) {
+    pct = Math.max(0, Math.min(pct, 100));
+    return '<div class="bar-wrap"><div class="bar' + (ok ? ' b-ok' : '') + '">' +
+      '<i style="width:' + pct.toFixed(1) + '%"></i></div><span class="mono">' +
+      pct.toFixed(0) + '%</span></div>';
+  }
+
+  function pdEmpty(cols, text) {
+    return '<tr data-empty><td colspan="' + cols + '"><div class="empty-state"><p>' +
+      text + '</p></div></td></tr>';
+  }
+
+  function fmtDay(iso) {
+    var p = String(iso || '').split('-');
+    return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : (iso || '');
+  }
+
   function renderLiveProdDash() {
     if (!can('proddash')) return;   /* Round 28: the server would refuse it */
+    wireProdDash();
     var g = function(id) { var e = document.getElementById(id); return e ? e.value : ''; };
     var f = {
       from: g('pdFrom'),
@@ -2373,7 +2675,7 @@ function wireFqcAnomalies() {
       customer: g('pdCust'),
       model: g('pdModel')
     };
-    
+
     var qs = [];
     if (f.from) qs.push('from=' + encodeURIComponent(f.from));
     if (f.to) qs.push('to=' + encodeURIComponent(f.to));
@@ -2381,45 +2683,193 @@ function wireFqcAnomalies() {
     if (f.customer && f.customer !== 'All customers') qs.push('customer=' + encodeURIComponent(f.customer));
     if (f.model && f.model !== 'All' && f.model !== 'All models') qs.push('model=' + encodeURIComponent(f.model));
     var query = qs.length ? '?' + qs.join('&') : '';
-    
+
     fetch('/api/prod/dashboard' + query, { cache: 'no-store' })
       .then(function(r) { return r.json(); })
       .then(function(d) {
+        /* Every figure is what HAPPENED in the period, each by its own
+           time - allocated, produced, inspected, packed, dispatched - on
+           the factory day (06:00 to 06:00). Never the serial's printed
+           date. Running and Remaining are that period's production still
+           short of FQC, and that period's allocation still unproduced. */
         var k = d.kpi || {};
-        var running = (k.prod || 0) - (k.fqc || 0);
-        var pending = (k.packed || 0) - (k.disp || 0);
-        var remaining = (k.alloc || 0) - (k.prod || 0);
-        
+        var alloc = k.alloc || 0, prod = k.prod || 0, fqc = k.fqc || 0,
+            rej = k.rej || 0, packed = k.packed || 0, disp = k.disp || 0;
+        var running = k.running || 0, remaining = k.remaining || 0,
+            passed = k.passed || 0;
+
         var el = function(id, text) { var e = document.getElementById(id); if(e) e.textContent = text; };
-        el('pk1', (k.alloc || 0).toLocaleString());
+        var sub = function(id, text) {
+          var e = document.getElementById(id), kpi = e && e.parentNode;
+          var dd = kpi && kpi.querySelector('.d'); if (dd) dd.textContent = text;
+        };
+        el('pk1', alloc.toLocaleString());
         el('pk2', running.toLocaleString());
-        el('pk3', (k.rej || 0).toLocaleString());
-        el('pk4', (k.disp || 0).toLocaleString());
+        el('pk3', rej.toLocaleString());
+        el('pk4', disp.toLocaleString());
         el('pk5', remaining.toLocaleString());
-        
+        /* a reject has no grade until Quality calls it - say how many wait */
+        sub('pk3', (k.gy || 0) + ' GY \u00b7 ' + (k.bgy || 0) + ' BGY \u00b7 ' +
+          (k.awaiting_quality || 0) + ' awaiting Quality');
+        sub('pk4', 'challan issued');
+
         if (typeof drawDonut === 'function') {
           drawDonut('pdDonut', 'pdLegend', [
-            {n:'Passed FQC', v:(k.fqc || 0)-(k.rej || 0), c:C.navy},
-            {n:'Rejected at FQC', v:k.rej || 0, c:C.red},
+            {n:'Passed FQC', v:passed, c:C.navy},
+            {n:'Rejected at FQC', v:rej, c:C.red},
             {n:'Produced, not yet at FQC', v:running, c:C.amber},
             {n:'Not yet produced', v:remaining, c:C.grey}
-          ], ((k.alloc || 0)/1000).toFixed(1)+'k', 'allocated');
+          ], (alloc/1000).toFixed(1)+'k', 'allocated');
         }
-        
+
+        /* v4's funnel, fed real counts - it was left empty. Each step is
+           what happened at that stage in the period, so a step can exceed
+           the one above it (FQC this morning on last night's production);
+           the bars are drawn against the largest. */
+        var fun = document.getElementById('pdFunnel');
+        if (fun) {
+          var steps = [{n:'Allocated',v:alloc,c:'#72859A'},{n:'Produced',v:prod,c:'#E08A1E'},
+            {n:'FQC done',v:fqc,c:'#4E8FC0'},{n:'Passed',v:passed,c:'#1B4D7A'},
+            {n:'Packed',v:packed,c:'#2A8A66'},{n:'Dispatched',v:disp,c:'#177A47'}];
+          var top = Math.max.apply(null, steps.map(function (x) { return x.v; }));
+          fun.innerHTML = top ? steps.map(function(x) {
+            var pc = x.v / top * 100;
+            return '<div class="fstep"><div class="fl">' + x.n + '</div>' +
+              '<div class="ft"><i style="width:' + pc.toFixed(1) + '%;background:' + x.c + '"></i></div>' +
+              '<div class="fv">' + x.v.toLocaleString() + '</div>' +
+              '<div class="fp">' + pc.toFixed(0) + '%</div></div>';
+          }).join('') : '<div class="empty-state"><p>Nothing happened under these filters.</p></div>';
+        }
+
+        /* Line & shift: production by the line its production entry names,
+           downtime from Loss of Production for the same line and shift.
+           A line is only known once a production entry records it - until
+           then the row says so rather than printing "?". */
+        var lossEvents = d.loss || [];
+        var rowsBy = {}, order = [];
+        var key = function (line, shift) { return (line || '') + '|' + shift; };
+        /* "Against plan" is against the ideal rate per shift on the Loss
+           screen - marked unconfirmed there, so indicative, as the card's
+           own footnote says. */
+        var ideal = +((document.getElementById('shiftTgt') || {}).value) || 2000;
+        (d.lines || []).forEach(function (r) {
+          var kk = key(pdLineName(r.line), r.shift);
+          rowsBy[kk] = { line: pdLineName(r.line), shift: r.shift, produced: r.produced,
+                         scrap: r.scrap, plan: ideal, down: 0, lost: 0 };
+          order.push(kk);
+        });
+        lossEvents.forEach(function (e) {
+          if (!e.shift) return;
+          var kk = key(pdLineName(e.line), e.shift);
+          if (!rowsBy[kk]) {
+            rowsBy[kk] = { line: pdLineName(e.line), shift: e.shift, produced: 0, scrap: 0,
+                           plan: ideal, down: 0, lost: 0 };
+            order.push(kk);
+          }
+          if (e.kind === 'P') rowsBy[kk].down += e.minutes || 0;
+          rowsBy[kk].lost += lossModules(e).lost;
+        });
+        order.sort(function (a, b) {
+          var x = rowsBy[a], y = rowsBy[b];
+          return (x.line || '~') < (y.line || '~') ? -1 : (x.line || '~') > (y.line || '~') ? 1
+               : x.shift - y.shift;
+        });
         var tBody = document.getElementById('pdLineRows');
         if (tBody) {
-          if (!d.shifts || d.shifts.length === 0) {
-            tBody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><p>Nothing produced under these filters.</p></div></td></tr>';
-          } else {
-            tBody.innerHTML = d.shifts.map(function(r) {
-              return '<tr><td>?</td><td class="s' + r.s + '">' + r.s + '</td>' +
-                '<td class="num">' + r.t.toLocaleString() + '</td>' +
-                '<td class="num">' + r.r.toLocaleString() + '</td>' +
-                '<td class="num">?</td><td class="num">?</td><td>?</td></tr>';
-            }).join('');
-          }
+          tBody.innerHTML = order.length ? order.map(function (kk) {
+            var r = rowsBy[kk], s = SHIFT_LETTER[r.shift] || r.shift;
+            var line = r.line ? '<span class="s' + r.line.charAt(0) + '">' + fqcEsc(r.line) + '</span>'
+              : '<span style="color:var(--ink3)" title="No production entry names the line ' +
+                'for these modules yet - they are counted from their FQC scan">not recorded</span>';
+            var plan = r.plan ? pdBar(r.produced / r.plan * 100, r.produced >= r.plan * 0.95) : '—';
+            return '<tr><td>' + line + '</td><td class="s' + s + '">' + s + '</td>' +
+              '<td class="num">' + r.produced.toLocaleString() + '</td>' +
+              '<td class="num"' + (r.scrap ? ' style="color:var(--fail)"' : '') + '>' + r.scrap + '</td>' +
+              '<td class="num"' + (r.down ? ' style="color:var(--review)"' : '') + '>' + r.down + '</td>' +
+              '<td class="num">' + r.lost + '</td>' +
+              '<td title="' + r.produced + ' produced against an ideal ' + r.plan +
+              ' a shift (Loss of Production, unconfirmed)">' + plan + '</td></tr>';
+          }).join('') : pdEmpty(7, 'Nothing produced under these filters.');
         }
-        
+
+        /* Customer-wise position - v4's table, left empty until now */
+        var cBody = document.getElementById('pdCustRows');
+        if (cBody) {
+          var bc = d.by_cust || [];
+          cBody.innerHTML = bc.length ? bc.map(function (r) {
+            /* running: produced in the period, not yet at FQC; pending:
+               packed in the period, not yet dispatched; completion: how
+               much of the period's allocation has left */
+            var run = r.running || 0, pend = r.c_packed || 0;
+            var pc = r.alloc ? (r.alloc_gone || 0) / r.alloc * 100 : 0;
+            return '<tr><td>' + fqcEsc(r.cust) + '</td><td class="mono">' + fqcEsc(r.model) + '</td>' +
+              '<td class="num">' + r.alloc.toLocaleString() + '</td>' +
+              '<td class="num">' + r.prod.toLocaleString() + '</td>' +
+              '<td class="num" style="color:var(--solar)">' + run.toLocaleString() + '</td>' +
+              '<td class="num" style="color:var(--fail)">' + r.rej.toLocaleString() + '</td>' +
+              '<td class="num">' + pend.toLocaleString() + '</td>' +
+              '<td class="num" style="color:var(--pass)">' + r.disp.toLocaleString() + '</td>' +
+              '<td>' + pdBar(pc, true) + '</td>' +
+              '<td style="text-align:center">' + r.batches + '</td></tr>';
+          }).join('') : pdEmpty(10, 'Nothing happened under these filters.');
+        }
+
+        /* Loss of production and machine downtime, from the real events */
+        var byReason = {}, byMach = {}, totMin = 0, totLost = 0;
+        lossEvents.forEach(function (e) {
+          var lm = lossModules(e);
+          if (e.kind === 'P') { totMin += e.minutes || 0; totLost += lm.lost; }
+          var rr = byReason[e.reason] = byReason[e.reason] || { min: 0, lost: 0 };
+          if (e.kind === 'P') rr.min += e.minutes || 0;
+          rr.lost += lm.lost;
+          var mk = e.machine + '|' + e.line;
+          var mm = byMach[mk] = byMach[mk] || { machine: e.machine, line: e.line,
+                                               min: 0, share: lm.share, lost: 0 };
+          mm.min += e.minutes || 0; mm.lost += lm.lost;
+        });
+        var lBody = document.getElementById('pdLossRows');
+        if (lBody) {
+          var reasons = Object.keys(byReason).sort(function (a, b) {
+            return byReason[b].min - byReason[a].min; });
+          lBody.innerHTML = reasons.length ? reasons.map(function (r) {
+            var x = byReason[r], pc = totMin ? x.min / totMin * 100 : 0;
+            return '<tr><td><span class="code">' + fqcEsc(r) + '</span></td>' +
+              '<td class="num">' + x.min + '</td><td class="num">' + x.lost + '</td>' +
+              '<td>' + pdBar(pc) + '</td></tr>';
+          }).join('') : pdEmpty(4, 'No downtime recorded in this period.');
+          el('pdLossMin', totMin.toLocaleString());
+          el('pdLossMod', totLost.toLocaleString());
+        }
+        var mBody = document.getElementById('pdMachRows');
+        if (mBody) {
+          var machs = Object.keys(byMach).sort(function (a, b) {
+            return byMach[b].min - byMach[a].min; });
+          mBody.innerHTML = machs.length ? machs.map(function (kk) {
+            var x = byMach[kk];
+            return '<tr><td class="mono">' + fqcEsc(x.machine) + '</td>' +
+              '<td class="s' + fqcEsc(x.line) + '">' + fqcEsc(x.line || '—') + '</td>' +
+              '<td class="num">' + x.min + '</td><td class="num">' + x.share.toFixed(2) + '%</td>' +
+              '<td class="num">' + x.lost + '</td></tr>';
+          }).join('') : pdEmpty(5, 'No machine was down in this period.');
+        }
+
+        /* When the chosen days hold nothing, say which day does, instead
+           of a page of zeros. */
+        var note = document.getElementById('pdFilterNote');
+        if (note) {
+          var one = f.from && (!f.to || f.to === f.from);
+          var period = one ? fmtDay(f.from) : fmtDay(f.from) + ' to ' + fmtDay(f.to || f.from);
+          var nothing = !(alloc || prod || fqc || packed || disp);
+          note.innerHTML = (nothing && f.from && d.latest) ?
+            '<div class="note n-info" style="font-size:11.5px"><span>&#9432;</span><span>' +
+            'Nothing was recorded on ' + fqcEsc(period) + '. Every figure here counts ' +
+            'what happened, by the time it was scanned or entered, on the factory day ' +
+            '(06:00 to 06:00 \u2014 01:12 on the 26th is C shift of the 25th). The last ' +
+            'day with activity is <b>' + fqcEsc(fmtDay(d.latest)) + '</b>. ' +
+            '<button class="lnk" onclick="pdShowDay(\'' + fqcEsc(d.latest) +
+            '\')">Show that day</button>.</span></div>' : '';
+        }
+
         var updateSel = function(id, arr, def, fVal) {
           var sel = document.getElementById(id);
           if (sel && (!fVal || sel.value === def || sel.value.startsWith('All'))) {
@@ -2431,12 +2881,23 @@ function wireFqcAnomalies() {
             if (sel.selectedIndex < 0) sel.value = def;
           }
         };
-        updateSel('pdShift', (d.shifts||[]).map(function(x){return x.s;}), 'All shifts', f.shift);
         updateSel('pdCust', d.customers, 'All customers', f.customer);
         updateSel('pdModel', d.models, 'All', f.model);
+        if (window.iconTable) window.iconTable.wireAll();
+      })
+      .catch(function (err) {
+        if (typeof toast === 'function')
+          toast('Could not load the Production Dashboard: ' + err.message);
       });
   }
   window.renderProd = renderLiveProdDash;
+
+  window.pdShowDay = function (day) {
+    var a = document.getElementById('pdFrom'), b = document.getElementById('pdTo');
+    if (a) a.value = day;
+    if (b) b.value = day;
+    renderLiveProdDash();
+  };
 
   function wirePackLog() {
     var pd = document.getElementById('v-packdash');
@@ -2767,7 +3228,8 @@ function wireFqcAnomalies() {
         var note = document.getElementById('fDashNote');
         if (note) {
           var act = [];
-          if (f.shift) act.push('Shift ' + f.shift);
+          if (f.shift) act.push('Shift ' + ({1: 'A', 2: 'B', 3: 'C'}[f.shift] || f.shift) +
+                                ' (inspected)');
           if (f.customer) act.push(f.custName);
           if (f.model) act.push(f.model);
           if (f.result) act.push(f.resultLabel);
@@ -2817,7 +3279,9 @@ function wireFqcAnomalies() {
         mdlCat.innerHTML += '<option>Pending</option>';
     }
 
-    var today = _localDate();
+    /* the factory day, 06:00 to 06:00 - as _shiftDay(), written out because
+       the dashboard tests lift this block on its own */
+    var today = _localDate(new Date(new Date().getTime() - 6 * 3600000));
     if (fFrom && (fFrom.value === '2026-08-19' || !fFrom.value)) fFrom.value = today;
     if (fTo && (fTo.value === '2026-08-19' || !fTo.value)) fTo.value = today;
 
@@ -2859,7 +3323,7 @@ function wireFqcAnomalies() {
        ['fDashModel', 'All'], ['fDashResult', 'All']].forEach(function (x) {
         var e = document.getElementById(x[0]); if (e) e.value = x[1];
       });
-      var today = _localDate();
+      var today = _localDate(new Date(new Date().getTime() - 6 * 3600000));
       var fr = document.getElementById('fFrom'), t = document.getElementById('fTo');
       if (fr) fr.value = today; if (t) t.value = today;
       if (typeof fqcRange === 'function') fqcRange();
@@ -2869,36 +3333,93 @@ function wireFqcAnomalies() {
   }
   window.wireFqcDash = wireFqcDash;
 
+  /* The module list behind a number on the FQC Dashboard or Management
+     Overview.
+
+     It is sent the whole slice the dashboard is showing - the period, the
+     customer, and the model when a row names one - and the number that was
+     clicked only sets where the list's own filters START. They used to be
+     applied on the server instead, so the list could only ever narrow:
+     "Rejection - low eff" fetched low-eff rejects and nothing else, and
+     choosing All remarks, another category or another shift found nothing.
+
+     Each dropdown offers what the list actually holds, counted, given the
+     other filters: pick shift A and Remark shows shift A's remarks only.
+     Shift is the shift FQC inspected in, matching the date beside it; the
+     production date and shift from the serial are on the cell's tooltip. */
+  var MDL_ALL = { res: 'All results', cat: 'All categories',
+                  rem: 'All remarks', shift: 'All shifts' };
+  var MDL_SEL = { res: 'mdlRes', cat: 'mdlCat', rem: 'mdlRem', shift: 'mdlShift' };
+  var MDL_SHIFT = { 1: 'A', 2: 'B', 3: 'C' };
+
+  function mdlFacets(m) {
+    var pass = m.outcome === 'pass';
+    return { res: pass ? 'Passed only' : 'Rejected only',
+             cat: pass ? 'A' : (m.quality_grade || 'Pending'),
+             /* the dashboard's own label for a reject with no defect */
+             rem: m.defect || (pass ? '—' : '(no defect recorded)'),
+             shift: MDL_SHIFT[m.shift] || String(m.shift || '—') };
+  }
+
+  function mdlSetSelect(id, all, counts, order, keep) {
+    var sel = document.getElementById(id);
+    if (!sel) return;
+    if (keep !== all && !Object.prototype.hasOwnProperty.call(counts, keep)) counts[keep] = 0;
+    var total = 0, k;
+    for (k in counts) if (Object.prototype.hasOwnProperty.call(counts, k)) total += counts[k];
+    var at = function (v) {           /* no Array#indexOf in JScript */
+      for (var j = 0; order && j < order.length; j++) if (order[j] === v) return j;
+      return -1;
+    };
+    var vals = Object.keys(counts).sort(function (a, b) {
+      var ia = at(a), ib = at(b);
+      if (ia !== ib) return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+      return counts[b] - counts[a] || (a < b ? -1 : 1);
+    });
+    var html = '<option value="' + fqcEsc(all) + '">' + fqcEsc(all) + ' (' + total + ')</option>';
+    for (var i = 0; i < vals.length; i++) {
+      html += '<option value="' + fqcEsc(vals[i]) + '">' + fqcEsc(vals[i]) +
+        ' (' + counts[vals[i]] + ')</option>';
+    }
+    sel.innerHTML = html;
+    sel.value = keep;
+  }
+
   window.openModules = function(o) {
     o = o || {};
     var f = fqcDashFilters();
-    if (o.shift) f.shift = o.shift;
-    if (o.model) f.model = o.model;
-    if (o.cat) f.cat = o.cat;
-    if (o.result) f.result = (o.result === 'Passed only' ? 'pass' : (o.result === 'Rejected only' ? 'reject' : ''));
-    if (o.remark) f.remark = o.remark;
+    if (o.from) { f.from = o.from; f.to = o.to || o.from; }
     if (o.date) { f.from = o.date; f.to = o.date; }
+    if (o.customer !== undefined) f.customer = o.customer;
+    if (o.model) f.model = o.model;
 
-    var q = fqcDashQuery(f);
-    if (f.cat) q += (q ? '&' : '?') + 'cat=' + encodeURIComponent(f.cat);
-    if (f.remark) q += (q ? '&' : '?') + 'remark=' + encodeURIComponent(f.remark);
+    /* what was clicked becomes the list's starting filters, not the fetch */
+    var shift0 = o.shift || f.shift;
+    var start = {
+      res: o.result || (f.result === 'pass' ? 'Passed only' :
+                        f.result === 'reject' ? 'Rejected only' : MDL_ALL.res),
+      cat: o.cat || MDL_ALL.cat,
+      rem: o.remark || MDL_ALL.rem,
+      shift: shift0 ? (MDL_SHIFT[shift0] || String(shift0)) : MDL_ALL.shift
+    };
+    var q = fqcDashQuery({ from: f.from, to: f.to, customer: f.customer, model: f.model });
 
     document.getElementById('mdlTitle').textContent = o.title || 'Modules';
-    document.getElementById('mdlCount').textContent = 'Loading...';
-    document.getElementById('mdlRows').innerHTML = '<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--ink3)">Loading database records...</td></tr>';
-    
-    document.getElementById('mdlSearch').value = '';
-    document.getElementById('mdlRes').value = o.result || 'All results';
-    document.getElementById('mdlCat').value = o.cat || 'All categories';
-    var shiftName = {1:'A', 2:'B', 3:'C'}[o.shift] || o.shift || 'All shifts';
-    document.getElementById('mdlShift').value = shiftName;
-    
-    var remSel = document.getElementById('mdlRem');
-    if (remSel) {
-      remSel.innerHTML = '<option>All remarks</option>' + (o.remark ? '<option value="' + fqcEsc(o.remark) + '">' + fqcEsc(o.remark) + '</option>' : '');
-      remSel.value = o.remark || 'All remarks';
+    var subEl = document.getElementById('mdlSub');
+    if (subEl) {
+      var fd = function (iso) { var p = String(iso || '').split('-');
+        return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : iso; };
+      var span = f.from ? (f.to && f.to !== f.from ? fd(f.from) + ' to ' + fd(f.to) : fd(f.from))
+                        : 'every day';
+      subEl.textContent = 'Inspected ' + span + (f.customer ? ' · ' + f.customer : '') +
+        (f.model ? ' · ' + f.model : '') + ' — the filters below work within this';
     }
-    
+    document.getElementById('mdlCount').textContent = 'Loading...';
+    document.getElementById('mdlRows').innerHTML = '<tr><td colspan="11" style="text-align:center;padding:20px;color:var(--ink3)">Loading database records...</td></tr>';
+    document.getElementById('mdlSearch').value = '';
+    window.MDL_START = start;
+    window.MDL_LIVE = [];
+
     if (typeof modalMode === 'function') modalMode(false);
     var mdl = document.getElementById('mdl');
     if (mdl) mdl.classList.add('on');
@@ -2906,63 +3427,84 @@ function wireFqcAnomalies() {
     fetch('/api/fqc/dashboard/modules' + q, {cache: 'no-store'})
       .then(function(r) { return r.json(); })
       .then(function(rows) {
-        window.MDL_LIVE = rows; // Store for filtering
-        
-        var remSel = document.getElementById('mdlRem');
-        if (remSel) {
-          var remSet = {};
-          rows.forEach(function(m) { if (m.defect) remSet[m.defect] = 1; });
-          var prev = remSel.value;
-          remSel.innerHTML = '<option>All remarks</option>' + Object.keys(remSet).sort().map(function(r) { return '<option value="'+fqcEsc(r)+'">'+fqcEsc(r)+'</option>'; }).join('');
-          remSel.value = prev;
-          if (remSel.selectedIndex < 0) remSel.value = 'All remarks';
+        window.MDL_LIVE = rows || [];
+        for (var k in MDL_SEL) {
+          if (!Object.prototype.hasOwnProperty.call(MDL_SEL, k)) continue;
+          var sel = document.getElementById(MDL_SEL[k]);
+          if (sel) sel.innerHTML = '<option value="' + fqcEsc(start[k]) + '">' +
+            fqcEsc(start[k]) + '</option>';
+          if (sel) sel.value = start[k];
         }
-
-        mdlFilter(); // initial render
+        mdlFilter();
+      })
+      ['catch'](function (err) {
+        document.getElementById('mdlCount').textContent = '0 shown';
+        document.getElementById('mdlRows').innerHTML = '<tr><td colspan="11"><div class="empty-state">' +
+          'Could not load the modules: ' + fqcEsc(err && err.message) + '</div></td></tr>';
       });
   };
 
   window.mdlFilter = function() {
-    var q = document.getElementById('mdlSearch').value.trim().toUpperCase();
-    var r = document.getElementById('mdlRes').value;
-    var c = document.getElementById('mdlCat').value;
-    var rm = document.getElementById('mdlRem').value;
-    var sh = document.getElementById('mdlShift').value;
+    var val = function (id, all) { var e = document.getElementById(id);
+      return e && e.value ? e.value : all; };
+    var q = (document.getElementById('mdlSearch').value || '').replace(/^\s+|\s+$/g, '').toUpperCase();
+    var sel = {}, k;
+    for (k in MDL_SEL) if (Object.prototype.hasOwnProperty.call(MDL_SEL, k)) sel[k] = val(MDL_SEL[k], MDL_ALL[k]);
+    var all = window.MDL_LIVE || [];
 
-    var rows = (window.MDL_LIVE || []).filter(function(m) {
-      if (q && m.serial.indexOf(q) < 0) return false;
-      var pass = m.outcome === 'pass';
-      if (r === 'Passed only' && !pass) return false;
-      if (r === 'Rejected only' && pass) return false;
-      var cat = pass ? 'A' : (m.quality_grade || '—');
-      if (c !== 'All categories' && cat !== c) return false;
-      var rem = m.defect || '—';
-      if (rm !== 'All remarks' && rem !== rm) return false;
-      var sMap = {1:'A', 2:'B', 3:'C'};
-      var mShift = sMap[m.shift] || m.shift;
-      if (sh !== 'All shifts' && mShift != sh) return false; // != handles type difference just in case
+    function keeps(fc, except) {
+      for (var key in sel) {
+        if (!Object.prototype.hasOwnProperty.call(sel, key) || key === except) continue;
+        if (sel[key] !== MDL_ALL[key] && fc[key] !== sel[key]) return false;
+      }
       return true;
-    });
+    }
+
+    var counts = { res: {}, cat: {}, rem: {}, shift: {} }, rows = [], i, m, fc;
+    for (i = 0; i < all.length; i++) {
+      m = all[i];
+      if (q && String(m.serial || '').toUpperCase().indexOf(q) < 0) continue;
+      fc = mdlFacets(m);
+      for (k in counts) {
+        if (!Object.prototype.hasOwnProperty.call(counts, k)) continue;
+        if (keeps(fc, k)) counts[k][fc[k]] = (counts[k][fc[k]] || 0) + 1;
+      }
+      if (keeps(fc, null)) rows.push(m);
+    }
+    mdlSetSelect('mdlRes', MDL_ALL.res, counts.res, ['Passed only', 'Rejected only'], sel.res);
+    mdlSetSelect('mdlCat', MDL_ALL.cat, counts.cat, ['A', 'GY', 'BGY', 'Pending'], sel.cat);
+    mdlSetSelect('mdlRem', MDL_ALL.rem, counts.rem, null, sel.rem);
+    mdlSetSelect('mdlShift', MDL_ALL.shift, counts.shift, ['A', 'B', 'C'], sel.shift);
 
     var countEl = document.getElementById('mdlCount');
-    if (countEl) countEl.textContent = rows.length + (window.MDL_LIVE && window.MDL_LIVE.length === 250 ? '+ shown (capped)' : ' shown');
-    
+    if (countEl) countEl.textContent = rows.length + ' shown' +
+      (all.length >= 5000 ? ' · first 5,000 of the period — narrow the dates' : '');
+
+    var fd = function (iso) { var p = String(iso || '').split('-');
+      return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : (iso || '—'); };
     var tbody = document.getElementById('mdlRows');
     if (tbody) {
-      tbody.innerHTML = rows.length ? rows.map(function(m, i) {
-        var sMap = {1:'A', 2:'B', 3:'C'};
-        var mShift = sMap[m.shift] || m.shift;
+      var html = [];
+      for (i = 0; i < rows.length; i++) {
+        m = rows[i]; fc = mdlFacets(m);
         var pass = m.outcome === 'pass';
-        var cat = pass ? 'A' : (m.quality_grade || '—');
-        var rem = m.defect || '—';
-        return '<tr><td class="num" style="color:var(--ink3)">'+(i+1)+'</td>'+
-          '<td class="mono"><button class="lnk" onclick="qTry(\''+fqcEsc(m.serial)+'\')">'+fqcEsc(m.serial)+'</button></td>'+
-          '<td class="mono">'+fqcEsc(m.model)+'</td><td>'+fqcEsc(m.customer || '—')+'</td>'+
-          '<td class="mono">'+(typeof fmtIST === 'function' ? fmtIST(m.at) : fqcEsc(m.at))+'</td>'+
-          '<td class="s'+fqcEsc(mShift)+'">'+fqcEsc(mShift)+'</td><td>'+fqcEsc(cat)+'</td>'+
-          '<td>'+fqcEsc(rem)+'</td><td><span class="tag '+(pass?'t-pass">Passed':'t-fail">Rejected')+'</span></td>'+
-          '<td class="mono">'+(m.wattage||'—')+'</td></tr>';
-      }).join('') : '<tr><td colspan="10"><div class="empty-state">No modules match these filters.</div></td></tr>';
+        var made = m.entry_at ? 'Production entry recorded ' +
+          (typeof fmtIST === 'function' ? fmtIST(m.entry_at) : m.entry_at) :
+          'No production entry yet - counted as produced from this scan';
+        var serial = fqcEsc(m.serial);
+        html.push('<tr><td class="num" style="color:var(--ink3)">' + (i + 1) + '</td>' +
+          '<td class="mono"><button class="lnk" onclick="qTry(\'' + serial + '\')">' + serial + '</button></td>' +
+          '<td class="mono">' + fqcEsc(m.model) + '</td><td>' + fqcEsc(m.customer || '—') + '</td>' +
+          '<td class="mono">' + (typeof fmtIST === 'function' ? fmtIST(m.at) : fqcEsc(m.at)) + '</td>' +
+          '<td class="s' + fqcEsc(fc.shift) + '" title="' + fqcEsc(made) + '">' + fqcEsc(fc.shift) + '</td>' +
+          '<td>' + fqcEsc(fc.cat) + '</td><td>' + fqcEsc(fc.rem) + '</td>' +
+          '<td><span class="tag ' + (pass ? 't-pass">Passed' : 't-fail">Rejected') + '</span></td>' +
+          '<td>' + fqcEsc(m.decided_by || '—') + '</td>' +
+          '<td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="qTry(\'' +
+            serial + '\')">Trace</button></td></tr>');
+      }
+      tbody.innerHTML = html.length ? html.join('') :
+        '<tr><td colspan="11"><div class="empty-state">No modules match these filters.</div></td></tr>';
     }
   };
 
@@ -3635,10 +4177,12 @@ function wireFqcAnomalies() {
   /* v4's reset functions restore a hardcoded demo window -
      mgReset() sets 2026-08-01 to 2026-08-21, fqcResetFilters() sets
      2026-08-19. Reset therefore appeared to do nothing, because it jumped to
-     a period with no real production in it. Override the dates to the range
-     the data actually covers, then let v4's own function do the rest. */
+     a period with no real production in it. Reset now goes back to where
+     the screen opens: today's factory day (06:00 to 06:00). It used to jump
+     to the whole span of the data, which was read from the dates printed
+     in serials - a Reset that showed a different question from the one the
+     screen opened on. */
   function wireDateResets() {
-    var span = (B.range && B.range.from) ? B.range : null;
     [['mgReset', 'mgFrom', 'mgTo'],
      ['fqcResetFilters', 'fFrom', 'fTo'],
      ['packLogReset', null, null]].forEach(function (t) {
@@ -3648,8 +4192,8 @@ function wireFqcAnomalies() {
         orig.apply(this, arguments);
         if (t[1]) {
           var a = document.getElementById(t[1]), b2 = document.getElementById(t[2]);
-          if (a) a.value = span ? span.from : '';
-          if (b2) b2.value = span ? span.to : '';
+          if (a) a.value = _shiftDay();
+          if (b2) b2.value = _shiftDay();
         }
         rerender();
         if (window.iconTable) window.iconTable.wireAll();
@@ -5268,7 +5812,9 @@ function wireFqcAnomalies() {
         '<div class="grid g5" style="margin-bottom:14px">' +
           tkpi('Quantity', d.qty, d.seq_from + ' – ' + d.seq_to) +
           tkpi('Model', d.model, d.wattage + ' W · ' + (d.dcr || '')) +
-          tkpi('Produced', d.date_produced, 'shift ' + d.shift) +
+          /* when Planning issued the batch - not the date printed in its
+             serials, which nothing counts by */
+          tkpi('Allocated', d.date_produced, 'shift ' + d.shift) +
           tkpi('Allocation', d.alloc_type || DASH, d.indent_no ? 'indent ' + d.indent_no : '') +
           tkpi('Dispatched', n('dispatched'), n('packed') + ' packed · ' + n('graded') +
                ' graded · ' + n('planned') + ' planned' +
@@ -10985,8 +11531,43 @@ window.gpSetKind = function(k) {
       matChg.checked = false;
       if (typeof window.peMatToggle === 'function') window.peMatToggle();
     }
+    peStampNow();
     if (typeof window.peCalc === 'function') window.peCalc();
   };
+
+  /* The date and shift of a production entry are when it is recorded -
+     stamped by the server from the IST clock, whatever the form says and
+     never from the serial's printed date. The form's two fields only show
+     what will be stamped, so they are locked. It opened on v4's demo
+     21-08-2026 before. */
+  function peStampNow() {
+    var date = document.querySelector('#peManual input[type="date"]');
+    var shift = document.querySelectorAll('#peManual .grid.g3 select')[0];
+    var p = _istParts(), day = _localDate(), fday = _shiftDay(), s = _istShift();
+    [date, shift].forEach(function (el) {
+      if (!el) return;
+      el.disabled = true;
+      el.title = 'Stamped when you record - the date and shift on the IST clock';
+    });
+    if (date) date.value = day;
+    if (shift) shift.value = s;
+    var hint = document.getElementById('peStampHint');
+    if (!hint && date && date.parentNode) {
+      hint = document.createElement('div');
+      hint.id = 'peStampHint';
+      hint.className = 'hint';
+      date.parentNode.appendChild(hint);
+    }
+    if (hint) hint.textContent = 'Recorded as ' + _pad2(p.h) + ':' + _pad2(p.mi) +
+      ', shift ' + s + (fday !== day ? ' — counts toward C shift of ' +
+      fmtDay(fday) + ' (the day runs 06:00 to 06:00)' : '');
+  }
+  window.peStampNow = peStampNow;
+  /* kept in step with the clock while the form is open */
+  setInterval(function () {
+    var o1 = document.querySelector('#v-prodentry .wmain.o1');
+    if (o1 && o1.style.display !== 'none' && document.getElementById('peStampHint')) peStampNow();
+  }, 30000);
 
   /* Date range, shift and customer are sent to the server - api/prodentries
      already accepted from/to/shift/cust, nothing before this round ever
@@ -11148,10 +11729,16 @@ window.gpSetKind = function(k) {
       }
 
       tbody.innerHTML = data.map(function(r) {
+        /* when it was recorded, as stored - calendar date and IST time;
+           the From/To filter counts it on its factory day (06:00-06:00),
+           which the tooltip names when the two differ */
         var dateParts = r.prod_date.split('-');
-        var fmtDate = dateParts.length === 3 ? dateParts[2]+'-'+dateParts[1]+'-'+dateParts[0] : r.prod_date;
+        var fmtDate = r.created_at && typeof fmtIST === 'function' ? fmtIST(r.created_at) :
+          (dateParts.length === 3 ? dateParts[2]+'-'+dateParts[1]+'-'+dateParts[0] : r.prod_date);
+        var countsOn = r.day && r.day !== r.prod_date ?
+          ' title="Counts toward shift ' + fqcEsc(r.shift) + ' of ' + fqcEsc(fmtDay(r.day)) + '"' : '';
         return '<tr>' +
-          '<td class="mono">' + fqcEsc(fmtDate) + '</td>' +
+          '<td class="mono"' + countsOn + '>' + fqcEsc(fmtDate) + '</td>' +
           '<td class="s' + r.shift + '">' + fqcEsc(r.shift) + '</td>' +
           '<td>' + fqcEsc(r.customer || '—') + '</td>' +
           '<td class="mono">' + r.wattage + 'W</td>' +
@@ -11274,6 +11861,10 @@ window.gpSetKind = function(k) {
       setupBar.className = 'card';
       setupBar.style.marginBottom = '16px';
       setupBar.innerHTML = '<div class="card-b"><div class="grid g5" style="align-items:start">' + setupBar.innerHTML + '</div></div>';
+      /* innerHTML just replaced every field - the ones found above are
+         detached copies now. Naming those left #loDate and #loShift off
+         the page altogether, and every event was sent with no shift. */
+      filterFlds = setupBar.querySelectorAll('.fld');
     }
     if (filterFlds[0]) {
       var dateInp = filterFlds[0].querySelector('input');
@@ -11290,6 +11881,18 @@ window.gpSetKind = function(k) {
       var shiftSel = filterFlds[1].querySelector('select');
       if (shiftSel && !shiftSel.id) shiftSel.id = 'loShift';
     }
+    /* An event's date and shift are when it is opened - the server stamps
+       them from the IST clock. These two only show it; Shift opened on v4's
+       B at any hour, and every event was filed under whatever it showed. */
+    [document.getElementById('loDate'), document.getElementById('loShift')]
+      .forEach(function (el) {
+        if (!el) return;
+        el.disabled = true;
+        el.title = 'Stamped when the event is opened - the date and shift on the IST clock';
+      });
+    var loD = document.getElementById('loDate'), loS = document.getElementById('loShift');
+    if (loD) loD.value = _localDate();
+    if (loS) loS.value = _istShift();
 
     window.loWireFilters();
     window.loToggleForm(false);
@@ -11310,7 +11913,7 @@ window.gpSetKind = function(k) {
     var firstCard = o1 && o1.querySelector('.card');
     if (!o1 || !firstCard || document.getElementById('loFilterFrom')) return;
 
-    var today = _localDate();
+    var today = _shiftDay();          /* events count on the factory day */
 
     var bar = document.createElement('div');
     bar.className = 'card-b';

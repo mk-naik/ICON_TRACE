@@ -61,6 +61,7 @@ in this project and reverted both times.
 | `db.py` | domain helpers — counters, indents, FQC, config |
 | `templates/frag_*.html` | screens agreed after v4 — rendered as fragments |
 | `icon_*.py` | serial, evidence, models, customers, barcode, FTR, parsers |
+| `icon_clock.py` | the one clock - IST, whatever the server is set to; shift of an hour |
 
 ---
 
@@ -204,6 +205,23 @@ codes map into the nullable `erp_code` column.
 - **`742` and `742 (A)` are two real documents.** Never unique on `seq` alone.
 - **The challan form mislabels a field**: `LR.NO.` holds the vehicle number.
 - **Boxes wait months** between packing and dispatch. Age is not an alert.
+- **Every time is IST**, naive, `2026-09-25T11:58:29`. Read the clock from
+  `icon_clock`, never `datetime.now()` or SQLite's `CURRENT_TIMESTAMP` (UTC -
+  a trigger per column converts those defaults; never write a space-separated
+  time into one yourself).
+- **Everything counts by when it happened in the system** - a scan, an
+  entry, a record created - never by the date or shift printed in a serial
+  (or in a box number). Stored: the calendar date and IST time. Counted: on
+  the factory day, 06:00 to 06:00, because C shift crosses midnight -
+  26-09 01:12 is stored as 26-09 01:12 and counts as C shift of 25-09
+  (`icon_clock.shift_day`, `_shiftDay()` on the page). A production entry,
+  allocation or downtime event is dated and shifted by the server clock when
+  it is created; the forms' Date/Shift only show it. Dispatch counts by
+  `challan.issued_at`, not the date printed on the challan.
+- **A running number is unique only inside one printed batch.** 0778 is on
+  more than one label run; Production Entry finds a range by its start
+  serial's run (the serial ahead of the running number) - to find labels,
+  never to date anything.
 
 ---
 
@@ -226,6 +244,7 @@ python test_repack.py              29 tests · a printed box number is never edi
 python test_styles.py               9 tests · the stylesheet reaches v4's page
 python test_challan.py             50 tests · quantity is boxes ticked, never the invoice
 python test_loading.py              10 tests · print/excel refuse until every pallet is confirmed
+python test_dashboards_ist.py       13 tests · IST, the 06:00-06:00 day, counting by when things happened
 ```
 
 Three more drive the real page in headless Chromium, because what they check —

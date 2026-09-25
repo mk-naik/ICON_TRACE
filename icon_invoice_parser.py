@@ -37,6 +37,8 @@ Usage:
 
 import sys, os, re, json, argparse, datetime
 
+import icon_clock as clock
+
 # Bump on every change to extraction behaviour. `--selftest` proves which
 # build is actually running, so "it does not detect X" can be answered in
 # one command instead of by guesswork.
@@ -450,7 +452,7 @@ def _parse(doc, path, expect_qty=None):
     meta = doc.metadata or {}
     r = {
         "source_file": os.path.basename(path),
-        "parsed_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "parsed_at": clock.now().isoformat(timespec="seconds"),
         "producer": meta.get("producer"),
         "pages": doc.page_count,
         "fingerprint": {"ok": False, "missing": []},
@@ -657,7 +659,7 @@ def _parse(doc, path, expect_qty=None):
     vu = r["fields"].get("ewb_valid_upto", {}).get("value")
     if vu:
         d = datetime.date.fromisoformat(vu)
-        left = (d - datetime.date.today()).days
+        left = (d - clock.today()).days
         if left < 0:
             r["blocked"] = True
             checks.append({"level": "block", "id": "ewb_expired",

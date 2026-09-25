@@ -42,6 +42,7 @@ import icon_customers as customers
 import icon_barcode as bc
 import icon_box_number as boxno
 import icon_ftr as ftr
+import icon_clock as clock
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 STORE = os.path.join(BASE, "storage", "invoices")
@@ -255,7 +256,7 @@ def build_id():
 # code_build() != BOOT_CODE_BUILD means the Python on disk has changed since
 # import and the server must be restarted — fixed by an admin, not a reload.
 BOOT_CODE_BUILD = code_build()
-STARTED_AT = datetime.datetime.now().strftime("%d-%m-%Y %I:%M:%S %p")
+STARTED_AT = clock.now().strftime("%d-%m-%Y %I:%M:%S %p")
 
 # Reset guard: POST /api/db/reset is disabled by default; set ICON_ALLOW_RESET=1
 # (or true/yes, case-insensitive) to enable it.  Requires a restart to take effect.
@@ -412,7 +413,7 @@ def _record_replay(cur, client_id, result, client_time):
         return
     db.audit(cur, actor(), "sync", "outbox", client_id,
              {"result": result, "client_time": client_time,
-              "server_time": datetime.datetime.now().isoformat(timespec="seconds")})
+              "server_time": clock.now().isoformat(timespec="seconds")})
 
 
 def _sync_guard(fn):
@@ -649,11 +650,11 @@ def globals_():
     return {
         "db_mode": "MySQL" if db.available() else "DEMO — nothing is saved",
         "db_live": db.available(),
-        "today": datetime.date.today(),
+        "today": clock.today(),
         "fy_label": db.fy_label(db.fin_year()),
         "user": actor(),
         "parser_version": invparse.__version__,
-        "now": datetime.datetime.now().strftime("%d-%m-%Y %I:%M:%S %p"),
+        "now": clock.now().strftime("%d-%m-%Y %I:%M:%S %p"),
         "cfg_unit": "2",
         "build": build_id(),
     }
@@ -1286,9 +1287,14 @@ def _data_range():
     demo window, which lands on a range with no production in it and makes
     Reset look broken. This is what it resets to instead."""
     with store.conn() as (cx, cur):
-        r = store.one(cur, "SELECT MIN(date_produced) AS a, MAX(date_produced) "
-                           "AS b FROM serial")
-    today = datetime.date.today().isoformat()
+        # by when things happened - allocations and FQC decisions - on the
+        # factory day, never the dates printed in serials
+        r = store.one(cur, "SELECT MIN(d) AS a, MAX(d) AS b FROM ("
+                           "SELECT %s AS d FROM allocation UNION ALL "
+                           "SELECT %s AS d FROM fqc_record)"
+                      % (clock.shift_day_sql("created_at"),
+                         clock.shift_day_sql("at")))
+    today = clock.shift_day().isoformat()
     if not r or not r["a"]:
         return {"from": today, "to": today}
     return {"from": r["a"], "to": r["b"]}
@@ -1302,14 +1308,16 @@ def _prod_rows():
 
 
 def _shift_rows():
+    # the shift FQC inspected in, as /api/fqc/dashboard reports it
     with store.conn() as (cx, cur):
         rows = store.rows(cur, """
-            SELECT s.shift AS s, s.model AS m, s.wattage AS w,
+            SELECT {sh} AS s, s.model AS m, s.wattage AS w,
                    COUNT(*) AS t,
                    SUM(CASE WHEN f.outcome='pass' THEN 1 ELSE 0 END) AS ok,
                    SUM(CASE WHEN f.outcome='reject' THEN 1 ELSE 0 END) AS r
             FROM fqc_record f JOIN serial s ON s.serial=f.serial
-            GROUP BY s, m, w ORDER BY s, m, w""")
+            WHERE f.superseded_by IS NULL
+            GROUP BY 1, m, w ORDER BY 1, m, w""".format(sh=clock.shift_sql("f.at")))
         return [{"s": r["s"] or "", "m": r["m"], "w": str(r["w"])+"W",
                  "t": r["t"], "ok": r["ok"], "r": r["r"]} for r in rows]
 
@@ -1375,7 +1383,7 @@ def api_box_open():
         # was physically built - so it is a field, not a fixed stamp. It is
         # not, however, the operator's to backdate past the frame's own
         # truth: nothing can be packed before it happens.
-        today = datetime.date.today()
+        today = clock.today()
         raw_date = (d.get("pack_date") or "").strip()
         if raw_date:
             try:
@@ -1678,7 +1686,7 @@ def _repack(cur, box_ids, groups, release, reason):
 
     # A repacked pallet is made up on the day it is repacked, so that is the
     # date its number carries - not the date of the box it came out of.
-    today = datetime.date.today().isoformat()
+    today = clock.today().isoformat()
     children = []
     moved_all, added_all = [], []
     for g in groups:
@@ -1786,7 +1794,7 @@ def _repack(cur, box_ids, groups, release, reason):
         db.audit(cur, actor(), "box.release", "serial", s,
                  {"box": owner[s]["box_id"], "reason": reason})
 
-    at = datetime.datetime.now().isoformat(timespec="seconds")
+    at = clock.now().isoformat(timespec="seconds")
     for b in sources:
         # retired, never deleted: the box is what its label said
         cur.execute("UPDATE box SET state='retired', retired_reason=%s, "
@@ -1948,7 +1956,7 @@ def api_box_abandon(box_id):
         cur.execute("UPDATE box SET state='retired', retired_reason=%s, "
                     "retired_at=%s, retired_by=%s WHERE box_id=%s",
                     (reason,
-                     datetime.datetime.now().isoformat(timespec="seconds"),
+                     clock.now().isoformat(timespec="seconds"),
                      actor(), box_id))
         db.audit(cur, actor(), "box.abandon", "box", box_id, {"reason": reason})
         label = _box_label(b)
@@ -2085,7 +2093,7 @@ def api_loading_challans():
     from_d = (request.args.get("from") or "").strip()
     to_d = (request.args.get("to") or "").strip()
     if not from_d and not to_d:
-        from_d = to_d = datetime.date.today().isoformat()
+        from_d = to_d = clock.today().isoformat()
     q = (request.args.get("q") or "").strip()
     status = (request.args.get("status") or "").strip()
 
@@ -2183,7 +2191,7 @@ def api_loading_confirm(challan_id):
         if not row:
             return jsonify({"ok": False, "why":
                 "%s is not on this challan." % box_no}), 400
-        at = datetime.datetime.now().isoformat(timespec="seconds")
+        at = clock.now().isoformat(timespec="seconds")
         cur.execute("UPDATE challan_box SET loading_status='saved', "
                     "loading_scanned_at=%s, loading_scanned_by=%s "
                     "WHERE challan_box_id=%s",
@@ -2239,7 +2247,7 @@ def api_loading_submit(challan_id):
         if existing:
             gp_no = existing["gp_no"]
         else:
-            d = datetime.date.today()
+            d = clock.today()
             seq = db.draw_gp_seq(cur, d)
             gp_no = db.render_gp_no(d, seq)
             try:
@@ -2501,7 +2509,7 @@ def _challan_precheck(cur, box_ids, invoice_id, exclude_challan_id=None):
             if evu:
                 try:
                     if datetime.date.fromisoformat(str(evu)[:10]) < \
-                            datetime.date.today():
+                            clock.today():
                         blocking.append({"code": "E-EWB", "detail":
                             "The e-Way Bill expired on %s. The vehicle must "
                             "not move against it." % evu})
@@ -2618,7 +2626,7 @@ def _write_challan(cur, d, status, exclude_challan_id=None, fy=None, seq=None,
         fy = db.fin_year()
         seq = db.draw_challan_seq(cur, fy)
     challan_date = (d.get("challan_date") or "").strip() or \
-        datetime.date.today().isoformat()
+        clock.today().isoformat()
 
     consignee_same = bool(d.get("consignee_same_as_buyer"))
     model_label = (" + ".join(chk["models"]) if len(chk["models"]) > 1
@@ -2655,7 +2663,10 @@ def _write_challan(cur, d, status, exclude_challan_id=None, fy=None, seq=None,
         "model": model_label, "wattage": avg_watt,
         "qty": chk["qty"],
         "declared_qty": invoice.get("declared_qty") if invoice else None,
-        "origin": "system", "status": status, "created_by": actor()})
+        "origin": "system", "status": status, "created_by": actor(),
+        # when its modules left - dispatch is counted by this, not by the
+        # date printed on the challan
+        "issued_at": clock.stamp() if status == "issued" else None})
 
     for i, b in enumerate(chk["boxes"]):
         cb_id = store.insert(cur, "challan_box", {
@@ -2753,8 +2764,8 @@ def api_challan_submit(challan_id):
                             "blocking": chk["blocking"]}), 400
         for bid in chk["general_stock"]:
             db.assign_customer_on_challan(cur, bid, chk["buyer_code"], actor())
-        cur.execute("UPDATE challan SET status='issued' WHERE challan_id=%s",
-                    (challan_id,))
+        cur.execute("UPDATE challan SET status='issued', issued_at=%s "
+                    "WHERE challan_id=%s", (clock.stamp(), challan_id))
         for s in store.rows(cur, "SELECT serial FROM challan_serial "
                                  "WHERE challan_id=%s", (challan_id,)):
             db.set_serial(cur, s["serial"], state="dispatched")
@@ -2802,7 +2813,7 @@ def api_challan_discard(challan_id):
             "UPDATE challan SET status='cancelled', cancelled_reason=%s, "
             "cancelled_by=%s, cancelled_at=%s WHERE challan_id=%s",
             (reason_msg, actor(),
-             datetime.datetime.now().isoformat(timespec="seconds"), challan_id))
+             clock.now().isoformat(timespec="seconds"), challan_id))
         db.audit(cur, actor(), "challan.cancel" if ch["status"] == "issued" else "challan.discard", "challan", challan_id, {"reason": reason_msg})
     return jsonify({"ok": True})
 
@@ -2911,7 +2922,7 @@ def api_challan_cancel(challan_id):
             "UPDATE challan SET status='cancelled', cancelled_reason=%s, "
             "cancelled_by=%s, cancelled_at=%s WHERE challan_id=%s",
             (reason, actor(),
-             datetime.datetime.now().isoformat(timespec="seconds"), challan_id))
+             clock.now().isoformat(timespec="seconds"), challan_id))
         db.audit(cur, actor(), "challan.cancel", "challan", challan_id,
                  {"fy": ch["fy"], "seq": ch["seq"], "reason": reason})
     return jsonify({"ok": True})
@@ -3087,7 +3098,13 @@ def api_challan_edit_save(challan_id):
         for s in released:
             db.set_serial(cur, s, state="packed")
 
-        at = datetime.datetime.now().isoformat(timespec="seconds")
+        at = clock.now().isoformat(timespec="seconds")
+        # the corrected challan's modules left when the original was issued
+        cur.execute(
+            "UPDATE challan SET issued_at = COALESCE((SELECT o.issued_at FROM "
+            "challan o WHERE o.challan_id=%s), issued_at) "
+            "WHERE challan_id=%s AND status='issued'",
+            (challan_id, out["challan_id"]))
         cur.execute(
             "UPDATE challan SET status='superseded', superseded_by=%s, "
             "superseded_at=%s, superseded_by_user=%s WHERE challan_id=%s",
@@ -3427,9 +3444,14 @@ def _prod_payload():
         rows = store.rows(cur, """
             SELECT COALESCE(s.customer,'ICON STOCK') AS cust, s.model AS model,
                    COUNT(*)                                    AS alloc,
-                   SUM(CASE WHEN s.state<>'planned' THEN 1 ELSE 0 END) AS prod,
-                   SUM(CASE WHEN s.grade IS NOT NULL THEN 1 ELSE 0 END) AS fqc,
-                   SUM(CASE WHEN s.grade IN ('GY','BGY') THEN 1 ELSE 0 END) AS rej,
+                   SUM(CASE WHEN s.state<>'planned' OR s.prod_entry_id IS NOT NULL
+                            THEN 1 ELSE 0 END) AS prod,
+                   -- the same reading /api/prod/dashboard makes: a reject is
+                   -- 'rejected' with no grade until Quality calls it
+                   SUM(CASE WHEN s.state IN ('graded','rejected','hold','packed','dispatched')
+                              OR s.grade IS NOT NULL THEN 1 ELSE 0 END) AS fqc,
+                   SUM(CASE WHEN s.state='rejected' OR s.grade IN ('GY','BGY')
+                            THEN 1 ELSE 0 END) AS rej,
                    SUM(CASE WHEN s.state IN ('packed','dispatched') THEN 1 ELSE 0 END) AS packed,
                    SUM(CASE WHEN s.state='dispatched' THEN 1 ELSE 0 END) AS disp,
                    COUNT(DISTINCT s.alloc_id)                  AS batches
@@ -3480,20 +3502,25 @@ def api_prodentries():
                   AND s.customer LIKE %s
             )"""
             args.append("%" + cust + "%")
-        if shift:
+        # by when the entry was recorded, on the factory day (06:00 to
+        # 06:00): an entry made at 01:12 on the 26th is C shift of the 25th
+        if clock.shift_number(shift):
             sql += " AND p.shift = %s"
-            args.append(shift)
+            args.append(clock.SHIFT_LETTER[clock.shift_number(shift)])
         if dfrom:
-            sql += " AND p.prod_date >= %s"
+            sql += " AND " + clock.shift_day_sql("p.created_at") + " >= %s"
             args.append(dfrom)
         if dto:
-            sql += " AND p.prod_date <= %s"
+            sql += " AND " + clock.shift_day_sql("p.created_at") + " <= %s"
             args.append(dto)
             
         sql += " ORDER BY p.created_at DESC LIMIT %s"
         args.append(limit)
         
         rows = store.rows(cur, sql, tuple(args))
+    for r in rows:
+        r["day"] = str(clock.shift_day(
+            datetime.datetime.fromisoformat(r["created_at"]))) if r.get("created_at") else None
     return jsonify({"entries": rows})
 
 
@@ -3502,32 +3529,65 @@ def api_prodentries():
 @_sync_guard
 def api_prodentry():
     d = request.get_json(force=True)
-    date = (d.get("date") or "").strip()
-    shift = (d.get("shift") or "").strip()
     incharge = (d.get("incharge") or "").strip()
     line = (d.get("line") or "").strip()
     start_serial = (d.get("start_serial") or "").strip().upper()
     end_serial = (d.get("end_serial") or "").strip().upper()
     mat_note = d.get("material_note")
     
-    if not date or not shift or not incharge or not start_serial or not end_serial:
+    if not incharge or not start_serial or not end_serial:
         return jsonify({"ok": False, "why": "Missing required fields."}), 400
-        
+
+    # The date and shift are when this entry is recorded - the calendar date
+    # and IST time, stamped here - never what the form sends and never what
+    # the serial's barcode says. A form default once filed a range under
+    # v4's demo 21-08-2026. Dashboards count it on the factory day it falls
+    # in (06:00 to 06:00, icon_clock.shift_day). `date`/`shift` in the body
+    # are ignored.
+    stamp = clock.now()
+    shift_letter = clock.SHIFT_LETTER[clock.shift_of(stamp.hour)]
+
+    import icon_challan_import as CI
+    ds, de = CI.decompose(start_serial), CI.decompose(end_serial)
+    if not ds.get("ok"):
+        return jsonify({"ok": False, "why": "Start serial %s - %s." % (start_serial, ds.get("why"))}), 400
+    if not de.get("ok"):
+        return jsonify({"ok": False, "why": "End serial %s - %s." % (end_serial, de.get("why"))}), 400
+
+    # A running number is unique only within ONE printed batch: 0778 is on
+    # two different label runs (ICON625R1292420778, ICON625R1292430778).
+    # Everything in the serial ahead of the running number names the run,
+    # so the range is the start serial's run and nothing else - used only
+    # to find the labels, never to date or count anything. Matching on
+    # sequence and model alone counted both shifts - "Expected 223 serials
+    # in range, but found 446" - and the updates below would have recorded
+    # the other shift's modules as produced too.
+    seq_len = 4 if ds["format_version"] == 2 else 3
+    batch = start_serial[:-seq_len]
+    if len(end_serial) != len(start_serial) or end_serial[:-seq_len] != batch:
+        return jsonify({"ok": False, "why":
+            "Start and end serial were not printed in the same batch - %s... "
+            "and %s... differ before the running number. Record each "
+            "printed batch as its own entry."
+            % (batch, end_serial[:-seq_len])}), 400
+    in_batch = ("sequence >= %s AND sequence <= %s AND build_instance=1 "
+                "AND length(serial) = %s AND substr(serial, 1, %s) = %s")
+
     with store.conn() as (cx, cur):
         start_row = store.one(cur, "SELECT sequence, wattage, model FROM serial WHERE serial=%s AND build_instance=1", (start_serial,))
         if not start_row:
             return jsonify({"ok": False, "why": f"Start serial {start_serial} not found in planning."}), 400
-            
+
         end_row = store.one(cur, "SELECT sequence, wattage, model FROM serial WHERE serial=%s AND build_instance=1", (end_serial,))
         if not end_row:
             return jsonify({"ok": False, "why": f"End serial {end_serial} not found in planning."}), 400
-            
+
         if start_row["model"] != end_row["model"] or start_row["wattage"] != end_row["wattage"]:
             return jsonify({"ok": False, "why": "Start and end serials are for different models/wattages."}), 400
-            
+
         if start_row["sequence"] > end_row["sequence"]:
             return jsonify({"ok": False, "why": "Start serial is greater than end serial."}), 400
-            
+
         # Verify every serial in the range exists and none has already been
         # recorded under an earlier production entry. `state` is NOT this
         # check: FQC can legitimately grade a serial before its shift's
@@ -3538,14 +3598,17 @@ def api_prodentry():
         seq_start = start_row["sequence"]
         seq_end = end_row["sequence"]
         qty = (seq_end - seq_start) + 1
+        range_args = (seq_start, seq_end, len(start_serial), len(batch), batch)
 
         serials_in_range = store.rows(cur,
-            "SELECT serial, state, prod_entry_id FROM serial WHERE sequence >= %s AND sequence <= %s "
-            "AND model=%s AND wattage=%s AND build_instance=1",
-            (seq_start, seq_end, start_row["model"], start_row["wattage"]))
+            "SELECT serial, state, prod_entry_id FROM serial WHERE " + in_batch,
+            range_args)
 
         if len(serials_in_range) != qty:
-            return jsonify({"ok": False, "why": f"Expected {qty} serials in range, but found {len(serials_in_range)}."}), 400
+            return jsonify({"ok": False, "why":
+                "%d of the %d serials from %s to %s were issued by Planning. "
+                "A range must be one that Planning allocated in full."
+                % (len(serials_in_range), qty, start_serial, end_serial)}), 400
 
         already_recorded = [s["serial"] for s in serials_in_range if s["prod_entry_id"]]
         if already_recorded:
@@ -3555,8 +3618,9 @@ def api_prodentry():
 
         # Insert production entry
         eid = store.insert(cur, "production_entry", {
-            "prod_date": date,
-            "shift": shift,
+            "prod_date": stamp.date().isoformat(),
+            "shift": shift_letter,
+            "created_at": stamp.isoformat(timespec="seconds"),
             "shift_incharge": incharge,
             "line": line,
             "model": start_row["model"],
@@ -3570,19 +3634,19 @@ def api_prodentry():
         })
 
         # Every serial in the range is now recorded under this entry, whether
-        # or not FQC already reached it. `state` only advances for a serial
-        # still 'planned' - one FQC already graded/rejected stays exactly
-        # where FQC left it, never regressed back to 'produced'.
+        # or not FQC already reached it. The serial's own date and shift are
+        # left as its barcode reads - nothing counts by them; when it was
+        # produced is this entry's created_at. `state` only advances for a
+        # serial still 'planned' - one FQC already graded/rejected stays
+        # exactly where FQC left it, never regressed back to 'produced'.
         cur.execute(
-            "UPDATE serial SET prod_entry_id=%s "
-            "WHERE sequence >= %s AND sequence <= %s AND model=%s AND wattage=%s AND build_instance=1",
-            (eid, seq_start, seq_end, start_row["model"], start_row["wattage"])
+            "UPDATE serial SET prod_entry_id=%s WHERE " + in_batch,
+            (eid,) + range_args
         )
         cur.execute(
-            "UPDATE serial SET state='produced', date_produced=%s, shift=%s "
-            "WHERE sequence >= %s AND sequence <= %s AND model=%s AND wattage=%s "
-            "AND build_instance=1 AND state='planned'",
-            (date, shift, seq_start, seq_end, start_row["model"], start_row["wattage"])
+            "UPDATE serial SET state='produced' "
+            "WHERE " + in_batch + " AND state='planned'",
+            range_args
         )
 
         db.audit(cur, actor(), "production.entry", "production_entry", eid, {
@@ -3622,18 +3686,20 @@ def api_loss_events():
            "LEFT JOIN loss_event l ON l.event_id = e.linked_event_id "
            "WHERE 1=1")
     args = []
+    # the factory day an event was opened in (06:00 to 06:00)
+    day = clock.shift_day_sql("e.created_at")
     if date:
-        sql += " AND e.event_date = %s"
+        sql += " AND " + day + " = %s"
         args.append(date)
     if date_from:
-        sql += " AND e.event_date >= %s"
+        sql += " AND " + day + " >= %s"
         args.append(date_from)
     if date_to:
-        sql += " AND e.event_date <= %s"
+        sql += " AND " + day + " <= %s"
         args.append(date_to)
-    if shift:
+    if clock.shift_number(shift):
         sql += " AND e.shift = %s"
-        args.append(shift)
+        args.append(clock.SHIFT_LETTER[clock.shift_number(shift)])
     if q:
         sql += " AND (e.line LIKE %s OR e.machine LIKE %s OR e.reason LIKE %s)"
         args.extend(["%" + q + "%", "%" + q + "%", "%" + q + "%"])
@@ -3671,8 +3737,12 @@ def api_loss_event_open():
     kind = (d.get("kind") or "P").strip()
     start = (d.get("start") or "").strip()
     mode = (d.get("mode") or "Live").strip()
-    date = (d.get("date") or datetime.date.today().isoformat()).strip()
-    shift = (d.get("shift") or "").strip()
+    # When it was opened: the calendar date and the shift on the IST clock.
+    # The form's own Date and Shift were whatever the page showed - Shift
+    # opened on B at any hour - so they are not read.
+    opened = clock.now()
+    date = opened.date().isoformat()
+    shift = clock.SHIFT_LETTER[clock.shift_of(opened.hour)]
     planned = bool(d.get("planned"))
     linked_raw = d.get("linked_event_id")
     try:
@@ -3702,6 +3772,7 @@ def api_loss_event_open():
 
         eid = store.insert(cur, "loss_event", {
             "event_date": date, "shift": shift, "line": line,
+            "created_at": opened.isoformat(timespec="seconds"),
             "machine": machine, "reason": reason, "planned": planned,
             "kind": kind, "linked_event_id": linked_event_id,
             "start_time": start, "end_time": None, "minutes": None,
@@ -3724,12 +3795,16 @@ def api_loss_event_close(event_id):
         if row["end_time"] is not None:
             return jsonify({"ok": False, "why": "That event is already closed."}), 400
 
-        end = datetime.datetime.now().strftime("%H:%M")
+        end = clock.now().strftime("%H:%M")
 
         def to_min(t):
             h, m = t.split(":")
             return int(h) * 60 + int(m)
-        minutes = max(0, to_min(end) - to_min(row["start_time"]))
+        # C shift crosses midnight: opened 23:50, closed 00:30 is 40
+        # minutes, not max(0, 30 - 1430) = 0
+        minutes = to_min(end) - to_min(row["start_time"])
+        if minutes < 0:
+            minutes += 24 * 60
 
         cur.execute(
             "UPDATE loss_event SET end_time=%s, minutes=%s, closed_by=%s "
@@ -3740,91 +3815,224 @@ def api_loss_event_close(event_id):
     return jsonify({"ok": True, "event_id": event_id, "end": end, "minutes": minutes})
 
 
-@app.route("/api/prod/dashboard")
-@require_screen_view("proddash", "mgmt")
-def api_prod_dashboard():
-    """Live endpoint for the Production Dashboard, allowing filtering by date,
-    shift, customer, and model. It returns both aggregated KPIs and a shift breakdown.
-    """
-    frm = (request.args.get("from") or "").strip()
-    to = (request.args.get("to") or "").strip() or frm
-    shift = (request.args.get("shift") or "").strip()
-    customer = (request.args.get("customer") or "").strip()
-    model = (request.args.get("model") or "").strip()
+_ISO_DAY = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
 
-    where = ["1=1"]
-    args = []
 
-    if frm:
-        where.append("s.date_produced >= ?")
-        args.append(frm)
-    if to:
-        where.append("s.date_produced <= ?")
-        args.append(to)
-    if shift and shift.lower() != "all shifts":
-        where.append("s.shift = ?")
-        args.append(shift.replace("Shift ", ""))
+def _module_events(cur, customer="", model=""):
+    """Every serial with the moment each thing happened to it, as a temp
+    table for this connection - what both dashboards count from.
+
+      alloc_at   Planning issued it           allocation.created_at
+      prod_at    it was produced              its production entry, or its
+                                              first FQC scan if that came
+                                              first - a module cannot be
+                                              inspected before it is made
+      fqc_at     FQC's live decision on it    fqc_record.at (+ outcome)
+      packed_at  first put in a box           box_serial.added_at
+      disp_at    its challan was issued       challan.issued_at
+
+    All stored as the calendar date and IST time they happened. Nothing
+    here reads the date or shift printed in the serial."""
+    where, args = ["s.build_instance = 1"], []
     if customer and customer.lower() != "all customers":
         if "G2G (M10R)" in customer:
             where.append("(s.customer IS NULL OR s.customer='ICON STOCK')")
         else:
             where.append("s.customer = ?")
             args.append(customer)
-    if model and model.lower() != "all" and model.lower() != "all models":
+    if model and model.lower() not in ("all", "all models"):
         where.append("s.model = ?")
         args.append(model)
+    cur.execute("DROP TABLE IF EXISTS temp.module_ev")
+    cur.execute("""
+        CREATE TEMP TABLE module_ev AS
+        WITH ff AS (SELECT serial, MIN(at) AS first_at
+                    FROM fqc_record GROUP BY serial),
+             fl AS (SELECT serial, MAX(fqc_id) AS fqc_id FROM fqc_record
+                    WHERE superseded_by IS NULL GROUP BY serial),
+             pk AS (SELECT serial, MIN(added_at) AS packed_at
+                    FROM box_serial GROUP BY serial),
+             dp AS (SELECT cs.serial,
+                           MIN(COALESCE(c.issued_at, c.created_at)) AS disp_at
+                    FROM challan_serial cs
+                    JOIN challan c ON c.challan_id = cs.challan_id
+                    WHERE c.status = 'issued' GROUP BY cs.serial)
+        SELECT s.serial, s.alloc_id, s.state, s.model,
+               COALESCE(s.customer, 'ICON STOCK') AS cust,
+               COALESCE(pe.line, '') AS line,
+               a.created_at AS alloc_at,
+               CASE WHEN pe.created_at IS NULL THEN ff.first_at
+                    WHEN ff.first_at IS NULL THEN pe.created_at
+                    WHEN pe.created_at < ff.first_at THEN pe.created_at
+                    ELSE ff.first_at END AS prod_at,
+               f.at AS fqc_at, f.outcome AS outcome, f.quality_grade AS qgrade,
+               pk.packed_at AS packed_at, dp.disp_at AS disp_at
+        FROM serial s
+        LEFT JOIN allocation a ON a.alloc_id = s.alloc_id
+        LEFT JOIN production_entry pe ON pe.entry_id = s.prod_entry_id
+        LEFT JOIN ff ON ff.serial = s.serial
+        LEFT JOIN fl ON fl.serial = s.serial
+        LEFT JOIN fqc_record f ON f.fqc_id = fl.fqc_id
+        LEFT JOIN pk ON pk.serial = s.serial
+        LEFT JOIN dp ON dp.serial = s.serial
+        WHERE """ + " AND ".join(where), tuple(args))
 
-    clause = " AND ".join(where)
+
+@app.route("/api/prod/dashboard")
+@require_screen_view("proddash", "mgmt")
+def api_prod_dashboard():
+    """Everything the Production Dashboard shows, filtered once.
+
+    Every figure counts what HAPPENED in the period, each by its own
+    timestamp (see _module_events): allocated in it, produced in it,
+    inspected in it, packed in it, dispatched in it. The period and the
+    shift are the factory's - the day runs 06:00 to 06:00, so 01:12 on the
+    26th is C shift of the 25th (icon_clock.shift_day). The date and shift
+    printed in a serial number are never read: a range printed for one day
+    and made on another counts on the day it was made.
+    """
+    frm = (request.args.get("from") or "").strip()
+    to = (request.args.get("to") or "").strip() or frm
+    for v in (frm, to):
+        if v and not _ISO_DAY.match(v):
+            return jsonify({"ok": False, "why": "Dates are YYYY-MM-DD."}), 400
+    shift = (request.args.get("shift") or "").strip()
+    shift_no = clock.shift_number(shift)
+    customer = (request.args.get("customer") or "").strip()
+    model = (request.args.get("model") or "").strip()
+
+    def inp(col):
+        """col happened inside the chosen days and shift"""
+        c = ["%s IS NOT NULL" % col]
+        if frm:
+            c.append("%s >= '%s'" % (clock.shift_day_sql(col), frm))
+        if to:
+            c.append("%s <= '%s'" % (clock.shift_day_sql(col), to))
+        if shift_no:
+            c.append("%s = %d" % (clock.shift_sql(col), shift_no))
+        return "(" + " AND ".join(c) + ")"
+
+    at_fqc = "(fqc_at IS NOT NULL)"
+    n = lambda cond: "SUM(CASE WHEN %s THEN 1 ELSE 0 END)" % cond
+    counts = ", ".join([
+        n(inp("alloc_at")) + " AS alloc",
+        n(inp("prod_at")) + " AS prod",
+        # produced in the period and not inspected yet
+        n(inp("prod_at") + " AND NOT " + at_fqc) + " AS running",
+        n(inp("fqc_at")) + " AS fqc",
+        n(inp("fqc_at") + " AND outcome = 'pass'") + " AS passed",
+        n(inp("fqc_at") + " AND outcome = 'reject'") + " AS rej",
+        n(inp("fqc_at") + " AND outcome = 'reject' AND qgrade = 'GY'") + " AS gy",
+        n(inp("fqc_at") + " AND outcome = 'reject' AND qgrade = 'BGY'") + " AS bgy",
+        n(inp("fqc_at") + " AND outcome = 'reject' AND qgrade IS NULL") + " AS awaiting_quality",
+        n(inp("packed_at")) + " AS packed",
+        n(inp("disp_at")) + " AS disp",
+        # allocated in the period and not produced yet
+        n(inp("alloc_at") + " AND prod_at IS NULL") + " AS remaining",
+        # of what was allocated in the period, how much has left
+        n(inp("alloc_at") + " AND disp_at IS NOT NULL") + " AS alloc_gone",
+        # Order-to-dispatch composition: each module in one slice only
+        n(inp("disp_at")) + " AS c_disp",
+        n(inp("packed_at") + " AND disp_at IS NULL") + " AS c_packed",
+        n(inp("fqc_at") + " AND outcome = 'pass' AND packed_at IS NULL") + " AS c_passed",
+        n(inp("fqc_at") + " AND outcome = 'reject' AND packed_at IS NULL") + " AS c_rej",
+        n(inp("prod_at") + " AND NOT " + at_fqc) + " AS c_running",
+        n(inp("alloc_at") + " AND prod_at IS NULL") + " AS c_unproduced",
+        # any event at all in the period - what a batch or customer row needs
+        "COUNT(DISTINCT CASE WHEN %s OR %s OR %s OR %s OR %s THEN alloc_id END) AS batches"
+        % (inp("alloc_at"), inp("prod_at"), inp("fqc_at"), inp("packed_at"), inp("disp_at")),
+    ])
+    keys = ("alloc", "prod", "running", "fqc", "passed", "rej", "gy", "bgy",
+            "awaiting_quality", "packed", "disp", "remaining", "alloc_gone",
+            "c_disp", "c_packed", "c_passed", "c_rej", "c_running",
+            "c_unproduced", "batches")
 
     with store.conn() as (cx, cur):
-        kpi_row = store.one(cur, f"""
-            SELECT COUNT(*) AS alloc,
-                   SUM(CASE WHEN s.state<>'planned' THEN 1 ELSE 0 END) AS prod,
-                   SUM(CASE WHEN s.grade IS NOT NULL THEN 1 ELSE 0 END) AS fqc,
-                   SUM(CASE WHEN s.grade IN ('GY','BGY') THEN 1 ELSE 0 END) AS rej,
-                   SUM(CASE WHEN s.state IN ('packed','dispatched') THEN 1 ELSE 0 END) AS packed,
-                   SUM(CASE WHEN s.state='dispatched' THEN 1 ELSE 0 END) AS disp
-            FROM serial s
-            WHERE {clause}""", args)
+        _module_events(cur, customer, model)
+        kpi_row = store.one(cur, "SELECT " + counts + " FROM module_ev")
 
-        shift_rows = store.rows(cur, f"""
-            SELECT s.shift AS shift,
-                   SUM(CASE WHEN s.state<>'planned' THEN 1 ELSE 0 END) AS t,
-                   SUM(CASE WHEN s.grade IN ('GY','BGY') THEN 1 ELSE 0 END) AS r
-            FROM serial s
-            WHERE {clause}
-            GROUP BY s.shift ORDER BY s.shift""", args)
+        # produced by the line its production entry names and the shift it
+        # was produced in; scrap by the shift FQC rejected it in
+        made = store.rows(cur,
+            "SELECT line, " + clock.shift_sql("prod_at") + " AS shift, "
+            "COUNT(*) AS n FROM module_ev WHERE " + inp("prod_at") +
+            " GROUP BY 1, 2")
+        scrap = store.rows(cur,
+            "SELECT line, " + clock.shift_sql("fqc_at") + " AS shift, "
+            "COUNT(*) AS n FROM module_ev WHERE " + inp("fqc_at") +
+            " AND outcome = 'reject' GROUP BY 1, 2")
 
-        customers_rows = store.rows(cur, f"""
-            SELECT DISTINCT COALESCE(s.customer, 'ICON STOCK') AS customer
-            FROM serial s
-            WHERE {clause} AND s.customer IS NOT NULL
-            ORDER BY customer
-        """, args)
+        cust_rows = store.rows(cur, "SELECT cust, model, " + counts +
+                               " FROM module_ev GROUP BY cust, model")
 
-        models_rows = store.rows(cur, f"""
-            SELECT DISTINCT s.model AS model
-            FROM serial s
-            WHERE {clause} AND s.model IS NOT NULL
-            ORDER BY model
-        """, args)
+        # the latest day anything happened on, for an empty period's note
+        latest = store.one(cur, "SELECT MAX(d) AS d FROM (" + " UNION ALL ".join(
+            "SELECT MAX(%s) AS d FROM module_ev" % clock.shift_day_sql(c)
+            for c in ("alloc_at", "prod_at", "fqc_at", "packed_at", "disp_at")) + ")")
+        hold = store.one(cur, "SELECT COUNT(*) AS n FROM serial "
+                              "WHERE state = 'hold'")["n"]
 
-    kpi = dict(kpi_row) if kpi_row else {"alloc":0, "prod":0, "fqc":0, "rej":0, "packed":0, "disp":0}
-    for k in kpi:
-        if kpi[k] is None: kpi[k] = 0
+        customers_rows = store.rows(cur,
+            "SELECT DISTINCT COALESCE(customer, 'ICON STOCK') AS customer "
+            "FROM serial WHERE customer IS NOT NULL ORDER BY customer")
+        models_rows = store.rows(cur,
+            "SELECT DISTINCT model FROM serial WHERE model IS NOT NULL "
+            "ORDER BY model")
 
-    shifts = []
-    for sr in shift_rows:
-        if not sr["shift"]: continue
-        shifts.append({
-            "s": sr["shift"],
-            "t": sr["t"] or 0,
-            "r": sr["r"] or 0
-        })
+        # Downtime opened in the period - closed events only; an open one
+        # has no end yet, and Loss of Production counts it once closed.
+        loss_rows = store.rows(cur,
+            "SELECT created_at, line, machine, reason, kind, planned, minutes "
+            "FROM loss_event WHERE end_time IS NOT NULL AND " + inp("created_at") +
+            " ORDER BY event_id")
+        # still open, whatever the period - "Needs a decision"
+        open_loss = store.one(cur,
+            "SELECT COUNT(*) AS n, MIN(created_at) AS oldest "
+            "FROM loss_event WHERE end_time IS NULL")
+        cur.execute("DROP TABLE IF EXISTS temp.module_ev")
+
+    kpi = {k: ((kpi_row or {}).get(k) or 0) for k in keys}
+    kpi["hold"] = hold or 0
+
+    lines = {}
+    for r in made:
+        lines.setdefault((r["line"] or "", r["shift"]), {"produced": 0, "scrap": 0})["produced"] = r["n"]
+    for r in scrap:
+        lines.setdefault((r["line"] or "", r["shift"]), {"produced": 0, "scrap": 0})["scrap"] = r["n"]
+    lines = [dict(v, line=k[0], shift=k[1])
+             for k, v in sorted(lines.items(), key=lambda x: ((x[0][0] or "~"), x[0][1]))]
+
+    by_cust = []
+    for r in cust_rows:
+        row = {k: (r.get(k) or 0) for k in keys}
+        if not any(row[k] for k in ("alloc", "prod", "fqc", "packed", "disp")):
+            continue
+        cr = customers.get(r["cust"]) if r["cust"] else None
+        row.update({"cust": cr["name"] if cr else (r["cust"] or "ICON STOCK"),
+                    "model": r["model"]})
+        by_cust.append(row)
+    by_cust.sort(key=lambda r: -(r["alloc"] + r["prod"]))
+
+    loss = []
+    for e in loss_rows:
+        at = datetime.datetime.fromisoformat(e["created_at"])
+        loss.append({"date": clock.shift_day(at).isoformat(),
+                     "shift": clock.shift_of(at.hour),
+                     "line": (e["line"] or "").strip()[:1].upper(),
+                     "machine": e["machine"], "reason": e["reason"],
+                     "kind": e["kind"], "planned": bool(e["planned"]),
+                     "minutes": e["minutes"] or 0})
 
     return jsonify({
         "kpi": kpi,
-        "shifts": shifts,
+        "lines": lines,
+        "by_cust": by_cust,
+        "loss": loss,
+        "latest": (latest or {}).get("d"),
+        "open_loss": {"n": (open_loss or {}).get("n") or 0,
+                      "oldest": (open_loss or {}).get("oldest")},
+        # the factory day it is now, 06:00 to 06:00
+        "today": clock.shift_day().isoformat(),
         "customers": [r["customer"] for r in customers_rows],
         "models": [r["model"] for r in models_rows]
     })
@@ -3844,15 +4052,19 @@ def api_packing_log():
     where = ["b.state<>'retired'"]
     args = []
 
+    # By when the box was opened - its created_at, on the factory day
+    # (06:00 to 06:00) and the shift on the clock then. Not the date in the
+    # box number (fixed at opening, and choosable) and not the shift the
+    # opening screen sent.
     if frm:
-        where.append("b.pack_date >= ?")
+        where.append(clock.shift_day_sql("b.created_at") + " >= ?")
         args.append(frm)
     if to:
-        where.append("b.pack_date <= ?")
+        where.append(clock.shift_day_sql("b.created_at") + " <= ?")
         args.append(to)
-    if shift and shift.lower() != "all shifts":
-        where.append("b.pack_shift = ?")
-        args.append(shift.replace("Shift ", ""))
+    if clock.shift_number(shift):
+        where.append(clock.shift_sql("b.created_at") + " = ?")
+        args.append(clock.shift_number(shift))
     if customer and customer.lower() != "all customers":
         if customer == "G2G (M10R) — General stock":
             where.append("(b.customer IS NULL OR b.customer='ICON STOCK')")
@@ -4181,6 +4393,16 @@ def api_indent_line(line_id):
     return jsonify(p)
 
 
+def _alloc_date_shift():
+    """An allocation's date and shift are when Planning issued it: the
+    calendar date and the shift on the IST clock. Never the date or shift
+    printed in its serials - a range printed for one shift is often issued
+    in another - and never a form field (Planning sent #pDate, which does
+    not exist on its page)."""
+    now = clock.now()
+    return now.date().isoformat(), clock.shift_of(now.hour)
+
+
 @app.route("/api/allocation", methods=["POST"])
 @require_screen_write("plan")
 @_sync_guard
@@ -4222,13 +4444,13 @@ def api_allocation_create():
                     "%d serial(s) already exist, e.g. %s. A serial is issued "
                     "once." % (len(clash), ", ".join(clash[:3]))}), 400
 
+        made_on, made_shift = _alloc_date_shift()
         aid = store.insert(cur, "allocation", {
             "indent_line_id": line_id, "model": L["model"],
             "wattage": L["wattage"], "customer": d.get("customer") or L["cust"],
             "dcr": L["dcr"], "arc": L["arc"],
-            "date_produced": d.get("date_produced")
-                             or datetime.date.today().isoformat(),
-            "shift": int(d.get("shift") or 1), "qty": qty,
+            "date_produced": made_on,
+            "shift": made_shift, "qty": qty,
             "seq_from": d.get("seq_from") or 0, "seq_to": d.get("seq_to") or 0,
             "alloc_type": _alloc_type(d.get("alloc_type")),
             "created_by": actor()})
@@ -4307,13 +4529,14 @@ def api_allocation_update(alloc_id):
             if not r["ok"]:
                 return jsonify({"ok": False, "why": "%s — %s" % (s, r["why"])}), 400
             parsed.append(r)
+        # an edit is not a new issue - it keeps when it was first allocated
+        made_on, made_shift = old["date_produced"], old["shift"]
         cur.execute("UPDATE allocation SET indent_line_id=%s, model=%s, wattage=%s, "
                     "customer=%s, dcr=%s, arc=%s, date_produced=%s, shift=%s, "
                     "qty=%s, seq_from=%s, seq_to=%s, alloc_type=%s "
                     "WHERE alloc_id=%s",
                     (line_id, L["model"], L["wattage"], d.get("customer") or L["cust"],
-                     L["dcr"], L["arc"], d.get("date_produced") or old["date_produced"],
-                     int(d.get("shift") or old["shift"]), qty,
+                     L["dcr"], L["arc"], made_on, made_shift, qty,
                      d.get("seq_from") or 0, d.get("seq_to") or 0,
                      _alloc_type(d.get("alloc_type")) or old.get("alloc_type"),
                      alloc_id))
@@ -4642,7 +4865,7 @@ def api_export_xlsx():
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
-    fn = "icontrace_%s_%s.xlsx" % (name, datetime.date.today().isoformat())
+    fn = "icontrace_%s_%s.xlsx" % (name, clock.today().isoformat())
     return Response(buf.read(),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="%s"' % fn})
@@ -5035,6 +5258,22 @@ def api_trace_invoice(invoice_no):
     return jsonify(out)
 
 
+def _when_shift(ts):
+    """'2026-09-26T01:12:56' -> '26-09-2026 01:12 · shift C (25-09)': the
+    calendar time as stored, its shift, and - when the two differ - the
+    factory day it counts towards."""
+    try:
+        t = datetime.datetime.fromisoformat(str(ts))
+    except ValueError:
+        return str(ts)
+    out = "%s · shift %s" % (t.strftime("%d-%m-%Y %H:%M"),
+                             clock.SHIFT_LETTER[clock.shift_of(t.hour)])
+    day = clock.shift_day(t)
+    if day != t.date():
+        out += " (%s)" % day.strftime("%d-%m")
+    return out
+
+
 @app.route("/api/trace/serial/<path:serial>")
 @require_screen_view("search")
 def api_trace_serial(serial):
@@ -5067,6 +5306,9 @@ def api_trace_serial(serial):
                                (first["alloc_id"],)) if first["alloc_id"] else []
         fqc = store.rows(cur, "SELECT * FROM fqc_record WHERE serial=%s "
                               "ORDER BY at", (s,))
+        entries = {r["entry_id"]: r for r in store.rows(cur,
+            "SELECT entry_id, created_at FROM production_entry WHERE entry_id IN "
+            "(SELECT prod_entry_id FROM serial WHERE serial=%s)", (s,))}
         boxes = store.rows(cur, "SELECT b.*, bs.added_at, bs.added_by "
                                 "FROM box_serial bs JOIN box b ON b.box_id=bs.box_id "
                                 "WHERE bs.serial=%s ORDER BY bs.added_at", (s,))
@@ -5094,12 +5336,23 @@ def api_trace_serial(serial):
     # ---- build instances ------------------------------------------------
     # DCR eligibility is derived here, never stored - a flag beside the grade
     # is free to drift away from it.
+    # Built is when it was PRODUCED - its production entry, or its first
+    # FQC scan if that came first - never the date printed in the serial.
+    def _built(r):
+        pe = entries.get(r.get("prod_entry_id"))
+        scans = [f["at"] for f in fqc
+                 if (f.get("build_instance") or 1) == r["build_instance"] and f.get("at")]
+        seen = [t for t in ([pe["created_at"]] if pe else []) + scans[:1] if t]
+        if not seen:
+            return "—"
+        return _when_shift(min(seen))
+
     instances = []
     for r in rows:
         g = r["grade"]
         instances.append({
             "instance": r["build_instance"],
-            "built": r["date_produced"] or "—",
+            "built": _built(r),
             "grade": g or "—",
             "allocation": bno,
             "status": r["state"],
@@ -5112,7 +5365,7 @@ def api_trace_serial(serial):
     # One row, because reassignment is not built yet. An empty table would
     # read as "never assigned", which is not what the record says.
     assignment = [{
-        "from": (alloc or {}).get("date_produced") or first["date_produced"] or "—",
+        "from": _when_shift(alloc["created_at"]) if alloc and alloc.get("created_at") else "—",
         "customer": cust_name,
         "reason": "Original allocation",
         "by": (alloc or {}).get("created_by") or "—",
@@ -5127,7 +5380,9 @@ def api_trace_serial(serial):
                                               first["dcr"] or "—",
                                               " · " + alloc_label
                                               if alloc_label else "")],
-        "tag": (first["date_produced"] or "") + " · shift " + str(first["shift"] or "—"),
+        # when Planning issued it, not the date printed in the serial
+        "tag": (_when_shift(alloc["created_at"])
+                if alloc and alloc.get("created_at") else "—"),
         "tone": "t-mute",
     }]
     
@@ -5549,12 +5804,12 @@ def api_invoice_confirm():
 
     if data.get("ewb_valid_upto"):
         try:
-            if datetime.date.fromisoformat(str(data["ewb_valid_upto"])) < datetime.date.today():
+            if datetime.date.fromisoformat(str(data["ewb_valid_upto"])) < clock.today():
                 return jsonify({"ok": False, "why": f"e-Way Bill expired on {data['ewb_valid_upto']}. The vehicle must not move."}), 400
         except ValueError:
             pass
 
-    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = clock.now().strftime("%Y%m%d_%H%M%S")
     safe = "".join(c for c in (data.get("invoice_no") or "invoice") if c.isalnum() or c in "-_")
     final = os.path.join(STORE, "%s_%s_%s.pdf" % (stamp, safe, pend["sha"][:8]))
     os.replace(pend["tmp"], final)
@@ -5782,14 +6037,14 @@ def invoice_confirm():
     if data.get("ewb_valid_upto"):
         try:
             if datetime.date.fromisoformat(str(data["ewb_valid_upto"])) \
-                    < datetime.date.today():
+                    < clock.today():
                 flash("e-Way Bill expired on %s. The vehicle must not move."
                       % data["ewb_valid_upto"], "fail")
                 return redirect(url_for("invoice_upload"))
         except ValueError:
             pass
 
-    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = clock.now().strftime("%Y%m%d_%H%M%S")
     safe = "".join(c for c in (data.get("invoice_no") or "invoice")
                    if c.isalnum() or c in "-_")
     final = os.path.join(STORE, "%s_%s_%s.pdf" % (stamp, safe, pend["sha"][:8]))
@@ -6094,7 +6349,7 @@ def planning():
         return redirect(url_for("planning"))
 
     return render_template("planning.html", prog=prog, allocs=allocs,
-                           today=datetime.date.today().isoformat())
+                           today=clock.today().isoformat())
 
 
 # --------------------------------------------------------------------------
@@ -6375,7 +6630,7 @@ def _resolve_provisional_mismatch(cur, review_id, resolution, reason):
         cur.execute("UPDATE fqc_record SET grade='A' WHERE fqc_id=%s", (winner,))
     db.set_serial(cur, item["serial"], state="graded" if passed else "rejected",
                   grade="A" if passed else None)
-    at = datetime.datetime.now().isoformat(timespec="seconds")
+    at = clock.now().isoformat(timespec="seconds")
     cur.execute("UPDATE review_item SET status='resolved', resolved_by=%s, "
                 "resolved_at=%s, resolution=%s, reason=%s WHERE review_id=%s",
                 (actor(), at, resolution, reason, review_id))
@@ -6431,7 +6686,7 @@ def api_hold():
                     "note": orig.get("note"), "defect": orig.get("defect"),
                     "decided_by": orig.get("decided_by"), "at": orig.get("at"),
                     "waiting_for": None})
-            month = datetime.date.today().strftime("%Y-%m")
+            month = clock.today().strftime("%Y-%m")
             confirmed = store.one(cur,
                 "SELECT COUNT(*) AS n FROM dispatch_audit WHERE "
                 "action='fqc.reconciled' AND at LIKE %s", (month + "%",))["n"]
@@ -6815,7 +7070,7 @@ def _resolve_duplicate_scan(cur, review_id, resolution, reason):
                           state="graded" if new_rec["outcome"] == "pass"
                           else "rejected", grade=new_rec["grade"])
 
-    at = datetime.datetime.now().isoformat(timespec="seconds")
+    at = clock.now().isoformat(timespec="seconds")
     cur.execute("UPDATE review_item SET status='resolved', resolved_by=%s, "
                 "resolved_at=%s, resolution=%s, reason=%s WHERE review_id=%s",
                 (actor(), at, resolution, reason, review_id))
@@ -6974,14 +7229,22 @@ def api_fqc_dashboard():
     # counted on the OUTCOME, not the grade: a reject has no grade until
     # Quality calls it, and counting grades would drop it from both
     # columns while it waits.
+    # The day and shift are the INSPECTION's, read from the time FQC
+    # decided - never the date or shift printed in the serial. It used to
+    # be the barcode's shift: a module inspected at 11:58 was listed
+    # "25-09-2026 11:58 AM · C", a time C shift does not cover. The day is
+    # the factory's, 06:00 to 06:00: 01:12 on the 26th is C shift of the
+    # 25th.
+    fqc_shift = clock.shift_sql("f.at")
+    fqc_day = clock.shift_day_sql("f.at")
     where = ["f.superseded_by IS NULL"]
     args = []
     if frm:
-        where.append("substr(f.at,1,10) >= %s"); args.append(frm)
+        where.append(fqc_day + " >= %s"); args.append(frm)
     if to:
-        where.append("substr(f.at,1,10) <= %s"); args.append(to)
-    if shift:
-        where.append("s.shift = %s"); args.append(shift)
+        where.append(fqc_day + " <= %s"); args.append(to)
+    if clock.shift_number(shift):
+        where.append(fqc_shift + " = %s"); args.append(clock.shift_number(shift))
     if customer:
         where.append("s.customer = %s"); args.append(customer)
     if model:
@@ -6994,13 +7257,14 @@ def api_fqc_dashboard():
     with store.conn() as (cx, cur):
         cfg = db.get_config(cur)
         summary = store.rows(cur,
-            "SELECT substr(f.at, 1, 10) AS day, s.model AS model, s.wattage AS wattage, "
-            "s.customer AS customer, s.shift AS shift, COUNT(*) AS inspected, "
+            "SELECT " + fqc_day + " AS day, s.model AS model, s.wattage AS wattage, "
+            "s.customer AS customer, " + fqc_shift + " AS shift, COUNT(*) AS inspected, "
             "SUM(CASE WHEN f.outcome='pass' THEN 1 ELSE 0 END) AS passed, "
             "SUM(CASE WHEN f.outcome='reject' THEN 1 ELSE 0 END) AS rejected "
             "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
             "WHERE " + clause + " "
-            "GROUP BY day, s.model, s.wattage, s.customer, s.shift ORDER BY day DESC, s.shift, s.model, s.wattage",
+            "GROUP BY " + fqc_day + ", s.model, s.wattage, s.customer, " + fqc_shift + " "
+            "ORDER BY day DESC, shift, s.model, s.wattage",
             args)
         totals = store.one(cur,
             "SELECT COUNT(*) AS inspected, "
@@ -7038,6 +7302,11 @@ def api_fqc_dashboard():
                                "customer": customer, "model": model,
                                "result": result}})
 
+# The most rows the FQC Dashboard's module list is sent at once. The page
+# says so when a slice reaches it.
+FQC_MODULES_LIMIT = 5000
+
+
 @app.route("/api/fqc/dashboard/modules")
 @require_screen_view("dash")
 def api_fqc_dashboard_modules():
@@ -7050,14 +7319,16 @@ def api_fqc_dashboard_modules():
     cat = (request.args.get("cat") or "").strip()
     remark = (request.args.get("remark") or "").strip()
 
+    fqc_shift = clock.shift_sql("f.at")      # the inspection's, as above
+    fqc_day = clock.shift_day_sql("f.at")
     where = ["f.superseded_by IS NULL"]
     args = []
     if frm:
-        where.append("substr(f.at,1,10) >= %s"); args.append(frm)
+        where.append(fqc_day + " >= %s"); args.append(frm)
     if to:
-        where.append("substr(f.at,1,10) <= %s"); args.append(to)
-    if shift:
-        where.append("s.shift = %s"); args.append(shift)
+        where.append(fqc_day + " <= %s"); args.append(to)
+    if clock.shift_number(shift):
+        where.append(fqc_shift + " = %s"); args.append(clock.shift_number(shift))
     if customer:
         where.append("s.customer = %s"); args.append(customer)
     if model:
@@ -7078,11 +7349,19 @@ def api_fqc_dashboard_modules():
     args = tuple(args)
 
     with store.conn() as (cx, cur):
+        # The screen filters these further by itself (result, category,
+        # remark, shift, search), so it is sent the whole slice the
+        # dashboard is showing rather than the first 250 of it - a filter
+        # can only widen to what it was given. Incharge is who decided.
         rows = store.rows(cur,
-            "SELECT s.serial, s.model, s.customer, s.shift, s.wattage, "
-            "f.at, f.outcome, f.quality_grade, f.defect "
+            "SELECT s.serial, s.model, s.customer, s.wattage, "
+            + fqc_shift + " AS shift, " + fqc_day + " AS day, "
+            "pe.created_at AS entry_at, f.fqc_id, f.at, f.outcome, "
+            "f.quality_grade, f.defect, f.decided_by "
             "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
-            "WHERE " + clause + " ORDER BY f.at DESC LIMIT 250", args)
+            "LEFT JOIN production_entry pe ON pe.entry_id = s.prod_entry_id "
+            "WHERE " + clause + " ORDER BY f.at DESC LIMIT %d"
+            % FQC_MODULES_LIMIT, args)
     
     out = []
     for r in rows:
@@ -7166,7 +7445,7 @@ _COUNTER = bx.DailyCounter()
 def packing():
     msg = None
     act = request.form.get("action")
-    today = datetime.date.today()
+    today = clock.today()
 
     if act == "open":
         grade = request.form.get("grade") or "A"
@@ -7267,7 +7546,7 @@ def dispatch():
             with db.conn() as (cx, cur):
                 fy = db.fin_year()
                 seq = db.draw_challan_seq(cur, fy)
-                d = datetime.date.today()
+                d = clock.today()
                 no = db.render_challan_no(d, seq)
                 db.audit(cur, actor(), "challan.issue", "challan", no,
                          {"invoice": inv_no, "boxes": len(sel), "qty": total})
@@ -7290,7 +7569,7 @@ def gatepass():
     with db.conn() as (cx, cur):
         rows = db.gatepasses(cur)
     if request.method == "POST":
-        d = datetime.date.today()
+        d = clock.today()
         # Accept challan_id (real FK) from both form and JSON body so the
         # JS layer can post either way without a second endpoint.
         body = request.get_json(silent=True) or {}
@@ -7330,7 +7609,7 @@ def gatepass():
         flash("Gate pass %s issued (%s)." % (no, rec["kind"]), "pass")
         return redirect(url_for("gatepass"))
     return render_template("gatepass.html", rows=rows,
-                           today=datetime.date.today().isoformat())
+                           today=clock.today().isoformat())
 
 
 # --------------------------------------------------------------------------
@@ -7468,7 +7747,7 @@ def export_csv(what):
         buf.getvalue(), mimetype="text/csv",
         headers={"Content-Disposition":
                  "attachment; filename=icontrace_%s_%s.csv"
-                 % (what, datetime.date.today().isoformat())})
+                 % (what, clock.today().isoformat())})
 
 
 @app.route("/healthz")
@@ -7497,7 +7776,7 @@ def healthz():
                     "server_stale": live_code != BOOT_CODE_BUILD,
                     "started": STARTED_AT,
                     "store": os.path.basename(store.DB_PATH),
-                    "time": datetime.datetime.now().strftime("%d-%m-%Y %I:%M:%S %p")})
+                    "time": clock.now().strftime("%d-%m-%Y %I:%M:%S %p")})
 
 
 @app.route("/api/stock_dispatch")
@@ -7510,9 +7789,13 @@ def api_stock_dispatch():
     if model == "All": model = None
     grade = request.args.get("grade", "").strip() or None
     if grade == "All": grade = None
-    
+    # a period, for Management Overview; `date` alone is one day, as before
+    d_from = request.args.get("from", "").strip() or None
+    d_to = request.args.get("to", "").strip() or d_from
+
     with store.conn() as (cx, cur):
-        data = db.stock_dispatch(cur, d_date, customer, model, grade)
+        data = db.stock_dispatch(cur, d_date, customer, model, grade,
+                                 d_from=d_from, d_to=d_to)
     return jsonify(data)
 
 @app.errorhandler(413)
@@ -7554,7 +7837,7 @@ def _clamp_gp_date_range():
     type=date> the client renders carries max=today too, but a filter is
     read here regardless of how it arrived, the same as every other
     refusal in this API not trusting the button state alone."""
-    today = datetime.date.today().isoformat()
+    today = clock.today().isoformat()
     d_from = (request.args.get("from") or "").strip()
     d_to = (request.args.get("to") or "").strip()
     for label, v in (("from", d_from), ("to", d_to)):
@@ -7596,7 +7879,7 @@ def api_gatepass_get(gatepass_id):
 @_sync_guard
 def api_gatepass():
     body = request.get_json(force=True)
-    d = datetime.date.today()
+    d = clock.today()
     ch_id_raw = str(body.get("challan_id") or "").strip()
     try:
         ch_id = int(ch_id_raw) if ch_id_raw else None

@@ -20,8 +20,9 @@ serial-existence issue, so the Incharge clears it — not Quality.</div>
 <div class="card-b"><div class="kpi">
   <div><span>Model</span><b style="font-size:14px">{{ hit.master.model }}</b></div>
   <div><span>Wattage</span><b>{{ hit.master.wattage }}W</b></div>
-  <div><span>Produced</span><b style="font-size:14px">{{ hit.master.date_produced }}</b></div>
-  <div><span>Shift</span><b>{{ hit.master.shift }}</b></div>
+  {# no Produced/Shift here: those were the date and shift printed in the
+     serial, which nothing counts by - when it was produced is its
+     production entry or first FQC scan, on Search & Trace #}
   <div><span>Customer</span><b style="font-size:13px">{{ hit.master.customer or 'General Stock' }}</b></div>
 </div></div></div>
 

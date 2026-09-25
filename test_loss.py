@@ -51,6 +51,20 @@ def open_event(c, line="A", mach="Laminator-2", reason="LOP-MACH",
         "linked_event_id": linked_event_id})
 
 
+def opened_at(r, at):
+    """As if the event had been opened at `at` (IST). The server stamps an
+    event's date and shift from the clock when it is opened, whatever the
+    form sends, and the list counts it on the factory day of that moment -
+    so a test of the filters sets the moment itself."""
+    eid = r.get_json()["event_id"]
+    h = int(at[11:13])
+    letter = "A" if 6 <= h < 14 else "B" if 14 <= h < 22 else "C"
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE loss_event SET created_at=%s, event_date=%s, shift=%s "
+                    "WHERE event_id=%s", (at, at[:10], letter, eid))
+    return r
+
+
 def event_count():
     with store.conn() as (cx, cur):
         return store.one(cur, "SELECT COUNT(*) AS n FROM loss_event")["n"]
@@ -155,10 +169,10 @@ def t_induced_link_succeeds():
      "line/machine/reason, server-side")
 def t_list_filters():
     c = setup()
-    open_event(c, line="A", mach="Laminator-2", reason="LOP-MACH",
-              date="2026-09-18", shift="A")
-    open_event(c, line="B", mach="Stringer-5", reason="LOP-POWER",
-              date="2026-09-17", shift="B")
+    opened_at(open_event(c, line="A", mach="Laminator-2", reason="LOP-MACH"),
+              "2026-09-18T09:00:00")                          # A shift
+    opened_at(open_event(c, line="B", mach="Stringer-5", reason="LOP-POWER"),
+              "2026-09-17T15:00:00")                          # B shift
 
     by_date = c.get("/api/loss_events?date=2026-09-18").get_json()["events"]
     assert len(by_date) == 1 and by_date[0]["mach"] == "Laminator-2"
@@ -176,9 +190,13 @@ def t_list_filters():
 @test("date_from/date_to filter a real range, independent of the exact-match date param")
 def t_list_date_range():
     c = setup()
-    open_event(c, line="A", mach="Laminator-2", reason="LOP-MACH", date="2026-09-15")
-    open_event(c, line="A", mach="Stringer-5", reason="LOP-POWER", date="2026-09-17")
-    open_event(c, line="B", mach="Glass loader-1", reason="LOP-MAT", date="2026-09-20")
+    opened_at(open_event(c, line="A", mach="Laminator-2", reason="LOP-MACH"),
+              "2026-09-15T10:00:00")
+    # 01:30 on the 18th is C shift of the 17th - it counts on the 17th
+    opened_at(open_event(c, line="A", mach="Stringer-5", reason="LOP-POWER"),
+              "2026-09-18T01:30:00")
+    opened_at(open_event(c, line="B", mach="Glass loader-1", reason="LOP-MAT"),
+              "2026-09-20T10:00:00")
 
     in_range = c.get("/api/loss_events?date_from=2026-09-16&date_to=2026-09-18").get_json()["events"]
     assert len(in_range) == 1 and in_range[0]["mach"] == "Stringer-5", in_range

@@ -75,19 +75,18 @@
                      : p.remaining_qty <= 0 ? 'complete'
                      : started ? 'in progress' : 'open';
           /* One row per ITEM, so an indent carrying two items is two rows -
-             the same number twice is the second item, not a duplicate. */
-          var repeat = i > 0 && rows[i - 1].indent_no === p.indent_no;
-          /* An indent with no item is not an indent ITEM, so it stays out of
-             the export. On screen the second item of an indent shows no
-             customer and a note under the number; the file needs both
-             filled, so those cells say what they hold (data-x). */
+             the same number twice is the second item, not a duplicate, and
+             "item N" under the number says which. Every row carries its own
+             number and customer: the second item used to show them blank
+             (or faded), which read as an item with no customer - and the
+             Customer filter and search, which read the cell, dropped it.
+             An indent with no item is not an indent ITEM, so it stays out
+             of the export. */
           return '<tr' + (empty ? ' data-noexport' : '') + '><td class="mono" data-x="' +
-            esc(p.indent_no) + '">' +
-            (repeat ? '<span style="color:var(--line)">' + esc(p.indent_no) +
-                      '</span>' : esc(p.indent_no)) +
+            esc(p.indent_no) + '">' + esc(p.indent_no) +
             (p.line_no ? '<div class="hint">item ' + p.line_no + '</div>' : '') +
             '</td>' +
-            '<td data-x="' + esc(p.customer) + '">' + (repeat ? '' : esc(p.customer)) + '</td>' +
+            '<td data-x="' + esc(p.customer) + '">' + esc(p.customer) + '</td>' +
             '<td class="mono">' + (empty ?
               '<span style="color:var(--review)">no item on this indent</span>'
               : esc(p.item || p.model)) + '</td>' +

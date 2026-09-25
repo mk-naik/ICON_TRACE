@@ -21,6 +21,7 @@ Two rules that make it trustworthy:
 
 import os, csv, datetime
 import icon_evidence as ev
+import icon_clock as clock
 
 # The columns and their headings. The POSITION of each one is not here: it
 # comes from the same Settings map FQC reads, through ev.param_cols(), so the
@@ -62,7 +63,7 @@ def build(cfg, serials):
     out = {"rows": [], "missing": [],
            "source": ", ".join("%s %s" % (s["label"], s["ss_path"])
                                for s in srcs if s["ss_path"]),
-           "generated": datetime.datetime.now().isoformat(timespec="seconds")}
+           "generated": clock.now().isoformat(timespec="seconds")}
     live = [s for s in srcs if s["ss_path"] and os.path.exists(s["ss_path"])]
     if not live:
         out["error"] = ("No Sun Simulator export is reachable%s. Set the "

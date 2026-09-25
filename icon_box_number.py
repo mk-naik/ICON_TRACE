@@ -53,6 +53,8 @@ WHAT THE CODE DOES AND DOES NOT DO:
 
 import datetime
 
+import icon_clock as clock
+
 PREFIX = "ISPL"
 SEQ_DIGITS = 3
 
@@ -276,7 +278,7 @@ class Box:
         if self.state == self.RETIRED:
             raise BoxNumberError("Box %s is retired. Do not print it."
                                  % self.number)
-        ev = {"at": datetime.datetime.now(), "by": actor, "reason": reason,
+        ev = {"at": clock.now(), "by": actor, "reason": reason,
               "number": self.number, "copy": len(self.print_events) + 1}
         self.print_events.append(ev)
         return ev
