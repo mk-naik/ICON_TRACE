@@ -10991,28 +10991,15 @@ function wireFqcAnomalies() {
              ], total.toLocaleString(), 'modules packed');
          }
          
-         var cSet={}, mSet={}, gSet={};
-         if (d.table_fg) {
-           d.table_fg.forEach(function(r) {
-             if (r.customer_name || r.customer) cSet[r.customer_name || r.customer] = 1;
-             if (r.model) mSet[r.model] = 1;
-             if (r.grade) gSet[r.grade] = 1;
-           });
-         }
-         var updateSel = function(id, set, def, fVal) {
-           var sel = document.getElementById(id);
-           if (sel && (!fVal || fVal === def || fVal.startsWith('All'))) {
-             var cur = sel.value;
-             sel.innerHTML = '<option>' + def + '</option>' + Object.keys(set).sort().map(function(v){
-               return '<option value="' + fqcEsc(v) + '">' + fqcEsc(v) + '</option>';
-             }).join('');
-             sel.value = cur;
-             if (sel.selectedIndex < 0) sel.value = def;
-           }
-         };
-         updateSel('dpCust', cSet, 'All customers', fCust);
-         updateSel('dpModel', mSet, 'All', fModel);
-         updateSel('dpGrade', gSet, 'All', fGrade);
+         /* Dynamic cascade - the dropdowns show only what the visible
+            finished-goods slice actually holds. Same helper and rules
+            as every other dashboard on this app. */
+         var cSet = _facetSet(d.table_fg || [], function (r) { return r.customer_name || r.customer; });
+         var mSet = _facetSet(d.table_fg || [], function (r) { return r.model; });
+         var gSet = _facetSet(d.table_fg || [], function (r) { return r.grade; });
+         _dashCascade('dpCust',  cSet, 'All customers', fCust !== 'All customers' ? fCust : '');
+         _dashCascade('dpModel', mSet, 'All', fModel !== 'All' ? fModel : '');
+         _dashCascade('dpGrade', gSet, 'All', fGrade !== 'All' ? fGrade : '');
          
       })
       .catch(function(err) {
