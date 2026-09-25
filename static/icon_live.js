@@ -4624,6 +4624,37 @@ function wireFqcAnomalies() {
      on a real pallet that is one wrong click from a fabricated box in the
      record, which is why the invoice screen's simulate buttons went the same
      way. The function is neutralised too, so nothing can reach it. */
+  /* v4 buttons whose whole action is a toast CLAIMING something happened -
+     "Draft saved.", "Document cancelled.", "Shift events submitted." -
+     when nothing reached the server. Found live on 25 Sep: Planning's and
+     Production Entry's "Save as draft", Planning's "Copy from last batch",
+     Loss's "Submit shift", and the Admin tabs' "Cancel document", "Sign off
+     review" and "+ Add type". An operator told "Draft saved." walks away
+     from work that was never kept. Disabled with the truth on hover - not
+     removed, so the missing feature stays visible for a decision. The two
+     toasts that only EXPLAIN (Grade rules' "+ New version", Defect codes'
+     "+ Add code") are honest and left alone. */
+  var DEMO_CLAIMS = ['Draft saved.', 'Materials copied from', 'Shift events submitted',
+                     'Access review recorded', 'Document cancelled.',
+                     'Add-machine form opens here.', 'Repack recorded.',
+                     'PDF stored against this challan', 'Saved as draft. Serials are reserved',
+                     'User created. Temporary password issued.'];
+  var NOT_BUILT = 'Not built yet — this does not save anything.';
+
+  function disableDemoClaims() {
+    document.querySelectorAll('[onclick^="toast("]').forEach(function (b) {
+      var oc = b.getAttribute('onclick') || '';
+      var claim = DEMO_CLAIMS.some(function (c) { return oc.indexOf("toast('" + c) === 0; });
+      if (!claim) return;
+      b.removeAttribute('onclick');
+      b.disabled = true;
+      b.title = NOT_BUILT;
+      b.classList.add('ro-locked');
+      b.setAttribute('data-demo-claim', '1');
+    });
+  }
+  window.disableDemoClaims = disableDemoClaims;
+
   function pruneDemoControls() {
     document.querySelectorAll('[onclick*="fillDemo"]').forEach(function (b) {
       b.remove();
@@ -5390,6 +5421,11 @@ function wireFqcAnomalies() {
     invoiceRealParse();
     pruneGatePass();
     pruneDemoControls();
+    /* After the wirings, never at file load: the live layer takes some of
+       these very buttons over at sign-in (Challan's "Save as draft" becomes
+       the real draft save, its inline toast stripped) - a pass at load
+       would disable them before that happens. */
+    disableDemoClaims();
     wireSearchOrder();
     searchScreenSetup();
     holdSetup();

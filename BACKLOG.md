@@ -4022,4 +4022,26 @@ Questions that need Mukesh are marked **Decide:**.
   offline layer's replay semantics depend on status codes and deserve a
   deliberate look. **Decide:** 400 for validation refusals, and check the
   other endpoints for the same pattern.
+- **Buttons that claimed a save that never happened - 8, now disabled.**
+  v4 placeholders whose whole action is a toast announcing success, with
+  nothing sent anywhere, still live in operator workflows: Planning's
+  "Save as draft" ("Draft saved.") and "Copy from last batch" ("Materials
+  copied from BAT-2602-00021."), Production Entry's "Save as draft", Loss's
+  "Submit shift" ("Shift events submitted."), the invoice parser's "Store
+  PDF only" ("PDF stored against this challan."), and on the Admin screen
+  "Cancel document" ("Document cancelled. Original preserved."), "Sign off
+  review" and "+ Add type". An operator told "Draft saved." walks away from
+  work that was never kept. Disabled with "Not built yet - this does not
+  save anything." on hover; not removed, so the gaps stay visible. The two
+  toasts that only explain (Grade rules' "+ New version", Defect codes'
+  "+ Add code") stay. `test_demo_claims.py` (3) pins the exact eight.
+  Caught on the way, by test_dashrath_case.py: the first version ran at
+  page load and disabled Challan's REAL "Save as draft" - the live layer
+  takes that very button over at sign-in (since Round 28 moved the wiring
+  after sign-in). It now runs after the sign-in wirings, and the test
+  asserts the real button is untouched.
+  **Decide:** build, remove, or leave disabled - Planning and Production
+  Entry drafts, Loss's shift submission, document cancellation and the
+  access-review sign-off are all features v4 promised and nothing
+  implements.
 
