@@ -4044,4 +4044,33 @@ Questions that need Mukesh are marked **Decide:**.
   Entry drafts, Loss's shift submission, document cancellation and the
   access-review sign-off are all features v4 promised and nothing
   implements.
+- **Stored XSS in three places - SECURITY, fixed.** Planted a tagged
+  `<img onerror>` in every free-text field reachable through the API (15
+  fields: indent notes, material name, invoice buyer, challan transporter/
+  driver/consignee, gate-pass party/description/address, FQC reason, Quality
+  resolution, abandon reason, loss machine, production incharge, user
+  display name) and opened every screen, the challan detail and Search &
+  Trace as a Super Admin. Three ran as script:
+  - a **gate pass's party** - the gate-pass list's Customer filter built
+    its `<option>`s from party names unescaped (the table beside it was
+    already escaped);
+  - an **invoice's buyer name** - the invoice list concatenated every field
+    raw; buyer name comes out of an UPLOADED PDF, so a crafted invoice could
+    carry script into the Admin's browser;
+  - a **loss event's machine** - v4's `renderLoss()` concatenates `EVENTS`
+    straight into its tables. v4 now receives escaped copies; the live
+    layer keeps the raw rows.
+  Who could exploit it: any Dispatch operator (gate pass), anyone who can
+  upload an invoice, any Production Incharge (loss events) - running in the
+  session of whoever opens the screen next, an Admin included (the cookie
+  is httpOnly, but script in an Admin's page can call the Admin's API).
+  `test_stored_xss.py` plants all 15, opens 25 screens plus the challan
+  detail and four searches, and asserts nothing ran and the three fixed
+  fields show as text. Verified it FAILS on the pre-fix code, naming exactly
+  those three.
+  **Not covered by the probe** (next pass): edit forms and modals opened
+  from rows (gate-pass edit, invoice edit, allocation detail, review detail
+  popups), printed documents (/challan/.../print, gate-pass print, pallet
+  sheet - server-rendered Jinja, autoescaped, but worth confirming), and
+  the Excel/CSV exports (formula injection - a cell starting with `=`).
 

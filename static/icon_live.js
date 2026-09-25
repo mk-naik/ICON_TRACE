@@ -10114,17 +10114,20 @@ function wireFqcAnomalies() {
       var html = '';
       data.invoices.forEach(function(inv) {
         var status = inv.superseded_by ? '<span class="tag t-mute">Superseded</span>' : 
-                     (inv.challan ? '<span class="tag t-pass">Challan '+inv.challan+'</span>' : '<span class="tag t-info">Pending</span>');
+                     (inv.challan ? '<span class="tag t-pass">Challan '+fqcEsc(inv.challan)+'</span>' : '<span class="tag t-info">Pending</span>');
+        /* Every field escaped: these come out of an uploaded PDF, so a
+           crafted invoice's buyer name reached this table as live HTML
+           (stored XSS, found 25 Sep). */
         html += '<tr>' +
-          '<td>' + (inv.invoice_no || '—') + '</td>' +
-          '<td>' + (inv.invoice_date || '—') + '</td>' +
-          '<td>' + (inv.buyer_name || '—') + '</td>' +
-          '<td>' + (inv.buyer_gstin || '—') + '</td>' +
-          '<td>' + (inv.declared_qty || '—') + '</td>' +
+          '<td>' + fqcEsc(inv.invoice_no || '—') + '</td>' +
+          '<td>' + fqcEsc(inv.invoice_date || '—') + '</td>' +
+          '<td>' + fqcEsc(inv.buyer_name || '—') + '</td>' +
+          '<td>' + fqcEsc(inv.buyer_gstin || '—') + '</td>' +
+          '<td>' + fqcEsc(inv.declared_qty || '—') + '</td>' +
           '<td>' + status + '</td>' +
           '<td style="text-align:right">' +
-          '<a href="/view/invoice/pdf/' + inv.id + '" target="_blank" class="btn btn-ghost btn-sm" style="margin-right:4px">PDF</a>' +
-          (inv.challan || inv.superseded_by ? '' : '<button class="btn btn-ghost btn-sm" onclick="editInvoice(' + inv.id + ')">Edit</button>') +
+          '<a href="/view/invoice/pdf/' + encodeURIComponent(inv.id) + '" target="_blank" class="btn btn-ghost btn-sm" style="margin-right:4px">PDF</a>' +
+          (inv.challan || inv.superseded_by ? '' : '<button class="btn btn-ghost btn-sm" onclick="editInvoice(' + Number(inv.id) + ')">Edit</button>') +
           '</td>' +
           '</tr>';
       });
@@ -10621,7 +10624,9 @@ window.gpSetKind = function(k) {
           var keep = customer || custSel.value;
           custSel.innerHTML = '<option value="">All customers</option>' +
             (d.customers || []).map(function (name) {
-              return '<option value="' + name + '">' + name + '</option>';
+              /* party is free text typed on the gate pass - escaped, as the
+                 table row beside it already is (stored XSS, found 25 Sep) */
+              return '<option value="' + fqcEsc(name) + '">' + fqcEsc(name) + '</option>';
             }).join('');
           if (keep) custSel.value = keep;
         }
@@ -11409,7 +11414,17 @@ window.gpSetKind = function(k) {
 
         if (typeof EVENTS === 'undefined') return;
         EVENTS.length = 0;
-        rows.forEach(function (r) { EVENTS.push(r); });
+        /* v4's renderLoss() concatenates these straight into its tables -
+           the machine name is free text, and it ran as HTML (stored XSS,
+           found 25 Sep). v4 gets escaped COPIES; `rows` keeps the raw
+           values for everything else in this file. */
+        rows.forEach(function (r) {
+          var safe = {};
+          Object.keys(r).forEach(function (k) {
+            safe[k] = typeof r[k] === 'string' ? fqcEsc(r[k]) : r[k];
+          });
+          EVENTS.push(safe);
+        });
         if (typeof renderLoss === 'function') renderLoss();
         if (window.iconTable) window.iconTable.wireAll();
 
