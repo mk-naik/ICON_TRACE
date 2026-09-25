@@ -110,6 +110,11 @@
 
   function csv(v) {
     v = (v || '').replace(/\s+/g, ' ').trim();
+    /* Text that opens with = + - @ is a formula to Excel when it opens the
+       file - an apostrophe keeps it text (numbers like -5 are left alone).
+       These cells hold what operators typed: a party named =HYPERLINK(...)
+       must not become a live link in somebody else's spreadsheet. */
+    if (/^[=+\-@]/.test(v) && !/^[+-]?\d+(\.\d+)?$/.test(v)) v = "'" + v;
     return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
   }
 

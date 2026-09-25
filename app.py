@@ -4494,6 +4494,29 @@ EXPORT_MAX_ROWS = 100000
 EXPORT_MAX_COLS = 60
 
 
+def _no_formulas(ws, row):
+    """openpyxl stores any string that starts with '=' as a FORMULA. These
+    cells are text somebody typed - a gate pass's party, a reason, a
+    customer - so '=HYPERLINK(...)' typed into a form would have become a
+    live formula in the Excel of whoever exported the screen. Forced back to
+    text: the cell shows exactly what was typed. (Found 25 Sep.)"""
+    for cell in ws[row]:
+        if isinstance(cell.value, str) and cell.value.startswith("="):
+            cell.data_type = "s"
+
+
+def _csv_cell(v):
+    """A CSV cell Excel will not run: text that opens with = + - @ or a
+    tab/CR is read by Excel as a formula when the file is opened, so it gets
+    OWASP's leading apostrophe. Numbers - -5, +3.2 - are left as they are."""
+    if not isinstance(v, str) or not v or v[0] not in "=+-@\t\r":
+        return v
+    import re as _re
+    if _re.fullmatch(r"[+-]?\d+(\.\d+)?", v):
+        return v
+    return "'" + v
+
+
 def _xlsx_value(text):
     """A cell as Excel should hold it: a quantity as a number so it can be
     summed, everything else as the text the operator was looking at.
@@ -4585,6 +4608,7 @@ def api_export_xlsx():
 
         if cols:
             ws.append(cols)
+            _no_formulas(ws, 1)
             for i, c in enumerate(cols, 1):
                 cell = ws.cell(1, i)
                 cell.font = head_font
@@ -4598,6 +4622,7 @@ def api_export_xlsx():
                                 ("" if v is None else str(v)))
                     for v in (r or [])[:EXPORT_MAX_COLS]]
             ws.append(vals)
+            _no_formulas(ws, ws.max_row)
             written += 1
             for i, v in enumerate(vals, 1):
                 widths[i] = max(widths.get(i, 0), len(str(v)) if v is not None else 0)
@@ -7410,7 +7435,7 @@ def export_csv(what):
             wr.writerow(["serial", "model", "wattage", "customer", "dcr",
                          "date_produced", "shift", "grade", "state"])
             for s in db.serials_for(cur, limit=100000):
-                wr.writerow([s.get(k) for k in ("serial", "model", "wattage",
+                wr.writerow([_csv_cell(s.get(k)) for k in ("serial", "model", "wattage",
                              "customer", "dcr", "date_produced", "shift",
                              "grade", "state")])
         elif what == "fqc":
@@ -7418,14 +7443,14 @@ def export_csv(what):
                          "el_verdict", "el_state", "proposed", "reason",
                          "decided_by", "at"])
             for r in db.fqc_recent(cur, 100000):
-                wr.writerow([r.get(k) for k in ("serial", "grade", "mode",
+                wr.writerow([_csv_cell(r.get(k)) for k in ("serial", "grade", "mode",
                              "ss_pmax", "ss_state", "el_verdict", "el_state",
                              "proposed", "reason", "decided_by", "at")])
         elif what == "indents":
             wr.writerow(["indent_no", "customer", "model", "dcr", "arc",
                          "ordered_qty", "ordered_kw", "dispatched", "remaining"])
             for p in db.indent_progress(cur):
-                wr.writerow([p.get(k) for k in ("indent_no", "customer",
+                wr.writerow([_csv_cell(p.get(k)) for k in ("indent_no", "customer",
                              "model", "dcr", "arc", "ordered_qty",
                              "ordered_kw", "dispatched_qty", "remaining_qty")])
         elif what == "gatepass":
@@ -7435,7 +7460,7 @@ def export_csv(what):
             # this whole function, so the session check above crashed with
             # UnboundLocalError (a 500) for any unknown file name.
             for gp in db.gatepasses(cur, 100000):
-                wr.writerow([gp.get(k) for k in ("gp_no", "gp_date", "kind",
+                wr.writerow([_csv_cell(gp.get(k)) for k in ("gp_no", "gp_date", "kind",
                              "party", "description", "qty", "expected_return")])
         else:
             abort(404)

