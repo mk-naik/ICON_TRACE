@@ -4095,3 +4095,24 @@ Questions that need Mukesh are marked **Decide:**.
   escape `</script>`, so if the item master ever becomes editable from the
   screen, that embed must escape `<` (in Python: `.replace("<", "\\u003c")`).
 
+### Not reached overnight (stopped at 08:45 - a usage-limit pause took the middle of the night)
+
+- **XSS in the views the probe does not open:** gate-pass edit, invoice
+  edit, allocation detail, the review item popups, the loading session.
+  `test_stored_xss.py` is the place to extend - it already seeds the
+  payloads; each view needs its opener added.
+- **The six UI smoke scripts** (`test_fqc_anomaly_ui`, `test_fqc_dashboard_ui`,
+  `test_fqc_recent_ui`, `test_mgmt_ui`, `test_pack_ui`, `test_prod_ui`)
+  still expect a server with data already running on 8090/5000 and sign in
+  through v4's old `signIn()`. They need `ui_harness` plus seeded data to
+  become real suite tests; until then they are the only noise left in the
+  suite besides `test_js.js` and `test_build_banner_live.py` (the latter
+  drives v4's `#who` dropdown, gone since Round 23).
+- **Signing out leaves the last account's payload in the page's memory**
+  (`B`, and the v4 arrays `applyBoot()` filled) until the next sign-in
+  replaces it. The sign-in card covers it, but a shared PC's devtools
+  could read it. Clearing `B`'s private keys in the sign-out patch would
+  close it.
+- **`/api/indent` answers refusals with 200** - see above; worth checking
+  the other endpoints for the same pattern at the same time.
+
