@@ -14,3 +14,34 @@ __pycache__/
 
 # Uploaded invoice files
 storage/invoices/
+
+# SQLite side files and copies
+*.db-shm
+*.db-wal
+*.db.bak
+
+# Logs
+*.log
+
+# Local backups and reports
+auth_backup_*/
+backfill_report_*/
+
+# Screenshots from test rounds
+round*_shots/
+/*.png
+
+# Incident notes
+INCIDENT_*.md
+
+# One-off local scripts
+fix_*.py
+patch_*.py
+append.py
+apply_ui_js.py
+backfill_challans.py
+clean_test.py
+extract_lockout.py
+print_test.py
+split_test.py
+ui_test_patch.py
