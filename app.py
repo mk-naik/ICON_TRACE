@@ -769,8 +769,12 @@ def _access_payload(login_id):
     offering what the server would refuse."""
     with store.conn() as (cx, cur):
         perms = icon_auth.get_screen_perms(cur, login_id)
+        auto_refresh = icon_auth.get_auto_refresh(cur, login_id)
     return {"perms": perms, "subviews": dict(icon_auth.SUBVIEWS),
-            "read_only": sorted(icon_auth.READ_ONLY_SCREENS)}
+            "read_only": sorted(icon_auth.READ_ONLY_SCREENS),
+            # Round 31: on the account, so it follows the person to any
+            # machine, the same way their permissions do.
+            "auto_refresh": auto_refresh}
 
 
 @app.route("/api/session")
@@ -5777,6 +5781,30 @@ def api_indents():
                 (p.get("indent_line_id"),))["n"]
         out.append(d)
     return jsonify(out)
+
+
+@app.route("/api/session/auto-refresh", methods=["POST"])
+def api_auto_refresh():
+    """Turn live updates on or off for MY OWN account (Round 31).
+
+    Self only, and structurally so: the login_id comes from the session,
+    never from the body, so there is no target to check and no hierarchy to
+    enforce. It grants no access and changes nothing anybody else sees -
+    only whether this person's screens act on the change feed.
+
+    Not blocked by must_change_pw: it is a display preference, not a write
+    to the record, and refusing it would strand somebody on a screen that
+    keeps offering to refresh itself."""
+    if not g.icon_session:
+        return jsonify({"ok": False, "why": "Sign in required."}), 401
+    body = request.get_json(silent=True) or {}
+    if "on" not in body:
+        return jsonify({"ok": False, "why": "Say on or off."}), 400
+    on = bool(body.get("on"))
+    with store.conn() as (cx, cur):
+        icon_auth.set_auto_refresh(cur, g.icon_session["login_id"], on,
+                                   ip=request.remote_addr)
+    return jsonify({"ok": True, "auto_refresh": on})
 
 
 @app.route("/api/changes")

@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS app_user (
     totp_pending_enc TEXT,
     totp_last_step INTEGER NOT NULL DEFAULT 0,
     must_change_pw INTEGER NOT NULL DEFAULT 0,
+    auto_refresh INTEGER NOT NULL DEFAULT 1,
     must_reenrol INTEGER NOT NULL DEFAULT 0,
     failed_count INTEGER NOT NULL DEFAULT 0,
     locked_until INTEGER NOT NULL DEFAULT 0,
@@ -194,6 +195,13 @@ CREATE TABLE IF NOT EXISTS auth_attempt (
     cols = {r["name"] for r in cur.fetchall()}
     if "station" not in cols:
         cur.execute("ALTER TABLE app_user ADD COLUMN station TEXT")
+    # Whether live updates act on this account's screens (Round 31). On the
+    # account and not the browser, so it follows the person to any machine
+    # they sign in on, the same way their permissions do. Default 1 - nobody
+    # who has not asked for a change gets one.
+    if "auto_refresh" not in cols:
+        cur.execute("ALTER TABLE app_user ADD COLUMN auto_refresh "
+                    "INTEGER NOT NULL DEFAULT 1")
 
 # ---------------------------------------------------------------------------
 # The screen registry (Round 26). Every screen a person can be given or
@@ -554,6 +562,33 @@ def stepup_cancel(cur, login_id, code, ip=None, now=None):
             return False
     except KeyMissing:
         return False
+
+def get_auto_refresh(cur, login_id):
+    """Whether this account wants its screens to act on live updates. A
+    missing account reads as True rather than False: the page would then
+    simply behave as it always has."""
+    u = _get_user(cur, login_id)
+    if not u:
+        return True
+    try:
+        return bool(u["auto_refresh"])
+    except (KeyError, IndexError):
+        return True          # a database from before the column existed
+
+
+def set_auto_refresh(cur, login_id, on, ip=None, now=None):
+    """Always and only for yourself - there is no actor argument and no
+    hierarchy check, because there is no way to set this for anybody else.
+    It changes nothing anyone else can see and grants no access."""
+    u = _get_user(cur, login_id)
+    if not u:
+        raise AuthError("Not found.")
+    cur.execute("UPDATE app_user SET auto_refresh=%s WHERE user_id=%s",
+                (1 if on else 0, u["user_id"]))
+    log_event(cur, login_id, "auto_refresh_set", ip,
+              "on" if on else "off", _now(now))
+    return bool(on)
+
 
 def change_password(cur, login_id, old_pw, new_pw, ip=None, now=None):
     t = _now(now)

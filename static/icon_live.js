@@ -1130,7 +1130,13 @@
                 the viewer's own row from anybody else's. */
              login_id: who.login_id || '',
              perms: who.perms || {}, subviews: who.subviews || {},
-             read_only: who.read_only || [] };
+             read_only: who.read_only || [],
+             /* Round 31: this account's own live-update preference, read
+                here beside must_change_pw and the permission map, because
+                it comes from the same answer and belongs to the account
+                rather than to this browser. Absent (an older server) reads
+                as on, which is how the app already behaved. */
+             auto_refresh: who.auto_refresh !== false };
     ensureRoleEntry(USER.role);
     /* v4's applyRole() and signIn() both go(ROLES[role].home) */
     if (ROLES[USER.role]) ROLES[USER.role].home = _homeFor(USER.role);
@@ -1189,6 +1195,7 @@
   function _enterBuilt(splash) {
     window.signIn();          /* the live layer's wrapper, by now */
     applyWriteLocks();
+    wireAutoRefreshToggle();
     startIdleWatch();
 
     /* hide() honours its own minimum, so a bootstrap faster than the
@@ -8158,6 +8165,11 @@ function wireFqcAnomalies() {
   }
 
   function applyChanges(d) {
+    /* Off means off: no silent refresh and no chip, on any screen. Not
+       "chip only" - somebody who has turned live updates off has said they
+       do not want the screen reacting, and a chip is the screen reacting.
+       The feed keeps running, so turning it back on needs no reload. */
+    if (typeof USER !== 'undefined' && USER && USER.auto_refresh === false) return;
     var view = currentView();
     if (!view) return;
     var topics = d.topics || [];
@@ -11839,6 +11851,57 @@ window.gpSetKind = function(k) {
      the 26th. (A: previous is C of the day before, because the factory day
      turns over at 06:00. B: previous is A of the same day. C: previous is
      B of the same day.) */
+  /* ---- the live-updates switch, on the profile card (Round 31) --------
+   *
+   * Under the person's own name and role, where a preference about their
+   * own screens belongs - not in Admin, because it is nobody else's to set.
+   * Saves the moment it is ticked; there is no second Save step to forget,
+   * and the answer is only believed once the server has given it. */
+  function wireAutoRefreshToggle() {
+    var menu = document.getElementById('umenu');
+    if (!menu || document.getElementById('umAutoRefresh')) return;
+    var perms = document.getElementById('umPerms');
+    var row = document.createElement('label');
+    row.className = 'um-pref';
+    row.innerHTML =
+      '<input type="checkbox" id="umAutoRefresh">' +
+      '<span>Update screens when others save<br>' +
+      '<small>Off: nothing on screen changes until you reload.</small></span>';
+    if (perms && perms.parentNode) perms.parentNode.insertBefore(row, perms.nextSibling);
+    else menu.insertBefore(row, menu.lastChild);
+
+    var box = document.getElementById('umAutoRefresh');
+    box.checked = !(USER && USER.auto_refresh === false);
+    /* the menu closes on any click inside the topbar otherwise */
+    row.addEventListener('click', function (e) { e.stopPropagation(); });
+    box.addEventListener('change', function () {
+      var want = box.checked;
+      box.disabled = true;
+      api('session/auto-refresh', { method: 'POST',
+        body: JSON.stringify({ on: want }) })
+        .then(function (d) {
+          box.disabled = false;
+          if (!d || d.ok !== true) {
+            box.checked = !want;                 /* the server did not take it */
+            toast((d && d.why) || 'That could not be saved.');
+            return;
+          }
+          USER.auto_refresh = d.auto_refresh;
+          box.checked = !!d.auto_refresh;
+          if (!d.auto_refresh) hideChangeChip();
+          toast(d.auto_refresh
+            ? 'Screens will update when others save.'
+            : 'Screens will stay as they are until you reload.');
+        })
+        .catch(function () {
+          box.disabled = false;
+          box.checked = !want;
+          toast('The server did not answer.');
+        });
+    });
+  }
+  window.iconWireAutoRefresh = wireAutoRefreshToggle;
+
   function _lastEndedShift(d) {
     d = d || new Date();
     var cur = _istShift(d);
