@@ -4235,7 +4235,9 @@ client's decision logic all stay.
   **protection** - the other is instead half-way through the New Gate Pass
   form; its typed text is still there and the chip appears in **2.1 s**
   naming the saver, and Review then takes the update. And a change to a topic
-  the visible screen does not show moves nothing.
+  the visible screen does not show moves nothing - and my own save raises no
+  chip on my own screen, since it already updated itself and every person
+  here has their own ID.
 
 ### Found on the way
 

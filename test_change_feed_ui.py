@@ -157,6 +157,28 @@ def t_protection():
             ctxA.close(); ctxB.close()
 
 
+@test("my OWN save raises no chip on my own screen - it already updated "
+     "itself, and a chip over my own work would be noise")
+def t_own_save_is_quiet():
+    fresh()
+    with H.browser() as b:
+        ctx, pg = signed_in_page(b, "Super Admin", "sa.solo")
+        try:
+            pg.evaluate("go('gp-new')")
+            pg.wait_for_timeout(1200)
+            typed = "MY OWN TYPING"
+            pg.fill("#gpParty", typed)
+            issue_gatepass(pg, "MY OWN SAVE")     # same session, same person
+            pg.wait_for_timeout(WAIT_MS)
+            assert not pg.evaluate("!!document.querySelector('#chgChip.on')"), \
+                "my own save told me my screen was out of date"
+            assert pg.input_value("#gpParty") == typed
+            assert pg.errors == [], pg.errors
+            print("      own save: no chip, typed text intact")
+        finally:
+            ctx.close()
+
+
 @test("a change to a topic the visible screen does NOT show is ignored - no "
      "chip, no refetch, nothing on screen moves")
 def t_unrelated_topic_ignored():

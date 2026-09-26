@@ -8111,9 +8111,17 @@ function wireFqcAnomalies() {
       }
     }
     if (!hit) return;
-    var by = (d.by || []).filter(function (n) {
+    var actors = d.by || [];
+    var others = actors.filter(function (n) {
       return n && n !== (USER && USER.login_id);
-    })[0] || '';
+    });
+    /* Only me: my own save already updated my own screen through its success
+       path, so telling me about it would be a chip over my own work. Safe
+       because every person here has their own ID - shared station logins are
+       not used, which is the whole reason the audit trail is worth reading.
+       An unattributed change (the CLI, a migration) is never suppressed. */
+    if (!d.truncated && actors.length && !others.length) return;
+    var by = others[0] || '';
     if (CHANGE_SILENT[view] && !screenBusy(view) && reloadScreen(view)) return;
     showChangeChip(view, by);
   }
