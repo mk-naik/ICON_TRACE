@@ -4258,3 +4258,94 @@ client's decision logic all stay.
   regex now, and verified 18/18 under both line endings. Worth remembering:
   running the suite in place can hide this whole class of fault.
 
+## Production Entry - record the shift that RAN, not the one you are typing in
+
+Reported by Mukesh, 26-09-2026: "in production entry, Production date and
+shift, allow past date and shift entry, practical, shift report is generated
+after shift ends means next shift, so current process force the user to fill
+wrong date and shift."
+
+He is right, and the form forced it twice over.
+
+**On the screen**, the two fields were `disabled` and re-stamped with the
+current date and shift every 30 seconds (`peStampNow`), so they could not be
+changed at all. They also opened on v4's hardcoded `2026-08-21` and its
+always-selected shift B until that stamp ran.
+
+**On the server**, `/api/prodentry` ignored `date` and `shift` from the body
+outright and wrote `clock.now()` into `prod_date` and `shift`. So the form
+asked for a date and shift, the operator typed them, and the server threw
+them away without saying so.
+
+The consequence is exactly what was reported. A shift report is written after
+the shift ends - which is the next shift, and for C shift the next calendar
+day. C shift of the 25th ends at 06:00 on the 26th and gets filed at 06:15,
+and was recorded as **A shift of the 26th**. The only way to file it under
+its own name was to get the form to lie, and the form would not even allow
+that.
+
+**And the list made it worse:** `/api/prodentries` filtered by
+`shift_day(p.created_at)` - the typing moment - so the shift you were looking
+for was never on the day you asked for.
+
+### What it does now
+
+- `prod_date` and `shift` are what the operator states. `created_at` is still
+  stamped from the clock, so a late entry is still visible as a late entry,
+  and the audit row carries both.
+- The fields are editable and open on **the shift that just ended** - at
+  06:15 on the 26th that is C of the 25th, which is the case being filed.
+  The date cannot be set to a future day (`max` = today).
+- `/api/prodentries` filters on `prod_date` and `shift`, so an entry is found
+  on the day it ran. `prod_date` is already the factory day (06:00 to 06:00),
+  so it is compared directly rather than through `shift_day_sql()`.
+- `_prod_when()` validates instead of overriding. Refused only where the
+  answer cannot be true: a shift that **has not started yet** (a shift still
+  running may be filed - some lines record as they go, and refusing that
+  would be inventing a rule), and a date further back than
+  `PROD_BACKDATE_DAYS` (30, `ICON_PROD_BACKDATE_DAYS` overrides), which
+  catches the wrong-year typo while leaving ordinary catching-up alone.
+  **Decide:** 30 days is my choice, not Mukesh's - say if a month is too
+  tight for a backlog.
+- The 30-second timer now refreshes only the hint. Re-defaulting the fields
+  on a timer is how a date somebody had just picked got overwritten under
+  them - the same rule as Round 30's change feed.
+
+The original reason for ignoring the fields was a form DEFAULT that once
+filed a range under v4's demo 21-08-2026. That is an argument for validating
+what arrives and fixing the default, not for discarding what the operator
+says.
+
+### What proves it
+
+`test_production.py` (7 -> 12): the stated shift is what is stored, with
+`created_at` kept separately; the list finds the entry on the day it ran and
+not on the day it was typed; a shift that has not started is refused while
+the shift now running is accepted; the backdate limit refuses a wrong-year
+typo and accepts ordinary catching-up; a missing or unreadable date or shift
+is refused by name rather than quietly replaced.
+`test_prodentry_when.py` (3), through the real form in Chromium: the fields
+are editable and capped at today; a fresh form opens on the shift that just
+ended (never v4's 2026-08-21 / B, and never the shift currently running);
+and the whole reported case end to end - C shift of yesterday, filed today,
+stored as `prod_date=2026-09-25 shift=C` with `created_at` today.
+
+### Swept, same flow, NOT changed
+
+Loss & Breakdown records a date and shift the same way, and
+`api_loss_event_open` also overrides them with `clock.now()`. It is **not**
+the same bug and was left alone deliberately:
+
+- A **Live** event is opened when the machine stops, so "now" is the truth,
+  and `/api/loss_events` filters by `shift_day(e.created_at)` - which is
+  already correct, including after midnight.
+- A **Retro** event (the mode already exists) is the gap: the form has no
+  date field at all, it sends `date: _localDate()`, so a downtime entered
+  the next morning lands on the wrong day. Fixing that means adding a date
+  field and deciding Live vs Retro semantics - a change to downtime and OEE
+  accounting that deserves its own pass, not a silent ride along with this
+  one. **Decide.**
+- Cosmetic, same screen: `event_date` is stored as the calendar date rather
+  than the factory day, so a 01:12 C-shift event displays as the 26th while
+  correctly counting on the 25th.
+

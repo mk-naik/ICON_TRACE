@@ -3518,16 +3518,20 @@ def api_prodentries():
                   AND s.customer LIKE %s
             )"""
             args.append("%" + cust + "%")
-        # by when the entry was recorded, on the factory day (06:00 to
-        # 06:00): an entry made at 01:12 on the 26th is C shift of the 25th
+        # By the shift the production RAN in, which is what prod_date and
+        # shift now hold - not by when the report was typed. Filtering on
+        # created_at listed a C shift under the following morning, so the
+        # shift you were looking for was never on the day you asked for.
+        # prod_date is already the factory day (06:00 to 06:00), so it is
+        # compared directly - no shift_day_sql() on top of it.
         if clock.shift_number(shift):
             sql += " AND p.shift = %s"
             args.append(clock.SHIFT_LETTER[clock.shift_number(shift)])
         if dfrom:
-            sql += " AND " + clock.shift_day_sql("p.created_at") + " >= %s"
+            sql += " AND p.prod_date >= %s"
             args.append(dfrom)
         if dto:
-            sql += " AND " + clock.shift_day_sql("p.created_at") + " <= %s"
+            sql += " AND p.prod_date <= %s"
             args.append(dto)
             
         sql += " ORDER BY p.created_at DESC LIMIT %s"
@@ -3538,6 +3542,59 @@ def api_prodentries():
         r["day"] = str(clock.shift_day(
             datetime.datetime.fromisoformat(r["created_at"]))) if r.get("created_at") else None
     return jsonify({"entries": rows})
+
+
+# How far back a production entry may be filed. Generous, because catching up
+# a backlog of shift reports is ordinary; bounded, because "2025-09-25" typed
+# for 2026 would otherwise file a year-old shift that no dashboard would ever
+# show again and nobody would notice. ICON_PROD_BACKDATE_DAYS overrides it.
+PROD_BACKDATE_DAYS = int(os.environ.get("ICON_PROD_BACKDATE_DAYS", 30))
+
+_SHIFT_STARTS_AT = {1: 6, 2: 14, 3: 22}
+
+
+def _prod_when(date_raw, shift_raw, now=None):
+    """(factory day, shift letter, refusal) for a production entry.
+
+    The date and shift the operator states, checked rather than replaced.
+    Refused only where the answer cannot be true:
+
+      * a shift that has not STARTED yet - you cannot report a shift that
+        has not run. A shift still running may be filed; some lines do
+        record as they go, and refusing that would be inventing a rule.
+      * a date further back than PROD_BACKDATE_DAYS, which catches the
+        wrong-year typo while leaving ordinary catching-up alone.
+
+    The date is the factory day (06:00 to 06:00, icon_clock), so C shift of
+    the 25th is '2026-09-25' even though it ends at 06:00 on the 26th -
+    which is exactly the case this refuses to make anyone get wrong."""
+    now = now or clock.now()
+    raw = (date_raw or "").strip()
+    if not raw:
+        return None, None, "Pick the date the shift ran."
+    try:
+        day = datetime.date.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None, None, "%r is not a date." % raw
+    n = clock.shift_number(shift_raw)
+    if not n:
+        return None, None, "Pick the shift the production ran in - A, B or C."
+    letter = clock.SHIFT_LETTER[n]
+
+    started = datetime.datetime.combine(
+        day, datetime.time(hour=_SHIFT_STARTS_AT[n]))
+    if started > now:
+        return None, None, (
+            "%s shift on %s has not started yet - a shift is recorded once it "
+            "has run, never before." % (letter, day.strftime("%d-%m-%Y")))
+
+    behind = (clock.shift_day(now) - day).days
+    if behind > PROD_BACKDATE_DAYS:
+        return None, None, (
+            "%s is %d days back, past the %d this screen accepts. Check the "
+            "year before recording it." % (day.strftime("%d-%m-%Y"), behind,
+                                           PROD_BACKDATE_DAYS))
+    return day, letter, None
 
 
 @app.route("/api/prodentry", methods=["POST"])
@@ -3554,14 +3611,27 @@ def api_prodentry():
     if not incharge or not start_serial or not end_serial:
         return jsonify({"ok": False, "why": "Missing required fields."}), 400
 
-    # The date and shift are when this entry is recorded - the calendar date
-    # and IST time, stamped here - never what the form sends and never what
-    # the serial's barcode says. A form default once filed a range under
-    # v4's demo 21-08-2026. Dashboards count it on the factory day it falls
-    # in (06:00 to 06:00, icon_clock.shift_day). `date`/`shift` in the body
-    # are ignored.
+    # WHEN IT WAS PRODUCED comes from the form. WHEN IT WAS TYPED is stamped
+    # here. They are different facts and the record now keeps both.
+    #
+    # This used to ignore `date`/`shift` and stamp clock.now() for all three,
+    # which put a shift report under the moment somebody filled the form in.
+    # A shift report is written AFTER the shift ends - which is the next
+    # shift, and for C shift the next calendar day: C shift of the 25th ends
+    # at 06:00 on the 26th and gets filed at 06:15, and was recorded as A
+    # shift of the 26th. The form asked for the real date and shift, the
+    # operator typed them, and the server threw them away without saying so -
+    # so the only way to file a shift under its own name was to get the form
+    # to lie. (Reported by Mukesh, 26-09-2026.)
+    #
+    # The original reason for ignoring them was a form DEFAULT that once
+    # filed a range under v4's demo 21-08-2026. That is an argument for
+    # validating what arrives, not for discarding it - see _prod_when().
     stamp = clock.now()
-    shift_letter = clock.SHIFT_LETTER[clock.shift_of(stamp.hour)]
+    prod_day, shift_letter, refusal = _prod_when(d.get("date"), d.get("shift"),
+                                                 now=stamp)
+    if refusal:
+        return jsonify({"ok": False, "why": refusal}), 400
 
     import icon_challan_import as CI
     ds, de = CI.decompose(start_serial), CI.decompose(end_serial)
@@ -3634,7 +3704,8 @@ def api_prodentry():
 
         # Insert production entry
         eid = store.insert(cur, "production_entry", {
-            "prod_date": stamp.date().isoformat(),
+            # the factory day the shift belongs to, not the day it was typed
+            "prod_date": prod_day.isoformat(),
             "shift": shift_letter,
             "created_at": stamp.isoformat(timespec="seconds"),
             "shift_incharge": incharge,
@@ -3668,7 +3739,12 @@ def api_prodentry():
         db.audit(cur, actor(), "production.entry", "production_entry", eid, {
             "start_serial": start_serial,
             "end_serial": end_serial,
-            "qty": qty
+            "qty": qty,
+            # both facts in the trail: which shift this is, and when it was
+            # filed - a late entry should be visible as a late entry
+            "prod_date": prod_day.isoformat(),
+            "shift": shift_letter,
+            "recorded_at": stamp.isoformat(timespec="seconds")
         })
         
     return jsonify({"ok": True, "entry_id": eid, "qty": qty})

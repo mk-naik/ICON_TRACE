@@ -22,13 +22,14 @@ THE RULE THIS FILE DEFENDS
 Each test names the rule it defends, so a failure says which decision broke.
 """
 
-import os, shutil, sys, tempfile, traceback
+import datetime, os, shutil, sys, tempfile, traceback
 
 TMP = tempfile.mkdtemp(prefix="icontrace_production_")
 os.environ["ICON_DB_FILE"] = os.path.join(TMP, "test.db")
 
 import db                                                    # noqa: E402
 import store                                                 # noqa: E402
+import icon_clock as clock                                   # noqa: E402
 import app as APP                                            # noqa: E402
 import auth_test_helper as AUTH
 
@@ -228,6 +229,129 @@ def t_list_resolves_customer_from_first_serial():
     assert len(entries) == 1, entries
     assert entries[0]["customer"] == "C0001", entries[0]
     assert entries[0]["qty"] == 3
+
+
+# --------------------------------------------------------------------------
+# When it was PRODUCED vs when it was TYPED (reported by Mukesh, 26-09-2026)
+#
+# A shift report is written after the shift ends - which is the next shift,
+# and for C shift the next calendar day. The server used to ignore the form's
+# date and shift and stamp clock.now() into prod_date/shift, so a C shift of
+# the 25th filed at 06:15 on the 26th was recorded as A shift of the 26th,
+# and the only way to file it under its own name was to make the form lie.
+# --------------------------------------------------------------------------
+
+def _entry(eid=None):
+    with store.conn() as (cx, cur):
+        return store.one(cur, "SELECT * FROM production_entry "
+                              "ORDER BY entry_id DESC LIMIT 1")
+
+
+@test("the shift the operator states is what is recorded - C shift of the "
+      "25th, filed the next morning, is stored as C shift of the 25th and "
+      "not as the shift the form happened to be typed in")
+def t_records_the_shift_that_ran():
+    c = setup()
+    with store.conn() as (cx, cur):
+        serials = plan_serials(cur, 4)
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    r = c.post("/api/prodentry", json={
+        "date": yesterday, "shift": "C", "incharge": "NIGHT INCHARGE",
+        "start_serial": serials[0], "end_serial": serials[3]})
+    assert r.status_code == 200, r.get_json()
+    row = _entry()
+    assert row["prod_date"] == yesterday, row
+    assert row["shift"] == "C", row
+    # and when it was typed is still recorded, separately - a late entry
+    # stays visible as a late entry
+    assert row["created_at"][:10] == datetime.date.today().isoformat(), row
+    print("      prod_date=%s shift=%s, typed %s" % (row["prod_date"],
+                                                     row["shift"], row["created_at"]))
+
+
+@test("the list finds that entry on the day it RAN, not on the day it was "
+      "typed - the filter that used to read created_at")
+def t_listed_on_the_day_it_ran():
+    c = setup()
+    with store.conn() as (cx, cur):
+        serials = plan_serials(cur, 4)
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    today = datetime.date.today().isoformat()
+    assert c.post("/api/prodentry", json={
+        "date": yesterday, "shift": "C", "incharge": "NIGHT INCHARGE",
+        "start_serial": serials[0], "end_serial": serials[3]}).status_code == 200
+
+    on_run_day = c.get("/api/prodentries?from=%s&to=%s" % (yesterday, yesterday))
+    assert len(on_run_day.get_json()["entries"]) == 1, on_run_day.get_json()
+    on_typed_day = c.get("/api/prodentries?from=%s&to=%s" % (today, today))
+    assert on_typed_day.get_json()["entries"] == [], on_typed_day.get_json()
+    by_shift = c.get("/api/prodentries?shift=C")
+    assert len(by_shift.get_json()["entries"]) == 1, by_shift.get_json()
+
+
+@test("a shift that has not started yet is refused - you cannot report a "
+      "shift that has not run - while a shift still running may be filed")
+def t_future_shift_refused():
+    c = setup()
+    with store.conn() as (cx, cur):
+        serials = plan_serials(cur, 6)
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    r = c.post("/api/prodentry", json={
+        "date": tomorrow, "shift": "A", "incharge": "X",
+        "start_serial": serials[0], "end_serial": serials[1]})
+    assert r.status_code == 400, r.get_json()
+    assert "has not started yet" in r.get_json()["why"], r.get_json()
+
+    # the shift running right now IS acceptable
+    now = clock.now()
+    running = clock.SHIFT_LETTER[clock.shift_of(now.hour)]
+    r = c.post("/api/prodentry", json={
+        "date": clock.shift_day(now).isoformat(), "shift": running,
+        "incharge": "X", "start_serial": serials[0], "end_serial": serials[1]})
+    assert r.status_code == 200, r.get_json()
+
+
+@test("a date far enough back to be a wrong-year typo is refused, naming "
+      "how far back it is - ordinary catching-up is not")
+def t_backdate_limit():
+    c = setup()
+    with store.conn() as (cx, cur):
+        serials = plan_serials(cur, 6)
+    old = (datetime.date.today() -
+           datetime.timedelta(days=APP.PROD_BACKDATE_DAYS + 5)).isoformat()
+    r = c.post("/api/prodentry", json={
+        "date": old, "shift": "A", "incharge": "X",
+        "start_serial": serials[0], "end_serial": serials[1]})
+    assert r.status_code == 400, r.get_json()
+    assert "days back" in r.get_json()["why"], r.get_json()
+
+    ok_day = (datetime.date.today() -
+              datetime.timedelta(days=APP.PROD_BACKDATE_DAYS - 1)).isoformat()
+    r = c.post("/api/prodentry", json={
+        "date": ok_day, "shift": "B", "incharge": "X",
+        "start_serial": serials[0], "end_serial": serials[1]})
+    assert r.status_code == 200, r.get_json()
+    print("      %s refused, %s accepted" % (old, ok_day))
+
+
+@test("a missing or unreadable date or shift is refused by name, rather "
+      "than being quietly replaced with the current one")
+def t_bad_date_or_shift_refused():
+    c = setup()
+    with store.conn() as (cx, cur):
+        serials = plan_serials(cur, 4)
+    base = {"incharge": "X", "start_serial": serials[0], "end_serial": serials[1]}
+    for body, expect in (
+            (dict(base, shift="A"), "Pick the date"),
+            (dict(base, date="", shift="A"), "Pick the date"),
+            (dict(base, date="not-a-date", shift="A"), "is not a date"),
+            (dict(base, date=datetime.date.today().isoformat()), "Pick the shift"),
+            (dict(base, date=datetime.date.today().isoformat(), shift="Z"), "Pick the shift")):
+        r = c.post("/api/prodentry", json=body)
+        assert r.status_code == 400, (body, r.status_code)
+        assert expect in r.get_json()["why"], (body, r.get_json())
+    with store.conn() as (cx, cur):
+        assert store.one(cur, "SELECT COUNT(*) AS n FROM production_entry")["n"] == 0
 
 
 if __name__ == "__main__":

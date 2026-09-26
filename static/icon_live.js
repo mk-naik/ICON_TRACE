@@ -11750,7 +11750,16 @@ window.gpSetKind = function(k) {
       matChg.checked = false;
       if (typeof window.peMatToggle === 'function') window.peMatToggle();
     }
-    peStampNow();
+    /* forced: a fresh form must not open on v4's hardcoded 2026-08-21 and
+       its always-selected shift B */
+    peDefaultWhen(true);
+    var dateEl = document.querySelector('#peManual input[type="date"]');
+    var shiftEl = document.querySelectorAll('#peManual .grid.g3 select')[0];
+    [dateEl, shiftEl].forEach(function (el) {
+      if (!el || el.__peWhenWired) return;
+      el.__peWhenWired = true;
+      el.addEventListener('change', peWhenHint);
+    });
     if (typeof window.peCalc === 'function') window.peCalc();
   };
 
@@ -11759,17 +11768,53 @@ window.gpSetKind = function(k) {
      never from the serial's printed date. The form's two fields only show
      what will be stamped, so they are locked. It opened on v4's demo
      21-08-2026 before. */
-  function peStampNow() {
+  /* The shift that most recently ENDED, on the factory day it belongs to.
+     A shift report is written after the shift is over, so that is the one
+     being filed: at 06:15 on the 26th it is C shift of the 25th, not A of
+     the 26th. (A: previous is C of the day before, because the factory day
+     turns over at 06:00. B: previous is A of the same day. C: previous is
+     B of the same day.) */
+  function _lastEndedShift(d) {
+    d = d || new Date();
+    var cur = _istShift(d);
+    var fd = new Date(d.getTime() - 6 * 3600000);     // the factory day's date
+    if (cur === 'A') {
+      return { date: _localDate(new Date(fd.getTime() - 24 * 3600000)), shift: 'C' };
+    }
+    return { date: _localDate(fd), shift: cur === 'B' ? 'A' : 'B' };
+  }
+  window.istLastEndedShift = _lastEndedShift;
+
+  /* WHEN THE PRODUCTION RAN - the operator's to state, not the clock's.
+     These two fields used to be DISABLED and re-stamped with the current
+     date and shift every 30 seconds, and the server ignored what was sent
+     and stamped "now" as well. A shift report is filed after the shift
+     ends, which is the next shift and for C shift the next day, so the
+     form could not be told the truth by anybody. (Mukesh, 26-09-2026.)
+     They default to the shift that just ended and are editable; the server
+     refuses a shift that has not run yet and a date far enough back to be
+     a wrong-year typo. */
+  function peDefaultWhen(force) {
     var date = document.querySelector('#peManual input[type="date"]');
     var shift = document.querySelectorAll('#peManual .grid.g3 select')[0];
-    var p = _istParts(), day = _localDate(), fday = _shiftDay(), s = _istShift();
+    var last = _lastEndedShift();
     [date, shift].forEach(function (el) {
       if (!el) return;
-      el.disabled = true;
-      el.title = 'Stamped when you record - the date and shift on the IST clock';
+      el.disabled = false;
+      el.title = 'The shift this production ran in - not when you are filling this in';
     });
-    if (date) date.value = day;
-    if (shift) shift.value = s;
+    if (date) {
+      date.setAttribute('max', _localDate());   /* never a future day */
+      if (force || !date.value) date.value = last.date;
+    }
+    if (shift && (force || !shift.value)) shift.value = last.shift;
+    peWhenHint();
+  }
+  window.peStampNow = peDefaultWhen;   /* the name peClearForm already calls */
+
+  function peWhenHint() {
+    var date = document.querySelector('#peManual input[type="date"]');
+    var shift = document.querySelectorAll('#peManual .grid.g3 select')[0];
     var hint = document.getElementById('peStampHint');
     if (!hint && date && date.parentNode) {
       hint = document.createElement('div');
@@ -11777,15 +11822,24 @@ window.gpSetKind = function(k) {
       hint.className = 'hint';
       date.parentNode.appendChild(hint);
     }
-    if (hint) hint.textContent = 'Recorded as ' + _pad2(p.h) + ':' + _pad2(p.mi) +
-      ', shift ' + s + (fday !== day ? ' — counts toward C shift of ' +
-      fmtDay(fday) + ' (the day runs 06:00 to 06:00)' : '');
+    if (!hint) return;
+    var p = _istParts();
+    var last = _lastEndedShift();
+    var chosen = (date && date.value) || '';
+    var isLast = chosen === last.date && shift && shift.value === last.shift;
+    hint.textContent = 'The shift this production ran in' +
+      (isLast ? ' — the shift that just ended (' + last.shift + ' of ' +
+                fmtDay(last.date) + '). Change it if you are filing another one.'
+              : ' — filed at ' + _pad2(p.h) + ':' + _pad2(p.mi) + ' today.');
   }
-  window.peStampNow = peStampNow;
-  /* kept in step with the clock while the form is open */
+
+  /* Only the hint follows the clock. Re-defaulting the fields on a timer is
+     how a date somebody had just picked got overwritten under them. */
   setInterval(function () {
     var o1 = document.querySelector('#v-prodentry .wmain.o1');
-    if (o1 && o1.style.display !== 'none' && document.getElementById('peStampHint')) peStampNow();
+    if (o1 && o1.style.display !== 'none' && document.getElementById('peStampHint')) {
+      peWhenHint();
+    }
   }, 30000);
 
   /* Date range, shift and customer are sent to the server - api/prodentries
