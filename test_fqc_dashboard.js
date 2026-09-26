@@ -302,13 +302,21 @@ if (from < 0 || to < 0 || to < from) {
 var dashSrc = srcFull.substring(from, to).replace(/\.catch\(/g, "['catch'](");
 /* The dashboard's date defaults come from _localDate(), which lives outside
    the block above - read from the same shipped file, not re-typed here. */
+/* The end of that function, found with a regex rather than a literal
+   '\n  }\n': a fresh clone on Windows checks this file out with CRLF, and a
+   literal LF search finds nothing there - which took the whole file out on a
+   pristine checkout while passing in the working tree that wrote it. */
 var ldFrom = srcFull.indexOf('  function _localDate(d) {');
-var ldTo = ldFrom < 0 ? -1 : srcFull.indexOf('\n  }\n', ldFrom);
-if (ldFrom < 0 || ldTo < 0) {
+var ldEnd = -1;
+if (ldFrom >= 0) {
+  var ldM = /\r?\n  \}\r?\n/.exec(srcFull.slice(ldFrom));
+  if (ldM) ldEnd = ldFrom + ldM.index + ldM[0].length;
+}
+if (ldFrom < 0 || ldEnd < 0) {
   echo('CANNOT RUN: icon_live.js no longer has function _localDate(d).');
   if (WSH) WScript.Quit(1); else process.exit(1);
 }
-eval(srcFull.substring(ldFrom, ldTo + 4));
+eval(srcFull.substring(ldFrom, ldEnd));
 eval(dashSrc);
 
 /* ---- harness -------------------------------------------------------------- */
