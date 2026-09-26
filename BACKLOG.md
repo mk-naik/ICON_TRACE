@@ -1724,7 +1724,7 @@ still "designed, not built" everywhere in this app, not only here.
       SS and EL with its reachability and its column map, says *not
       configured* where nothing is set, and is redrawn after a save.
 
-## 21. Sessions, roles and live updates  *(decided in chat, Sep 2026 - Stage 0 built, Stages 1-3 not started)*
+## 21. Sessions, roles and live updates  *(decided in chat, Sep 2026 - Stages 0, 1 and 2 built; Stage 3 part-built - see below)*
 
 Why: a reload sends everyone back to sign-in (no server session; sign-in is a dropdown
 that sets a JS variable), and one user's save is never seen by another until they reload.
@@ -1749,14 +1749,19 @@ Staging
       (`python icon_auth_cli.py create-superadmin <id> "<name>"`), and enrolment
       itself, which auth_lab/lab_app.py still serves because app.py has no /enrol
       route.
-- [ ] Stage 2 - change feed: a server sequence bumped at the one commit point
+- [x] Stage 2 - change feed: a server sequence bumped at the one commit point
       (store.conn); the client polls /api/changes?since=N inside the 5 s ping; only the
       visible screen refetches; 3-5 s is acceptable. True push (SSE) later needs TLS +
       reverse proxy + a small separate async process; the feed makes push a change of
-      transport only.
+      transport only.  **Built in Round 30** - measured at 1.3 s from save to the other
+      machine's list, no reload, no click.
 - [ ] Stage 3 - form protection (never replace the DOM under someone typing or scanning;
       show a "changed by X" chip), version checks (409) on records two people can edit,
       cancel request/approve flow.
+      **The DOM-protection half arrived early, in Round 30**: it could not wait for a
+      later stage, because a feed that refetches a screen is exactly what destroys work
+      in progress. Still open here: version checks (409) on records two people can edit,
+      and the cancel request/approve flow.
 
 Decisions:
 - Lockout: lock after 10 consecutive failures for 5 minutes, with an escalating cooldown before it - 2 s after failure 1, 4 s after failure 2, 8 s after failure 3 and every one after that - enforced as a refusal on the *next* request, never a `time.sleep()` inside one: ICON TRACE serves on several Waitress worker threads, and a sleep in the request path would hold one for the cooldown's duration - enough parallel bad logins on one ID would tie up every worker and freeze the app for everyone else too. Keyed by the typed ID string itself, for every role and for IDs that match no user - if only real accounts slowed down, the cooldown alone would be an oracle for which IDs exist. The failure count shown on the login page is computed client-side, from that browser's own record of what it typed; the server never returns a count, a remaining-attempts figure, a lock state, or a "wait N seconds" - a locked or cooling-down ID gets the byte-identical generic failure whether the credential given was right or wrong, in the same time. (An earlier revision here said the opposite - "told how long only when the credential was CORRECT" - which is exactly the oracle this refuses to be: telling an attacker their guess was right, unpunished, while the account stays locked.)
@@ -4115,4 +4120,134 @@ Questions that need Mukesh are marked **Decide:**.
   close it.
 - **`/api/indent` answers refusals with 200** - see above; worth checking
   the other endpoints for the same pattern at the same time.
+
+## Round 30 - main catches up, and Stage 2: the change feed
+
+### Part A - the merge
+
+`main` was 113 commits behind what was actually running. `origin/main` was
+fully contained in `stage0-build-banner` (0 commits the other way), so it
+fast-forwarded: `11ac5fb..91d3b88`, no merge commit, no rebase, history
+still linear. `overnight-review-20260925` pointed at `2c5cadd`, an ancestor,
+and was deleted - the commits live on in both branches.
+
+One thing the brief did not anticipate: the LOCAL `main` had diverged
+(ahead 39, behind 3) and carried one commit that `stage0-build-banner` did
+not - `0417035`, a cherry-pick of `1a7ec3c`. Checked rather than assumed
+before moving anything: `1a7ec3c` itself is an ancestor of the branch, and
+every line the cherry-pick added is in today's tree (`prod_entry_id` in
+schema_sqlite.sql, store.py and app.py). It was a duplicate. Local main was
+moved to match, with `backup-local-main-0417035` left as a local tag.
+
+### Part B - the change feed
+
+Two people on two machines: one saves an indent and the other's screen shows
+the old list until they reload. Stage 1 fixed the refresh problem; this is
+the other half.
+
+**The sequence is bumped at the single commit point**, `store.conn.__exit__`,
+from the tables `_Cur.execute` saw written - not by editing 40-odd write
+endpoints. That one choke point is why this was cheap. `change_log.seq` is
+`AUTOINCREMENT` and that is load-bearing: rows are pruned after an hour, and a
+plain INTEGER PRIMARY KEY would hand out a number that had already been used,
+leaving every client holding a higher `since` permanently deaf.
+
+**Topic mapping** (table -> topic), coarser than a table and coarser than a
+screen:
+
+| Topic | Tables |
+|---|---|
+| indents | indent, indent_line |
+| allocations | allocation, allocation_material |
+| production | production_entry |
+| serials | serial |
+| fqc | fqc_record |
+| boxes | box, box_serial, box_lineage, box_print, box_counter |
+| challans | challan, challan_box, challan_serial, challan_counter |
+| invoices | invoice |
+| gatepasses | gatepass, gatepass_item, gp_counter |
+| loss | loss_event |
+| review | review_item |
+| master | material, cell_efficiency, app_config |
+| users | app_user, user_screen_perm |
+| audit | dispatch_audit |
+
+**Deliberately untracked**, each for its own reason: `auth_session` (the
+page's own polling touches it, so tracking it would make the feed feed
+itself and never go quiet), `change_log` (it must not report itself), and the
+rest of the `auth_*` credential machinery (nobody's screen data). A
+transaction touching only untracked tables records nothing at all.
+
+`serial` is its own topic rather than being folded into production: it is
+written by allocation, FQC, packing and dispatch alike, so every screen that
+counts modules subscribes to it and none of them has to guess.
+
+**Silent vs chip.** Silently refreshed - read-only lists and dashboards,
+where the worst case is a row moving under someone who is reading:
+
+    mgmt, proddash, dash, packdash, invoice, indent,
+    challan-list, gp-list, loading-list, hold, review
+
+Everything else shows the chip: every form and every scan screen - fqc, pack,
+repack, challan, gp, gp-new, plan, prodentry, loss, loadsession,
+invoice-parser, admin, items.
+
+That list is not the whole protection, because a list can have work on it
+too. A runtime check demotes ANY screen to the chip when a field on it has
+focus, when text has been typed into a non-filter input, or when a pallet,
+loading or challan session is open. Filter and search boxes do not count -
+they are how you read a list, not work in progress. This is Stage 3's rule
+arriving early, and it could not wait: a feed that refetches a screen is
+precisely what destroys work in progress.
+
+**The baseline is the payload's own sequence.** `/api/boot` now returns
+`change_seq`, read just before the payload is built, and the page counts from
+there. Letting the page set its own mark on its first poll left a window of
+up to five seconds in which a save was absorbed into the baseline and never
+reported - the acceptance test failed on exactly that, which is what found
+it. Taken from the payload, the worst case is a redundant refetch of
+something already on screen, which is the harmless direction.
+
+**`truncated`.** A `since` older than anything left after pruning answers
+`truncated: true` with NO topic list. A short list is what would make a
+client quietly miss those updates for good; the page treats truncated as
+"refetch the screen I am on".
+
+**True push (SSE/WebSocket) was deliberately not built.** It needs TLS and a
+reverse proxy in front of Waitress, and each open stream pins one of
+Waitress's 12 threads - a dozen people with two tabs each would exhaust them
+and the app would stop answering anyone. The feed is shaped so that adding
+push later is a change of transport only: the sequence, the topics and the
+client's decision logic all stay.
+
+### What proves it
+
+- `test_change_feed.py` (8): the sequence advances on a write through a real
+  endpoint and not on ten reads; a refused write (400 and 403) records
+  nothing; two sessions - one saves, the other's feed names the topic and the
+  saver's real login_id; topics match the tables; `truncated` on a pruned
+  `since`, and never on a first call; pruning removes what is past the window
+  and the sequence is never reused; 401 without a session and no screen gate;
+  junk `since` and a dropped `change_log` both survive without losing a save.
+- `test_change_feed_ui.py` (3): **acceptance** - two browser contexts, two
+  accounts, both on the Gate Pass list; one issues a gate pass and the other's
+  list shows it in **1.3 s**, with a sentinel proving no reload and no click.
+  **protection** - the other is instead half-way through the New Gate Pass
+  form; its typed text is still there and the chip appears in **2.1 s**
+  naming the saver, and Review then takes the update. And a change to a topic
+  the visible screen does not show moves nothing.
+
+### Found on the way
+
+- **The first `/api/boot` on an empty database really does write**: it seeds
+  the material master from icon_materials.py, once, and the feed reports it.
+  Correct, not a bug - pinned in the test rather than excluded, so it cannot
+  change quietly.
+- **`test_fqc_dashboard.js` could not run on a fresh clone** - my own
+  regression from the overnight review. It extracts `_localDate()` from
+  icon_live.js by searching for a literal `\n  }\n`, which a Windows checkout
+  does not contain (git writes CRLF). It passed in the working tree that
+  wrote the file and failed on a pristine checkout of main. Matched with a
+  regex now, and verified 18/18 under both line endings. Worth remembering:
+  running the suite in place can hide this whole class of fault.
 
