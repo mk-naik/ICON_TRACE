@@ -8,10 +8,14 @@ the browser, so it follows the person to any machine they sign in on - the
 same way their permissions already do. Default on: nobody who has not asked
 for a change gets one.
 
-Off means OFF, not "chip only". Someone who has turned live updates off has
-said they do not want the screen reacting, and a chip is the screen
-reacting - so neither the silent refresh of a landing page nor the chip on
-everything else may appear.
+Round 32 fixes what OFF means. The toggle governs the CHIP: box ON refreshes
+the list silently and never chips (a chip is what you show INSTEAD of
+refreshing); box OFF does the opposite - it never refreshes the list under the
+person, it shows the chip and lets them reload when they choose. So OFF is not
+"nothing at all" (Round 31 read it that way): OFF suppresses the SILENT
+refresh, and the chip is precisely the OFF affordance. The one thing OFF and
+ON share: an open form or popup stands the screen down either way - OFF shows
+no chip over a form, ON refreshes only once the form closes.
 """
 
 import os, sys, tempfile, traceback
@@ -139,9 +143,9 @@ def t_self_only():
 # what it does on screen
 # --------------------------------------------------------------------------
 
-@test("OFF suppresses the silent refresh of a landing page AND the chip on "
-     "everything else - off is off, not 'chip only'")
-def t_off_suppresses_both():
+@test("OFF suppresses the SILENT refresh of a list and shows the chip instead "
+     "- box off is the chip, not 'nothing at all' (Round 32 reverses Round 31)")
+def t_off_is_chip_not_silent():
     fresh()
     with H.browser() as b:
         ctxA, pgA = signed_in_page(b, "sa.saver")
@@ -156,7 +160,8 @@ def t_off_suppresses_both():
             pgB.wait_for_timeout(600)
             assert pgB.evaluate("USER.auto_refresh") is False
 
-            # a landing page, which WOULD have refreshed itself silently
+            # a dashboard that WOULD refresh itself silently with the box on:
+            # off, it must NOT refetch, and must show the chip instead.
             pgB.evaluate("go('packdash')")
             pgB.wait_for_timeout(900)
             pgB.evaluate("""() => { window.__loads = 0;
@@ -165,19 +170,21 @@ def t_off_suppresses_both():
                   if (String(u).indexOf('/api/boxes') >= 0) window.__loads++;
                   return real.apply(this, arguments); }; }""")
             open_pallet(pgA)
-            pgB.wait_for_timeout(WAIT_MS)
-            assert pgB.evaluate("window.__loads") == 0, "a landing page refreshed with the switch off"
-            assert not pgB.evaluate("!!document.querySelector('#chgChip.on')")
+            pgB.wait_for_selector("#chgChip.on", timeout=WAIT_MS)
+            assert pgB.evaluate("window.__loads") == 0, \
+                "off: the list refreshed silently instead of chipping"
 
-            # and a chip screen, which WOULD have chipped
+            # a working list too: off, gp-list shows the chip, never refetches
+            pgB.evaluate("if (window.hideChangeChip) hideChangeChip()")
             pgB.evaluate("go('gp-list')")
             pgB.wait_for_timeout(900)
-            issue_gatepass(pgA, "SHOULD NOT CHIP")
-            pgB.wait_for_timeout(WAIT_MS)
-            assert not pgB.evaluate("!!document.querySelector('#chgChip.on')"), \
-                "the chip appeared with the switch off"
+            before = pgB.inner_text("#gpLTableBody")
+            issue_gatepass(pgA, "CHIP WHEN OFF")
+            pgB.wait_for_selector("#chgChip.on", timeout=WAIT_MS)
+            assert "CHIP WHEN OFF" not in pgB.inner_text("#gpLTableBody"), \
+                "off: the list refreshed silently instead of chipping"
             assert pgB.errors == [], pgB.errors
-            print("      off: 0 silent refreshes, 0 chips, over %ds" % (WAIT_MS / 500))
+            print("      off: chip shown on both a dashboard and a list, 0 silent refreshes")
         finally:
             ctxA.close(); ctxB.close()
 

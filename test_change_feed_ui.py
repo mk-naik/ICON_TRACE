@@ -1,5 +1,5 @@
 """
-ICON TRACE - Round 30: the change feed on two real screens.
+ICON TRACE - the change feed on two real screens (Round 30, widened Round 32).
 
     python test_change_feed_ui.py
 
@@ -8,15 +8,20 @@ machines, and when one saves, the other's screen shows stale data until
 they reload. Two independent browser contexts here - two sessions, two
 accounts, one server.
 
-    acceptance   both on the Gate Pass list; one issues a gate pass; the
-                 other's list shows it without a reload and without a click
-    protection   the other is instead on the New Gate Pass form with text
-                 typed into it - the typed text must survive, and a chip
-                 must appear INSTEAD of the screen being refetched
+Round 32 fixes two things Mukesh found by using Round 31:
+  * the silent set is now EVERY list and dashboard, not four landing pages -
+    a row someone else created appears on the list you are looking at;
+  * the toggle governs the CHIP. Box on refreshes silently and never chips;
+    box off never refreshes and shows the chip instead. A chip is what you
+    show INSTEAD of refreshing, so it cannot appear while the box is on.
 
-The second is the one that matters most. Replacing the DOM under someone
-who is typing or scanning destroys work in progress, which is far worse
-than showing them something a few seconds out of date.
+The one thing that overrides both: an open form or resolve/detail popup on a
+screen stands it down - whether or not anything has been typed yet (presence,
+not dirtiness). Box on, the refresh is held until the form closes and then
+run; box off, no chip over a form at all. Tearing a blank New Indent form or
+an open review popup out from under someone is jarring even when nothing is
+lost, and refetching under someone mid-entry destroys work in progress -
+both far worse than a list a few seconds out of date.
 """
 
 import os, sys, tempfile, time, traceback
@@ -119,6 +124,45 @@ def open_pallet(pg):
     assert ok, "the pallet did not open"
 
 
+def make_indent(pg, no):
+    """An indent created BY THAT PAGE's session - topic 'indents', which the
+    Indent list subscribes to. The item code is read from /api/boot, the same
+    catalog the New Indent form's dropdown is built from."""
+    status = pg.evaluate("""(no) => fetch('/api/boot').then(function (r) { return r.json(); })
+          .then(function (b) {
+            var code = b.items && b.items[0] && b.items[0].item_code;
+            return fetch('/api/indent', {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({indent_no: no, indent_date: '2026-09-09',
+                customer: 'ICON STOCK', items: [{item_code: code, qty: 10}]})
+            }).then(function (r) { return r.status; }); })""", no)
+    assert status == 200, "the indent did not save (status %s)" % status
+
+
+def fqc_provisional_pass(pg, serial):
+    """A provisional FQC pass BY THAT PAGE's session - topic 'fqc', which Needs
+    Review subscribes to. Without the tester's reading a pass needs a coded
+    reason and is held; that is a real, evidence-free path to an 'fqc' change."""
+    status = pg.evaluate("""(s) => fetch('/api/fqc', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({serial: s, outcome: 'pass',
+                                  reason: 'OV-CAL', note: 'tester unreachable'})
+          }).then(function (r) { return r.status; })""", serial)
+    assert status == 200, "the provisional pass did not save (status %s)" % status
+
+
+def set_auto_refresh(pg, on):
+    """Flip the account's live-updates switch and mirror it into USER, the way
+    the profile-card checkbox does."""
+    pg.evaluate("""(on) => fetch('/api/session/auto-refresh', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({on: on})
+        }).then(function (r) { return r.json(); })
+          .then(function (d) { USER.auto_refresh = d.auto_refresh; })""", on)
+    pg.wait_for_timeout(500)
+    assert pg.evaluate("USER.auto_refresh") is on
+
+
 def wait_for(pg, js, ms=WAIT_MS):
     """Poll a predicate in the page. Returns how long it took, or None."""
     t0 = time.time()
@@ -129,9 +173,9 @@ def wait_for(pg, js, ms=WAIT_MS):
     return None
 
 
-@test("ACCEPTANCE: two machines on the Packing Log - a landing page, one of "
-     "the four still refreshed silently - one opens a pallet and the other "
-     "refetches itself through its own load path, no reload, no click, no chip")
+@test("ACCEPTANCE: two machines on the Packing Log - a dashboard in the silent "
+     "set - one opens a pallet and the other refetches itself through its own "
+     "load path, no reload, no click, no chip")
 def t_acceptance():
     fresh()
     with H.browser() as b:
@@ -169,47 +213,140 @@ def t_acceptance():
             ctxA.close(); ctxB.close()
 
 
-@test("PROTECTION: the other machine is half-way through the New Gate Pass "
-     "form - the typed text survives, and a chip appears INSTEAD of the "
-     "form being refetched")
-def t_protection():
+@test("PROTECTION, box on: the New Indent form is OPEN and BLANK - nothing "
+     "typed - when a new indent arrives. No chip, the form is left standing, "
+     "and the list refreshes ONLY once the form is closed (Mukesh's case: "
+     "presence, not dirtiness)")
+def t_indent_blank_form_protected():
     fresh()
     with H.browser() as b:
         ctxA, pgA = signed_in_page(b, "Super Admin", "sa.saver")
-        ctxB, pgB = signed_in_page(b, "Super Admin", "sa.typist")
+        ctxB, pgB = signed_in_page(b, "Super Admin", "sa.indent")
         try:
-            pgB.evaluate("go('gp-new')")
-            pgB.wait_for_timeout(1200)
-            typed = "HALF TYPED PARTY NAME"
-            pgB.fill("#gpParty", typed)
-            pgB.wait_for_timeout(200)
+            pgB.evaluate("go('indent')")
+            pgB.wait_for_selector("#indToggleBtn", timeout=20000)
+            pgB.evaluate("indNew()")                       # open the form
+            pgB.wait_for_selector("#indSaveBtn", timeout=20000)
+            # nothing is typed into it - it is blank on purpose
+            assert pgB.evaluate(
+                "document.getElementById('indForm').style.display") != "none"
+            # count B's own list reloads through its load path
+            pgB.evaluate("""() => { window.__loads = 0; var real = window.fetch;
+                window.fetch = function (u) {
+                  if (String(u).indexOf('/api/indents') >= 0) window.__loads++;
+                  return real.apply(this, arguments); }; }""")
 
-            issue_gatepass(pgA, "SOMEBODY ELSE SAVED THIS")
+            make_indent(pgA, "BLANKFORM-1")
 
-            took = wait_for(pgB, "!!document.querySelector('#chgChip.on')")
-            assert took is not None, "no chip appeared in %ds" % (WAIT_MS / 1000)
-            # the work in progress is untouched
-            assert pgB.input_value("#gpParty") == typed, \
-                "the typed text was destroyed: %r" % pgB.input_value("#gpParty")
-            chip = pgB.inner_text("#chgChip")
-            assert "out of date" in chip, chip
-            assert "sa.saver" in chip, "the chip does not say who: %r" % chip
-
-            # and the person can take the update when they choose
-            pgB.click("#chgChipGo")
-            pgB.wait_for_timeout(1500)
+            # two poll cycles: the form is open, so NOTHING happens
+            pgB.wait_for_timeout(WAIT_MS)
             assert not pgB.evaluate("!!document.querySelector('#chgChip.on')"), \
-                "the chip stayed up after Review"
+                "a chip appeared over an open (blank) form"
+            assert pgB.evaluate("window.__loads") == 0, \
+                "the list refreshed under the open form"
+            assert pgB.evaluate("!!document.querySelector('#indSaveBtn')"), \
+                "the blank form was torn down"
+
+            # close the form -> the list refreshes on its own, now it is safe
+            pgB.evaluate("indNew()")                       # toggles it closed
+            took = wait_for(pgB, "window.__loads > 0")
+            assert took is not None, \
+                "the list never refreshed after the form was closed"
+            assert "BLANKFORM-1" in pgB.inner_text("#indRows"), \
+                "the refreshed list does not show the new indent"
+            assert not pgB.evaluate("!!document.querySelector('#chgChip.on')"), \
+                "a chip appeared with the box on"
             assert pgB.evaluate("window.__noReload") == "intact"
             assert pgB.errors == [] and pgA.errors == [], (pgA.errors, pgB.errors)
-            print("      chip in %.1fs: %r; typed text intact" % (took, chip[:60]))
+            print("      blank form left standing; list refreshed %.1fs after close"
+                  % took)
         finally:
             ctxA.close(); ctxB.close()
 
 
-@test("SAME ACCOUNT, TWO WINDOWS: the second window is still told. Suppressing "
-     "my own saves is decided by the PAGE that wrote, never by the account - "
-     "deciding it by account left Production Entry silent for six minutes")
+@test("PROTECTION, box OFF: the New Indent form is open and a new indent "
+     "arrives - still NO chip. A chip inviting a reload that would destroy the "
+     "form is the wrong prompt; this is deliberate (Round 32)")
+def t_indent_form_open_off_no_chip():
+    fresh()
+    with H.browser() as b:
+        ctxA, pgA = signed_in_page(b, "Super Admin", "sa.saver")
+        ctxB, pgB = signed_in_page(b, "Super Admin", "sa.offform")
+        try:
+            set_auto_refresh(pgB, False)
+            pgB.evaluate("go('indent')")
+            pgB.wait_for_selector("#indToggleBtn", timeout=20000)
+            pgB.evaluate("indNew()")
+            pgB.wait_for_selector("#indSaveBtn", timeout=20000)
+
+            make_indent(pgA, "OFFFORM-1")
+
+            pgB.wait_for_timeout(WAIT_MS)
+            assert not pgB.evaluate("!!document.querySelector('#chgChip.on')"), \
+                "off + form open still raised a chip"
+            assert pgB.evaluate("!!document.querySelector('#indSaveBtn')"), \
+                "the form was torn down"
+            assert pgB.errors == [] and pgA.errors == [], (pgA.errors, pgB.errors)
+            print("      off + New Indent form open: no chip, deliberately")
+        finally:
+            ctxA.close(); ctxB.close()
+
+
+@test("PROTECTION, box on: the review resolve popup is OPEN when a review "
+     "change arrives - the popup is left standing, no chip, and the list "
+     "refreshes only once the popup closes")
+def t_review_resolve_protected():
+    fresh()
+    serials = seed_serials()
+    with H.browser() as b:
+        ctxA, pgA = signed_in_page(b, "Super Admin", "sa.saver")
+        ctxB, pgB = signed_in_page(b, "Super Admin", "sa.review")
+        try:
+            pgB.evaluate("go('review')")
+            pgB.wait_for_selector("#rvRows", timeout=20000)
+            # open the REAL resolve popup. __reviewItems is scaffolded, but
+            # reviewGradePrompt() and the #mdl overlay it raises are the ones
+            # the Reject button in a review row uses.
+            pgB.evaluate("""() => {
+                window.__reviewItems = [{type:'quality_grade', serial:'REVSER-1',
+                  locked:false, evidence:{original:{pmax:630, wattage:625,
+                    el_verdict:'PASS', defect:'', reason:'', note:'',
+                    decided_by:'x'}}}];
+                window.reviewGradePrompt('REVSER-1', 'B'); }""")
+            pgB.wait_for_selector("#mdl.on", timeout=20000)
+            pgB.wait_for_selector("#revWhy", timeout=20000)
+            pgB.evaluate("""() => { window.__loads = 0; var real = window.fetch;
+                window.fetch = function (u) {
+                  if (String(u).indexOf('/api/review') >= 0) window.__loads++;
+                  return real.apply(this, arguments); }; }""")
+
+            fqc_provisional_pass(pgA, serials[0])          # topic 'fqc'
+
+            pgB.wait_for_timeout(WAIT_MS)
+            assert not pgB.evaluate("!!document.querySelector('#chgChip.on')"), \
+                "a chip appeared over the resolve popup"
+            assert pgB.evaluate("window.__loads") == 0, \
+                "the review list refreshed under the open popup"
+            assert pgB.evaluate("!!document.querySelector('#mdl.on') && "
+                                "!!document.getElementById('revWhy')"), \
+                "the resolve popup was torn down"
+
+            pgB.evaluate("closeModal()")
+            took = wait_for(pgB, "window.__loads > 0")
+            assert took is not None, \
+                "the review list never refreshed after the popup closed"
+            assert not pgB.evaluate("!!document.querySelector('#chgChip.on')")
+            assert pgB.errors == [] and pgA.errors == [], (pgA.errors, pgB.errors)
+            print("      resolve popup left standing; list refreshed %.1fs after close"
+                  % took)
+        finally:
+            ctxA.close(); ctxB.close()
+
+
+@test("SAME ACCOUNT, TWO WINDOWS, box on: the second window is still told - "
+     "and now (Round 32, prodentry is a silent screen) it refreshes itself, "
+     "while the window that DID the save does not. Suppressing my own save is "
+     "decided by the PAGE that wrote, never by the account")
 def t_same_account_second_window_is_told():
     fresh()
     serials = seed_serials()
@@ -222,76 +359,88 @@ def t_same_account_second_window_is_told():
             assert pgA.evaluate("window.iconClientId") != \
                 pgB.evaluate("window.iconClientId"), "two pages shared one client id"
             for pg in (pgA, pgB):
-                pg.evaluate("go('prodentry')")       # not a silent screen
+                pg.evaluate("go('prodentry')")       # a silent screen now
                 pg.wait_for_timeout(900)
+            # count each page's own reloads through its load path
+            for pg in (pgA, pgB):
+                pg.evaluate("""() => { window.__loads = 0; var real = window.fetch;
+                    window.fetch = function (u) {
+                      if (String(u).indexOf('/api/prodentries') >= 0) window.__loads++;
+                      return real.apply(this, arguments); }; }""")
 
             record_production(pgA, serials)
 
-            took = wait_for(pgB, "!!document.querySelector('#chgChip.on')")
+            took = wait_for(pgB, "window.__loads > 0")
             assert took is not None, \
-                "the second window was never told, %ds after the save" % (WAIT_MS / 1000)
-            chip = pgB.inner_text("#chgChip")
-            assert "another window" in chip, chip
-            # and the window that DID the save is still not chipped
+                "the second window never refreshed, %ds after the save" % (WAIT_MS / 1000)
+            # told SILENTLY - a refresh, not a chip
+            assert not pgB.evaluate("!!document.querySelector('#chgChip.on')"), \
+                "the second window chipped instead of refreshing (box is on)"
+            # and the window that DID the save does not react to its own change
+            assert pgA.evaluate("window.__loads") == 0, \
+                "the saving window refetched its own save through the feed"
             assert not pgA.evaluate("!!document.querySelector('#chgChip.on')"), \
                 "the saving window chipped itself"
             assert pgA.errors == [] and pgB.errors == [], (pgA.errors, pgB.errors)
-            print("      second window told in %.1fs: %r" % (took, chip.split("\n")[0]))
+            print("      second window refreshed in %.1fs; saving window quiet" % took)
         finally:
             ctxA.close(); ctxB.close()
 
 
-@test("my OWN save raises no chip on my own screen - it already updated "
-     "itself, and a chip over my own work would be noise")
+@test("my OWN save makes my own SILENT screen neither chip nor refetch through "
+     "the feed - its own success path owns that update; the feed stays out of "
+     "my way (suppressed by page, not account)")
 def t_own_save_is_quiet():
     fresh()
+    serials = seed_serials()
     with H.browser() as b:
         ctx, pg = signed_in_page(b, "Super Admin", "sa.solo")
         try:
-            pg.evaluate("go('gp-new')")
-            pg.wait_for_timeout(1200)
-            typed = "MY OWN TYPING"
-            pg.fill("#gpParty", typed)
-            issue_gatepass(pg, "MY OWN SAVE")     # same session, same person
+            pg.evaluate("go('prodentry')")           # a silent screen
+            pg.wait_for_timeout(900)
+            pg.evaluate("""() => { window.__loads = 0; var real = window.fetch;
+                window.fetch = function (u) {
+                  if (String(u).indexOf('/api/prodentries') >= 0) window.__loads++;
+                  return real.apply(this, arguments); }; }""")
+            record_production(pg, serials)           # same session, same page
             pg.wait_for_timeout(WAIT_MS)
             assert not pg.evaluate("!!document.querySelector('#chgChip.on')"), \
                 "my own save told me my screen was out of date"
-            assert pg.input_value("#gpParty") == typed
+            assert pg.evaluate("window.__loads") == 0, \
+                "the feed refetched my screen over my own save"
             assert pg.errors == [], pg.errors
-            print("      own save: no chip, typed text intact")
+            print("      own save: no chip, no feed-driven refetch")
         finally:
             ctx.close()
 
 
-@test("the seven screens moved out of silent now show the chip even when "
-     "idle - the decision is being outside the four landing pages, not "
-     "whether anybody happens to be typing (Round 31)")
-def t_moved_screens_chip_when_idle():
+@test("box on, idle list: a change refreshes it SILENTLY and shows no chip - "
+     "gp-list was chip-only in Round 31 and is a silent screen again "
+     "(Round 32 flips it back)")
+def t_idle_list_refreshes_silently_when_on():
     fresh()
     with H.browser() as b:
         ctxA, pgA = signed_in_page(b, "Super Admin", "sa.saver")
         ctxB, pgB = signed_in_page(b, "Super Admin", "sa.watcher")
         try:
-            # gp-list was silent until Round 31; nothing is focused or typed
             pgB.evaluate("go('gp-list')")
             pgB.wait_for_timeout(1200)
             assert pgB.evaluate("(document.activeElement||{}).tagName") == "BODY", \
                 "the screen is not idle - the test would prove nothing"
-            before = pgB.inner_text("#gpLTableBody")
 
-            issue_gatepass(pgA, "IDLE CHIP TEST PARTY")
+            issue_gatepass(pgA, "IDLE SILENT TEST PARTY")
 
-            took = wait_for(pgB, "!!document.querySelector('#chgChip.on')")
-            assert took is not None, "an idle non-landing screen did not chip"
-            assert "IDLE CHIP TEST PARTY" not in pgB.inner_text("#gpLTableBody"), \
-                "it refreshed itself instead of showing the chip"
-            # and Review still takes the update, through its own load path
-            pgB.click("#chgChipGo")
-            pgB.wait_for_timeout(1800)
-            assert "IDLE CHIP TEST PARTY" in pgB.inner_text("#gpLTableBody"), \
-                "Review did not reload the list"
+            took = wait_for(pgB,
+                "document.getElementById('gpLTableBody').innerText.indexOf("
+                "'IDLE SILENT TEST PARTY') >= 0")
+            assert took is not None, \
+                "an idle list did not refresh itself with the box on"
+            assert not pgB.evaluate("!!document.querySelector('#chgChip.on')"), \
+                "it showed a chip with the box on"
+            assert pgB.evaluate("window.__noReload") == "intact", \
+                "the page reloaded - that is not what this feature does"
             assert pgB.errors == [], pgB.errors
-            print("      gp-list chipped in %.1fs while idle; Review reloaded it" % took)
+            print("      gp-list refreshed itself in %.1fs, no chip, no reload" % took)
         finally:
             ctxA.close(); ctxB.close()
 

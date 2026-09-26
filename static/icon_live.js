@@ -8075,19 +8075,42 @@ function wireFqcAnomalies() {
     review:           function () { window.iconReviewRefresh(); }
   };
 
-  /* Refetched under the person WITHOUT asking: the landing pages and
-     dashboards ONLY - screens you read, with nothing on them to act on and
-     nothing to lose if a figure moves. Everything else gets the chip and
-     lets the person decide, and that no longer depends on what is on screen
-     at the time: being outside these four is the whole test. (Round 31 -
-     Mukesh's rule. It was eleven, and seven of them were screens people
-     work from.)
+  /* The screens the feed acts on at all: every screen whose LANDING state is
+     a list or a dashboard - i.e. everything that a row someone else created
+     should simply appear on. Box on refreshes it silently; box off shows the
+     chip on it instead (see applyChanges). A pure form is NOT here, because it
+     has no landing list to refresh - and a form or popup open ON one of these
+     lists is handled by screenBusy() below (presence, not dirtiness), never by
+     dropping the list out of this set.
 
-     The four were checked, not assumed: packdash has no action control at
-     all, and mgmt/proddash/dash carry only links to OTHER screens (Open,
-     Enter, Production entry, New entry) - nothing that acts on their own
-     data. The runtime check below can still demote any of them. */
-  var CHANGE_SILENT = { mgmt: 1, proddash: 1, dash: 1, packdash: 1 };
+     Round 31 had only the four landing dashboards here and pushed every
+     working list (Indent, Challan, Gate Pass, Planning, Production Entry, ...)
+     onto the chip. Mukesh's correction: a list is exactly where a new row
+     belongs silently, so the set is now the dashboards, every list/landing
+     screen, the Control lists and Search & Trace. Confirmed against the live
+     nav in icon_trace.html and the injected NEW_VIEWS ids.
+
+     OUT, deliberately, and each confirmed to have no landing list of its own:
+       pack (New Pallet - scan into a pallet), challan (Create Challan; its
+       list is challan-list), gp / gp-new (the Gate Pass create/edit form and
+       New Gate Pass; the list is gp-list), loadver / loadsession (Loading
+       Verification and its session; the list is loading-list), invoice-parser
+       (the upload/parse form) - pure forms; and admin / items, the two Admin
+       config screens, which have no clean list-reload path (they redraw on
+       navigation).
+
+     drafts and search are here for completeness - both are list/landing by
+     nature - but neither carries a change topic today, so neither actually
+     fires: drafts still shows v4's sample rows (CHANGE_SCREEN_TOPICS has no
+     'drafts'), and Search & Trace opens empty and is deliberately left without
+     a topic so a trace result is never refetched out from under a reader. */
+  var CHANGE_SILENT = {
+    mgmt: 1, proddash: 1, dash: 1, packdash: 1, disp: 1,
+    indent: 1, plan: 1, prodentry: 1, loss: 1, fqc: 1, repack: 1,
+    invoice: 1, 'challan-list': 1, 'gp-list': 1, 'loading-list': 1,
+    hold: 1, review: 1,
+    drafts: 1, search: 1
+  };
 
   var _chgSeq = null;          /* null until the first answer: nothing to miss */
   var _chgBusy = false;
@@ -8101,10 +8124,35 @@ function wireFqcAnomalies() {
      the guard that makes that true regardless of the lists above: a screen is
      busy if a field on it has focus, if anything typed into it is unsaved, or
      if a scan session is open. Filter and search boxes do not count - they
-     are how you read a list, not work in progress. */
+     are how you read a list, not work in progress.
+
+     Round 32 widens it: an open entry form or resolve/detail popup stands the
+     screen down whether or not anything has been typed into it yet - the
+     trigger is PRESENCE, not dirtiness. A blank New Indent form, or an open
+     review popup, vanishing (or its list moving) under someone is jarring even
+     when nothing would be lost. The silent refresh acts on the LIST; a form or
+     popup is a separate thing on top of it, and is never touched while open. */
   function screenBusy(view) {
     var sec = document.getElementById('v-' + view);
     if (!sec) return false;
+    /* The generic modal is a GLOBAL overlay (review resolve, duplicate
+       compare, quality decision, any dialog). If one is up the person is in
+       it, whatever screen is behind - so stand down. */
+    var mdl = document.getElementById('mdl');
+    if (mdl && mdl.classList.contains('on')) return true;
+    /* New Indent: a panel that toggles open above the list (frag_indent.html
+       #indForm, inline display '' when open, 'none' when closed). */
+    var indForm = sec.querySelector('#indForm');
+    if (indForm && indForm.style.display !== 'none') return true;
+    /* Hold: the row "Open" button fills #holdDetail with a detail card; it is
+       empty until then, so any content means a detail panel is open. */
+    var holdDetail = sec.querySelector('#holdDetail');
+    if (holdDetail && holdDetail.innerHTML.trim()) return true;
+    /* Repack: rpLoad(true) only re-renders the source picker, but a repack
+       wizard past the source pick - loose modules pooled, or target boxes
+       being built - is work in progress on top of it. */
+    if ((typeof rpPool !== 'undefined' && rpPool && rpPool.length) ||
+        (typeof rpTargets !== 'undefined' && rpTargets && rpTargets.length)) return true;
     if (typeof packBox !== 'undefined' && packBox && packBox.box_id) return true;
     if (typeof ldSession !== 'undefined' && ldSession) return true;
     if (typeof chOrder !== 'undefined' && chOrder && chOrder.length) return true;
@@ -8119,7 +8167,14 @@ function wireFqcAnomalies() {
         if (busy || el.disabled || el.readOnly) return;
         if (el.getAttribute('data-role')) return;         /* filter / search */
         if (/search|filter|qbox/i.test(el.id || '')) return;
-        if ((el.value || '').trim()) busy = true;
+        /* Work in progress is a value the person CHANGED - not one v4 ships
+           the field pre-filled with (Production Entry's demo serial range, a
+           form's "Prepared by" default). An untouched default is a placeholder,
+           not unsaved work, and must not block a silent refresh of the list
+           beside it - el.defaultValue is exactly the HTML value= it loaded
+           with. A field the person focused is already caught above. */
+        var v = (el.value || '');
+        if (v.trim() && v !== (el.defaultValue || '')) busy = true;
       });
     return busy;
   }
@@ -8164,12 +8219,22 @@ function wireFqcAnomalies() {
     try { fn(); return true; } catch (e) { return false; }
   }
 
+  /* A silent refresh owed to a list once the form/popup open on it closes -
+       keyed by view id, set only when the box is ON (see applyChanges). box
+       OFF never refreshes silently, so it never owes one. */
+  var _pendingRefresh = {};
+
+  function flushPendingRefresh() {
+    var view = currentView();
+    if (!view || !_pendingRefresh[view]) return;
+    if (screenBusy(view)) return;                 /* form/popup still open */
+    if (typeof USER !== 'undefined' && USER && USER.auto_refresh === false) {
+      delete _pendingRefresh[view]; return;       /* box turned off meanwhile */
+    }
+    if (reloadScreen(view)) delete _pendingRefresh[view];
+  }
+
   function applyChanges(d) {
-    /* Off means off: no silent refresh and no chip, on any screen. Not
-       "chip only" - somebody who has turned live updates off has said they
-       do not want the screen reacting, and a chip is the screen reacting.
-       The feed keeps running, so turning it back on needs no reload. */
-    if (typeof USER !== 'undefined' && USER && USER.auto_refresh === false) return;
     var view = currentView();
     if (!view) return;
     var topics = d.topics || [];
@@ -8195,22 +8260,45 @@ function wireFqcAnomalies() {
     var elsewhere = pages.filter(function (c) { return c && c !== CLIENT_ID; });
     if (!d.truncated && pages.length && !elsewhere.length) return;
 
-    var actors = d.by || [];
-    var others = actors.filter(function (n) {
-      return n && n !== (USER && USER.login_id);
-    });
-    /* Name them if it was somebody else; say so plainly if it was this
-       account in another window, which is the confusing case worth naming. */
-    var label = others.length ? fqcEsc(others[0]) + ' saved changes'
-              : actors.length ? 'Saved in another window, signed in as you'
-              : 'Changed elsewhere';
-    if (CHANGE_SILENT[view] && !screenBusy(view) && reloadScreen(view)) return;
-    showChangeChip(view, label);
+    /* Only the lists and dashboards react at all. A pure form (New Pallet,
+       Create Challan, New Gate Pass, ...) has no landing list to refresh and
+       never shows a chip - being outside CHANGE_SILENT is the whole test. */
+    if (!CHANGE_SILENT[view]) return;
+
+    var off = (typeof USER !== 'undefined' && USER && USER.auto_refresh === false);
+
+    /* The toggle decides the whole of it (Round 32):
+         box OFF -> the chip, and the person reloads when they choose; unless a
+                    form/popup is open, then nothing (a chip inviting a reload
+                    that would destroy the form is the wrong prompt).
+         box ON  -> a silent refresh of the list; unless a form/popup is open,
+                    then nothing now and the refresh is run once it closes, so
+                    the list is current the moment they are back to it.
+       A chip only ever appears with the box OFF: if the box is on there is
+       never a chip, because a chip is what you show INSTEAD of refreshing. */
+    if (off) {
+      if (screenBusy(view)) return;               /* form open -> nothing */
+      var actors = d.by || [];
+      var others = actors.filter(function (n) {
+        return n && n !== (USER && USER.login_id);
+      });
+      /* Name them if it was somebody else; say so plainly if it was this
+         account in another window, which is the confusing case worth naming. */
+      var label = others.length ? fqcEsc(others[0]) + ' saved changes'
+                : actors.length ? 'Saved in another window, signed in as you'
+                : 'Changed elsewhere';
+      showChangeChip(view, label);
+      return;
+    }
+    /* box on */
+    if (screenBusy(view)) { _pendingRefresh[view] = true; return; }
+    reloadScreen(view);
   }
 
   function pollChanges() {
     var app = document.getElementById('app');
     if (!app || !app.classList.contains('on')) return;   /* not signed in */
+    flushPendingRefresh();     /* run a refresh a now-closed form was owed */
     if (_chgBusy) return;
     _chgBusy = true;
     fetch('/api/changes?since=' + (_chgSeq === null ? 0 : _chgSeq),
