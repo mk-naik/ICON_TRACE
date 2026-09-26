@@ -4349,3 +4349,120 @@ the same bug and was left alone deliberately:
   than the factory day, so a 01:12 C-shift event displays as the 26th while
   correctly counting on the 25th.
 
+## Round 31 - the second window, a much shorter silent list, and a switch
+
+### The bug, and what it actually was
+
+Mukesh, live: two sessions of the SAME Super Admin account (one ordinary
+window, one InPrivate), both on Production Entry. A save in one added an
+entry; six minutes later the other showed neither the entry nor a chip.
+`prodentry` is correctly NOT in `CHANGE_SILENT`, so a chip was the right
+expectation.
+
+Reproduced before touching anything, at the real 5-second interval, 19 poll
+cycles:
+
+    t+5.0s   seq=3  topics=[]                                  by=[]
+    t+10.0s  seq=3  topics=[]                                  by=[]
+    t+15.0s  seq=6  topics=['audit','production','serials']     by=['mknaik']
+    t+20.0s ... t+95.0s  seq=6  topics=[]                      by=[]
+    chip events: 0
+
+So: polling was healthy, `/api/changes` DID report the save, and
+`applyChanges()` DID match `production` against prodentry's topics. Then it
+returned early on **Round 30's own self-save suppression**, because
+`d.by == ['mknaik']` and the watching window's `USER.login_id` was also
+`mknaik`. `showChangeChip()` was never called - the chip never appeared,
+rather than appearing and being dismissed.
+
+**Root cause: the suppression asked the wrong question.** Round 30 justified
+it with "every person here has their own ID - shared station logins are not
+used", which is true of two different PEOPLE and says nothing about one
+person signed in twice. An InPrivate window, a phone, a second PC: one
+account, two pages. The account was never the right question.
+
+**The fix is to ask about the page.** Each page mints a client id at load
+(`window.iconClientId`) and sends it as `X-Icon-Client` on every same-origin
+request; `_load_session` reads it, `change_log.by_client` records it, and
+`/api/changes` returns `by_clients`. A change is suppressed only when every
+change since came from THIS page. A write carrying no client id - the CLI, a
+migration, an offline replay through the service worker - is never
+suppressed. The chip now says "Saved in another window, signed in as you"
+when that is what happened, because that case is confusing enough to name.
+
+Re-ran the identical repro: chip at **t+15.05s**, and it stays up.
+
+### CHANGE_SILENT: eleven to four
+
+Mukesh's rule - silent is landing pages and dashboards only; anywhere people
+work is chip-only, whatever is or is not on screen at the time.
+
+    silent now:  mgmt, proddash, dash, packdash
+    moved out:   invoice, indent, challan-list, gp-list, loading-list,
+                 hold, review
+
+Each was checked by listing every live control on the screen, not assumed:
+
+| Screen | Why it moved |
+|---|---|
+| invoice | **New invoice** |
+| indent | **New indent** |
+| challan-list | **Create challan** |
+| gp-list | **New Gate Pass** |
+| loading-list | **Verify one pallet's contents** |
+| review | resolve actions, which live in the ROWS - an empty screen shows none, which is why a control scan alone under-reports it |
+| hold | see below |
+
+Two corrections to the reasoning that came with the request:
+
+- **Holds are not released from the Hold screen.** Round 26 established that
+  already ("GET /api/hold only; holds clear by themselves when evidence
+  arrives, or through Needs Review"), and a control scan confirms it. It
+  still moves, for a better reason: its rows carry an **Open** button that
+  opens a detail panel, and a silent refetch would close what somebody is
+  reading. A reading context is worth protecting too, not only a typed one.
+- **`packdash` is genuinely passive** - no action control at all - so it
+  stays silent, as intended. `mgmt`, `proddash` and `dash` carry only links
+  to OTHER screens (Open, Enter, Production entry, New entry), nothing that
+  acts on their own data.
+
+The runtime `screenBusy()` check stays as a second line of defence, but the
+decision no longer depends on it: being outside those four is the whole test.
+
+### The switch
+
+`app_user.auto_refresh`, default 1 - on the account, not the browser, so it
+follows the person to any machine, the same way their permissions do. Added
+with the same ALTER-if-missing migration `station` used. Returned in
+`_access_payload()`, so `/login` and `/api/session` both carry it and the
+page reads it beside `must_change_pw`.
+
+`POST /api/session/auto-refresh` is self only and structurally so: the login
+comes from the session and never from the body, so there is no target to
+check and no hierarchy to enforce. Deliberately NOT blocked by
+`must_change_pw` - it is a display preference, and refusing it would strand
+somebody on a screen that keeps offering to refresh itself.
+
+**Off means off**, not "chip only": `applyChanges()` returns before both the
+silent refresh and the chip. Somebody who has turned live updates off has
+said they do not want the screen reacting, and a chip is the screen
+reacting. The feed keeps running, so turning it back on needs no reload.
+
+The checkbox is on the profile card under the person's own name and role -
+not in Admin, because it is nobody else's to set. Ticked by default, saved
+the moment it is ticked, and only believed once the server has answered.
+
+### What proves it
+
+- `test_change_feed_ui.py` (4 -> 6): the same account in a second window IS
+  told (1.7s) while the window that saved is not; an IDLE `gp-list` chips
+  rather than refreshing, and Review then reloads it; the acceptance case
+  moves to `packdash` - still silent - and asserts it refetched through its
+  own load path with no chip.
+- `test_change_feed.py` (8 -> 9): `by_clients` distinguishes two pages of one
+  account, and a write with no client id is attributed to none.
+- `test_auto_refresh_pref.py` (5): default on; it follows the account across
+  a sign-out and does not move anybody else's; self-only and 401 signed out;
+  OFF suppresses a landing page's silent refresh AND the chip elsewhere; the
+  checkbox is on the profile card, ticked, and persists on the tick.
+
