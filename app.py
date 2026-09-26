@@ -1222,6 +1222,15 @@ def boot_private():
     and the same for every account: filtering it per account was
     considered and deliberately deferred (BACKLOG, Round 29)."""
     import icon_models as M
+    # Read BEFORE the payload is built, and handed to the page as the mark its
+    # data is current as of (Round 30). Letting the page set that mark on its
+    # own first poll instead left a window - up to one poll - in which a save
+    # was absorbed into the baseline and never reported to that screen. Taken
+    # first, the worst case is a redundant refetch of something already on
+    # screen, which is the harmless direction to be wrong in.
+    with store.conn() as (cx, cur):
+        change_seq = (store.one(cur, "SELECT MAX(seq) AS s FROM change_log")
+                      or {}).get("s") or 0
     with store.conn() as (cx, cur):
         indents = []
         for i in store.rows(cur, "SELECT * FROM indent ORDER BY indent_id DESC"):
@@ -1250,6 +1259,7 @@ def boot_private():
     return {
         "live": True,
         "build": build_id(),
+        "change_seq": change_seq,
         "db_file": os.path.basename(store.DB_PATH),
         "indents": indents,
         "challan_seq": {"fy": fy, "next": (r or {}).get("next_seq", 1)},

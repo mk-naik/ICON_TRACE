@@ -62,7 +62,11 @@ MARKERS = [INDENT_NO, DELIVERY, MATERIAL, CELL_EFF] + GSTINS
 # A field that goes missing from /api/boot fails here by name.
 TOP_KEYS = {"live", "build", "db_file", "indents", "challan_seq", "prod",
             "shifts", "range", "customers", "open_boxes", "models", "items",
-            "materials", "mat_cats", "cell_eff", "config", "counts"}
+            "materials", "mat_cats", "cell_eff", "config", "counts",
+            # Round 30: the change sequence this payload is current as of.
+            # Added deliberately - the page uses it as the mark the change
+            # feed counts from, so it belongs with the data, not beside it.
+            "change_seq"}
 NESTED = {"challan_seq": {"fy", "next"}, "config": {"pallet_ceiling"},
           "counts": {"serials", "invoices", "challans", "boxes", "indents"},
           "range": {"from", "to"}}

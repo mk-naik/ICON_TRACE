@@ -1124,6 +1124,11 @@
       })
       .then(function (d) {
         Object.keys(d).forEach(function (k) { B[k] = d[k]; });
+        /* The sequence the server read just BEFORE building this payload, so
+           the feed counts from the moment this page's data was true. Setting
+           it on the first poll instead left a save made in the seconds after
+           sign-in absorbed into the baseline and never reported. */
+        _chgSeq = (typeof d.change_seq === 'number') ? d.change_seq : null;
         _enterBuilt(splash);
       })
       .catch(function () { _bootFailed(splash); });
@@ -6075,6 +6080,9 @@ function wireFqcAnomalies() {
        data loads below would only be refused by the server as well */
     if (!can(id)) return;
     applyWriteLocks();
+    /* The chip named the screen you were on - leaving it there over a
+       different screen would be a claim about the wrong thing. */
+    hideChangeChip();
     if (id === 'search') clearSearch();
     if (id === 'plan') {
       try { wirePlanChecks(); renderAllocations(); } catch (e) {}
@@ -7937,7 +7945,205 @@ function wireFqcAnomalies() {
       : 'rgba(190,51,37,.35)';
   }
 
+  /* ---- the change feed (Round 30) ------------------------------------
+   *
+   * Two people, two machines: one saves an indent and the other's list sat
+   * there stale until they reloaded. The server hands out a sequence number
+   * and the topics that moved (/api/changes); this decides whether the
+   * screen in front of THIS person should be refetched.
+   *
+   * It rides the ping cycle that already runs every five seconds for the
+   * build banner - no second timer. Only the visible screen is refetched;
+   * the others reload when next visited, because go() already loads them.
+   *
+   * A topic is what the server records; a screen subscribes to the topics it
+   * actually displays. Deliberately generous: an extra fetch costs a few
+   * kilobytes, a missed one leaves somebody working from yesterday's list. */
+  var CHANGE_SCREEN_TOPICS = {
+    mgmt:             ['serials', 'fqc', 'production', 'challans'],
+    proddash:         ['serials', 'production'],
+    indent:           ['indents'],
+    plan:             ['allocations', 'indents', 'serials'],
+    prodentry:        ['production', 'serials'],
+    loss:             ['loss'],
+    dash:             ['fqc', 'serials'],
+    fqc:              ['fqc', 'serials'],
+    pack:             ['boxes', 'serials'],
+    repack:           ['boxes', 'serials'],
+    packdash:         ['boxes'],
+    disp:             ['boxes', 'serials', 'challans'],
+    invoice:          ['invoices'],
+    'invoice-parser': ['invoices'],
+    challan:          ['challans', 'invoices', 'boxes'],
+    'challan-list':   ['challans', 'invoices'],
+    loadver:          ['challans', 'boxes'],
+    'loading-list':   ['challans', 'boxes'],
+    loadsession:      ['challans', 'boxes'],
+    gp:               ['gatepasses', 'challans'],
+    'gp-list':        ['gatepasses', 'challans'],
+    'gp-new':         ['gatepasses', 'challans'],
+    hold:             ['fqc', 'serials'],
+    review:           ['review', 'fqc'],
+    admin:            ['users', 'master', 'audit'],
+    items:            ['master']
+  };
+
+  /* The screen's OWN load path, never a second rendering path - each of
+     these is the function its own Refresh button already calls. Wrapped so
+     the name resolves when it runs, not when this object is built. */
+  var CHANGE_RELOAD = {
+    mgmt:             function () { window.renderMgmt(); },
+    proddash:         function () { window.renderProd(); },
+    dash:             function () { window.renderLiveFqcDash(); },
+    fqc:              function () { window.renderLiveFqcRecent(); },
+    packdash:         function () { window.renderPackLog(); },
+    repack:           function () { rpLoad(true); },
+    disp:             function () { window.dispApply(); },
+    invoice:          function () { window.renderInvoiceList(); },
+    'challan-list':   function () { clLoad(); },
+    'gp-list':        function () { window.gpListLoad(); },
+    'loading-list':   function () { window.ldLoad(); },
+    indent:           function () { window.indRefresh(); },
+    plan:             function () { renderAllocations(); },
+    prodentry:        function () { window.renderPE(); },
+    loss:             function () { window.loFetchAndRender(); },
+    hold:             function () { window.iconHoldRefresh(); },
+    review:           function () { window.iconReviewRefresh(); }
+  };
+
+  /* Screens that may be refetched under the person WITHOUT asking: a list or
+     a dashboard they are reading, where the worst case is a row moving.
+     Everything absent from this - every form, every scan screen - gets the
+     chip instead and decides for itself. The runtime check below can still
+     demote any of these to the chip. */
+  var CHANGE_SILENT = {
+    mgmt: 1, proddash: 1, dash: 1, packdash: 1, invoice: 1, indent: 1,
+    'challan-list': 1, 'gp-list': 1, 'loading-list': 1, hold: 1, review: 1
+  };
+
+  var _chgSeq = null;          /* null until the first answer: nothing to miss */
+  var _chgBusy = false;
+
+  function currentView() {
+    var on = document.querySelector('.view.on');
+    return on ? on.id.replace(/^v-/, '') : '';
+  }
+
+  /* Never replace the DOM under someone who is typing or scanning. This is
+     the guard that makes that true regardless of the lists above: a screen is
+     busy if a field on it has focus, if anything typed into it is unsaved, or
+     if a scan session is open. Filter and search boxes do not count - they
+     are how you read a list, not work in progress. */
+  function screenBusy(view) {
+    var sec = document.getElementById('v-' + view);
+    if (!sec) return false;
+    if (typeof packBox !== 'undefined' && packBox && packBox.box_id) return true;
+    if (typeof ldSession !== 'undefined' && ldSession) return true;
+    if (typeof chOrder !== 'undefined' && chOrder && chOrder.length) return true;
+    if (typeof chEditingId !== 'undefined' && chEditingId) return true;
+    var a = document.activeElement;
+    if (a && a !== document.body && sec.contains(a) &&
+        /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) return true;
+    var busy = false;
+    Array.prototype.forEach.call(
+      sec.querySelectorAll('input[type=text], input[type=number], ' +
+                           'input:not([type]), textarea'), function (el) {
+        if (busy || el.disabled || el.readOnly) return;
+        if (el.getAttribute('data-role')) return;         /* filter / search */
+        if (/search|filter|qbox/i.test(el.id || '')) return;
+        if ((el.value || '').trim()) busy = true;
+      });
+    return busy;
+  }
+
+  function chgChipEl() {
+    var chip = document.getElementById('chgChip');
+    if (chip) return chip;
+    chip = document.createElement('div');
+    chip.id = 'chgChip';
+    chip.className = 'chg-chip';
+    chip.setAttribute('role', 'status');
+    document.body.appendChild(chip);
+    return chip;
+  }
+
+  function hideChangeChip() {
+    var chip = document.getElementById('chgChip');
+    if (chip) chip.classList.remove('on');
+  }
+
+  /* Shown instead of refetching: says who, and leaves the decision with the
+     person whose work is on screen. */
+  function showChangeChip(view, by) {
+    var chip = chgChipEl();
+    chip.innerHTML =
+      '<span>' + (by ? fqcEsc(by) + ' saved changes' : 'Changed elsewhere') +
+      ' · this screen is out of date</span>' +
+      '<button class="btn btn-ghost btn-sm" id="chgChipGo">Review</button>' +
+      '<button class="btn btn-ghost btn-sm" id="chgChipX" ' +
+      'title="Keep what is on screen" aria-label="Dismiss">×</button>';
+    chip.classList.add('on');
+    document.getElementById('chgChipGo').onclick = function () {
+      hideChangeChip();
+      reloadScreen(view);
+    };
+    document.getElementById('chgChipX').onclick = hideChangeChip;
+  }
+
+  function reloadScreen(view) {
+    var fn = CHANGE_RELOAD[view];
+    if (!fn) return false;
+    try { fn(); return true; } catch (e) { return false; }
+  }
+
+  function applyChanges(d) {
+    var view = currentView();
+    if (!view) return;
+    var topics = d.topics || [];
+    var mine = CHANGE_SCREEN_TOPICS[view] || [];
+    /* Past the pruned window: the server cannot say what was missed, so the
+       only honest response is to reload this screen rather than believe a
+       short list. */
+    var hit = d.truncated;
+    if (!hit) {
+      for (var i = 0; i < topics.length && !hit; i++) {
+        if (mine.indexOf(topics[i]) >= 0) hit = true;
+      }
+    }
+    if (!hit) return;
+    var by = (d.by || []).filter(function (n) {
+      return n && n !== (USER && USER.login_id);
+    })[0] || '';
+    if (CHANGE_SILENT[view] && !screenBusy(view) && reloadScreen(view)) return;
+    showChangeChip(view, by);
+  }
+
+  function pollChanges() {
+    var app = document.getElementById('app');
+    if (!app || !app.classList.contains('on')) return;   /* not signed in */
+    if (_chgBusy) return;
+    _chgBusy = true;
+    fetch('/api/changes?since=' + (_chgSeq === null ? 0 : _chgSeq),
+          { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        _chgBusy = false;
+        if (!d || d.ok !== true) return;
+        var first = _chgSeq === null;
+        var prev = _chgSeq;
+        _chgSeq = d.seq;
+        /* The first answer only establishes where we are - whatever happened
+           before this page opened is already on it. */
+        if (first || d.seq === prev) return;
+        applyChanges(d);
+      })
+      .catch(function () { _chgBusy = false; });
+  }
+  window.iconPollChanges = pollChanges;
+
   function ping() {
+    /* Same cycle as the build banner - deliberately not a second timer. */
+    try { pollChanges(); } catch (e) {}
     fetch('/healthz', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {

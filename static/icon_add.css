@@ -252,3 +252,22 @@ a.nav-i{text-decoration:none}
 .pe-tbl input[type=checkbox] { width: 16px; height: 16px; cursor: pointer; }
 .ro-note { margin-bottom: 12px; }
 .ro-locked { cursor: not-allowed; }
+
+/* ---- Round 30: the "changed elsewhere" chip -------------------------
+   Shown instead of refetching a screen somebody is working on. Bottom
+   centre, above the content but out of the way of the toolbar and the
+   side nav, and it never steals focus. */
+.chg-chip {
+  display: none;
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  z-index: 70; align-items: center; gap: 10px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 8px 10px 8px 14px;
+  font-size: 12.5px; color: var(--ink);
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 4px solid var(--review);
+  border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, .18);
+}
+.chg-chip.on { display: flex; }
+.chg-chip span { flex: 1; }
+.chg-chip .btn { flex: none; }
