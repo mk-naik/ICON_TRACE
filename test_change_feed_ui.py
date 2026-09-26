@@ -108,6 +108,17 @@ def issue_gatepass(pg, party):
     assert ok, "the save did not go through"
 
 
+def open_pallet(pg):
+    """A pallet opened BY THAT PAGE's session - topic 'boxes', which the
+    Packing Log subscribes to."""
+    ok = pg.evaluate("""() => fetch('/api/box/open', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({grade: 'A', model: 'ISEN625-G12R', capacity: 4})
+          }).then(function (r) { return r.json(); })
+            .then(function (d) { return !!d.box_id; })""")
+    assert ok, "the pallet did not open"
+
+
 def wait_for(pg, js, ms=WAIT_MS):
     """Poll a predicate in the page. Returns how long it took, or None."""
     t0 = time.time()
@@ -118,8 +129,9 @@ def wait_for(pg, js, ms=WAIT_MS):
     return None
 
 
-@test("ACCEPTANCE: two machines on the Gate Pass list - one issues a gate "
-     "pass, the other's list shows it with no reload and no click")
+@test("ACCEPTANCE: two machines on the Packing Log - a landing page, one of "
+     "the four still refreshed silently - one opens a pallet and the other "
+     "refetches itself through its own load path, no reload, no click, no chip")
 def t_acceptance():
     fresh()
     with H.browser() as b:
@@ -127,24 +139,32 @@ def t_acceptance():
         ctxB, pgB = signed_in_page(b, "Super Admin", "sa.watcher")
         try:
             for pg in (pgA, pgB):
-                pg.evaluate("go('gp-list')")
+                pg.evaluate("go('packdash')")
                 pg.wait_for_timeout(1200)
-            assert pgB.evaluate("(document.querySelector('.view.on')||{}).id") == "v-gp-list"
-            before = pgB.inner_text("#gpLTableBody")
-            party = "FEED WATCHER TEST PARTY"
-            assert party not in before, before[:200]
+            assert pgB.evaluate("(document.querySelector('.view.on')||{}).id") == "v-packdash"
+            # Count B's own reloads by watching the endpoint its load path
+            # uses. The Packing Log's filters decide which ROWS it shows -
+            # what this test is about is whether it went and asked again,
+            # by itself, through that same path.
+            pgB.evaluate("""() => { window.__loads = 0;
+                var real = window.fetch;
+                window.fetch = function (u) {
+                  if (String(u).indexOf('/api/boxes') >= 0) window.__loads++;
+                  return real.apply(this, arguments); }; }""")
+            loads_before = pgB.evaluate("window.__loads")
 
-            issue_gatepass(pgA, party)
+            open_pallet(pgA)
 
-            took = wait_for(pgB, "document.getElementById('gpLTableBody')"
-                                 ".innerText.indexOf('FEED WATCHER TEST PARTY') >= 0")
+            took = wait_for(pgB, "window.__loads > %d" % loads_before)
             assert took is not None, \
-                "B never saw it in %ds. B's list: %r" % (WAIT_MS / 1000,
-                                                         pgB.inner_text("#gpLTableBody")[:300])
+                "B's Packing Log never refetched itself in %ds" % (WAIT_MS / 1000)
+            assert not pgB.evaluate("!!document.querySelector('#chgChip.on')"), \
+                "a landing page showed the chip instead of refreshing itself"
             assert pgB.evaluate("window.__noReload") == "intact", \
                 "the page reloaded - that is not what this feature does"
             assert pgB.errors == [] and pgA.errors == [], (pgA.errors, pgB.errors)
-            print("      B's list picked it up in %.1fs, no reload, no click" % took)
+            print("      B's Packing Log refetched itself in %.1fs, no reload, no click"
+                  % took)
         finally:
             ctxA.close(); ctxB.close()
 
@@ -241,6 +261,39 @@ def t_own_save_is_quiet():
             print("      own save: no chip, typed text intact")
         finally:
             ctx.close()
+
+
+@test("the seven screens moved out of silent now show the chip even when "
+     "idle - the decision is being outside the four landing pages, not "
+     "whether anybody happens to be typing (Round 31)")
+def t_moved_screens_chip_when_idle():
+    fresh()
+    with H.browser() as b:
+        ctxA, pgA = signed_in_page(b, "Super Admin", "sa.saver")
+        ctxB, pgB = signed_in_page(b, "Super Admin", "sa.watcher")
+        try:
+            # gp-list was silent until Round 31; nothing is focused or typed
+            pgB.evaluate("go('gp-list')")
+            pgB.wait_for_timeout(1200)
+            assert pgB.evaluate("(document.activeElement||{}).tagName") == "BODY", \
+                "the screen is not idle - the test would prove nothing"
+            before = pgB.inner_text("#gpLTableBody")
+
+            issue_gatepass(pgA, "IDLE CHIP TEST PARTY")
+
+            took = wait_for(pgB, "!!document.querySelector('#chgChip.on')")
+            assert took is not None, "an idle non-landing screen did not chip"
+            assert "IDLE CHIP TEST PARTY" not in pgB.inner_text("#gpLTableBody"), \
+                "it refreshed itself instead of showing the chip"
+            # and Review still takes the update, through its own load path
+            pgB.click("#chgChipGo")
+            pgB.wait_for_timeout(1800)
+            assert "IDLE CHIP TEST PARTY" in pgB.inner_text("#gpLTableBody"), \
+                "Review did not reload the list"
+            assert pgB.errors == [], pgB.errors
+            print("      gp-list chipped in %.1fs while idle; Review reloaded it" % took)
+        finally:
+            ctxA.close(); ctxB.close()
 
 
 @test("a change to a topic the visible screen does NOT show is ignored - no "

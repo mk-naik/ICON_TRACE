@@ -8068,15 +8068,19 @@ function wireFqcAnomalies() {
     review:           function () { window.iconReviewRefresh(); }
   };
 
-  /* Screens that may be refetched under the person WITHOUT asking: a list or
-     a dashboard they are reading, where the worst case is a row moving.
-     Everything absent from this - every form, every scan screen - gets the
-     chip instead and decides for itself. The runtime check below can still
-     demote any of these to the chip. */
-  var CHANGE_SILENT = {
-    mgmt: 1, proddash: 1, dash: 1, packdash: 1, invoice: 1, indent: 1,
-    'challan-list': 1, 'gp-list': 1, 'loading-list': 1, hold: 1, review: 1
-  };
+  /* Refetched under the person WITHOUT asking: the landing pages and
+     dashboards ONLY - screens you read, with nothing on them to act on and
+     nothing to lose if a figure moves. Everything else gets the chip and
+     lets the person decide, and that no longer depends on what is on screen
+     at the time: being outside these four is the whole test. (Round 31 -
+     Mukesh's rule. It was eleven, and seven of them were screens people
+     work from.)
+
+     The four were checked, not assumed: packdash has no action control at
+     all, and mgmt/proddash/dash carry only links to OTHER screens (Open,
+     Enter, Production entry, New entry) - nothing that acts on their own
+     data. The runtime check below can still demote any of them. */
+  var CHANGE_SILENT = { mgmt: 1, proddash: 1, dash: 1, packdash: 1 };
 
   var _chgSeq = null;          /* null until the first answer: nothing to miss */
   var _chgBusy = false;
