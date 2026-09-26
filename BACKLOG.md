@@ -4466,3 +4466,29 @@ the moment it is ticked, and only believed once the server has answered.
   OFF suppresses a landing page's silent refresh AND the chip elsewhere; the
   checkbox is on the profile card, ticked, and persists on the tick.
 
+### Caught by the full suite, after the fact
+
+Three files the targeted runs had not covered:
+
+- **`test_dashboards_ist.py` (4 failures) - from the Production Entry change
+  of the previous round, not from Round 31.** One of its tests was named "a
+  production entry is dated and shifted when it is RECORDED, whatever the
+  form and the barcode say" - the very contract Mukesh overturned. Rewritten
+  to the new one, keeping the half that has not changed and matters just as
+  much: nothing counts by the date or shift printed in the barcode. The
+  other three simply omitted a date, which the server used to supply; they
+  now state one through a small `ran_now()` helper, since their subject is
+  batch ranges and counting, not dating.
+  **My process fault**: that change was verified with a targeted regression
+  set rather than the full suite, and this is exactly what that misses.
+- **`test_role_gates.py` (3 failures) - the guard doing its job.**
+  `/api/session/auto-refresh` is a new write route with no decorator gate,
+  so the "every write endpoint carries a gate" test failed on sight. Added
+  to `_AUTH_ROUTES` with its reason, beside `/api/session/change-password`:
+  self only and structurally so, no target to gate and no role that should
+  be refused it.
+- **`test_dashrath_case.py` (1 failure) - flakiness, not a regression.** It
+  passes 6/6 on its own and failed only inside the full suite: the invoice
+  list was asserted after a fixed 1200 ms sleep, which is not enough on a
+  loaded machine. It now waits for the row itself.
+

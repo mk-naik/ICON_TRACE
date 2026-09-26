@@ -103,6 +103,14 @@ def inspect(cur, serial, at, outcome="pass", defect=None, by="Suryansh Verma"):
                   grade="A" if outcome == "pass" else None)
 
 
+def ran_now():
+    """The date and shift a production entry says it ran in, for tests whose
+    subject is something else. Since Round 31 the form states this and the
+    server keeps it - it is no longer stamped from the clock."""
+    return {"date": clock.shift_day().isoformat(),
+            "shift": clock.SHIFT_LETTER[clock.shift_of(clock.now().hour)]}
+
+
 def state_of(s):
     with store.conn() as (cx, cur):
         return store.one(cur, "SELECT * FROM serial WHERE serial=%s", (s,))
@@ -179,9 +187,9 @@ def t_range_is_one_batch():
     with store.conn() as (cx, cur):
         allocate(cur, b_run, "2026-09-25T10:37:24")
         allocate(cur, c_run, "2026-09-25T10:39:42")
-    r = c.post("/api/prodentry", json={
-        "incharge": "RAJESH KUMAR", "line": "A-Line",
-        "start_serial": b_run[0], "end_serial": b_run[-1]})
+    r = c.post("/api/prodentry", json=dict(
+        ran_now(), incharge="RAJESH KUMAR", line="A-Line",
+        start_serial=b_run[0], end_serial=b_run[-1]))
     assert r.status_code == 200, r.get_json()
     assert r.get_json()["qty"] == 223, r.get_json()
     assert state_of(b_run[0])["state"] == "produced"
@@ -192,24 +200,29 @@ def t_range_is_one_batch():
         "the other run's 0778 was recorded too: %r" % got
 
 
-@test("a production entry is dated and shifted when it is recorded, "
-      "whatever the form and the barcode say; the serial's own printed date "
-      "and shift are left alone")
-def t_entry_stamped_from_clock():
+@test("a production entry is dated and shifted by the SHIFT IT RAN IN, "
+      "which the operator states; when it was filed is kept separately, and "
+      "the serial's own printed date and shift are still left alone")
+def t_entry_dated_by_the_shift_that_ran():
+    """Until Round 31 this recorded the clock instead, whatever the form
+    said - so a C shift filed the next morning was stored as the next
+    morning's A shift. The half of it that has not changed, and matters just
+    as much: nothing counts by the date or shift printed in the barcode."""
     c = setup()
     s = printed("2026-09-24", 2, 1, 5)
     with store.conn() as (cx, cur):
         allocate(cur, s, "2026-09-25T10:37:24")
-    before = clock.now()
+    filed_on = clock.now()
+    ran_on = (clock.shift_day() - datetime.timedelta(days=1)).isoformat()
     r = c.post("/api/prodentry", json={
-        "date": "2026-08-21", "shift": "B", "incharge": "X",
+        "date": ran_on, "shift": "C", "incharge": "X",
         "start_serial": s[0], "end_serial": s[-1]})
     assert r.get_json()["ok"], r.get_json()
     with store.conn() as (cx, cur):
         e = store.one(cur, "SELECT prod_date, shift, created_at FROM production_entry")
-    assert e["prod_date"] == before.date().isoformat(), e
-    assert e["shift"] == clock.SHIFT_LETTER[clock.shift_of(before.hour)], e
-    assert e["created_at"][:10] == before.date().isoformat(), e
+    assert e["prod_date"] == ran_on, e              # what the operator said
+    assert e["shift"] == "C", e
+    assert e["created_at"][:10] == filed_on.date().isoformat(), e   # when filed
     row = state_of(s[0])
     assert (row["date_produced"], row["shift"]) == ("2026-09-24", 2), row
 
@@ -222,8 +235,8 @@ def t_cross_batch_refused():
     cc = printed("2026-09-24", 3, 1, 5)
     with store.conn() as (cx, cur):
         allocate(cur, b + cc, "2026-09-25T10:37:24")
-    r = c.post("/api/prodentry", json={"incharge": "X",
-                                       "start_serial": b[0], "end_serial": cc[-1]})
+    r = c.post("/api/prodentry", json=dict(
+        ran_now(), incharge="X", start_serial=b[0], end_serial=cc[-1]))
     why = r.get_json()["why"]
     assert r.status_code == 400 and "same batch" in why, why
     assert b[0][:-4] in why and cc[0][:-4] in why, why
@@ -305,8 +318,9 @@ def t_entry_counts_when_recorded():
     run = printed("2026-09-20", 1, 1, 6)
     with store.conn() as (cx, cur):
         allocate(cur, run, "2026-09-24T09:00:00")
-    r = c.post("/api/prodentry", json={"incharge": "X", "line": "B-Line",
-                                       "start_serial": run[0], "end_serial": run[-1]})
+    r = c.post("/api/prodentry", json=dict(
+        ran_now(), incharge="X", line="B-Line",
+        start_serial=run[0], end_serial=run[-1]))
     assert r.get_json()["ok"], r.get_json()
     today = clock.shift_day().isoformat()
     d = dash(c, today)

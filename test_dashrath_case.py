@@ -257,8 +257,17 @@ def t_on_the_page():
         assert "INV-DASHRATH-1" in pg.inner_text("#v-challan-list") or \
             pg.locator("#v-challan-list tbody tr").count() > 0, "no challan data shown"
         # the nav button, as a person reaches it - its onclick is what paints the list
-        pg.click('#sidenav .nav-i[data-v="invoice"]'); pg.wait_for_timeout(1200)
-        assert "INV-DASHRATH-1" in pg.inner_text("#v-invoice"), "no invoice data shown"
+        pg.click('#sidenav .nav-i[data-v="invoice"]')
+        # Waits for the row rather than a fixed 1200ms: under a full suite the
+        # fetch behind this list can take longer than that, and the sleep made
+        # the whole file fail on a loaded machine and pass on a quiet one.
+        try:
+            pg.wait_for_function(
+                "document.getElementById('v-invoice')"
+                ".innerText.indexOf('INV-DASHRATH-1') >= 0", timeout=15000)
+        except Exception:
+            raise AssertionError("no invoice data shown: %r"
+                                 % pg.inner_text("#v-invoice")[:200])
         pg.screenshot(path=os.path.join(shots, "dashrath_invoice.png"))
 
         for v in ("disp", "gp"):

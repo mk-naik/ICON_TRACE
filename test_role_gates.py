@@ -68,8 +68,16 @@ _SRC = open(os.path.join(BASE, "app.py"), encoding="utf-8").read().split("\n")
 #                                 somebody does BEFORE they can sign in,
 #                                 and the enrolment token is the whole of
 #                                 the authorisation
+#   /api/session/auto-refresh     a preference about the caller's OWN
+#                                 screens. Self only and structurally so -
+#                                 the login comes from the session, never
+#                                 the body - so there is no target to gate
+#                                 and no role that should be refused it. It
+#                                 grants no access and changes nothing
+#                                 anybody else can see.
 _AUTH_ROUTES = {"/login", "/logout", "/api/session/extend",
-                "/api/session/change-password", "/enrol"}
+                "/api/session/change-password", "/api/session/auto-refresh",
+                "/enrol"}
 
 _PARAM = {"int": "1", "path": "X-1", "string": "X-1"}
 
