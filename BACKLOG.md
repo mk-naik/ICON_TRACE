@@ -4492,3 +4492,116 @@ Three files the targeted runs had not covered:
   list was asserted after a fixed 1200 ms sleep, which is not enough on a
   loaded machine. It now waits for the row itself.
 
+## Round 32 - the silent set is the lists and dashboards, and the toggle means what it says
+
+Two things Mukesh found by USING Round 31, both corrected here. Neither was a
+crash; both were the feature doing the wrong thing confidently.
+
+### 1. Round 31's silent set was four screens. It should be every list and dashboard.
+
+Round 31 shrank `CHANGE_SILENT` to four landing dashboards and pushed every
+working LIST onto the chip. That confused "this screen has a New form behind a
+button" with "this screen is a form": the Indent list, the Challan list, the
+Gate Pass list are exactly where a row someone else created should simply
+appear - not screens to interrupt with a chip. The rule now: a screen whose
+LANDING state is a list or a dashboard is silent; only a pure form (no landing
+list) is left out. Confirmed against the live nav in `icon_trace.html` and the
+injected `NEW_VIEWS`, not transcribed.
+
+    IN  (the silent set):
+      dashboards      mgmt, proddash, dash, packdash, disp
+      list / landing  indent, plan, prodentry, loss, fqc, repack, invoice,
+                      challan-list, gp-list, loading-list
+      Control lists   hold, review
+      listed, dormant drafts, search        (see below)
+
+    OUT, each confirmed to have no landing list of its own:
+      pack            New Pallet - a bare scan-into-pallet form
+      challan         Create Challan - its list is challan-list
+      gp / gp-new     the Gate Pass create/edit form and New Gate Pass -
+                      the list is gp-list (the nav button redirects there)
+      loadver         Loading Verification - its list is loading-list
+      loadsession     an active loading session
+      invoice-parser  the upload/parse form
+      admin, items    the two Admin config screens - no clean list-reload
+                      path; they redraw on navigation. (Consequence: they no
+                      longer chip on a users/master change, as they did in
+                      Round 31. Master and user edits are rare and made by the
+                      same admin; the noise is not worth a reload path they
+                      do not otherwise need.)
+
+Three the tentative brief had wrong, resolved by looking at the screen:
+`loss`, `fqc` and `repack` are all IN. `fqc` is NOT a bare form - it carries a
+live *Recent gradings* list (`#fqcRows`, `renderLiveFqcRecent`) beside its
+grading form. `repack` lands on the closed-box source picker (`rpLoad` -> a
+list); the repack wizard on top of it is protected by section 2, not by
+dropping the list. `loss` is a list (`loFetchAndRender`, topic `loss`).
+
+`drafts` and `search` are listed for completeness - both are list/landing by
+nature - but neither carries a change topic today, so neither actually fires:
+`drafts` still shows v4's sample rows (nothing in `CHANGE_SCREEN_TOPICS`), and
+Search & Trace opens empty and is deliberately left without a topic so a trace
+result on screen is never refetched out from under a reader.
+
+### 2. The chip appeared with the box ON. A chip is what you show INSTEAD of refreshing.
+
+Round 31 wired the per-account `auto_refresh` flag as "off -> nothing at all",
+and left the chip firing on every non-silent screen whether the box was on or
+off. Both wrong. The toggle now governs the chip, and only the chip:
+
+    box OFF -> the chip, and the person reloads when they choose
+    box ON  -> a silent refresh of the list, and NEVER a chip
+
+`applyChanges()` reads in exactly that order now: topic hit and own-page
+suppression first, then screens outside `CHANGE_SILENT` return; then
+`off -> chip (unless a form is open, then nothing)`; then
+`on -> silent refresh (unless a form is open, then nothing, and refresh on
+close)`. Round 31's early `auto_refresh === false -> return` is gone.
+
+### Section 2: an open form or popup stands the screen down - presence, not dirtiness
+
+The silent refresh acts on the LIST. A form or a resolve/detail popup is a
+separate thing on top of it and is never touched while open, typed into or not
+- Mukesh's call: a blank New Indent form vanishing (or its list moving) under
+someone is jarring even when nothing is lost. `screenBusy()` now also stands a
+screen down for:
+
+  - the generic modal `#mdl.on` - a GLOBAL overlay (review resolve, duplicate
+    compare, quality decision, any dialog), whatever screen is behind it;
+  - the New Indent panel `#indForm` while it is displayed;
+  - the Hold "Open" detail panel `#holdDetail` while it holds content;
+  - a repack wizard past the source pick (`rpPool` / `rpTargets` non-empty),
+    on top of Round 31's existing focus / typed / pack / loading / challan
+    checks.
+
+With the box ON and one of these open, nothing happens now and the refresh is
+**held and run once it closes** (`_pendingRefresh` keyed by view, flushed on
+the poll cycle - no second timer), so the list is current the moment they are
+back to it. With the box OFF and one open, no chip either: a chip inviting a
+reload that would destroy the form is the wrong prompt.
+
+**One subtlety that cost a test.** "Text is typed" was reading v4's own
+pre-filled demo values as work in progress - Production Entry ships `#peFrom`
+/ `#peTo` with a sample serial range, a form ships "Prepared by" defaulted -
+so those screens could never refresh silently once they were in the set.
+`screenBusy()` now treats a field as work in progress only when its value
+DIFFERS from `el.defaultValue` (the HTML `value=` it loaded with). An untouched
+default is a placeholder, not unsaved work; a field the person focused or
+edited is still caught.
+
+### Tests (real, run)
+
+`test_change_feed_ui.py` (Playwright, two independent browser contexts):
+    ACCEPTANCE packdash silent · New Indent blank form protected box on
+    (no chip, refreshes on close) · New Indent form + box off (no chip) ·
+    review resolve popup protected box on · same account two windows (second
+    refreshes, saver quiet) · own save quiet · idle list refreshes silently
+    box on · unrelated topic ignored
+    -> 8 passed, 0 failed
+`test_auto_refresh_pref.py` (setting mechanics + on-screen):
+    default on · follows the account · self only · OFF is the chip not
+    "nothing" (reverses Round 31) · checkbox on the profile card
+    -> 5 passed, 0 failed
+`test_change_feed.py` (server side, unchanged) -> 9 passed
+`test_boot_payload.py` (session payload carries auto_refresh) -> 6 passed
+
