@@ -828,3 +828,26 @@ CREATE TABLE IF NOT EXISTS loss_event (
   CONSTRAINT fk_loss_link FOREIGN KEY (linked_event_id)
     REFERENCES loss_event (event_id)
 ) ;
+
+-- ---------------------------------------------------------------------------
+-- change_log  (Round 30 - the change feed)
+--
+-- One row per topic touched by a committed transaction, written at the single
+-- commit point in store.conn rather than by any endpoint. The page polls
+-- /api/changes?since=N on the ping it already runs, and refetches only the
+-- screen in front of the person.
+--
+-- AUTOINCREMENT is deliberate and load-bearing. Rows are pruned after an hour,
+-- and a plain INTEGER PRIMARY KEY would then hand out a sequence number that
+-- had already been used - every client holding a higher `since` would go
+-- permanently deaf to new changes. AUTOINCREMENT never reuses one.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS change_log (
+  seq       INTEGER PRIMARY KEY AUTOINCREMENT,
+  topic     TEXT     NOT NULL,
+  at        TEXT     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  at_epoch  REAL     NOT NULL,   -- pruning compares numbers, never timezones
+  by_login  TEXT     NULL        -- the session's real login_id, or '' for CLI
+) ;
+
+CREATE INDEX IF NOT EXISTS ix_change_log_epoch ON change_log (at_epoch) ;

@@ -15,7 +15,7 @@ Moving to MySQL later is a connection change, not a rewrite: the SQL here is
 plain, the placeholders are normalised, and nothing depends on SQLite.
 """
 
-import os, re, json, sqlite3, datetime, threading
+import os, re, json, time, sqlite3, datetime, threading
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("ICON_DB_FILE", os.path.join(BASE, "icontrace.db"))
@@ -29,13 +29,97 @@ def _row_factory(cursor, row):
     return {d[0]: row[i] for i, d in enumerate(cursor.description)}
 
 
+# ---------------------------------------------------------------------------
+# The change feed (Round 30)
+#
+# Two people on two machines: when one saves an indent, the other's screen
+# showed yesterday's list until they reloaded. Every write in this application
+# commits in exactly one place - conn.__exit__ below - and every statement
+# passes through _Cur.execute, so the tables a transaction touched are known
+# without any of the 40-odd write endpoints being told to say so.
+#
+# A topic is coarser than a table and coarser than a screen: a screen
+# subscribes to the topics it displays, and one table can only ever mean one
+# topic. Anything absent from this map records no change at all, which is what
+# keeps the feed from feeding itself - see UNTRACKED below.
+# ---------------------------------------------------------------------------
+TOPIC_OF_TABLE = {
+    "indent": "indents", "indent_line": "indents",
+    "allocation": "allocations", "allocation_material": "allocations",
+    "production_entry": "production",
+    "serial": "serials",
+    "fqc_record": "fqc",
+    "box": "boxes", "box_serial": "boxes", "box_lineage": "boxes",
+    "box_print": "boxes", "box_counter": "boxes",
+    "challan": "challans", "challan_box": "challans",
+    "challan_serial": "challans", "challan_counter": "challans",
+    "invoice": "invoices",
+    "gatepass": "gatepasses", "gatepass_item": "gatepasses",
+    "gp_counter": "gatepasses",
+    "loss_event": "loss",
+    "review_item": "review",
+    "material": "master", "cell_efficiency": "master", "app_config": "master",
+    "app_user": "users", "user_screen_perm": "users",
+    "dispatch_audit": "audit",
+}
+
+# Deliberately outside the map, each for its own reason:
+#   auth_session        touched by the session hook on ordinary requests, so
+#                       tracking it would make the page's own polling look
+#                       like activity and never go quiet
+#   change_log          the feed must not report itself
+#   auth_*              credential machinery; it is nobody's screen data
+UNTRACKED = frozenset((
+    "change_log", "auth_session", "auth_attempt", "auth_event",
+    "auth_enrol_token", "auth_recovery_code", "auth_backup_window",
+))
+
+# An hour, against a client that polls every five seconds - generous enough
+# that only a tab left closed over lunch falls behind, and that case is told
+# so explicitly rather than handed a short list (see app.api_changes).
+CHANGE_RETENTION_S = int(os.environ.get("ICON_CHANGE_RETENTION_S", 3600))
+
+_WRITE_SQL = re.compile(
+    r"""^\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)
+        \s+["'`\[]?([A-Za-z_][A-Za-z_0-9]*)""",
+    re.IGNORECASE | re.VERBOSE)
+
+_actor = threading.local()
+
+
+def set_actor(login_id):
+    """Who the current thread is acting as, for the change feed's `by_login`.
+
+    A thread-local rather than an argument threaded through every call:
+    Waitress serves each request on its own thread, and app.py sets this once
+    per request from the real session. store must not import app."""
+    _actor.login_id = (login_id or "").strip()
+
+
+def current_actor():
+    return getattr(_actor, "login_id", "") or ""
+
+
+def _written_table(sql):
+    m = _WRITE_SQL.match(sql or "")
+    return m.group(1).lower() if m else None
+
+
 class _Cur:
-    """Accepts MySQL-style %s placeholders so the same SQL works either way."""
+    """Accepts MySQL-style %s placeholders so the same SQL works either way.
+
+    Also remembers which tables were WRITTEN, which is what lets the change
+    feed name the topics a transaction touched without reading its SQL twice
+    or asking the endpoint."""
 
     def __init__(self, cur):
         self._c = cur
+        self.written = set()
 
     def execute(self, sql, args=()):
+        t = _written_table(sql)
+        if t:
+            self.written.add(t)
         self._c.execute(sql.replace("%s", "?"), tuple(args))
         return self
 
@@ -61,13 +145,43 @@ class conn:
         self.cx.row_factory = _row_factory
         self.cx.execute("PRAGMA foreign_keys=ON")
         self.cx.execute("PRAGMA journal_mode=WAL")
-        return self.cx, _Cur(self.cx.cursor())
+        self.cur = _Cur(self.cx.cursor())
+        return self.cx, self.cur
+
+    def _record_change(self):
+        """One row per topic this transaction touched, written just before the
+        commit so the change and the data it describes land together - a reader
+        can never be told about a save it cannot yet see.
+
+        Raw cx.execute, not self.cur: the cursor records what it writes, and
+        writing the change log through it would have the feed report itself.
+
+        Nothing here may cost the caller their save. A change feed that fails
+        makes screens stale; an exception escaping here would lose the work."""
+        try:
+            topics = sorted({TOPIC_OF_TABLE[t] for t in self.cur.written
+                             if t in TOPIC_OF_TABLE})
+            if not topics:
+                return
+            now = time.time()
+            who = current_actor()
+            for topic in topics:
+                self.cx.execute(
+                    "INSERT INTO change_log (topic, at_epoch, by_login) "
+                    "VALUES (?, ?, ?)", (topic, now, who))
+            # Opportunistic, like icon_auth.purge_expired_sessions: pruned on
+            # write rather than by a job nobody remembers to run.
+            self.cx.execute("DELETE FROM change_log WHERE at_epoch < ?",
+                            (now - CHANGE_RETENTION_S,))
+        except Exception:
+            pass
 
     def __exit__(self, exc_type, exc, tb):
         try:
             if exc_type:
                 self.cx.rollback()
             else:
+                self._record_change()
                 self.cx.commit()
         finally:
             self.cx.close()

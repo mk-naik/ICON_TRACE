@@ -294,6 +294,10 @@ def _load_session():
     not on which screens the SPA shell will show cosmetically."""
     g.icon_session = None
     g.icon_must_change_pw = False
+    # Cleared on every request, not only when a session is found: Waitress
+    # reuses threads, and a leftover value would sign the next person's
+    # changes with the last person's name (Round 30).
+    store.set_actor("")
     if request.path in _SESSION_EXEMPT_PATHS or \
        request.path.startswith(_SESSION_EXEMPT_PREFIXES):
         return
@@ -310,6 +314,8 @@ def _load_session():
             row = store.one(cur, "SELECT must_change_pw FROM app_user "
                                  "WHERE user_id=%s", (g.icon_session["user_id"],))
             g.icon_must_change_pw = bool(row and row["must_change_pw"])
+            # Who the change feed records for anything this request saves.
+            store.set_actor(g.icon_session["login_id"])
 
 
 def _int_arg(name, default):
@@ -5681,6 +5687,46 @@ def api_indents():
                 (p.get("indent_line_id"),))["n"]
         out.append(d)
     return jsonify(out)
+
+
+@app.route("/api/changes")
+def api_changes():
+    """What has changed since sequence N (Round 30).
+
+    Topic names and a number - never data - so it needs a session but no
+    screen gate: a screen the caller may not view still has to be told its
+    topic moved, or the caller would be told "nothing changed" and believe it.
+    A session IS required, because the pattern of who saves what and when is
+    itself worth not handing out.
+
+    `truncated` is the part that matters. Rows are pruned after an hour, so a
+    tab left open over lunch asks with a `since` older than anything left. The
+    honest answer then is "I cannot tell you what you missed", not a short
+    list - a client given a short list would quietly miss those updates for
+    good. It refetches its current screen instead."""
+    if not g.icon_session:
+        return jsonify({"ok": False, "why": "Sign in required."}), 401
+    try:
+        since = int(request.args.get("since") or 0)
+    except (TypeError, ValueError):
+        since = 0
+    with store.conn() as (cx, cur):
+        row = store.one(cur, "SELECT MAX(seq) AS s, MIN(seq) AS m FROM change_log")
+        seq = (row or {}).get("s") or 0
+        oldest = (row or {}).get("m") or 0
+        # since=0 is a first call, not a gap: the client has nothing to miss.
+        truncated = bool(since and oldest and since < oldest - 1)
+        topics = []
+        if since < seq and not truncated:
+            topics = sorted({r["topic"] for r in store.rows(
+                cur, "SELECT DISTINCT topic FROM change_log WHERE seq > %s",
+                (since,))})
+        who = sorted({r["by_login"] for r in store.rows(
+            cur, "SELECT DISTINCT by_login FROM change_log WHERE seq > %s "
+                 "AND by_login IS NOT NULL AND by_login <> ''", (since,))
+        }) if (since < seq and not truncated) else []
+    return jsonify({"ok": True, "seq": seq, "topics": topics, "by": who,
+                    "truncated": truncated})
 
 
 @app.route("/api/boot")
