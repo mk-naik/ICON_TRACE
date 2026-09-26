@@ -847,7 +847,12 @@ CREATE TABLE IF NOT EXISTS change_log (
   topic     TEXT     NOT NULL,
   at        TEXT     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   at_epoch  REAL     NOT NULL,   -- pruning compares numbers, never timezones
-  by_login  TEXT     NULL        -- the session's real login_id, or '' for CLI
+  by_login  TEXT     NULL,       -- the session's real login_id, or '' for CLI
+  -- WHICH PAGE wrote it, not which account (Round 31). One person signed in
+  -- twice - an ordinary window and an InPrivate one, or a PC and a phone -
+  -- is two pages, and the second must still be told. Suppressing on
+  -- by_login alone left it silent, because both were the same person.
+  by_client TEXT     NULL
 ) ;
 
 CREATE INDEX IF NOT EXISTS ix_change_log_epoch ON change_log (at_epoch) ;

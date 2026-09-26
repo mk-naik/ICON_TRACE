@@ -89,6 +89,58 @@
     (document.head || document.documentElement).appendChild(link);
   })();
 
+  /* ---- which PAGE this is (Round 31) ---------------------------------
+   *
+   * Minted per page load, sent on every request, and recorded against
+   * anything the request saves. It answers one question the account cannot:
+   * "did I do this, or did somebody else?" One person signed in twice - an
+   * ordinary window and an InPrivate one, a PC and a phone - is ONE account
+   * and TWO pages, and Round 30 suppressed its own notifications by account,
+   * which left the second window permanently silent about the first one's
+   * saves. Mukesh found it doing exactly that on Production Entry.
+   *
+   * Not an identity and never used for access: the server reads it only to
+   * say which page wrote a change. */
+  var CLIENT_ID = (function () {
+    var hex = '';
+    try {
+      if (window.crypto && window.crypto.getRandomValues) {
+        var a = new Uint8Array(8);
+        window.crypto.getRandomValues(a);
+        for (var i = 0; i < a.length; i++) hex += (a[i] + 256).toString(16).slice(1);
+      }
+    } catch (e) { /* fall through to the time-and-random id below */ }
+    return hex || ('p' + Date.now().toString(36) +
+                   Math.random().toString(36).slice(2, 10));
+  })();
+  window.iconClientId = CLIENT_ID;
+
+  (function stampOwnRequests() {
+    var real = window.fetch;
+    if (typeof real !== 'function' || real.__iconClient) return;
+    var wrapped = function (input, init) {
+      try {
+        var url = (typeof input === 'string') ? input
+                : (input && input.url) || '';
+        /* this server only - the header is meaningless anywhere else and
+           has no business being sent there */
+        var offsite = /^https?:/i.test(url) &&
+                      url.indexOf(window.location.origin) !== 0;
+        if (!offsite) {
+          init = init || {};
+          var h = new Headers(init.headers ||
+                              (typeof input !== 'string' && input && input.headers) || {});
+          h.set('X-Icon-Client', CLIENT_ID);
+          init.headers = h;
+          return real.call(this, input, init);
+        }
+      } catch (e) { /* never let this stop a request going out */ }
+      return real.apply(this, arguments);
+    };
+    wrapped.__iconClient = true;
+    window.fetch = wrapped;
+  })();
+
   function api(path, opts) {
     opts = opts || {};
     /* Round 23: X-User-Name and X-User-Role used to travel on every call
@@ -8079,10 +8131,10 @@ function wireFqcAnomalies() {
 
   /* Shown instead of refetching: says who, and leaves the decision with the
      person whose work is on screen. */
-  function showChangeChip(view, by) {
+  function showChangeChip(view, label) {
     var chip = chgChipEl();
     chip.innerHTML =
-      '<span>' + (by ? fqcEsc(by) + ' saved changes' : 'Changed elsewhere') +
+      '<span>' + (label || 'Changed elsewhere') +
       ' · this screen is out of date</span>' +
       '<button class="btn btn-ghost btn-sm" id="chgChipGo">Review</button>' +
       '<button class="btn btn-ghost btn-sm" id="chgChipX" ' +
@@ -8116,19 +8168,28 @@ function wireFqcAnomalies() {
       }
     }
     if (!hit) return;
+    /* Was this THIS PAGE's own doing? Asked of the page, not the account.
+       My own save already updated my own screen through its success path, so
+       a chip about it would sit over my own work - but the same account in a
+       second window is a different page and must still be told. Asking by
+       account instead is what left Production Entry silent (Round 31).
+       A change with no page against it (the CLI, a migration, an offline
+       replay through the service worker) is never suppressed. */
+    var pages = d.by_clients || [];
+    var elsewhere = pages.filter(function (c) { return c && c !== CLIENT_ID; });
+    if (!d.truncated && pages.length && !elsewhere.length) return;
+
     var actors = d.by || [];
     var others = actors.filter(function (n) {
       return n && n !== (USER && USER.login_id);
     });
-    /* Only me: my own save already updated my own screen through its success
-       path, so telling me about it would be a chip over my own work. Safe
-       because every person here has their own ID - shared station logins are
-       not used, which is the whole reason the audit trail is worth reading.
-       An unattributed change (the CLI, a migration) is never suppressed. */
-    if (!d.truncated && actors.length && !others.length) return;
-    var by = others[0] || '';
+    /* Name them if it was somebody else; say so plainly if it was this
+       account in another window, which is the confusing case worth naming. */
+    var label = others.length ? fqcEsc(others[0]) + ' saved changes'
+              : actors.length ? 'Saved in another window, signed in as you'
+              : 'Changed elsewhere';
     if (CHANGE_SILENT[view] && !screenBusy(view) && reloadScreen(view)) return;
-    showChangeChip(view, by);
+    showChangeChip(view, label);
   }
 
   function pollChanges() {

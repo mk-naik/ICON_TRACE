@@ -47,6 +47,36 @@ def fresh():
     AUTH.ensure_auth_schema()
 
 
+def seed_serials(n=8):
+    """Planned serials, so a production entry can actually be recorded -
+    the screen the bug was reported on."""
+    out = []
+    with store.conn() as (cx, cur):
+        for i in range(n):
+            sn = "ICON590G120212%04d" % (3000 + i)
+            store.insert(cur, "serial", {
+                "serial": sn, "build_instance": 1, "model": "ISEN590-G12R",
+                "wattage": 590, "customer": "STOCK", "dcr": "DCR",
+                "format_version": 2, "date_produced": "2026-09-09",
+                "shift": 1, "sequence": 3000 + i, "state": "planned"})
+            out.append(sn)
+    return out
+
+
+def record_production(pg, serials):
+    """A production entry saved BY THAT PAGE's own session - the exact save
+    Mukesh made when the other window stayed silent."""
+    ok = pg.evaluate("""(s) => fetch('/api/prodentry', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({date: window.istLastEndedShift().date,
+                                  shift: window.istLastEndedShift().shift,
+                                  incharge: 'RAJESH KUMAR', line: 'A-Line',
+                                  start_serial: s[0], end_serial: s[3]})
+          }).then(function (r) { return r.json(); })
+            .then(function (d) { return d.ok === true; })""", serials)
+    assert ok, "the production entry did not save"
+
+
 def signed_in_page(b, role, login_id):
     """A page in its OWN browser context - two contexts means two genuinely
     separate sessions, which is the whole point of the test."""
@@ -153,6 +183,40 @@ def t_protection():
             assert pgB.evaluate("window.__noReload") == "intact"
             assert pgB.errors == [] and pgA.errors == [], (pgA.errors, pgB.errors)
             print("      chip in %.1fs: %r; typed text intact" % (took, chip[:60]))
+        finally:
+            ctxA.close(); ctxB.close()
+
+
+@test("SAME ACCOUNT, TWO WINDOWS: the second window is still told. Suppressing "
+     "my own saves is decided by the PAGE that wrote, never by the account - "
+     "deciding it by account left Production Entry silent for six minutes")
+def t_same_account_second_window_is_told():
+    fresh()
+    serials = seed_serials()
+    with H.browser() as b:
+        # one account, two sessions - which is all an InPrivate window is
+        ctxA, pgA = signed_in_page(b, "Super Admin", "mknaik")
+        ctxB, pgB = signed_in_page(b, "Super Admin", "mknaik")
+        try:
+            assert pgA.evaluate("USER.login_id") == pgB.evaluate("USER.login_id")
+            assert pgA.evaluate("window.iconClientId") != \
+                pgB.evaluate("window.iconClientId"), "two pages shared one client id"
+            for pg in (pgA, pgB):
+                pg.evaluate("go('prodentry')")       # not a silent screen
+                pg.wait_for_timeout(900)
+
+            record_production(pgA, serials)
+
+            took = wait_for(pgB, "!!document.querySelector('#chgChip.on')")
+            assert took is not None, \
+                "the second window was never told, %ds after the save" % (WAIT_MS / 1000)
+            chip = pgB.inner_text("#chgChip")
+            assert "another window" in chip, chip
+            # and the window that DID the save is still not chipped
+            assert not pgA.evaluate("!!document.querySelector('#chgChip.on')"), \
+                "the saving window chipped itself"
+            assert pgA.errors == [] and pgB.errors == [], (pgA.errors, pgB.errors)
+            print("      second window told in %.1fs: %r" % (took, chip.split("\n")[0]))
         finally:
             ctxA.close(); ctxB.close()
 

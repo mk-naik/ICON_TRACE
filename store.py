@@ -87,17 +87,29 @@ _WRITE_SQL = re.compile(
 _actor = threading.local()
 
 
-def set_actor(login_id):
-    """Who the current thread is acting as, for the change feed's `by_login`.
+def set_actor(login_id, client_id=""):
+    """Who the current thread is acting as, for the change feed.
+
+    Two facts, not one: WHO (login_id, for "Rajesh saved changes") and WHICH
+    PAGE (client_id, a token the browser mints per page load and sends on
+    every request). The page is what decides whether a change is the
+    caller's own - an account signed in twice is one person and two pages,
+    and Round 30 suppressed on the account, which left the second page
+    permanently silent about the first one's saves.
 
     A thread-local rather than an argument threaded through every call:
     Waitress serves each request on its own thread, and app.py sets this once
     per request from the real session. store must not import app."""
     _actor.login_id = (login_id or "").strip()
+    _actor.client_id = (client_id or "").strip()[:64]
 
 
 def current_actor():
     return getattr(_actor, "login_id", "") or ""
+
+
+def current_client():
+    return getattr(_actor, "client_id", "") or ""
 
 
 def _written_table(sql):
@@ -164,11 +176,11 @@ class conn:
             if not topics:
                 return
             now = time.time()
-            who = current_actor()
+            who, page = current_actor(), current_client()
             for topic in topics:
                 self.cx.execute(
-                    "INSERT INTO change_log (topic, at_epoch, by_login) "
-                    "VALUES (?, ?, ?)", (topic, now, who))
+                    "INSERT INTO change_log (topic, at_epoch, by_login, by_client) "
+                    "VALUES (?, ?, ?, ?)", (topic, now, who, page))
             # Opportunistic, like icon_auth.purge_expired_sessions: pruned on
             # write rather than by a job nobody remembers to run.
             self.cx.execute("DELETE FROM change_log WHERE at_epoch < ?",
@@ -207,6 +219,11 @@ def _migrate(cx, text):
     """
     def cols(t):
         return {r[1]: r for r in cx.execute("PRAGMA table_info(%s)" % t)}
+
+    # Round 31: which PAGE made the change, so one person signed in twice is
+    # still told about their other window's save.
+    if cols("change_log") and "by_client" not in cols("change_log"):
+        cx.execute("ALTER TABLE change_log ADD COLUMN by_client TEXT")
 
     # pre-shared or post-shared, recorded at allocation
     if cols("allocation") and "alloc_type" not in cols("allocation"):

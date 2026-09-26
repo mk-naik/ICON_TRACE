@@ -297,7 +297,9 @@ def _load_session():
     # Cleared on every request, not only when a session is found: Waitress
     # reuses threads, and a leftover value would sign the next person's
     # changes with the last person's name (Round 30).
-    store.set_actor("")
+    # Which PAGE this request came from (Round 31), minted per page load by
+    # the browser. Cleared alongside the actor for the same reason.
+    store.set_actor("", request.headers.get("X-Icon-Client", ""))
     if request.path in _SESSION_EXEMPT_PATHS or \
        request.path.startswith(_SESSION_EXEMPT_PREFIXES):
         return
@@ -314,8 +316,10 @@ def _load_session():
             row = store.one(cur, "SELECT must_change_pw FROM app_user "
                                  "WHERE user_id=%s", (g.icon_session["user_id"],))
             g.icon_must_change_pw = bool(row and row["must_change_pw"])
-            # Who the change feed records for anything this request saves.
-            store.set_actor(g.icon_session["login_id"])
+            # Who the change feed records for anything this request saves,
+            # and which page they did it from.
+            store.set_actor(g.icon_session["login_id"],
+                            request.headers.get("X-Icon-Client", ""))
 
 
 def _int_arg(name, default):
@@ -5807,12 +5811,19 @@ def api_changes():
             topics = sorted({r["topic"] for r in store.rows(
                 cur, "SELECT DISTINCT topic FROM change_log WHERE seq > %s",
                 (since,))})
-        who = sorted({r["by_login"] for r in store.rows(
-            cur, "SELECT DISTINCT by_login FROM change_log WHERE seq > %s "
-                 "AND by_login IS NOT NULL AND by_login <> ''", (since,))
-        }) if (since < seq and not truncated) else []
+        who, pages = [], []
+        if since < seq and not truncated:
+            who = sorted({r["by_login"] for r in store.rows(
+                cur, "SELECT DISTINCT by_login FROM change_log WHERE seq > %s "
+                     "AND by_login IS NOT NULL AND by_login <> ''", (since,))})
+            # WHICH PAGES wrote, so a caller can tell its own saves from
+            # another window's - including another window of its own account
+            # (Round 31). Never used for access, only for "was this me".
+            pages = sorted({r["by_client"] for r in store.rows(
+                cur, "SELECT DISTINCT by_client FROM change_log WHERE seq > %s "
+                     "AND by_client IS NOT NULL AND by_client <> ''", (since,))})
     return jsonify({"ok": True, "seq": seq, "topics": topics, "by": who,
-                    "truncated": truncated})
+                    "by_clients": pages, "truncated": truncated})
 
 
 @app.route("/api/boot")

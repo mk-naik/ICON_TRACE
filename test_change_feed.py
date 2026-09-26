@@ -141,6 +141,39 @@ def t_two_sessions():
     print("      watcher saw topics=%s by=%s" % (d["topics"], d["by"]))
 
 
+@test("the feed says which PAGE wrote, not only which account - the same "
+     "account signed in twice is two pages, and Round 30 could not tell them "
+     "apart, so the second window was never told anything")
+def t_by_client_distinguishes_pages():
+    fresh()
+    a = APP.app.test_client()
+    AUTH.test_login(a, role="Super Admin", login_id="mknaik")
+    b = APP.app.test_client()
+    AUTH.test_login(b, role="Super Admin", login_id="mknaik")   # same account
+    at = seq_now(b)
+    r = a.post("/api/material", json={"name": "Page A material", "uom": "Nos"},
+               headers={"X-Icon-Client": "PAGE-A"})
+    assert r.status_code == 200, r.get_json()
+
+    d = b.get("/api/changes?since=%d" % at,
+              headers={"X-Icon-Client": "PAGE-B"}).get_json()
+    assert d["by"] == ["mknaik"], d              # same person...
+    assert d["by_clients"] == ["PAGE-A"], d      # ...but a different page
+    # the page that wrote it sees its own id and can stay quiet
+    d2 = a.get("/api/changes?since=%d" % at,
+               headers={"X-Icon-Client": "PAGE-A"}).get_json()
+    assert d2["by_clients"] == ["PAGE-A"], d2
+    # a write with no client id at all (CLI, migration) is attributed to none,
+    # so nobody mistakes it for their own and suppresses it
+    at2 = seq_now(b)
+    assert a.post("/api/material", json={"name": "Headless", "uom": "Nos"}
+                  ).status_code == 200
+    d3 = b.get("/api/changes?since=%d" % at2).get_json()
+    assert d3["by_clients"] == [], d3
+    print("      by=%s by_clients=%s (headless write -> %s)"
+          % (d["by"], d["by_clients"], d3["by_clients"]))
+
+
 @test("the topic is the one the tables map to: a gate pass says gatepasses, "
      "an FQC grade says fqc, a pallet says boxes")
 def t_topics_match_tables():
