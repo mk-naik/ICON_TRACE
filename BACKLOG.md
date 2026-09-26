@@ -4172,6 +4172,11 @@ screen:
 | users | app_user, user_screen_perm |
 | audit | dispatch_audit |
 
+No screen subscribes to `audit` yet, on purpose: nearly every save anywhere
+writes `dispatch_audit`, so wiring it to the Admin screen would raise a chip
+over somebody editing a user every time an operator closed a pallet. The
+topic is recorded and ready for an Audit screen that actually shows it.
+
 **Deliberately untracked**, each for its own reason: `auth_session` (the
 page's own polling touches it, so tracking it would make the feed feed
 itself and never go quiet), `change_log` (it must not report itself), and the

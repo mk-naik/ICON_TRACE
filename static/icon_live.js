@@ -7984,7 +7984,12 @@ function wireFqcAnomalies() {
     'gp-new':         ['gatepasses', 'challans'],
     hold:             ['fqc', 'serials'],
     review:           ['review', 'fqc'],
-    admin:            ['users', 'master', 'audit'],
+    /* Not 'audit', deliberately. Nearly every save anywhere writes
+       dispatch_audit, so subscribing the Admin screen to it would raise a
+       chip over somebody editing a user every time an operator closed a
+       pallet - noise about a tab they are not even looking at. The topic is
+       still recorded, ready for an Audit screen that does show it. */
+    admin:            ['users', 'master'],
     items:            ['master']
   };
 
