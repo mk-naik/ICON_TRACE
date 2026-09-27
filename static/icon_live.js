@@ -1568,6 +1568,10 @@
 
   function renderMgmt() {
     if (!can('mgmt')) return;   /* Round 28: the server would refuse it */
+    /* Round 33: at boot, v4's initAll() calls this directly (it fetches all
+       three dashboard endpoints at once); skip it when landing elsewhere, so a
+       refresh onto a non-dashboard does not run the dashboard's query load. */
+    if (_bootRenderOnly !== null && _bootRenderOnly !== 'mgmt') return;
     var g = function(id) { var e = document.getElementById(id); return e ? (e.value === 'All customers' || e.value.startsWith('All') || e.value.startsWith('Both') ? '' : e.value) : ''; };
     var f = {
       from: g('mgFrom'), to: g('mgTo') || g('mgFrom'),
@@ -1966,6 +1970,15 @@
     renderLiveFqcRecent: 'fqc', renderPackLog: 'packdash',
     renderStock: 'disp', renderPlan: 'plan' };
 
+  /* Round 33: non-null only during the ONE rerender inside applyBoot() at
+     sign-in/refresh, holding the screen being landed on. While it is set,
+     rerender() paints only that screen, so a refresh onto a non-dashboard does
+     not run the dashboard's query load. Every other rerender() - a filter
+     Reset, iconRefresh() after a save - leaves it null and still redraws every
+     viewable screen, exactly as before. Each dashboard also redraws when
+     navigated to (the go wrapper), so one skipped at boot is not left stale. */
+  var _bootRenderOnly = null;
+
   function rerender() {
     replaceDemoDates();
     istClock();
@@ -1973,6 +1986,7 @@
      'renderLiveFqcRecent', 'renderPackLog',
      'renderStock', 'renderPlan'].forEach(function (fn) {
       if (typeof can === 'function' && !can(RENDER_SCREEN[fn])) return;
+      if (_bootRenderOnly !== null && RENDER_SCREEN[fn] !== _bootRenderOnly) return;
       try { if (typeof window[fn] === 'function') window[fn](); }
       catch (e) { /* a screen that is not on the page yet */ }
     });
@@ -2730,6 +2744,9 @@ function wireFqcAnomalies() {
 
   function renderLiveProdDash() {
     if (!can('proddash')) return;   /* Round 28: the server would refuse it */
+    /* Round 33: initAll() calls this directly at boot too - skip when landing
+       on another screen (see renderMgmt and rerender's _bootRenderOnly). */
+    if (_bootRenderOnly !== null && _bootRenderOnly !== 'proddash') return;
     wireProdDash();
     var g = function(id) { var e = document.getElementById(id); return e ? e.value : ''; };
     var f = {
@@ -6012,8 +6029,39 @@ function wireFqcAnomalies() {
   var _origSignIn = window.signIn;
   window.signIn = function () {
     packingOrder();
-    if (_origSignIn) _origSignIn.apply(this, arguments);
+    /* Round 33: land on the screen the URL hash names, so a refresh returns
+       the person to where they were instead of the dashboard. Resolved AFTER
+       packingOrder(), which may have just changed this role's home.
+
+         - empty hash            -> home, unchanged from before;
+         - a known, viewable id  -> that screen;
+         - anything else         -> home (an unknown id, or one this account
+                                    cannot view - a stale bookmark, a changed
+                                    permission). can() is the SAME gate the nav
+                                    buttons use (it reads the account's own
+                                    perms/subviews), so validation and the
+                                    can-view cross-check are one and the same,
+                                    and a hash cannot route anywhere the nav
+                                    would not - the open-redirect defence in
+                                    miniature. */
+    var _origHome = (ROLES[USER.role] && ROLES[USER.role].home) || null;
+    var home = _origHome || 'search';
+    var h = (location.hash || '').replace(/^#/, '').trim();
+    var landing = (h && typeof can === 'function' && can(h)) ? h : home;
+
+    /* Paint only the landing screen at boot (see rerender's _bootRenderOnly):
+       go(landing) below sets it "on", and the one rerender() inside applyBoot()
+       then paints only what is on. An injected screen (Indent, Item Master,
+       Loading Verification) is not built until addScreens() - go() cannot show
+       it yet and leaves nothing "on", so rerender paints nothing and the screen
+       is shown at the end, once it exists. Either way the dashboard's query
+       load is not run for a refresh onto something else. */
+    if (ROLES[USER.role]) ROLES[USER.role].home = landing;
+    _bootRenderOnly = landing;
+    if (_origSignIn) _origSignIn.apply(this, arguments);   /* go(landing) */
     applyBoot();
+    _bootRenderOnly = null;
+    if (ROLES[USER.role]) ROLES[USER.role].home = _origHome;   /* restore */
     _loadViewableScreens();
     addScreens();
     sidebarToggle();
@@ -6047,6 +6095,14 @@ function wireFqcAnomalies() {
     badge.style.background = B.live ? 'rgba(23,122,71,.35)' : '';
     var right = document.querySelector('.tb-right');
     if (right) right.insertBefore(badge, right.firstChild);
+
+    /* Round 33: the landing screen may be one addScreens() only just built
+       (Indent, Item Master, Loading Verification), which go() could not show
+       during _origSignIn above. Now that it exists, show it. For a screen
+       already shown at boot this is a no-op (currentView() already matches). */
+    if (typeof currentView === 'function' && currentView() !== landing) {
+      try { go(landing); } catch (e) {}
+    }
   };
 
   /* Loading Verification is its own screen, so Gate Pass must stop offering
@@ -10957,10 +11013,66 @@ function wireFqcAnomalies() {
         if (view === 'disp') {
           wireDisp();
         }
+        /* Round 33: the dashboards used to be painted only by the one big
+           rerender() at boot (which fired every one of them at once). Now that
+           boot paints only the screen being landed on, these must redraw when
+           navigated to instead - the same way the list screens above already
+           do. Skipped while _bootRenderOnly is set: at boot the landing screen
+           is painted by applyBoot's rerender, so re-rendering it here too would
+           only double the fetch. Gated on can(view): renderLiveFqcRecent()
+           does NOT check permission itself (the others do), so without this an
+           account that cannot view a screen but navigates at it - and is
+           refused by go() above - would still fire that screen's read and earn
+           a 403. */
+        if (_bootRenderOnly === null && typeof can === 'function' && can(view)) {
+          if (view === 'mgmt' && typeof window.renderMgmt === 'function') window.renderMgmt();
+          else if (view === 'proddash' && typeof window.renderProd === 'function') window.renderProd();
+          else if (view === 'dash' && typeof window.renderLiveFqcDash === 'function') window.renderLiveFqcDash();
+          else if (view === 'fqc' && typeof window.renderLiveFqcRecent === 'function') window.renderLiveFqcRecent();
+          else if (view === 'packdash' && typeof window.renderPackLog === 'function') window.renderPackLog();
+        }
       } catch (e) {}
       return result;
     };
     window.go.__chListPatched = true;
+  }
+
+  /* ---- Round 33: refresh comes back to the screen you were on --------------
+   *
+   * Every navigation records the screen in the URL hash (#challan-list,
+   * #indent, ...). On a refresh the hash is read on the way into the app (see
+   * the signIn wrapper) and that screen is restored instead of the dashboard.
+   *
+   * The hash NEVER leaves the browser - it is not sent to the server, Flask
+   * keeps serving the same page - and it carries only a screen id, nothing a
+   * URL could smuggle in. It is written with history.replaceState, chosen over
+   * assigning location.hash for two reasons: replaceState does NOT push a
+   * history entry, so the Back button does not walk backwards through every
+   * screen visited (a refresh landing on the current screen is the goal, not a
+   * navigation history); and it does NOT fire a hashchange event, so there is
+   * no listener to loop back into go() - which is also why no in-progress flag
+   * is needed here (there is no hashchange listener at all: the hash is read
+   * once, on entry, never on a live hashchange).
+   *
+   * This is the OUTERMOST wrapper, so it records the screen ACTUALLY shown -
+   * after the nav-button redirects the wrapper above applies (challan ->
+   * challan-list, gp -> gp-list, loadver -> loading-list). currentView() reads
+   * the .view.on element, so a refused/failed navigation (which leaves the
+   * shown screen unchanged) never rewrites the hash to somewhere it did not go. */
+  if (typeof window.go === 'function' && !window.go.__hashWrapped) {
+    var _goForHash = window.go;
+    window.go = function () {
+      var r = _goForHash.apply(this, arguments);
+      try {
+        var shown = (typeof currentView === 'function') ? currentView() : '';
+        if (shown && ('#' + shown) !== location.hash && window.history &&
+            typeof history.replaceState === 'function') {
+          history.replaceState(history.state, '', '#' + shown);
+        }
+      } catch (e) { /* a browser without the history API still navigates fine */ }
+      return r;
+    };
+    window.go.__hashWrapped = true;
   }
 
   /* Pre-wire on load if either screen is already active */
