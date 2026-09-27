@@ -282,6 +282,23 @@ def _migrate(cx, text):
     if cols("serial") and "prod_entry_id" not in cols("serial"):
         cx.execute("ALTER TABLE serial ADD COLUMN prod_entry_id INTEGER "
                    "REFERENCES production_entry(entry_id)")
+
+    # Round 34: direct cancellation of every document type (Admin/Super Admin
+    # + a TOTP step-up). The SAME four columns on every table - the exact ones
+    # challan already carries - so cancel is one shape, not one per type.
+    # Existing rows default to 'active'; a NOT NULL DEFAULT is what lets
+    # ADD COLUMN backfill them in place (SQLite requires the default).
+    for _cancel_tbl in ("indent", "gatepass", "production_entry",
+                        "loss_event", "invoice"):
+        if not cols(_cancel_tbl):
+            continue
+        for name, decl in (("status", "TEXT NOT NULL DEFAULT 'active'"),
+                           ("cancelled_reason", "TEXT"),
+                           ("cancelled_by", "TEXT"),
+                           ("cancelled_at", "TEXT")):
+            if name not in cols(_cancel_tbl):
+                cx.execute("ALTER TABLE %s ADD COLUMN %s %s"
+                           % (_cancel_tbl, name, decl))
     cx.commit()
 
 
