@@ -4605,3 +4605,97 @@ edited is still caught.
 `test_change_feed.py` (server side, unchanged) -> 9 passed
 `test_boot_payload.py` (session payload carries auto_refresh) -> 6 passed
 
+## Round 33 - a refresh comes back to the screen you were on
+
+Every screen lived at one URL (/), the current screen only a JS variable, so a
+refresh reloaded / and always booted to the dashboard: the person lost their
+place AND paid for the dashboard's full query load every time, even when they
+never wanted the dashboard. This round records the screen in the URL hash
+(#challan-list, #indent) and reads it back on load.
+
+### What it does, and what it deliberately does not
+
+  - REFRESH-RETURN only. No logout-return / return-after-login. That was the
+    one part carrying an open-redirect consideration (a saved "next" URL) and
+    the smaller benefit; dropped, value-vs-risk. The hash never leaves the
+    browser - not sent to the server, Flask keeps serving the same page - and
+    carries only a screen id.
+  - SCREEN only, not record, and NOT in-progress form state. A half-typed New
+    Indent form is gone after a refresh; restoring unsaved form data validated
+    against records that may have changed is a separate, much bigger thing.
+  - Data is fetched fresh on arrival, as every screen already does - the hash
+    restores the screen, not a data snapshot.
+
+### How it is written and read
+
+Writing: a THIRD wrapper on window.go (the outermost, after the two the live
+layer already installs, so it sees the screen ACTUALLY shown - past the
+nav-button redirects challan->challan-list, gp->gp-list, loadver->loading-list)
+sets location.hash to currentView() on every navigation. It uses
+history.replaceState, NOT an assignment to location.hash, for two reasons:
+replaceState does not push a history entry, so the Back button does not walk
+backwards through every screen visited (a refresh landing on the current screen
+is the goal, not a navigation history); and it does not fire a hashchange
+event. There is no hashchange listener at all - the hash is read once, on the
+way into the app, never on a live change - so no in-progress flag is needed to
+stop the write looping back into go().
+
+Reading: on enterApp (a fresh sign-in AND a reload with a live cookie both
+funnel through the signIn wrapper), location.hash is read, stripped, and:
+  - empty            -> home, unchanged from before;
+  - a known, viewable screen id -> that screen;
+  - anything else    -> home (an unknown id, or one this account cannot view).
+The valid-screen set is NOT hard-coded. It is sourced from can() - the live
+layer's own gate (Round 28), which reads the account's own perms/subviews from
+the session payload (icon_auth.SCREENS is what fills that map). can() is the
+SAME gate the nav buttons use, so validation and the can-view cross-check are
+one and the same call: a hash cannot route anywhere the nav would not, which is
+the open-redirect defence in miniature, and a stale bookmark or a since-revoked
+permission lands on home rather than a 403 or a blank screen.
+
+### The efficiency win - measured, not assumed
+
+The dashboard's query load did NOT come from go(home) as first assumed. It came
+from v4's initAll() (in the read-only HTML), which calls renderMgmt() directly
+- and renderMgmt fetches all three dashboard endpoints (/api/prod/dashboard,
+/api/fqc/dashboard, /api/stock_dispatch) at once - plus renderProd(). initAll
+runs inside v4's signIn(). So the fix is: at boot, paint only the screen being
+landed on. A module-scoped `_bootRenderOnly` holds the landing screen for the
+one rerender() inside applyBoot() and is checked at the top of renderMgmt() and
+renderLiveProdDash() (the two initAll calls directly); every other rerender - a
+filter Reset, iconRefresh() after a save - leaves it null and still redraws
+every viewable screen, exactly as before. Because boot no longer pre-paints the
+dashboards, each one now redraws when navigated TO instead (a render hook in
+the go wrapper, beside the list-screen hooks already there), gated on can(view)
+so an account navigating at a screen it cannot see - and refused by go() - does
+not fire that screen's read (renderLiveFqcRecent has no can() check of its own;
+this is where the Dashrath account earned a 403 until the gate was added).
+
+Observed, GET / with a fresh Super Admin session:
+    refresh onto #search      -> /api/prod/dashboard, /api/fqc/dashboard,
+                                 /api/stock_dispatch NOT called
+    refresh onto #mgmt        -> all three called (it IS the dashboard asked for)
+    refresh onto #proddash    -> only /api/prod/dashboard
+    refresh onto #challan-list, #prodentry, #indent, #gp-list -> none of the three
+
+### Tests (real, run)
+
+`test_hash_route.py` (Playwright): refresh returns to a list, a dashboard and a
+form-bearing screen (form state gone, as intended) · #search refresh calls no
+dashboard endpoint while #mgmt does · #nonsense -> home, no error · a restricted
+account's hash to an unviewable screen -> its home, no 403 · in-app navigation
+does not grow history.length (replaceState, Back does not walk screens)
+    -> 5 passed, 0 failed
+Full existing suite re-run and unchanged: the Round 30-32 change-feed and
+auto-refresh UI tests (8 + 5), test_change_feed server side (9),
+test_boot_payload (6), test_dashrath_case (6 - the can(view) gate above),
+test_screen_perms (20), test_search_invoice (16), test_login_screen (11),
+test_fqc_override (9), test_fqc_screen (10), and the rest of the harness UI
+suite; the JScript suite via cscript (test_screens 17, test_trace 33,
+test_challan 35, test_packing 26, test_loading 24). All JS-only; no server route
+changed - the hash is never sent to the server.
+The fixed-port dev UI tests (test_mgmt_ui, test_prod_ui, test_pack_ui,
+test_fqc_dashboard_ui, test_fqc_recent_ui) need a manually-started server on
+their hard-coded ports and were not run here; each navigates to its dashboard
+before asserting, which the go-wrapper render hook now serves.
+
