@@ -85,7 +85,9 @@ SCREEN_MAP = read_screen_map()
 # What the map must be - the review-before-apply map from the Round 27
 # report, written down once so a silent re-mapping fails here.
 EXPECTED = {
-    "challan":   {"api_challan_create", "api_challan_cancel",
+    # api_challan_cancel moved to a role gate (Admin/Super Admin + TOTP) in
+    # Round 34 - see t_critical_surface_keeps_role_gates below.
+    "challan":   {"api_challan_create",
                   "api_challan_discard", "api_challan_edit_draft",
                   "api_challan_edit_save", "api_challan_submit",
                   "api_challan_checks"},
@@ -100,7 +102,9 @@ EXPECTED = {
                   "api_box_remove", "api_box_repack", "api_box_scan",
                   "api_box_open", "packing"},
     "repack":    {"api_repack"},
-    "plan":      {"api_allocation_create", "api_allocation_cancel",
+    # api_allocation_cancel moved to a role gate (Admin/Super Admin + TOTP) in
+    # Round 34 - see t_critical_surface_keeps_role_gates below.
+    "plan":      {"api_allocation_create",
                   "api_allocation_update", "planning"},
     "indent":    {"api_indent_create", "api_indent_update", "indent_new"},
     "loss":      {"api_loss_event_open", "api_loss_event_close"},
@@ -156,7 +160,7 @@ def fresh():
 # The map itself
 # --------------------------------------------------------------------------
 
-@test("the map read out of app.py is exactly the reviewed map - 40 view "
+@test("the map read out of app.py is exactly the reviewed map - 38 view "
      "functions on 13 screens, every one a real, non-excluded screen")
 def t_map_is_the_reviewed_map():
     got = {}
@@ -165,7 +169,7 @@ def t_map_is_the_reviewed_map():
     assert got == EXPECTED, "map drifted:\n  got      %s\n  expected %s" % (
         sorted((k, sorted(v)) for k, v in got.items()),
         sorted((k, sorted(v)) for k, v in EXPECTED.items()))
-    assert sum(len(v) for v in got.values()) == 40
+    assert sum(len(v) for v in got.values()) == 38
     for s in got:
         assert s in icon_auth.SCREEN_IDS and s not in icon_auth.EXCLUDED_SCREENS, s
     print("      %d route lines, %d functions" % (
@@ -200,6 +204,15 @@ def t_critical_surface_keeps_role_gates():
         "/api/users/<login_id>/deactivate": "_R_ADMIN",
         "/api/users/<login_id>/reactivate": "_R_ADMIN",
         "/api/export/xlsx": "_R_EVERY", "/api/quality": "_R_QUALITY",
+        # Round 34: every document cancel is Admin/Super Admin only, moved here
+        # off the per-screen write flag (challan and allocation) or newly added.
+        "/api/challan/<int:challan_id>/cancel": "_R_ADMIN",
+        "/api/allocation/<int:alloc_id>": "_R_ADMIN",
+        "/api/indent/<int:indent_id>/cancel": "_R_ADMIN",
+        "/api/gatepass/<int:gatepass_id>/cancel": "_R_ADMIN",
+        "/api/prodentry/<int:entry_id>/cancel": "_R_ADMIN",
+        "/api/loss_event/<int:event_id>/cancel": "_R_ADMIN",
+        "/api/invoice/<int:invoice_id>/cancel": "_R_ADMIN",
     }
     for path, const in want.items():
         i = next(n for n, l in enumerate(_SRC)

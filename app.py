@@ -481,6 +481,31 @@ def actor_login_id():
     return g.icon_session["login_id"] if g.icon_session else ""
 
 
+def _require_stepup(cur, body):
+    """The TOTP step-up every cancel endpoint shares (Round 34).
+
+    Returns a (json, status) error tuple to return as-is, or None to proceed.
+
+    Called BEFORE the type-specific refusal check, on purpose: a wrong or
+    replayed code refuses IDENTICALLY whether or not the document could
+    otherwise be cancelled, so nothing about the document's state leaks from
+    which error came back. icon_auth.stepup_cancel() already carries the replay
+    guard (a code used to sign in has advanced totp_last_step and is refused
+    here), the rank floor, and the wrong-code path - this is only the plumbing
+    that reads {totp_code} off the body and turns a False into the one response.
+
+    The endpoints are also @require_role(*_R_ADMIN), so a wrong role is refused
+    before the body ever runs and never reaches this at all."""
+    code = str((body or {}).get("totp_code") or "").strip()
+    if not code:
+        return jsonify({"ok": False, "why":
+            "Enter your authenticator code to cancel."}), 400
+    if not icon_auth.stepup_cancel(cur, actor_login_id(), code):
+        return jsonify({"ok": False, "why":
+            "That authenticator code was not accepted."}), 403
+    return None
+
+
 def require_role(*allowed_roles):
     """Gate a write endpoint by role, in one place instead of 41 manual
     `if role() not in (...)` blocks. 401 (who are you) when there is no
@@ -2907,7 +2932,7 @@ def api_challan_get(challan_id):
 
 
 @app.route("/api/challan/<int:challan_id>/cancel", methods=["POST"])
-@require_screen_write("challan")
+@require_role(*_R_ADMIN)
 @_sync_guard
 def api_challan_cancel(challan_id):
     """Cancel an ISSUED challan.
@@ -2915,6 +2940,10 @@ def api_challan_cancel(challan_id):
     Mirrors api_challan_discard exactly - same audit fields, same cancel
     convention - but allowed only when status='issued' and no gate pass
     references it via the real FK.
+
+    Round 34: Admin/Super Admin only (was any Dispatch-write role), with the
+    shared TOTP step-up. The REFUSAL RULE is unchanged - issued-only, no
+    referencing gate pass - only who may call it and the step-up are new.
 
     On success every serial reverts dispatched -> packed and its boxes
     become repackable again (their serials are no longer dispatched, so
@@ -2924,6 +2953,9 @@ def api_challan_cancel(challan_id):
     d = request.get_json(force=True) or {}
     reason = (d.get("reason") or "").strip() or "issued challan cancelled by operator"
     with store.conn() as (cx, cur):
+        err = _require_stepup(cur, d)
+        if err:
+            return err
         ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
                        (challan_id,))
         if not ch:
@@ -2949,6 +2981,205 @@ def api_challan_cancel(challan_id):
              clock.now().isoformat(timespec="seconds"), challan_id))
         db.audit(cur, actor(), "challan.cancel", "challan", challan_id,
                  {"fy": ch["fy"], "seq": ch["seq"], "reason": reason})
+    return jsonify({"ok": True})
+
+
+# ==========================================================================
+# Round 34 - direct cancellation of every remaining document type.
+#
+# Admin/Super Admin only, TOTP step-up on every one (the shared _require_stepup
+# above, called before the type-specific refusal so a wrong code leaks nothing
+# about the document's state). Each keys its refusal to what downstream has
+# already consumed it - the same idea challan and allocation use, one condition
+# per type, stated in BACKLOG for Mukesh to correct.
+# ==========================================================================
+
+@app.route("/api/indent/<int:indent_id>/cancel", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_sync_guard
+def api_indent_cancel(indent_id):
+    """Refuse once production has acted on any serial allocated against this
+    indent - i.e. any allocation on any of its lines holds a serial that has
+    left 'planned'. This mirrors allocation withdrawal's own rule exactly, one
+    level up (indent -> line -> allocation -> serial)."""
+    d = request.get_json(force=True) or {}
+    reason = (d.get("reason") or "").strip() or "indent cancelled"
+    with store.conn() as (cx, cur):
+        err = _require_stepup(cur, d)
+        if err:
+            return err
+        row = store.one(cur, "SELECT * FROM indent WHERE indent_id=%s", (indent_id,))
+        if not row:
+            return jsonify({"ok": False, "why": "No such indent."}), 404
+        if row["status"] == "cancelled":
+            return jsonify({"ok": False, "why": "Indent is already cancelled."}), 400
+        started = store.one(cur,
+            "SELECT COUNT(*) AS n FROM serial s "
+            "JOIN allocation a ON a.alloc_id = s.alloc_id "
+            "JOIN indent_line il ON il.indent_line_id = a.indent_line_id "
+            "WHERE il.indent_id=%s AND s.state<>'planned'", (indent_id,))["n"]
+        if started:
+            return jsonify({"ok": False, "why":
+                "%d module(s) allocated against this indent have already been "
+                "through production. It cannot be cancelled." % started}), 400
+        cur.execute(
+            "UPDATE indent SET status='cancelled', cancelled_reason=%s, "
+            "cancelled_by=%s, cancelled_at=%s WHERE indent_id=%s",
+            (reason, actor(), clock.now().isoformat(timespec="seconds"), indent_id))
+        db.audit(cur, actor(), "indent.cancel", "indent", indent_id,
+                 {"indent_no": row["indent_no"], "reason": reason})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/gatepass/<int:gatepass_id>/cancel", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_sync_guard
+def api_gatepass_cancel(gatepass_id):
+    """A gate pass has no post-issue lifecycle to key a refusal on: it is
+    created AT the moment of leaving (audit 'gatepass.issue'), there is no
+    return/close workflow (return_date is never written - db.py notes this),
+    and nothing downstream reads its outcome. Its one linkage is that a module
+    gate pass locks its challan (the challan's own cancel refuses while a gate
+    pass references it) - and cancelling the gate pass is exactly how you
+    release that lock to then unwind the challan, so it must NOT be refused for
+    having a challan. Hence: allowed whenever not already cancelled. Flagged
+    for Mukesh - if a real dispatched/left state is added later, key it here."""
+    d = request.get_json(force=True) or {}
+    reason = (d.get("reason") or "").strip() or "gate pass cancelled"
+    with store.conn() as (cx, cur):
+        err = _require_stepup(cur, d)
+        if err:
+            return err
+        row = store.one(cur, "SELECT * FROM gatepass WHERE gp_id=%s", (gatepass_id,))
+        if not row:
+            return jsonify({"ok": False, "why": "No such gate pass."}), 404
+        if row["status"] == "cancelled":
+            return jsonify({"ok": False, "why": "Gate pass is already cancelled."}), 400
+        cur.execute(
+            "UPDATE gatepass SET status='cancelled', cancelled_reason=%s, "
+            "cancelled_by=%s, cancelled_at=%s WHERE gp_id=%s",
+            (reason, actor(), clock.now().isoformat(timespec="seconds"), gatepass_id))
+        db.audit(cur, actor(), "gatepass.cancel", "gatepass", gatepass_id,
+                 {"gp_no": row["gp_no"], "reason": reason})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/prodentry/<int:entry_id>/cancel", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_sync_guard
+def api_prodentry_cancel(entry_id):
+    """Refuse once any serial this entry recorded has left 'planned'/'produced'
+    into FQC or beyond (graded, rejected, hold, packed, dispatched) - FQC has
+    acted on it and the range is history. On success the entry's own serials go
+    back to 'planned' and their prod_entry_id is cleared, so the range can be
+    re-recorded correctly - the same 'revert what I did downstream' the challan
+    cancel does with its serials."""
+    d = request.get_json(force=True) or {}
+    reason = (d.get("reason") or "").strip() or "production entry cancelled"
+    with store.conn() as (cx, cur):
+        err = _require_stepup(cur, d)
+        if err:
+            return err
+        row = store.one(cur, "SELECT * FROM production_entry WHERE entry_id=%s",
+                        (entry_id,))
+        if not row:
+            return jsonify({"ok": False, "why": "No such production entry."}), 404
+        if row["status"] == "cancelled":
+            return jsonify({"ok": False, "why":
+                            "Production entry is already cancelled."}), 400
+        touched = store.one(cur,
+            "SELECT COUNT(*) AS n FROM serial WHERE prod_entry_id=%s "
+            "AND state NOT IN ('planned','produced')", (entry_id,))["n"]
+        if touched:
+            return jsonify({"ok": False, "why":
+                "%d module(s) from this entry have already reached FQC or "
+                "beyond. It cannot be cancelled." % touched}), 400
+        # revert this entry's own effect, so the range can be re-recorded
+        cur.execute("UPDATE serial SET state='planned' WHERE prod_entry_id=%s "
+                    "AND state='produced'", (entry_id,))
+        cur.execute("UPDATE serial SET prod_entry_id=NULL WHERE prod_entry_id=%s",
+                    (entry_id,))
+        cur.execute(
+            "UPDATE production_entry SET status='cancelled', cancelled_reason=%s, "
+            "cancelled_by=%s, cancelled_at=%s WHERE entry_id=%s",
+            (reason, actor(), clock.now().isoformat(timespec="seconds"), entry_id))
+        db.audit(cur, actor(), "production_entry.cancel", "production_entry",
+                 entry_id, {"range": "%s..%s" % (row["start_serial"],
+                            row["end_serial"]), "reason": reason})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/loss_event/<int:event_id>/cancel", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_sync_guard
+def api_loss_event_cancel(event_id):
+    """A loss event is a leaf record - dashboards read it in aggregate, nothing
+    is built on one INDIVIDUAL event's outcome, so it is cancellable... except
+    a PRIMARY event that an INDUCED event names (linked_event_id): cancelling
+    the primary would orphan the induced stoppage whose double-count exclusion
+    depends on it. So refuse only while an active induced event references it;
+    cancel those first."""
+    d = request.get_json(force=True) or {}
+    reason = (d.get("reason") or "").strip() or "loss event cancelled"
+    with store.conn() as (cx, cur):
+        err = _require_stepup(cur, d)
+        if err:
+            return err
+        row = store.one(cur, "SELECT * FROM loss_event WHERE event_id=%s",
+                        (event_id,))
+        if not row:
+            return jsonify({"ok": False, "why": "No such loss event."}), 404
+        if row["status"] == "cancelled":
+            return jsonify({"ok": False, "why": "Loss event is already cancelled."}), 400
+        linked = store.one(cur,
+            "SELECT COUNT(*) AS n FROM loss_event WHERE linked_event_id=%s "
+            "AND status<>'cancelled'", (event_id,))["n"]
+        if linked:
+            return jsonify({"ok": False, "why":
+                "%d induced stoppage(s) name this primary event. Cancel those "
+                "first." % linked}), 400
+        cur.execute(
+            "UPDATE loss_event SET status='cancelled', cancelled_reason=%s, "
+            "cancelled_by=%s, cancelled_at=%s WHERE event_id=%s",
+            (reason, actor(), clock.now().isoformat(timespec="seconds"), event_id))
+        db.audit(cur, actor(), "loss_event.cancel", "loss_event", event_id,
+                 {"reason": reason})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/invoice/<int:invoice_id>/cancel", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_sync_guard
+def api_invoice_cancel_real(invoice_id):
+    """The REAL invoice cancel (distinct from /api/invoice/cancel, which
+    discards an unsaved upload). Refuse once a live challan reconciles against
+    it - the same shape challan's own cancel uses to refuse while a gate pass
+    references it, one FK up."""
+    d = request.get_json(force=True) or {}
+    reason = (d.get("reason") or "").strip() or "invoice cancelled"
+    with store.conn() as (cx, cur):
+        err = _require_stepup(cur, d)
+        if err:
+            return err
+        row = store.one(cur, "SELECT * FROM invoice WHERE invoice_id=%s",
+                        (invoice_id,))
+        if not row:
+            return jsonify({"ok": False, "why": "No such invoice."}), 404
+        if row["status"] == "cancelled":
+            return jsonify({"ok": False, "why": "Invoice is already cancelled."}), 400
+        used = store.one(cur,
+            "SELECT COUNT(*) AS n FROM challan WHERE invoice_id=%s "
+            "AND status<>'cancelled'", (invoice_id,))["n"]
+        if used:
+            return jsonify({"ok": False, "why":
+                "%d challan(s) reconcile against this invoice. It is locked "
+                "and cannot be cancelled." % used}), 400
+        cur.execute(
+            "UPDATE invoice SET status='cancelled', cancelled_reason=%s, "
+            "cancelled_by=%s, cancelled_at=%s WHERE invoice_id=%s",
+            (reason, actor(), clock.now().isoformat(timespec="seconds"), invoice_id))
+        db.audit(cur, actor(), "invoice.cancel", "invoice", invoice_id,
+                 {"invoice_no": row["invoice_no"], "reason": reason})
     return jsonify({"ok": True})
 
 
@@ -4685,12 +4916,21 @@ def api_allocation_get(alloc_id):
 
 
 @app.route("/api/allocation/<int:alloc_id>", methods=["DELETE"])
-@require_screen_write("plan")
+@require_role(*_R_ADMIN)
 def api_allocation_cancel(alloc_id):
     """An allocation can be withdrawn while every serial in it is still
     'planned'. Once one has been graded, production has acted on it and the
-    range is history."""
+    range is history.
+
+    Round 34: Admin/Super Admin only (was any Planning-write role), with the
+    shared TOTP step-up. The REFUSAL RULE is unchanged - all serials still
+    'planned' - only who may call it and the step-up are new. The code is
+    carried in the DELETE's JSON body, same {reason, totp_code} as the rest."""
+    d = request.get_json(silent=True) or {}
     with store.conn() as (cx, cur):
+        err = _require_stepup(cur, d)
+        if err:
+            return err
         a = store.one(cur, "SELECT * FROM allocation WHERE alloc_id=%s", (alloc_id,))
         if not a:
             return jsonify({"ok": False, "why": "No such allocation."}), 404

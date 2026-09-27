@@ -60,8 +60,13 @@ def setup():
                             "ss_a_csv_path": "", "ss_b_csv_path": "",
                             "el_a_root": "", "el_b_root": ""})
     c = APP.app.test_client()
-    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    info = AUTH.test_login(c)   # a real Super Admin session (Round 23)
+    global _TOTP_SECRET
+    _TOTP_SECRET = AUTH.provision_totp(info["login_id"])   # Round 34 step-up
     return c
+
+
+_TOTP_SECRET = None
 
 
 def _seed_serials(idx, watt=WATT, model=MODEL):
@@ -289,7 +294,8 @@ def t_cancelled_challan_refused():
     b1 = packed_box(c, [50, 51])
     inv = make_invoice(qty=2, invoice_no="INV-GP-6")
     chid = issue(c, [b1], inv)
-    r0 = c.post("/api/challan/%d/cancel" % chid, json={"reason": "test"})
+    r0 = c.post("/api/challan/%d/cancel" % chid,
+                json={"reason": "test", "totp_code": AUTH.totp_code(_TOTP_SECRET)})
     assert r0.status_code == 200, r0.get_json()
 
     r = c.post("/api/gatepass", json={"challan_id": chid, "kind": "NRGP",

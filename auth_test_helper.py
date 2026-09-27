@@ -24,8 +24,32 @@ permissions they were never written to test. The files that ARE about roles
 (test_review.py, test_fqc.py, test_role_gates.py) pass a real role instead.
 """
 
+import os
 import store
 import icon_auth
+import pyotp
+
+
+def provision_totp(login_id):
+    """Give a test account a real TOTP secret and return it, so a test can
+    generate valid step-up codes for cancellation (Round 34). Real accounts
+    get their secret through enrolment; a test skips that ceremony the same way
+    test_login skips the password one. Ensures the .icon_totp_key exists first -
+    a wiped temp database has no key beside it, and encrypt_secret needs one."""
+    secret = pyotp.random_base32()
+    ensure_auth_schema()
+    if not os.path.exists(icon_auth._get_key_path()):
+        icon_auth.create_key()
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE app_user SET totp_secret_enc=%s WHERE login_id=%s",
+                    (icon_auth.encrypt_secret(secret), login_id))
+    return secret
+
+
+def totp_code(secret):
+    """A valid 6-digit code for `secret` right now - what an authenticator app
+    would show. verify_totp accepts the current 30s step (offset 0)."""
+    return pyotp.TOTP(secret).now()
 
 # A person is bound to a station; it is who they are, not a per-session
 # choice. These are the same station ids v4's own screens use.

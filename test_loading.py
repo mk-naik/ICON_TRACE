@@ -60,8 +60,13 @@ def setup():
                             "ss_a_csv_path": "", "ss_b_csv_path": "",
                             "el_a_root": "", "el_b_root": ""})
     c = APP.app.test_client()
-    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    info = AUTH.test_login(c)   # a real Super Admin session (Round 23)
+    global _TOTP_SECRET
+    _TOTP_SECRET = AUTH.provision_totp(info["login_id"])   # Round 34 step-up
     return c
+
+
+_TOTP_SECRET = None
 
 
 def _seed_serials(idx, watt=WATT, model=MODEL):
@@ -490,7 +495,7 @@ def t_landing_excludes_cancelled_and_superseded():
     superseded_id = make_issued_challan(c, [b2], inv2)
 
     c.post("/api/challan/%d/cancel" % cancelled_id,
-          json={"reason": "test cancel"})
+          json={"reason": "test cancel", "totp_code": AUTH.totp_code(_TOTP_SECRET)})
     edit = c.post("/api/challan/%d/edit-save" % superseded_id,
                   json={"boxes": [b2], "invoice_id": inv2,
                         "vehicle_no": "CG04EDITED1"})

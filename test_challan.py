@@ -35,6 +35,19 @@ import auth_test_helper as AUTH
 
 _results = []
 
+# Round 34: cancelling an issued challan is now Admin/Super Admin + a TOTP
+# step-up. setup() provisions the Super Admin account's secret into this, and
+# _cancel_body() attaches a fresh code so the tests below still exercise the
+# unchanged refusal RULES (issued-only, no referencing gate pass) through the
+# new gate.
+_TOTP_SECRET = None
+
+
+def _cancel_body(extra=None):
+    b = dict(extra or {})
+    b["totp_code"] = AUTH.totp_code(_TOTP_SECRET)
+    return b
+
 
 def test(name):
     def deco(fn):
@@ -68,7 +81,9 @@ def setup():
                             "ss_a_csv_path": "", "ss_b_csv_path": "",
                             "el_a_root": "", "el_b_root": ""})
     c = APP.app.test_client()
-    AUTH.test_login(c)          # a real Super Admin session (Round 23)
+    info = AUTH.test_login(c)   # a real Super Admin session (Round 23)
+    global _TOTP_SECRET
+    _TOTP_SECRET = AUTH.provision_totp(info["login_id"])   # Round 34 step-up
     return c
 
 
@@ -803,7 +818,7 @@ def t_gp_blocks_cancel():
     inv = make_invoice(qty=2, invoice_no="INV-GPCAN")
     chid = make_issued_challan(c, [b], inv)
     add_gatepass(c, chid)
-    r = c.post("/api/challan/%d/cancel" % chid, json={})
+    r = c.post("/api/challan/%d/cancel" % chid, json=_cancel_body())
     assert r.status_code == 400, "cancelled despite gate pass reference"
     assert "gate pass" in r.get_json()["why"].lower(), r.get_json()
     # Challan must still be issued
@@ -820,7 +835,7 @@ def t_gp_blocks_edit():
     add_gatepass(c, chid)
     # The edit path would first call /cancel - that must be blocked
     r = c.post("/api/challan/%d/cancel" % chid,
-               json={"reason": "cancelled for edit by operator"})
+               json=_cancel_body({"reason": "cancelled for edit by operator"}))
     assert r.status_code == 400, "edit-cancel succeeded despite gate pass"
     assert challan_row(chid)["status"] == "issued"
 
@@ -836,7 +851,7 @@ def t_cancel_reverts_serials():
     for i in idx:
         assert state_of(serial(i)) == "dispatched", \
             "serial %s not dispatched" % serial(i)
-    r = c.post("/api/challan/%d/cancel" % chid, json={})
+    r = c.post("/api/challan/%d/cancel" % chid, json=_cancel_body())
     assert r.status_code == 200, r.get_json()
     assert r.get_json()["ok"]
     # Must revert to packed, never stuck at dispatched
@@ -856,7 +871,7 @@ def t_cancel_frees_boxes():
     ids_before = [x["box_id"] for x in r.get_json()]
     assert b not in ids_before, "box still in repack list while challan live"
     # Cancel
-    c.post("/api/challan/%d/cancel" % chid, json={})
+    c.post("/api/challan/%d/cancel" % chid, json=_cancel_body())
     # After cancel — box should reappear
     r2 = c.get("/api/boxes?state=closed&exclude_live_challan=1")
     ids_after = [x["box_id"] for x in r2.get_json()]
@@ -874,7 +889,7 @@ def t_cancel_frees_invoice():
     ids_before = [x["id"] for x in r.get_json()["invoices"]]
     assert inv not in ids_before, "invoice visible in selector while challan live"
     # Cancel
-    c.post("/api/challan/%d/cancel" % chid, json={})
+    c.post("/api/challan/%d/cancel" % chid, json=_cancel_body())
     # After cancel — invoice must reappear
     r2 = c.get("/api/invoices?for_challan=1")
     ids_after = [x["id"] for x in r2.get_json()["invoices"]]
@@ -928,7 +943,7 @@ def t_split_load_second_gp():
     chid = make_issued_challan(c, [b], inv)
     gp1 = add_gatepass(c, chid)
     # First gate pass must lock editing via the cancel endpoint
-    r_cancel = c.post("/api/challan/%d/cancel" % chid, json={})
+    r_cancel = c.post("/api/challan/%d/cancel" % chid, json=_cancel_body())
     assert r_cancel.status_code == 400, "first gp did not lock the challan"
     assert "gate pass" in r_cancel.get_json()["why"].lower(), r_cancel.get_json()
     # But a SECOND gate pass must be allowed — no 1:1 constraint
