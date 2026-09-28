@@ -1210,14 +1210,19 @@ def _line_payload(cur, l, i):
                           "WHERE indent_line_id=%s AND state='dispatched'",
                      (l["indent_line_id"],))["n"]
     cr = customers.get(i["customer"])
+    # Round 34: true if EITHER this line or its parent indent has been
+    # cancelled - either voids allocating against it. One flag here, read by
+    # every caller (allocation create/update, boot_private's Planning
+    # dropdown), rather than each re-deriving it from the two status columns.
+    cancelled = (l["status"] == "cancelled") or (i["status"] == "cancelled")
     return {"line": l["line_no"], "model": l["model"],
             "item_code": l["item_code"], "item": l["item_description"],
             "dcr": l["dcr"], "arc": l["arc"], "qty": l["qty"],
             "wattage": l["wattage"], "pallet": l["pallet_qty"],
             "cust": cr["name"] if cr else i["customer"],
-            "id": l["indent_line_id"],
+            "id": l["indent_line_id"], "cancelled": cancelled,
             "allocated": alloc, "started": started, "dispatched": disp,
-            "left": max(0, (l["qty"] or 0) - alloc)}
+            "left": 0 if cancelled else max(0, (l["qty"] or 0) - alloc)}
 
 
 def _line_state(cur, line_id):
@@ -1267,9 +1272,20 @@ def boot_private():
     with store.conn() as (cx, cur):
         indents = []
         for i in store.rows(cur, "SELECT * FROM indent ORDER BY indent_id DESC"):
+            # Round 34: a cancelled indent - or a live indent with every line
+            # cancelled - must not be offered here. This feeds Planning's own
+            # pIndent/pIndentLine dropdowns directly (planDropdowns() in the
+            # live layer reads B.indents), so leaving one in is not a display
+            # nicety - it is the difference between the dropdown offering a
+            # dead indent to allocate against and not offering it at all.
+            if i["status"] == "cancelled":
+                continue
             lines = store.rows(
-                cur, "SELECT * FROM indent_line WHERE indent_id=%s ORDER BY line_no",
+                cur, "SELECT * FROM indent_line WHERE indent_id=%s "
+                     "AND status<>'cancelled' ORDER BY line_no",
                 (i["indent_id"],))
+            if not lines:
+                continue
             indents.append({
                 "indent_no": i["indent_no"], "customer": i["customer"],
                 "build_type": i["build_type"], "delivery_by": i["delivery_by"],
@@ -2289,10 +2305,14 @@ def api_loading_submit(challan_id):
         # Safe to call more than once per challan (a resubmit is a no-op
         # everywhere else in this route too) - checked in the same
         # transaction the row is written in, not assumed from the caller
-        # never doing it twice.
+        # never doing it twice. Round 34: a CANCELLED gate pass does not
+        # count as "already exists" here either - without this a resubmit
+        # after the gate pass was cancelled would hand back the dead gp_no
+        # instead of minting a real, live one.
         gp_no = None
         existing = store.one(cur, "SELECT gp_no FROM gatepass WHERE "
-                                  "challan_id=%s", (challan_id,))
+                                  "challan_id=%s AND status<>'cancelled'",
+                             (challan_id,))
         if existing:
             gp_no = existing["gp_no"]
         else:
@@ -2554,6 +2574,13 @@ def _challan_precheck(cur, box_ids, invoice_id, exclude_challan_id=None):
                     "document under a different IRN. Select that one."
                     % (newer["invoice_no"] if newer else
                        "invoice #%s" % invoice["superseded_by"])})
+            # Round 34: a cancelled invoice is void. The picker already
+            # excludes one (/api/invoices, for_challan), but this is the
+            # server-side gate for a direct call or a stale/pasted id.
+            elif invoice.get("status") == "cancelled":
+                blocking.append({"code": "E-CANCELLED", "detail":
+                    "%s has been cancelled and cannot be used on a challan."
+                    % (invoice.get("invoice_no") or "This invoice")})
             evu = invoice.get("ewb_valid_upto")
             if evu:
                 try:
@@ -4610,14 +4637,15 @@ def api_prod_dashboard():
 
         # Downtime opened in the period - closed events only; an open one
         # has no end yet, and Loss of Production counts it once closed.
+        # Round 34: a cancelled event never counted (voided, not a real stop).
         loss_rows = store.rows(cur,
             "SELECT created_at, line, machine, reason, kind, planned, minutes "
-            "FROM loss_event WHERE end_time IS NOT NULL AND " + inp("created_at") +
-            " ORDER BY event_id")
+            "FROM loss_event WHERE end_time IS NOT NULL AND status<>'cancelled' "
+            "AND " + inp("created_at") + " ORDER BY event_id")
         # still open, whatever the period - "Needs a decision"
         open_loss = store.one(cur,
             "SELECT COUNT(*) AS n, MIN(created_at) AS oldest "
-            "FROM loss_event WHERE end_time IS NULL")
+            "FROM loss_event WHERE end_time IS NULL AND status<>'cancelled'")
         cur.execute("DROP TABLE IF EXISTS temp.module_ev")
 
     kpi = {k: ((kpi_row or {}).get(k) or 0) for k in keys}
@@ -5053,6 +5081,10 @@ def api_allocation_create():
         L = _line_state(cur, line_id)
         if not L:
             return jsonify({"ok": False, "why": "No such indent line."}), 400
+        if L["cancelled"]:
+            return jsonify({"ok": False, "why":
+                "Indent %s line %d is cancelled and cannot be allocated "
+                "against." % (L["indent_no"], L["line"])}), 400
         if qty < 1:
             return jsonify({"ok": False, "why": "Quantity must be at least 1."}), 400
         if qty > L["left"]:
@@ -5138,6 +5170,10 @@ def api_allocation_update(alloc_id):
         L = _line_state(cur, line_id)
         if not L:
             return jsonify({"ok": False, "why": "No such indent item."}), 400
+        if L["cancelled"]:
+            return jsonify({"ok": False, "why":
+                "Indent %s line %d is cancelled and this allocation cannot be "
+                "edited - withdraw it instead." % (L["indent_no"], L["line"])}), 400
         old_qty = store.one(cur, "SELECT COUNT(*) AS n FROM serial WHERE alloc_id=%s",
                             (alloc_id,))["n"]
         if qty > L["left"] + old_qty:
@@ -7495,6 +7531,15 @@ def api_fqc_grade():
         if not rec:
             return jsonify(out), 404
 
+        # Round 34: a cancelled serial is void - grading it would make the
+        # cancellation meaningless. Checked before the packed/dispatched
+        # duplicate-scan branch below on purpose, though a serial cancel is
+        # only ever allowed while planned/produced so the two states cannot
+        # overlap in practice.
+        if rec.get("state") == "cancelled":
+            return jsonify({"ok": False, "why":
+                "%s has been cancelled and cannot be graded." % serial}), 400
+
         # A module already packed or dispatched being scanned again at FQC
         # is not a normal grading event - the line has already acted on a
         # decision for it. It is a duplicate scan: compare what this reading
@@ -8673,8 +8718,11 @@ def api_gatepass():
             # Verification entirely and so is never submitted through it),
             # but it must not be a second way to the same challan ending
             # up with two gate pass numbers for one shipment.
+            # Round 34: a CANCELLED gate pass does not count as "already has
+            # one" - cancelling it is exactly how the lock on this challan is
+            # meant to be released so a fresh one can be issued.
             dupe = store.one(cur, "SELECT gp_no FROM gatepass WHERE "
-                                  "challan_id=%s", (ch_id,))
+                                  "challan_id=%s AND status<>'cancelled'", (ch_id,))
             if dupe:
                 return jsonify({"ok": False, "why":
                     "%s already has a gate pass: %s." % (ch_row.get("challan_no")

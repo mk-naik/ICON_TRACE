@@ -693,6 +693,152 @@ def t_missing_code():
     print("      a cancel with no code is refused before anything else")
 
 
+# --------------------------------------------------------------------------
+# Round 34 follow-up 3: OTHER types leaking as "live" the same way the FQC
+# grade did - the exact question asked after follow-up 2 fixed FQC. Each of
+# these was found by tracing, for the cancelled type, every place ELSE in the
+# app that used to assume it could never be cancelled.
+# --------------------------------------------------------------------------
+
+@test("cancelling a gate pass releases the LOCK it held on its challan: the "
+     "challan may now be cancelled, re-edited, and re-issued a fresh gate "
+     "pass - a cancelled gate pass no longer counts as 'still references it'")
+def t_cancelled_gatepass_releases_challan_lock():
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        cid = store.insert(cur, "challan", {"fy": 2026, "seq": nxt(),
+            "challan_date": "2026-09-09", "qty": 1, "status": "issued",
+            "created_by": "t"})
+        gid = store.insert(cur, "gatepass", {"gp_no": "GP-%d" % nxt(),
+            "gp_date": "2026-09-09", "kind": "NRGP", "created_by": "t",
+            "challan_id": cid})
+    r = admin.post("/api/challan/%d/cancel" % cid,
+                   json={"reason": "x", "totp_code": code(secret)})
+    assert r.status_code == 400 and "gate pass" in r.get_json()["why"].lower(), \
+        "setup: the live gate pass should still lock the challan"
+
+    admin.post("/api/gatepass/%d/cancel" % gid,
+              json={"reason": "released", "totp_code": fresh_code("sa.cancel", secret)})
+
+    r2 = admin.post("/api/challan/%d/cancel" % cid,
+                    json={"reason": "x", "totp_code": fresh_code("sa.cancel", secret)})
+    assert r2.status_code == 200, \
+        "a CANCELLED gate pass still locked the challan: %r" % r2.get_json()
+
+    # and a fresh gate pass can be issued for a challan whose old one was
+    # cancelled (api_gatepass's own dupe check, and loading-submit's
+    # idempotency check, must both see the old one as gone)
+    with store.conn() as (cx, cur):
+        cid2 = store.insert(cur, "challan", {"fy": 2026, "seq": nxt(),
+            "challan_date": "2026-09-09", "qty": 1, "status": "issued",
+            "created_by": "t"})
+        gid2 = store.insert(cur, "gatepass", {"gp_no": "GP-%d" % nxt(),
+            "gp_date": "2026-09-09", "kind": "NRGP", "created_by": "t",
+            "challan_id": cid2})
+    admin.post("/api/gatepass/%d/cancel" % gid2,
+              json={"reason": "x", "totp_code": fresh_code("sa.cancel", secret)})
+    r3 = admin.post("/api/gatepass", json={"challan_id": cid2, "kind": "NRGP",
+                    "party": "AGNI"})
+    assert r3.status_code == 200 and r3.get_json().get("gp_no"), \
+        "a challan whose gate pass was cancelled still refused a new one: %r" \
+        % r3.get_json()
+    assert r3.get_json()["gp_no"] != "GP-%d" % gid2
+    print("      gate pass cancel released the challan lock; a fresh gate "
+          "pass was issued")
+
+
+@test("a cancelled indent LINE (or a fully-cancelled indent) is refused for "
+     "NEW allocation - both create and edit - and leaves Planning's own "
+     "indent/line dropdown, not only the Indent list")
+def t_cancelled_line_refuses_allocation_and_leaves_planning_dropdown():
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        iid = store.insert(cur, "indent", {"indent_no": "IS2I/26/0700",
+            "indent_date": "2026-09-09", "customer": "ICON STOCK", "created_by": "t"})
+        lid = store.insert(cur, "indent_line", {"indent_id": iid, "line_no": 1,
+            "item_description": "X", "model": MODEL, "wattage": WATT,
+            "qty": 100, "dcr": "NDCR"})
+    boot = admin.get("/api/boot").get_json()
+    assert any(i["indent_no"] == "IS2I/26/0700" for i in boot["indents"]), \
+        "setup: the live indent should be in Planning's own dropdown data"
+
+    admin.post("/api/indent/line/%d/cancel" % lid,
+              json={"reason": "x", "totp_code": code(secret)})
+
+    boot2 = admin.get("/api/boot").get_json()
+    assert not any(i["indent_no"] == "IS2I/26/0700" for i in boot2["indents"]), \
+        "a cancelled-out indent (its only line gone) is still in Planning's dropdown"
+
+    r = admin.post("/api/allocation", json={"indent_line_id": lid, "qty": 5})
+    assert r.status_code == 400 and "cancelled" in r.get_json()["why"].lower(), \
+        "allocation-create did not refuse a cancelled line: %r" % r.get_json()
+    print("      cancelled line: gone from Planning's dropdown; new "
+          "allocation refused")
+
+
+@test("a cancelled invoice is refused by the challan pre-check (E-CANCELLED), "
+     "not only hidden from the invoice picker - the server-side gate a "
+     "direct call or a stale id would otherwise slip past")
+def t_cancelled_invoice_refused_at_challan_precheck():
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        inv = store.insert(cur, "invoice", {"invoice_no": "INV-PRECHK-1",
+            "pdf_path": "x.pdf", "pdf_sha256": "h", "created_by": "t",
+            "declared_qty": 1})
+    admin.post("/api/invoice/%d/cancel" % inv,
+              json={"reason": "x", "totp_code": code(secret)})
+    r = admin.post("/api/challan/checks", json={"boxes": [], "invoice_id": inv})
+    assert r.status_code == 200, r.get_json()
+    codes = [b["code"] for b in r.get_json()["blocking"]]
+    assert "E-CANCELLED" in codes, \
+        "a cancelled invoice was not flagged at the challan pre-check: %s" % codes
+    print("      a cancelled invoice is refused at the challan pre-check "
+          "(E-CANCELLED)")
+
+
+@test("a cancelled loss event drops out of the Production Dashboard's own "
+     "downtime totals and its 'still open, needs a decision' count - not "
+     "only the Loss screen's own list")
+def t_cancelled_loss_event_leaves_prod_dashboard():
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        eid = store.insert(cur, "loss_event", {"event_date": "2026-09-28",
+            "shift": "A", "line": "A-Line", "machine": "LAM-1",
+            "reason": "LOP-POWER", "kind": "P", "start_time": "10:00",
+            "end_time": "10:30", "minutes": 30, "entry_mode": "Live",
+            "created_by": "t"})
+    before = admin.get("/api/prod/dashboard?from=2026-09-28&to=2026-09-28").get_json()
+    assert before["loss"], "setup: the live downtime should show on the dashboard"
+
+    admin.post("/api/loss_event/%d/cancel" % eid,
+              json={"reason": "x", "totp_code": code(secret)})
+
+    after = admin.get("/api/prod/dashboard?from=2026-09-28&to=2026-09-28").get_json()
+    assert after["loss"] == [], \
+        "a cancelled loss event is still in the Production Dashboard's downtime: %s" \
+        % after["loss"]
+    print("      cancelled loss event gone from the Production Dashboard's "
+          "own downtime total: %s -> %s" % (before["loss"], after["loss"]))
+
+
+@test("a cancelled serial cannot be graded at FQC - the cancellation would "
+     "otherwise be meaningless")
+def t_cancelled_serial_refused_at_fqc():
+    admin, secret, op = accounts()
+    sn = "ICON630G1202129950"
+    with store.conn() as (cx, cur):
+        store.insert(cur, "serial", {"serial": sn, "build_instance": 1,
+            "model": MODEL, "wattage": WATT, "format_version": 2,
+            "date_produced": "2026-09-09", "shift": 1, "sequence": nxt(),
+            "state": "planned"})
+    admin.post("/api/serials/cancel", json={"serial": sn, "reason": "x",
+              "totp_code": code(secret)})
+    r = admin.post("/api/fqc", json={"serial": sn, "outcome": "pass"})
+    assert r.status_code == 400 and "cancelled" in r.get_json()["why"].lower(), \
+        "a cancelled serial was still gradeable at FQC: %r" % r.get_json()
+    print("      a cancelled serial is refused at FQC grading")
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

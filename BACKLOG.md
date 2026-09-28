@@ -4935,3 +4935,82 @@ unchanged: cancel_documents 15, indent 7, loss 10, production 12, fqc 57,
 search_invoice 16, challan 55, gatepass 11, screen_write_gates 9, dashrath 6,
 fqc_override 9, review 8, dashboards_ist 13; JS via cscript (screens 17, trace
 33, challan 35, packing 26, fqc_dashboard 18, loading 24, repack 27).
+
+### Round 34 follow-up 3 - the same "still reads as live" question, asked of
+
+Prompted directly: "you fixed FQC to reflect which reads the live record, but
+what about the others in the dropdown?" Right question - FQC was not special.
+Traced, for each of the other 8 cancellable types, every OTHER place in the
+app that used to assume it could never be cancelled. Nine real gaps found and
+fixed, none cosmetic - each let the app act as though a cancelled document
+were still live:
+
+1. **`gp_count_for_challan()`** counted a CANCELLED gate pass as still
+   "referencing" its challan - so cancelling a gate pass never actually
+   released the challan lock it exists to release. Fixed once, in the shared
+   helper; fixes all three callers (challan cancel, edit-draft, edit-save).
+2. **`api_gatepass()`'s duplicate check** ("this challan already has a gate
+   pass") counted a cancelled one too, refusing a fresh gate pass for a
+   challan whose old one was voided.
+3. **`api_loading_submit()`'s idempotency check** (Loading Verification's own
+   "safe to resubmit") found the cancelled gate pass and handed its DEAD
+   gp_no back as if current, instead of minting a live one.
+4. **Allocation create** had no check at all for the indent line (or its
+   parent indent) being cancelled - Planning could still allocate a fresh
+   serial range against a line that had been voided.
+5. **Allocation update** had the same gap for growing/editing an existing
+   allocation against a since-cancelled line.
+6. **`boot_private()`'s own `indents` array** - which Planning's own
+   `pIndent`/`pIndentLine` dropdowns are built from directly
+   (`planDropdowns()` reads `B.indents`) - listed cancelled indents and
+   cancelled lines exactly as live ones. This is the one that matches the
+   original screenshot's own list-omission bug, one level down: fixing
+   `/api/indents` (the Indent SCREEN's list) said nothing about Planning's
+   own copy of the same data, fetched at boot into a different structure.
+7. **`_challan_precheck()`** checked an invoice for `superseded_by` but never
+   for `status='cancelled'` - the picker already excluded one, but a direct
+   call or a stale/pasted invoice id would sail through to E-QTY/E-EWB checks
+   without ever being told the invoice is void. Added E-CANCELLED.
+8. **Production Dashboard's own downtime stats** (closed-in-period totals,
+   and the "still open, needs a decision" count) read `loss_event` with no
+   status filter at all - a cancelled event kept adding minutes to OEE-style
+   totals and could keep counting as "needs a decision" if cancelled while
+   still open.
+9. **FQC grading (`api_fqc_grade`)** had no refusal for a cancelled serial's
+   state at all - a cancelled serial could still be graded, which makes the
+   cancellation meaningless. Refused before the packed/dispatched
+   duplicate-scan branch.
+
+`_line_payload()` now carries one shared `cancelled` flag (true if the line OR
+its parent indent is cancelled), read by both allocation endpoints and by
+`boot_private()`'s filtering - one source of truth instead of each caller
+re-deriving it from the two status columns.
+
+Not changed, checked and found already safe: box scanning already refuses
+anything but state='graded' (an allowlist, not a denylist, so 'cancelled'
+falls into the existing generic refusal with no change needed); Production
+Entry already clears `prod_entry_id` unconditionally on cancel, so every join
+that follows that FK sees nothing for a cancelled entry's serials without
+being told to filter anything.
+
+**Flagged, not fixed - a policy question, not a bug**: can a NEW Production
+Entry range be recorded over a serial that was individually cancelled (via
+`/api/serials/cancel`, not a whole-entry cancel)? Today `state` is
+deliberately NOT checked when validating a range (a serial already
+graded/rejected is not a conflict, by design) - a cancelled serial in the
+middle of an otherwise-valid printed range would currently be recorded under
+the entry anyway (its own state stays 'cancelled', but its qty/kw_output would
+be counted and prod_entry_id set). Whether that should refuse the whole range,
+silently exclude the cancelled serial from the count, or is fine as-is is
+Mukesh's call, not assumed here.
+
+Tests: test_cancel_documents.py +5 (gate pass cancel releases the challan
+lock and permits a fresh one; cancelled line refused at allocation
+create/leaves Planning's dropdown; cancelled invoice flagged E-CANCELLED at
+challan pre-check; cancelled loss event leaves the Production Dashboard's
+downtime totals; cancelled serial refused at FQC grading) - 20 passed. Full
+regression unchanged: challan 55, gatepass 11, gatepass_multiitem 9, loading
+14, indent 7, production 12, loss 10, fqc 57, fqc_override 9, search_invoice
+16, review 8, dashboards_ist 13, screen_write_gates 9, dashrath 6; JS via
+cscript (screens 17, trace 33, challan 35, packing 26, fqc_dashboard 18,
+loading 24, repack 27).

@@ -1210,11 +1210,16 @@ def challan_detail(cur, challan_id):
 
 
 def gp_count_for_challan(cur, challan_id):
-    """How many gate passes reference this challan via the real FK."""
+    """How many LIVE gate passes reference this challan via the real FK.
+
+    Round 34: a cancelled gate pass no longer locks the challan it named -
+    cancelling it is the intended way to release that lock (see
+    api_gatepass_cancel). Counting it here would leave the challan
+    permanently locked by a gate pass that is itself void."""
     if cur is None:
         return 0
-    cur.execute("SELECT COUNT(*) AS n FROM gatepass WHERE challan_id = %s",
-                (challan_id,))
+    cur.execute("SELECT COUNT(*) AS n FROM gatepass WHERE challan_id = %s "
+                "AND status<>'cancelled'", (challan_id,))
     row = cur.fetchone()
     return row["n"] if row else 0
 
