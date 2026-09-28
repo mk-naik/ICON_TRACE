@@ -6074,6 +6074,7 @@ function wireFqcAnomalies() {
     wireMatDefaults();
     wireSourcesRedraw();
     mergeEvidenceSources();
+    cancelDocSetup();
     wireResets();
     wireExports();
     invoiceRealParse();
@@ -7780,6 +7781,132 @@ function wireFqcAnomalies() {
     opt.textContent = 'Neha Verma — Quality';
     sel.appendChild(opt);
   })();
+
+  /* Round 34: the real Admin > Cancel document screen, replacing v4's disabled
+     placeholder (a fake toast). One screen, every document type, Admin/Super
+     Admin + a TOTP step-up - the same seven endpoints test_cancel_documents.py
+     pins. v4's markup is read-only, so the live layer swaps the #ad-cancel
+     pane's contents, the same way Evidence Sources takes over #ad-stations.
+
+     Each type carries the language its own cancel endpoint acts on, so the
+     admin sees what cancelling WILL do before committing; on a refusal the
+     screen shows the server's exact reason. A wrong code (403) and a document
+     that cannot be cancelled (400) read differently here on purpose: the
+     person is an authenticated Admin, and the endpoint gives THEM the specific
+     reason - what section 3 keeps indistinguishable is what an UNauthenticated
+     prober could learn, and such a caller never passes the role gate to reach
+     any of this. */
+  var CANCEL_TYPES = {
+    indent:  { label: 'Indent', method: 'POST',
+      url: function (id) { return '/api/indent/' + id + '/cancel'; },
+      effect: 'The indent is voided (kept for search and history). Allowed only ' +
+              'while nothing allocated against it has gone into production.' },
+    gatepass: { label: 'Gate pass', method: 'POST',
+      url: function (id) { return '/api/gatepass/' + id + '/cancel'; },
+      effect: 'The gate pass is voided, releasing any challan it was locking.' },
+    prodentry: { label: 'Production entry', method: 'POST',
+      url: function (id) { return '/api/prodentry/' + id + '/cancel'; },
+      effect: 'The entry is voided and its serials revert to planned so the ' +
+              'range can be re-recorded. Allowed only while none has reached FQC.' },
+    loss_event: { label: 'Loss event', method: 'POST',
+      url: function (id) { return '/api/loss_event/' + id + '/cancel'; },
+      effect: 'The loss event is voided. Not allowed while an induced stoppage ' +
+              'still names it.' },
+    invoice: { label: 'Invoice', method: 'POST',
+      url: function (id) { return '/api/invoice/' + id + '/cancel'; },
+      effect: 'The invoice is voided. Not allowed while a live challan ' +
+              'reconciles against it.' },
+    challan: { label: 'Challan', method: 'POST',
+      url: function (id) { return '/api/challan/' + id + '/cancel'; },
+      effect: 'The challan is voided; every serial reverts dispatched → ' +
+              'packed and its boxes become repackable. Only an issued challan ' +
+              'with no gate pass against it.' },
+    allocation: { label: 'Allocation batch', method: 'DELETE',
+      url: function (id) { return '/api/allocation/' + id; },
+      effect: 'The allocation is withdrawn and its planned serials released. ' +
+              'Allowed only while every serial in it is still planned.' }
+  };
+
+  function cancelDocSetup() {
+    if (!can('admin')) return;   /* the server refuses it anyway (Round 28) */
+    var pane = document.getElementById('ad-cancel');
+    if (!pane || pane.__live) return;
+    pane.__live = true;
+    var opts = Object.keys(CANCEL_TYPES).map(function (k) {
+      return '<option value="' + k + '">' + CANCEL_TYPES[k].label + '</option>';
+    }).join('');
+    pane.innerHTML =
+      '<div class="note n-warn"><span>⚡</span><span><b>Nothing is ever ' +
+        'deleted.</b> A document is cancelled with a coded reason and your name ' +
+        'against it; the original stays for search and history. Admin and Super ' +
+        'Admin only, and every cancel needs your authenticator code.</span></div>' +
+      '<div class="work"><div class="card"><div class="card-b">' +
+        '<div class="grid g2">' +
+          '<div class="fld req"><label>Document type</label>' +
+            '<select id="cdType">' + opts + '</select></div>' +
+          '<div class="fld req"><label>Document id</label>' +
+            '<input class="mono" id="cdId" placeholder="its id on the list screen"></div>' +
+        '</div>' +
+        '<div class="note n-info" id="cdEffect" style="margin:4px 0 12px"></div>' +
+        '<div class="grid g2">' +
+          '<div class="fld req"><label>Reason</label>' +
+            '<input id="cdReason" placeholder="why, in your own words"></div>' +
+          '<div class="fld req"><label>Authenticator code</label>' +
+            '<input class="mono" id="cdTotp" inputmode="numeric" ' +
+            'autocomplete="one-time-code" maxlength="6" placeholder="6 digits"></div>' +
+        '</div>' +
+        '<button class="btn btn-danger" id="cdBtn">Cancel document</button>' +
+        '<div id="cdResult" style="margin-top:12px"></div>' +
+      '</div></div></div>';
+
+    var typeSel = document.getElementById('cdType');
+    var effect = document.getElementById('cdEffect');
+    var result = document.getElementById('cdResult');
+    function showEffect() {
+      var t = CANCEL_TYPES[typeSel.value];
+      effect.innerHTML = '<span>ℹ</span><span>' + fqcEsc(t.effect) + '</span>';
+    }
+    typeSel.addEventListener('change', function () { showEffect(); result.innerHTML = ''; });
+    showEffect();
+
+    document.getElementById('cdBtn').addEventListener('click', function () {
+      var t = CANCEL_TYPES[typeSel.value];
+      var id = (document.getElementById('cdId').value || '').trim();
+      var reason = (document.getElementById('cdReason').value || '').trim();
+      var totp = (document.getElementById('cdTotp').value || '').trim();
+      result.innerHTML = '';
+      if (!id) { result.innerHTML = note('n-bad', 'Enter the document id.'); return; }
+      if (!reason) { result.innerHTML = note('n-bad', 'A reason is required.'); return; }
+      if (!totp) { result.innerHTML = note('n-bad', 'Enter your authenticator code.'); return; }
+      var btn = document.getElementById('cdBtn');
+      btn.disabled = true;
+      api(t.url(id).replace(/^\/api\//, ''),
+          { method: t.method, body: JSON.stringify({ reason: reason, totp_code: totp }) })
+        .then(function (d) {
+          btn.disabled = false;
+          if (d && d.ok) {
+            result.innerHTML = note('n-info', '✓ ' + t.label + ' ' + fqcEsc(id) +
+              ' cancelled. ' + fqcEsc(t.effect));
+            document.getElementById('cdTotp').value = '';
+            document.getElementById('cdReason').value = '';
+          } else {
+            /* the server's exact reason: a wrong code and a wrong-state document
+               read differently, deliberately (see the comment above). */
+            result.innerHTML = note('n-bad', fqcEsc((d && d.why) || 'That did not work.'));
+          }
+        })
+        .catch(function () {
+          btn.disabled = false;
+          result.innerHTML = note('n-bad', 'The server did not answer.');
+        });
+    });
+
+    function note(cls, msg) {
+      return '<div class="note ' + cls + '"><span>' +
+        (cls === 'n-info' ? '✓' : '⚠') + '</span><span>' + msg + '</span></div>';
+    }
+  }
+  window.iconCancelDocSetup = cancelDocSetup;
 
   /* Evidence Sources, merged into Admin > Stations & sources.
    *
