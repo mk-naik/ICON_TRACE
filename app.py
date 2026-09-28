@@ -3818,7 +3818,8 @@ def api_prodentries():
         # assigned) - looked up from the entry's first serial, which
         # names the batch's customer for the ordinary case of one
         # customer per shift's production entry.
-        sql = "SELECT p.*, (SELECT s.customer FROM serial s WHERE s.serial = p.start_serial LIMIT 1) as customer FROM production_entry p WHERE 1=1"
+        sql = ("SELECT p.*, (SELECT s.customer FROM serial s WHERE s.serial = p.start_serial LIMIT 1) as customer "
+               "FROM production_entry p WHERE 1=1 AND p.status<>'cancelled'")   # Round 34
         args = []
         if q:
             sql += " AND (p.start_serial LIKE %s OR p.end_serial LIKE %s OR p.model LIKE %s)"
@@ -4088,7 +4089,7 @@ def api_loss_events():
     sql = ("SELECT e.*, l.event_id AS link_event_id "
            "FROM loss_event e "
            "LEFT JOIN loss_event l ON l.event_id = e.linked_event_id "
-           "WHERE 1=1")
+           "WHERE 1=1 AND e.status<>'cancelled'")   # Round 34: hide cancelled
     args = []
     # the factory day an event was opened in (06:00 to 06:00)
     day = clock.shift_day_sql("e.created_at")
@@ -4170,7 +4171,9 @@ def api_loss_event_open():
                     "why": "An induced stop must name the primary event that caused it, or it double-counts."}), 400
             primary = store.one(cur,
                 "SELECT * FROM loss_event WHERE event_id=%s", (linked_event_id,))
-            if not primary or primary["kind"] != "P" or primary["end_time"] is not None:
+            if (not primary or primary["kind"] != "P" or
+                    primary["end_time"] is not None or
+                    primary["status"] == "cancelled"):   # Round 34
                 return jsonify({"ok": False,
                     "why": "That primary event is not currently open."}), 400
 
@@ -4196,6 +4199,8 @@ def api_loss_event_close(event_id):
         row = store.one(cur, "SELECT * FROM loss_event WHERE event_id=%s", (event_id,))
         if not row:
             return jsonify({"ok": False, "why": "That event no longer exists."}), 404
+        if row["status"] == "cancelled":   # Round 34: a cancelled event is void
+            return jsonify({"ok": False, "why": "That event is cancelled."}), 400
         if row["end_time"] is not None:
             return jsonify({"ok": False, "why": "That event is already closed."}), 400
 
@@ -5997,6 +6002,11 @@ def api_indent_update(indent_no):
         i = store.one(cur, "SELECT * FROM indent WHERE indent_no=%s", (indent_no,))
         if not i:
             return jsonify({"errors": ["Indent %s not found." % indent_no]})
+        # Round 34: a cancelled indent is void - it cannot be edited back into
+        # life. (The list already hides it; this refuses a direct call.)
+        if i["status"] == "cancelled":
+            return jsonify({"errors": ["Indent %s is cancelled and cannot be "
+                                       "edited." % indent_no]})
         used = store.one(cur, "SELECT COUNT(*) AS n FROM serial WHERE "
                               "indent_line_id IN (SELECT indent_line_id FROM "
                               "indent_line WHERE indent_id=%s)",
@@ -6336,6 +6346,9 @@ def api_invoices_list():
         exclude_id = None
     with store.conn() as (cx, cur):
         invoices = db.search_invoices(cur, q=q, date_from=from_d, date_to=to_d)
+        # Round 34: a cancelled invoice leaves the working list and the challan
+        # picker - it cannot be reconciled against, and stays only for history.
+        invoices = [i for i in invoices if (i["status"] or "active") != "cancelled"]
         if for_challan:
             # Build set of invoice_ids already claimed by a live challan,
             # excluding any challan we are explicitly editing (so it can
@@ -8475,6 +8488,9 @@ def api_gatepass_update(gatepass_id):
         gp = store.one(cur, "SELECT * FROM gatepass WHERE gp_id=%s", (gatepass_id,))
         if not gp:
             return jsonify({"ok": False, "why": "No such gate pass."}), 404
+        if gp["status"] == "cancelled":   # Round 34: a cancelled GP is void
+            return jsonify({"ok": False, "why":
+                "%s is cancelled and cannot be edited." % gp["gp_no"]}), 400
         if gp.get("challan_id"):
             return jsonify({"ok": False, "why":
                 "%s is linked to a challan - edit the challan instead. A "

@@ -366,6 +366,84 @@ def t_lookup_resolves_reference():
     print("      lookup resolves numbers, rendered challan no, ids; gates by role")
 
 
+@test("a cancelled document leaves its working list, and its edit/close is "
+     "refused (indent, gate pass, invoice, loss event, production entry)")
+def t_cancelled_leaves_lists_and_uneditable():
+    # INDENT: shows in /api/indents (the view joins its line), gone after cancel,
+    # and its edit is refused (the exact hole the screenshot showed).
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        iid, _, _ = _seed_indent_line_alloc(cur, "planned")
+        no = store.one(cur, "SELECT indent_no FROM indent WHERE indent_id=%s",
+                       (iid,))["indent_no"]
+    assert any(r["indent_no"] == no for r in admin.get("/api/indents").get_json())
+    admin.post("/api/indent/%d/cancel" % iid,
+               json={"reason": "lot cancelled", "totp_code": code(secret)})
+    assert not any(r["indent_no"] == no for r in admin.get("/api/indents").get_json()), \
+        "cancelled indent is still in the list"
+    r = admin.put("/api/indent/" + no.replace("/", "%2F"),
+                  json={"items": [{"item_code": "F02010011", "qty": 2500}]})
+    assert "cancelled" in " ".join(r.get_json().get("errors") or []).lower(), \
+        "a cancelled indent could still be edited"
+
+    # GATE PASS: gone from /api/gatepasses, edit refused
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        gid = store.insert(cur, "gatepass", {"gp_no": "GP-LIST-1",
+            "gp_date": "2026-09-09", "kind": "NRGP", "created_by": "t"})
+    rows = admin.get("/api/gatepasses").get_json()["rows"]
+    assert any(g["gp_id"] == gid for g in rows)
+    admin.post("/api/gatepass/%d/cancel" % gid,
+               json={"reason": "x", "totp_code": code(secret)})
+    rows = admin.get("/api/gatepasses").get_json()["rows"]
+    assert not any(g["gp_id"] == gid for g in rows), "cancelled gate pass still listed"
+    r = admin.put("/api/gatepass/%d" % gid,
+                  json={"items": [{"description": "x", "unit": "Nos", "qty": 1}]})
+    assert "cancelled" in (r.get_json().get("why") or "").lower(), \
+        "a cancelled gate pass could still be edited"
+
+    # INVOICE: gone from /api/invoices
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        inv = store.insert(cur, "invoice", {"invoice_no": "INV-LIST-1",
+            "pdf_path": "x.pdf", "pdf_sha256": "h", "created_by": "t"})
+    assert any(i["id"] == inv for i in admin.get("/api/invoices").get_json()["invoices"])
+    admin.post("/api/invoice/%d/cancel" % inv,
+               json={"reason": "x", "totp_code": code(secret)})
+    assert not any(i["id"] == inv for i in admin.get("/api/invoices").get_json()["invoices"]), \
+        "cancelled invoice still listed"
+
+    # LOSS EVENT: gone from /api/loss_events, close refused
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        eid = store.insert(cur, "loss_event", {"event_date": "2026-09-09",
+            "shift": "A", "line": "A-Line", "machine": "LAM-1",
+            "reason": "LOP-POWER", "kind": "P", "start_time": "10:00",
+            "entry_mode": "Live", "created_by": "t"})
+    assert any(e["event_id"] == eid for e in admin.get("/api/loss_events").get_json()["events"])
+    admin.post("/api/loss_event/%d/cancel" % eid,
+               json={"reason": "x", "totp_code": code(secret)})
+    assert not any(e["event_id"] == eid for e in admin.get("/api/loss_events").get_json()["events"]), \
+        "cancelled loss event still listed"
+    r = admin.post("/api/loss_event/%d/close" % eid, json={})
+    assert "cancelled" in (r.get_json().get("why") or "").lower(), \
+        "a cancelled loss event could still be closed"
+
+    # PRODUCTION ENTRY: gone from /api/prodentries
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        pe = store.insert(cur, "production_entry", {"prod_date": "2026-09-09",
+            "shift": "A", "shift_incharge": "RAJESH", "model": MODEL,
+            "wattage": WATT, "start_serial": "S1", "end_serial": "S1", "qty": 1,
+            "kw_output": 0.63, "created_by": "t"})
+    assert any(e["entry_id"] == pe for e in admin.get("/api/prodentries").get_json()["entries"])
+    admin.post("/api/prodentry/%d/cancel" % pe,
+               json={"reason": "x", "totp_code": code(secret)})
+    assert not any(e["entry_id"] == pe for e in admin.get("/api/prodentries").get_json()["entries"]), \
+        "cancelled production entry still listed"
+    print("      cancelled docs gone from every working list; edits/close refused")
+
+
 @test("no code at all is refused (400) - the step-up is not optional")
 def t_missing_code():
     admin, secret, op = accounts()

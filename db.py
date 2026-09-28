@@ -225,7 +225,7 @@ def search_invoices(cur, q=None, date_from=None, date_to=None):
     if cur is None: return []
     sql = """
         SELECT i.invoice_id as id, i.invoice_no, i.invoice_date, i.buyer_name, i.buyer_gstin,
-               i.declared_qty, i.superseded_by,
+               i.declared_qty, i.superseded_by, i.status,
                (SELECT group_concat(c.fy || '/' || c.seq, ', ') FROM challan c WHERE c.invoice_id = i.invoice_id AND c.status != 'CANCELLED') as challan
         FROM invoice i
         WHERE 1=1
@@ -592,8 +592,15 @@ def indent_progress(cur, indent_no=None):
     sql = "SELECT * FROM v_indent_progress"
     args = ()
     if indent_no:
+        # a specific lookup still returns a cancelled indent, so an edit or a
+        # trace can see it and refuse/label it; only the LIST hides them.
         sql += " WHERE indent_no=%s"
         args = (indent_no,)
+    else:
+        # Round 34: a cancelled indent leaves the working list, the same way a
+        # cancelled challan does - it stays findable by number for search and
+        # history, but it is not offered for work or edit.
+        sql += " WHERE status<>'cancelled'"
     cur.execute(sql + " ORDER BY indent_date DESC, line_no", args)
     return cur.fetchall()
 
@@ -1094,7 +1101,9 @@ def gatepasses_list(cur, q=None, date_from=None, date_to=None, customer=None, n=
         return []
     sql = ("SELECT g.*, "
            "(SELECT COUNT(*) FROM gatepass_item gi WHERE gi.gatepass_id=g.gp_id) "
-           "AS item_count FROM gatepass g WHERE 1=1")
+           # Round 34: a cancelled gate pass leaves the working list
+           "AS item_count FROM gatepass g "
+           "WHERE 1=1 AND g.status<>'cancelled'")
     params = []
     if date_from:
         sql += " AND g.gp_date >= %s"; params.append(date_from)
