@@ -5014,3 +5014,58 @@ regression unchanged: challan 55, gatepass 11, gatepass_multiitem 9, loading
 16, review 8, dashboards_ist 13, screen_write_gates 9, dashrath 6; JS via
 cscript (screens 17, trace 33, challan 35, packing 26, fqc_dashboard 18,
 loading 24, repack 27).
+
+### Round 34 - everything still open, in one place
+
+Four sub-rounds (s1-s7, then three follow-ups) touched a lot of surface.
+Consolidated here so nothing is scattered - this is the full list of what
+Round 34 deliberately deferred plus what was found late and not yet fixed.
+Work on this paused here to focus on the FQC redesign; pick up from this list.
+
+**Deliberately deferred (scope, not bugs):**
+- **Hierarchical cancellation** - request/approve, per-role cancel paths,
+  escalation, a second approver for a dispatched document. Round 34 is
+  Admin/Super Admin DIRECT cancel only, for every type. No other role has any
+  cancel path yet.
+- **Production Entry has no printed reference number.** Its cancel takes the
+  internal id; the Cancel screen says so honestly ("no printed number yet")
+  rather than inventing a format. A real reference number for Production
+  Entry is a separate, later piece of work.
+
+**Found, not yet fixed - each needs a decision, not a guess:**
+- **A cancelled FQC grade can leave a stale Needs Review item behind.**
+  Confirmed: an open `review_item` (duplicate_scan or provisional_mismatch)
+  that points at an fqc_id keeps showing in `/api/review` after that
+  fqc_record is cancelled - Quality can still be asked to resolve a
+  "Provisional vs evidence" conflict about a decision that no longer stands.
+  Needs a decision: does cancelling the FQC record auto-close any open review
+  item that names it (and with what resolution), or does Review need its own
+  "the underlying record was cancelled" state? Do NOT guess at this - it
+  changes what Quality is told to act on.
+- **Production Entry range validation does not look at `state='cancelled'`.**
+  A serial individually cancelled via `/api/serials/cancel` could still be
+  swept into a NEW production entry's printed range (state is deliberately
+  not checked there today, for an unrelated reason - see api_prodentry's own
+  comment). Should the whole range refuse, or should a cancelled serial be
+  silently excluded from the count? Mukesh's call.
+- **Search & Trace's non-serial results (challan/invoice/batch/vehicle/
+  customer) were not audited for a clear "cancelled" indicator** the way the
+  serial journey now shows one. The serial journey fix (follow-up 2) covered
+  only the module journey; whether searching a cancelled challan/invoice
+  NUMBER directly shows its cancelled status as plainly is unverified.
+- **Admin > Audit trail is still v4's own unwired demo tab** - `auditRows` is
+  never populated from `dispatch_audit`, so none of the richer stage/verb/actor
+  information the event log fix (follow-up 2) added is visible there, only on
+  a module's own Search & Trace page. Wiring a real Audit trail screen was
+  never in scope for Round 34 and is its own piece of work.
+- **The nine-gap sweep (follow-up 3) was thorough, not exhaustive.** It
+  covered every call site found by tracing each type's own foreign keys and
+  status columns; a genuinely new cancellable type added later needs the same
+  trace repeated for it, not assumed safe by analogy.
+
+Nothing above blocks Round 34 as shipped: every cancel endpoint, its refusal
+rule, its step-up, its screen, and the specific "must leave every list"
+fixes made along the way are real and tested (20 tests in
+test_cancel_documents.py, 8 checks in test_cancel_screen.py, full regression
+green). What is listed here is what a NEXT pass on this feature should read
+first, rather than rediscovering it.
