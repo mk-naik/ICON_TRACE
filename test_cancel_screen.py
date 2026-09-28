@@ -200,6 +200,23 @@ def run():
         newtypes["fqc"] = screen_cancel("fqc", "ICON630G1202127100")
         pg.screenshot(path=os.path.join(SHOTS, "05_serial_and_fqc.png"))
 
+        # after a successful cancel, every field clears - ready for the next
+        # one, not left holding what was just cancelled
+        fields_after_success = {
+            "id": pg.input_value("#cdId"), "id2": pg.input_value("#cdId2"),
+            "reason": pg.input_value("#cdReason"), "totp": pg.input_value("#cdTotp"),
+        }
+
+        # each type shows its OWN shaped placeholder, not one generic example -
+        # picked across a spread of the real types, including the one flagged
+        # (indent_line uses '#', serial/fqc show a real serial shape, prodentry
+        # is honest that it has no printed number yet)
+        placeholders = {}
+        for tv in ("indent", "serial", "serial_range", "indent_line", "prodentry"):
+            pg.select_option("#cdType", tv)
+            placeholders[tv] = pg.get_attribute("#cdId", "placeholder")
+        pg.screenshot(path=os.path.join(SHOTS, "06_type_placeholder.png"))
+
         # a refusal, shown with the server's exact reason (a blocked invoice)
         blocked = seed("invoice", blocked=True)
         ui_cancel(pg, "invoice", blocked)
@@ -219,14 +236,16 @@ def run():
         pg.screenshot(path=os.path.join(SHOTS, "04_wrong_code.png"))
 
         ctx.close()
-        return results, refusal, wrongcode, errs, by_number, newtypes
+        return (results, refusal, wrongcode, errs, by_number, newtypes,
+                fields_after_success, placeholders)
 
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     passed = failed = 0
     try:
-        results, refusal, wrongcode, errs, by_number, newtypes = run()
+        (results, refusal, wrongcode, errs, by_number, newtypes,
+         fields_after_success, placeholders) = run()
         checks = []
         checks.append(("cancel by the document's real number (IS2I/26/0099)",
                        "cancelled" in by_number.lower()))
@@ -240,6 +259,18 @@ if __name__ == "__main__":
                        "reconcile against this invoice" in refusal.lower()))
         checks.append(("a wrong code refused, and reads differently from a block",
                        "code" in wrongcode.lower() and "reconcile" not in wrongcode.lower()))
+        checks.append(("every field clears after a successful cancel",
+                       all(v == "" for v in fields_after_success.values())))
+        checks.append(("each document type shows its OWN example placeholder, "
+                       "not one generic one for all (indent vs indent-line vs "
+                       "serial vs prodentry are all different; serial and "
+                       "serial_range legitimately share a serial-shaped example)",
+                       len({placeholders.get(k) for k in
+                            ("indent", "indent_line", "serial", "prodentry")}) == 4 and
+                       "IS2I" in placeholders.get("indent", "") and
+                       "#" in placeholders.get("indent_line", "") and
+                       "ICON" in placeholders.get("serial", "") and
+                       "no printed number" in placeholders.get("prodentry", "")))
         checks.append(("no page errors", errs == []))
         for name, ok in checks:
             print(("  PASS  " if ok else "  FAIL  ") + name)
@@ -250,6 +281,10 @@ if __name__ == "__main__":
             print("    %-11s %s" % (k, t))
         print("  refusal shown:   %s" % " ".join(refusal.split())[:90])
         print("  wrong code shown:%s" % " ".join(wrongcode.split())[:90])
+        print("  fields after success:", fields_after_success)
+        print("  placeholders by type:")
+        for k, v in placeholders.items():
+            print("    %-14s %s" % (k, v))
         if errs:
             print("  page errors:", errs)
     except Exception as e:

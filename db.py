@@ -952,9 +952,12 @@ def fqc_recent(cur, n=25, include_superseded=False, filters=None):
     if cur is None:
         return list(reversed(_demo["fqc"]))[:n]
     
-    where = ["f.superseded_by IS NULL"] if not include_superseded else ["1=1"]
+    # Round 34: a cancelled grade is void, so it is not a "live decision"
+    # either - excluded the same way a superseded one is.
+    where = (["f.superseded_by IS NULL", "f.status<>'cancelled'"]
+             if not include_superseded else ["1=1"])
     args = []
-    
+
     if filters:
         # The shift the decision was made in, by the header's clock - the
         # screen sends A/B/C, which never equalled the serial's 1/2/3, so

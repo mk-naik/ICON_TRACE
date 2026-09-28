@@ -4863,3 +4863,75 @@ its edit/close is refused; the lookup resolves numbers/rendered-challan/ids
 (single+range) cancel with their refusals and the serial-state reversions. 12
 passed. test_cancel_screen.py extended - cancel by real number, and the indent
 line / serial / serial range / FQC grade all through the screen.
+
+### Round 34 follow-up 2 (found in review of the follow-up)
+
+**1. A cancelled FQC grade kept reading as a standing Pass/Reject everywhere
+else in the app.** Same class of bug as follow-up #1, one level down: the
+ENDPOINT'S OWN table stopped being "live" on cancel, but every OTHER place
+reading "the live FQC record" (`superseded_by IS NULL`) had no idea a cancel
+existed and kept counting/showing the voided grade. Fixed at every site that
+picks the live record:
+  - Search & Trace's module journey (api_trace_serial) - a cancelled record no
+    longer shows Pass/Reject; it shows a "Cancelled" card naming what the grade
+    WAS, who cancelled it and the reason, instead of silently falling back to
+    "not judged yet" (which would have hidden that a decision was made and undone);
+  - `db.fqc_recent()` (FQC Recent Gradings) excludes cancelled the same way it
+    already excludes superseded;
+  - `/api/fqc/dashboard` and `/api/fqc/dashboard/modules` (FQC Dashboard, its
+    shift/model table and its module drill-down);
+  - Management Overview's `fl` CTE (the "latest live FQC record per serial"
+    join used for its own stats) and `_shift_rows()` (the FQC Dashboard's own
+    shift table).
+  `db.py`/`app.py` locations still reading `superseded_by IS NULL` alone were
+  audited one by one; two (`quality_pending`, `provisional_pending`) were left
+  untouched because the cancel already reverts `state` away from the value
+  those queries filter on ('rejected'/'hold'), so a cancelled record cannot
+  appear there regardless.
+
+**2. The event log named the entity but silently dropped the VERB, for every
+audited action, not only cancellation.** `action` is stored "entity.verb"
+(`fqc.cancel`, `planning.cancel`, `challan.cancel`, ...); the trace event log
+showed only the entity half (`stage = action.split(".")[0].title()`), so a
+cancel row read as generic "Fqc" - nothing on the row said "cancelled"
+anywhere, even though the actor (`Mukesh Naik`) WAS already shown correctly in
+the User column. Fixed generally: stage is now "Entity · Verb" for every
+audited row (`"Fqc · Cancel"`, `"Planning · Allocate"`, ...), and the FQC
+grading rows (a second, separate log source from the fqc_record table itself)
+now say "Fqc · Cancelled" and append who cancelled it and why when that record
+was voided, instead of silently continuing to show "Grade A · manual" with no
+sign anything happened to it since.
+
+**3. The Cancel screen's lookup only accepted a row id for allocation and loss
+event, not the display number the rest of the app actually shows.** Reported:
+Planning & Allocation lists a batch as `BAT-2609-00003` with a Withdraw button;
+typing that exact string into the Cancel screen gave "No allocation matches
+'BAT-2609-00003'." The resolver had a challan-shaped special case but nothing
+for allocation's `BAT-YYMM-NNNNN` (the existing `batch_no()` renderer - the
+trailing 5 digits ARE the alloc_id) or loss event's `DT-<id>` (`_loss_display_id`,
+already shown on the Loss screen and Search & Trace). Both added to
+`/api/cancel/lookup`, reusing the exact regex/format each already renders with -
+no new numbering scheme invented.
+
+**4. The screen didn't reset for the next entry, and every type shared one
+generic placeholder.** Fixed: every field (reference, second reference, reason,
+code) clears after a successful cancel AND when the type dropdown changes (a
+serial left in the box after switching to Indent would just be confusing
+against a new placeholder of a different shape). Each type now shows its own
+realistic example - `IS2I/26/0001` for an indent, `IS2I/26/0001#2` for a line,
+`ISGP260928/0007` for a gate pass, `IS-28.09.2026/0007` for a challan,
+`BAT-2609-00007` for an allocation, `DT-42` for a loss event,
+`ICON625R1292420778` for a serial. Production Entry is deliberately left
+honest rather than inventing a plausible-looking format: "its internal id — no
+printed number yet" - it has no printed reference number at all yet, a
+separate, later fix.
+
+Tests: test_cancel_documents.py +2 (journey/event-log verb and cancellation
+wording; cancelled FQC gone from Recent/Dashboard/module drill-down) +1
+(allocation/loss-event lookup by their real display numbers) - 15 passed.
+test_cancel_screen.py +2 checks (every field clears after success; each type's
+placeholder is its own, not shared) - 8 checks passed. Full regression
+unchanged: cancel_documents 15, indent 7, loss 10, production 12, fqc 57,
+search_invoice 16, challan 55, gatepass 11, screen_write_gates 9, dashrath 6,
+fqc_override 9, review 8, dashboards_ist 13; JS via cscript (screens 17, trace
+33, challan 35, packing 26, fqc_dashboard 18, loading 24, repack 27).

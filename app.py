@@ -1365,7 +1365,7 @@ def _shift_rows():
                    SUM(CASE WHEN f.outcome='pass' THEN 1 ELSE 0 END) AS ok,
                    SUM(CASE WHEN f.outcome='reject' THEN 1 ELSE 0 END) AS r
             FROM fqc_record f JOIN serial s ON s.serial=f.serial
-            WHERE f.superseded_by IS NULL
+            WHERE f.superseded_by IS NULL AND f.status<>'cancelled'
             GROUP BY 1, m, w ORDER BY 1, m, w""".format(sh=clock.shift_sql("f.at")))
         return [{"s": r["s"] or "", "m": r["m"], "w": str(r["w"])+"W",
                  "t": r["t"], "ok": r["ok"], "r": r["r"]} for r in rows]
@@ -3435,6 +3435,20 @@ def api_cancel_lookup():
                             (ref,))
         if not row and typ == "challan":
             row = _resolve_challan_by_number(cur, ref)
+        if not row and typ == "allocation":
+            # BAT-2609-00003 - the same batch number Planning and Search &
+            # Trace show; its trailing 5 digits ARE the alloc_id (batch_no()).
+            m = BATCH_NO_RE.match(ref.strip().upper())
+            if m:
+                row = store.one(cur, "SELECT * FROM allocation WHERE alloc_id=%s",
+                                (int(m.group(1)),))
+        if not row and typ == "loss_event":
+            # DT-42 - the display id the Loss screen and Search & Trace show
+            # (_loss_display_id); the digits are the real event_id.
+            up = ref.strip().upper()
+            if up.startswith("DT-") and up[3:].isdigit():
+                row = store.one(cur, "SELECT * FROM loss_event WHERE event_id=%s",
+                                (int(up[3:]),))
         if not row and typ == "indent_line" and "#" in ref:
             # "indent_no#line_no" -> the line (indent_no itself contains '/',
             # so '#' is the separator); a bare line id also works, below.
@@ -4463,7 +4477,8 @@ def _module_events(cur, customer="", model=""):
         WITH ff AS (SELECT serial, MIN(at) AS first_at
                     FROM fqc_record GROUP BY serial),
              fl AS (SELECT serial, MAX(fqc_id) AS fqc_id FROM fqc_record
-                    WHERE superseded_by IS NULL GROUP BY serial),
+                    WHERE superseded_by IS NULL AND status<>'cancelled'
+                    GROUP BY serial),
              pk AS (SELECT serial, MIN(added_at) AS packed_at
                     FROM box_serial GROUP BY serial),
              dp AS (SELECT cs.serial,
@@ -6015,13 +6030,18 @@ def api_trace_serial(serial):
                         "detail": [anomaly["why"], "Attempts: " + str(anomaly["attempts"])],
                         "tag": anomaly["at"] or "", "tone": "t-fail"})
 
-    if fqc:
-        # The live record, not simply the newest by timestamp: a resolved
-        # duplicate-scan conflict can leave an EARLIER row as the one that
-        # stands (keep the original packed decision over a later rescan),
-        # and fqc is ordered by `at` alone. Falls back to the newest row,
-        # unchanged from before, on every serial that was never duplicated.
-        f = next((r for r in fqc if not r.get("superseded_by")), fqc[-1])
+    # The live record, not simply the newest by timestamp: a resolved
+    # duplicate-scan conflict can leave an EARLIER row as the one that
+    # stands (keep the original packed decision over a later rescan), and
+    # fqc is ordered by `at` alone. A cancelled record (Round 34) never
+    # stands either, whatever position it is in - the journey must not go
+    # on showing Pass/Reject for a grade that has been voided.
+    live = [r for r in fqc if not r.get("superseded_by")
+                          and (r.get("status") or "active") != "cancelled"]
+    cancelled_standing = [r for r in fqc if not r.get("superseded_by")
+                                        and (r.get("status") or "active") == "cancelled"]
+    if live:
+        f = live[0]
         # FQC records pass or reject
         if f["outcome"] == "pass":
             value, tone = "Pass", "t-pass"
@@ -6033,7 +6053,7 @@ def api_trace_serial(serial):
             detail = [f["decided_by"] or "—", f["defect"] or ""]
             journey.append({"stage": "FQC", "value": value, "done": True,
                             "detail": detail, "tag": f["at"] or "", "tone": tone})
-            
+
             # Quality Decision step
             if f["quality_grade"]:
                 q_value, q_tone = f["quality_grade"], "t-fail"
@@ -6043,6 +6063,18 @@ def api_trace_serial(serial):
                 q_detail = ["awaiting a quality decision"]
             journey.append({"stage": "Quality Decision", "value": q_value, "done": bool(f["quality_grade"]),
                             "detail": q_detail, "tag": (f["at"] if f["quality_grade"] else "pending"), "tone": q_tone})
+    elif cancelled_standing:
+        # Nothing stands: the last live grade was cancelled and the module
+        # reverted to 'produced' (api_fqc_cancel). Say what it WAS and who
+        # voided it, rather than silently falling back to "not judged yet" -
+        # that would hide that a decision was made and then undone.
+        c = cancelled_standing[-1]
+        was = "Pass" if c["outcome"] == "pass" else "Reject"
+        journey.append({"stage": "FQC", "value": "Cancelled", "done": False,
+                        "detail": ["was " + was + " · " + (c["decided_by"] or "—"),
+                                   "cancelled by " + (c.get("cancelled_by") or "—") +
+                                   (" · " + c["cancelled_reason"] if c.get("cancelled_reason") else "")],
+                        "tag": c.get("cancelled_at") or "", "tone": "t-mute"})
     else:
         journey.append({"stage": "FQC", "value": "—", "done": False,
                         "detail": ["not judged yet"], "tag": "pending",
@@ -6089,16 +6121,30 @@ def api_trace_serial(serial):
                 detail = " · ".join("%s %s" % (k, v) for k, v in d.items())
             except (ValueError, TypeError):
                 pass
-        stage = (e["action"] or "").split(".")[0].title()
+        # action is stored "entity.verb" (challan.cancel, planning.cancel,
+        # fqc.cancel, indent.cancel, ...). The entity alone used to be shown
+        # here and the verb silently dropped, so every row read as "Fqc" or
+        # "Challan" whether it was a grade, a save or a CANCEL - a cancel
+        # event did not visibly say "cancelled" anywhere on the row. Both
+        # halves are shown now, for every action, not only cancellations.
+        parts = (e["action"] or "").split(".", 1)
+        entity_word = parts[0].replace("_", " ").title() or "—"
+        verb_word = parts[1].replace("_", " ").title() if len(parts) > 1 else ""
+        stage = (entity_word + " · " + verb_word) if verb_word else entity_word
         log.append({"at": e["at"], "stage": stage,
                     "reference": bno if e["entity"] == "allocation" else s,
                     "detail": detail or (e["action"] or ""),
                     "user": e["actor"] or "—"})
     for f in fqc:
-        log.append({"at": f["at"], "stage": "FQC", "reference": s,
-                    "detail": "Grade %s · %s%s" % (
+        cancelled = (f.get("status") or "active") == "cancelled"
+        log.append({"at": f["at"], "stage": "Fqc · Cancelled" if cancelled else "Fqc · Grade",
+                    "reference": s,
+                    "detail": ("Grade %s · %s%s" % (
                         f["grade"], f["mode"] or "",
-                        " · " + f["reason"] if f["reason"] else ""),
+                        " · " + f["reason"] if f["reason"] else "")) +
+                        ((" · cancelled by " + (f.get("cancelled_by") or "—") +
+                          (" · " + f["cancelled_reason"] if f.get("cancelled_reason") else ""))
+                         if cancelled else ""),
                     "user": f["decided_by"] or "—"})
     for b in boxes:
         log.append({"at": b["added_at"], "stage": "Packing",
@@ -7939,7 +7985,7 @@ def api_fqc_dashboard():
     # 25th.
     fqc_shift = clock.shift_sql("f.at")
     fqc_day = clock.shift_day_sql("f.at")
-    where = ["f.superseded_by IS NULL"]
+    where = ["f.superseded_by IS NULL", "f.status<>'cancelled'"]
     args = []
     if frm:
         where.append(fqc_day + " >= %s"); args.append(frm)
@@ -8023,7 +8069,7 @@ def api_fqc_dashboard_modules():
 
     fqc_shift = clock.shift_sql("f.at")      # the inspection's, as above
     fqc_day = clock.shift_day_sql("f.at")
-    where = ["f.superseded_by IS NULL"]
+    where = ["f.superseded_by IS NULL", "f.status<>'cancelled'"]
     args = []
     if frm:
         where.append(fqc_day + " >= %s"); args.append(frm)

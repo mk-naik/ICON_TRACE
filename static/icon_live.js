@@ -7798,30 +7798,40 @@ function wireFqcAnomalies() {
      any of this. */
   var CANCEL_TYPES = {
     indent:  { label: 'Indent', method: 'POST',
+      hint: 'e.g. IS2I/26/0001',
       url: function (id) { return '/api/indent/' + id + '/cancel'; },
       effect: 'The indent is voided (kept for search and history). Allowed only ' +
               'while nothing allocated against it has gone into production.' },
     gatepass: { label: 'Gate pass', method: 'POST',
+      hint: 'e.g. ISGP260928/0007',
       url: function (id) { return '/api/gatepass/' + id + '/cancel'; },
       effect: 'The gate pass is voided, releasing any challan it was locking.' },
     prodentry: { label: 'Production entry', method: 'POST',
+      /* Production Entry prints no reference number of its own yet (raised
+         separately) - its id here is the internal one, honestly labelled
+         rather than inventing a plausible-looking format that does not exist. */
+      hint: 'its internal id — no printed number yet',
       url: function (id) { return '/api/prodentry/' + id + '/cancel'; },
       effect: 'The entry is voided and its serials revert to planned so the ' +
               'range can be re-recorded. Allowed only while none has reached FQC.' },
     loss_event: { label: 'Loss event', method: 'POST',
+      hint: 'e.g. DT-42',
       url: function (id) { return '/api/loss_event/' + id + '/cancel'; },
       effect: 'The loss event is voided. Not allowed while an induced stoppage ' +
               'still names it.' },
     invoice: { label: 'Invoice', method: 'POST',
+      hint: 'e.g. ICON/26-27/822',
       url: function (id) { return '/api/invoice/' + id + '/cancel'; },
       effect: 'The invoice is voided. Not allowed while a live challan ' +
               'reconciles against it.' },
     challan: { label: 'Challan', method: 'POST',
+      hint: 'e.g. IS-28.09.2026/0007',
       url: function (id) { return '/api/challan/' + id + '/cancel'; },
       effect: 'The challan is voided; every serial reverts dispatched → ' +
               'packed and its boxes become repackable. Only an issued challan ' +
               'with no gate pass against it.' },
     allocation: { label: 'Allocation batch', method: 'DELETE',
+      hint: 'e.g. BAT-2609-00007',
       url: function (id) { return '/api/allocation/' + id; },
       effect: 'The allocation is withdrawn and its planned serials released. ' +
               'Allowed only while every serial in it is still planned.' },
@@ -7830,24 +7840,24 @@ function wireFqcAnomalies() {
        the serial(s) DIRECTLY - no id to resolve - and the *_range ones show a
        second field and post a start/end range. */
     indent_line: { label: 'Indent line', mode: 'doc',
-      hint: 'indent no#line no, e.g. IS2I/26/0001#2',
+      hint: 'e.g. IS2I/26/0001#2 (indent no # line no)',
       effect: 'This one line is voided; the indent’s other lines stay live. ' +
               'Allowed only while nothing allocated against this line has gone ' +
               'into production.' },
     serial: { label: 'Serial (one)', mode: 'serial', endpoint: 'serials/cancel',
-      hint: 'the serial',
+      hint: 'e.g. ICON625R1292420778',
       effect: 'The serial is voided (state → cancelled). Allowed only while ' +
               'it is still planned or produced - not once FQC has judged it.' },
     serial_range: { label: 'Serial range', mode: 'range', endpoint: 'serials/cancel',
-      hint: 'start serial', hint2: 'end serial',
+      hint: 'e.g. ICON625R1292420778', hint2: 'e.g. ICON625R1292420801',
       effect: 'Every serial in the printed range is voided. Allowed only while ' +
               'all are still planned or produced. All-or-nothing.' },
     fqc: { label: 'FQC grade (one)', mode: 'serial', endpoint: 'fqc/cancel',
-      hint: 'the serial',
+      hint: 'e.g. ICON625R1292420778',
       effect: 'The serial’s standing FQC grade is voided and it reverts to ' +
               'produced so it can be graded again. Not once packed or dispatched.' },
     fqc_range: { label: 'FQC grade range', mode: 'range', endpoint: 'fqc/cancel',
-      hint: 'start serial', hint2: 'end serial',
+      hint: 'e.g. ICON625R1292420778', hint2: 'e.g. ICON625R1292420801',
       effect: 'The standing FQC grade of every serial in the range is voided and ' +
               'each reverts to produced. Not once any is packed or dispatched.' }
   };
@@ -7908,6 +7918,11 @@ function wireFqcAnomalies() {
       field2.style.display = (m === 'range') ? '' : 'none';
       lbl2.textContent = 'To';
       ref2El.placeholder = t.hint2 || 'end';
+      /* A value shaped for the PREVIOUS type (a serial left in the box after
+         switching to Indent) would just be confusing sitting against a new
+         placeholder that shows a different shape - clear it along with the
+         placeholder, not only after a successful cancel. */
+      refEl.value = ''; ref2El.value = '';
       state.innerHTML = ''; result.innerHTML = '';
     }
     typeSel.addEventListener('change', applyType);
@@ -7944,8 +7959,14 @@ function wireFqcAnomalies() {
                 ? (d.cancelled + ' cancelled. ') : (label + ' cancelled. ');
         result.innerHTML = note('n-info', '✓ ' + n +
           fqcEsc(CANCEL_TYPES[typeSel.value].effect));
+        /* Ready for the next one: every field clears, not just the code -
+           the reference(s) and reason too, so a second cancel cannot be
+           submitted by accident against what is still sitting in the box
+           from the last one. */
         document.getElementById('cdTotp').value = '';
         document.getElementById('cdReason').value = '';
+        refEl.value = '';
+        ref2El.value = '';
         state.innerHTML = '';
       } else {
         /* the server's exact reason: a wrong code (403) and a wrong-state

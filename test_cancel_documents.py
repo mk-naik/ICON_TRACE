@@ -577,6 +577,111 @@ def t_fqc_cancel():
     print("      FQC grade voided single + range, serials reverted; packed refused")
 
 
+@test("a cancelled FQC grade stops reading as a standing Pass/Reject: the "
+     "Search & Trace journey says Cancelled (not Reject), names who cancelled "
+     "it and why, and the event log's stage says which VERB happened, not "
+     "just which entity - for the cancel row and every other audited row")
+def t_journey_and_event_log_reflect_cancellation():
+    admin, secret, op = accounts()
+    sn = "ICON630G1202129900"
+    with store.conn() as (cx, cur):
+        store.insert(cur, "serial", {"serial": sn, "build_instance": 1,
+            "model": MODEL, "wattage": WATT, "format_version": 2,
+            "date_produced": "2026-09-09", "shift": 1, "sequence": nxt(),
+            "state": "rejected"})
+        store.insert(cur, "fqc_record", {"serial": sn, "outcome": "reject",
+            "grade": None, "defect": "Burning", "decided_by": "Suryansh Verma",
+            "at": "2026-09-25T11:59:25", "mode": "confirmed"})
+    r = admin.post("/api/fqc/cancel", json={"serial": sn, "reason": "testing",
+                   "totp_code": code(secret)})
+    assert r.status_code == 200, r.get_json()
+
+    tr = admin.get("/api/trace/serial/" + sn).get_json()
+    assert tr["ok"], tr
+    fqc_card = next(j for j in tr["journey"] if j["stage"] == "FQC")
+    assert fqc_card["value"] == "Cancelled", \
+        "journey still shows a voided grade as standing: %r" % fqc_card
+    detail_text = " ".join(fqc_card["detail"])
+    assert "reject" in detail_text.lower(), \
+        "the journey no longer says what the voided decision WAS: %r" % detail_text
+    assert "cancelled by" in detail_text.lower(), fqc_card
+    assert "testing" in detail_text, "the cancel reason is missing from the journey"
+
+    # the event log: find the audit row for this cancel and the annotated
+    # grade row, and confirm both say something more than the bare entity
+    cancel_rows = [e for e in tr["events"] if "cancel" in e["stage"].lower()]
+    assert cancel_rows, "no event log row names the cancel action at all: %s" % (
+        [e["stage"] for e in tr["events"]])
+    audit_row = next(e for e in cancel_rows if e["user"] == "Test Super Admin")
+    assert "fqc" in audit_row["stage"].lower(), audit_row
+    assert "cancel" in audit_row["stage"].lower(), \
+        "stage names the entity but drops the verb: %r" % audit_row["stage"]
+    grade_row = next(e for e in tr["events"] if e["user"] == "Suryansh Verma")
+    assert "cancel" in (grade_row["stage"] + grade_row["detail"]).lower(), \
+        "the original grade's own log line never says it was cancelled: %r" % grade_row
+    print("      journey: %s (%s) | audit stage: %r | grade-row stage: %r" % (
+        fqc_card["value"], detail_text, audit_row["stage"], grade_row["stage"]))
+
+
+@test("a cancelled FQC grade leaves FQC Recent, the FQC Dashboard's shift "
+     "table and the Management Overview stats - the same 'gone from every "
+     "list' rule Round 34 already applies to the seven document types")
+def t_cancelled_fqc_leaves_lists():
+    admin, secret, op = accounts()
+    sn = "ICON630G1202129901"
+    with store.conn() as (cx, cur):
+        store.insert(cur, "serial", {"serial": sn, "build_instance": 1,
+            "model": MODEL, "wattage": WATT, "format_version": 2,
+            "date_produced": "2026-09-09", "shift": 1, "sequence": nxt(),
+            "state": "graded"})
+        store.insert(cur, "fqc_record", {"serial": sn, "outcome": "pass",
+            "grade": "A", "decided_by": "x", "at": "2026-09-25T10:00:00",
+            "mode": "manual"})
+    recent = admin.get("/api/fqc/recent?limit=1000").get_json()["rows"]
+    assert any(r["serial"] == sn for r in recent), "setup: not in Recent yet"
+    dash = admin.get("/api/fqc/dashboard?from=2026-09-25&to=2026-09-25").get_json()
+    before = dash["totals"]["inspected"]
+
+    admin.post("/api/fqc/cancel", json={"serial": sn, "reason": "x",
+              "totp_code": code(secret)})
+
+    recent = admin.get("/api/fqc/recent?limit=1000").get_json()["rows"]
+    assert not any(r["serial"] == sn for r in recent), \
+        "a cancelled FQC grade is still in FQC Recent"
+    dash = admin.get("/api/fqc/dashboard?from=2026-09-25&to=2026-09-25").get_json()
+    after = dash["totals"]["inspected"]
+    assert after < before, \
+        "the FQC Dashboard still counts a cancelled grade (inspected %r -> %r)" % (
+            before, after)
+    modules = admin.get("/api/fqc/dashboard/modules?from=2026-09-25&to=2026-09-25").get_json()
+    mod_rows = modules if isinstance(modules, list) else modules.get("rows", [])
+    assert not any(m.get("serial") == sn for m in mod_rows), \
+        "a cancelled FQC grade is still in the FQC Dashboard's module drill-down"
+    print("      cancelled grade gone from FQC Recent, dashboard modules, and "
+          "the dashboard total (inspected %s -> %s)" % (before, after))
+
+
+@test("the Cancel screen's lookup resolves the SAME display numbers the rest "
+     "of the app shows for allocation (BAT-...) and loss event (DT-...), not "
+     "only a bare row id")
+def t_lookup_resolves_batch_and_loss_display_numbers():
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        _, _, aid = _seed_indent_line_alloc(cur, "planned")
+        eid = store.insert(cur, "loss_event", {"event_date": "2026-09-09",
+            "shift": "A", "line": "A-Line", "machine": "LAM-1",
+            "reason": "LOP-POWER", "kind": "P", "start_time": "10:00",
+            "entry_mode": "Live", "created_by": "t"})
+    batch_no = "BAT-2609-%05d" % aid       # the same shape Planning/Search show
+    d = admin.get("/api/cancel/lookup?type=allocation&ref=" + batch_no).get_json()
+    assert d["ok"] and d["id"] == aid, (batch_no, d)
+    assert d["method"] == "DELETE"
+    d2 = admin.get("/api/cancel/lookup?type=loss_event&ref=DT-%d" % eid).get_json()
+    assert d2["ok"] and d2["id"] == eid, d2
+    print("      allocation resolved by %s; loss event resolved by DT-%d"
+          % (batch_no, eid))
+
+
 @test("no code at all is refused (400) - the step-up is not optional")
 def t_missing_code():
     admin, secret, op = accounts()
