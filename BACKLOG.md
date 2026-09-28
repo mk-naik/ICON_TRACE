@@ -4699,3 +4699,110 @@ test_fqc_dashboard_ui, test_fqc_recent_ui) need a manually-started server on
 their hard-coded ports and were not run here; each navigates to its dashboard
 before asserting, which the go-wrapper render hook now serves.
 
+
+## Round 34 - direct cancellation of every document type, Admin/Super Admin + TOTP
+
+Only Challan had a real cancel before this, gated by screen-write (any
+Dispatch-write role) with no step-up; allocation withdrawal had the same two
+gaps; Indent, Gate Pass, Production Entry and Loss Event had no cancel at all;
+Invoice's /invoice/cancel only discards an unsaved upload; the Admin "Cancel
+document" screen was a disabled placeholder. icon_auth.stepup_cancel() existed
+from Stage 1a but nothing in app.py called it. This round builds the whole thing:
+Admin and Super Admin can cancel every document type directly, with a TOTP
+step-up at submit, no exceptions.
+
+### The four-column pattern, one shape everywhere
+
+status ('active' default), cancelled_reason, cancelled_by, cancelled_at - the
+exact four challan already carried - added by store.py's _migrate ALTER/IF NOT
+EXISTS to: **indent, gatepass, production_entry, loss_event, invoice**. Existing
+rows backfill to 'active'. challan already had them.
+
+### The step-up, one shared check
+
+_require_stepup(cur, body) reads {totp_code} and calls stepup_cancel() BEFORE any
+type-specific refusal, so a wrong or replayed code refuses identically whatever
+the document's state - a prober learns nothing from which error returns.
+stepup_cancel already carries the replay guard (a code used to sign in has
+advanced totp_last_step and is refused here), confirmed not reimplemented. Every
+cancel endpoint (all seven) is @require_role(*_R_ADMIN): a wrong role is refused
+before the body runs, never a per-screen-permission decision.
+
+### The refusal condition per type - FLAGGED for Mukesh's review
+
+Some were inferred from the state machine rather than told directly. Correct any
+that are wrong for the process:
+
+- **Indent** - refuse if any serial in any allocation on any of its lines has
+  left 'planned' (production has acted). Mirrors allocation withdrawal's own rule
+  exactly, one level up (indent -> line -> allocation -> serial).
+- **Production Entry** - refuse if any serial it recorded has left
+  'planned'/'produced' into FQC or beyond (graded/rejected/hold/packed/
+  dispatched). On success its serials revert to 'planned' and prod_entry_id is
+  cleared, so the range can be re-recorded - the same "revert what I did" the
+  challan cancel does with its serials. (Checked: serial.prod_entry_id is set
+  exclusively by the production-entry route, and 'produced' is set only for
+  serials still 'planned'.)
+- **Loss Event** - refuse a PRIMARY event while an active INDUCED event names it
+  (linked_event_id), which would orphan the induced stop whose double-count
+  exclusion depends on it; otherwise allowed. (Checked: linked_event_id is the
+  only thing built on an individual event; dashboards read events only in
+  aggregate.)
+- **Gate Pass** - **allowed unconditionally** (only "already cancelled" stops
+  it). Checked the gatepass table: it has NO post-issue lifecycle state - a gate
+  pass is created AT the moment of leaving (audit 'gatepass.issue'), there is no
+  dispatched flag, and no return/close workflow (return_date is never written -
+  db.py notes this). Nothing downstream reads a gate pass's outcome; its one
+  linkage is that a module gate pass locks its challan, and cancelling the gate
+  pass is exactly how that lock is released to unwind the challan - so it must
+  NOT be refused for having a challan. **This is the one most in need of Mukesh's
+  confirmation**: if a real "dispatched/left" state is added later, key a refusal
+  on it here.
+- **Invoice** - refuse while a live (non-cancelled) challan reconciles against it
+  (challan.invoice_id). The same shape challan's own cancel uses to refuse while
+  a gate pass references it, one FK up. The existing /invoice/cancel (discards an
+  unsaved upload) is untouched - this is a new, separate /api/invoice/<id>/cancel.
+
+### Challan and allocation - unchanged apart from who and the step-up
+
+Both moved from @require_screen_write to @require_role(*_R_ADMIN) and gained the
+step-up. Their refusal RULES are unchanged: challan still issued-only with no
+referencing gate pass; allocation still all-serials-'planned'. The existing tests
+for those rules pass, with the TOTP code added to the calls (the rule assertions
+themselves are untouched). The screen-write meta-test moved both endpoints off
+its per-screen map (40 -> 38 functions) onto its role-gate assertion.
+
+### The Admin > Cancel document screen
+
+The disabled placeholder is replaced (the live layer swaps the #ad-cancel pane,
+as Evidence Sources does #ad-stations). Pick a type, enter the document id, see
+what cancelling will do, give a reason and an authenticator code, cancel. On
+refusal the server's exact reason shows. A wrong code and a wrong-state document
+read differently on screen ON PURPOSE: the caller is an authenticated Admin, to
+whom the endpoint gives the specific reason; what section 3 keeps
+indistinguishable is what an UNauthenticated prober could learn, and such a
+caller never passes the role gate. The distinction is the UI reading its own
+request outcome, not a probe.
+
+### Deferred, explicitly
+
+Hierarchical cancellation - request/approve, per-role cancel paths, escalation,
+a second approver for a dispatched document - is a LATER feature. This round is
+Admin/Super Admin direct cancel only, for every type. No other role gets any
+cancel path yet. Downstream list/aggregate filtering on the new 'cancelled'
+status (e.g. excluding a cancelled loss event from OEE, a cancelled invoice from
+the available-invoice picker) is a separate follow-up; this round builds the
+cancel mechanism, the refusal rules, the step-up and the screen.
+
+### Tests
+
+test_cancel_documents.py - the whole matrix across all seven endpoints: success
++ status flip + audit; wrong role (before TOTP); wrong code; not-cancellable with
+its specific reason; the replay guard; no-code. 7 passed.
+test_cancel_screen.py (Playwright) - each of the seven cancelled end to end
+through the screen, a blocked invoice refused with its real reason, a wrong code
+shown differently. 4 checks passed; screenshots in round34_shots/.
+Existing suites unchanged: test_challan (55), test_gatepass (11), test_loading
+(14), test_screen_write_gates (9), test_review (8), test_indent (7),
+test_production (12), test_role_gates (11), test_screen_perms (20),
+test_inner_role_checks (7), and the auth/UI harness suites.
