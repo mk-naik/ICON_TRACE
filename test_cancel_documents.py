@@ -325,6 +325,47 @@ def t_replay_guard():
     print("      a reused code cancelled the first, was refused on the second")
 
 
+@test("the lookup resolves the number a person actually knows to its internal "
+     "id and current state - an indent no, a gate pass no, an invoice no, a "
+     "rendered challan no - and a bare id; unknown -> 404, non-admin -> 403")
+def t_lookup_resolves_reference():
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        iid = store.insert(cur, "indent", {"indent_no": "IS2I/26/0003",
+            "indent_date": "2026-09-09", "customer": "STOCK", "created_by": "t"})
+        gid = store.insert(cur, "gatepass", {"gp_no": "IS2-GP-77",
+            "gp_date": "2026-09-09", "kind": "NRGP", "created_by": "t"})
+        inv = store.insert(cur, "invoice", {"invoice_no": "INV-9001",
+            "pdf_path": "x.pdf", "pdf_sha256": "h1", "created_by": "t"})
+        cid = store.insert(cur, "challan", {"fy": 2026, "seq": 4242,
+            "challan_date": "2026-09-09", "qty": 1, "status": "issued",
+            "created_by": "t"})
+    # by the human number
+    d = admin.get("/api/cancel/lookup?type=indent&ref=IS2I/26/0003").get_json()
+    assert d["ok"] and d["id"] == iid and "/api/indent/%d/cancel" % iid == d["cancel_url"], d
+    assert admin.get("/api/cancel/lookup?type=gatepass&ref=IS2-GP-77").get_json()["id"] == gid
+    assert admin.get("/api/cancel/lookup?type=invoice&ref=INV-9001").get_json()["id"] == inv
+    # a rendered challan number (IS-09.09.2026/4242), which has no stored column
+    import datetime as _dt
+    rendered = db.render_challan_no(_dt.date(2026, 9, 9), 4242, None)
+    dc = admin.get("/api/cancel/lookup?type=challan&ref=" + rendered).get_json()
+    assert dc["ok"] and dc["id"] == cid, (rendered, dc)
+    assert dc["method"] == "POST"
+    # a bare numeric id still resolves
+    assert admin.get("/api/cancel/lookup?type=indent&ref=%d" % iid).get_json()["id"] == iid
+    # allocation resolves by id and reports a DELETE
+    with store.conn() as (cx, cur):
+        _, _, aid = _seed_indent_line_alloc(cur, "planned")
+    da = admin.get("/api/cancel/lookup?type=allocation&ref=%d" % aid).get_json()
+    assert da["ok"] and da["method"] == "DELETE" and da["id"] == aid, da
+    # unknown -> 404, unknown type -> 400
+    assert admin.get("/api/cancel/lookup?type=indent&ref=NOPE").status_code == 404
+    assert admin.get("/api/cancel/lookup?type=nonsense&ref=1").status_code == 400
+    # non-admin cannot even resolve
+    assert op.get("/api/cancel/lookup?type=indent&ref=IS2I/26/0003").status_code == 403
+    print("      lookup resolves numbers, rendered challan no, ids; gates by role")
+
+
 @test("no code at all is refused (400) - the step-up is not optional")
 def t_missing_code():
     admin, secret, op = accounts()

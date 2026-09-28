@@ -134,6 +134,16 @@ def run():
         pg.wait_for_timeout(300)
         pg.screenshot(path=os.path.join(SHOTS, "01_cancel_screen.png"))
 
+        # the reported case: cancel by the document's REAL number (an indent no
+        # like IS2I/26/0003), not an internal row id - the screen resolves it.
+        with store.conn() as (cx, cur):
+            store.insert(cur, "indent", {"indent_no": "IS2I/26/0099",
+                "indent_date": "2026-09-09", "customer": "STOCK", "created_by": "t"})
+        ui_cancel(pg, "indent", "IS2I/26/0099", reason="Lot cancelled")
+        pg.wait_for_selector("#cdResult .note.n-info", timeout=10000)
+        by_number = " ".join(pg.inner_text("#cdResult").split())
+        pg.screenshot(path=os.path.join(SHOTS, "00_cancel_by_number.png"))
+
         # one of each type, end to end
         results = []
         for kind in ("indent", "gatepass", "prodentry", "loss_event",
@@ -165,15 +175,17 @@ def run():
         pg.screenshot(path=os.path.join(SHOTS, "04_wrong_code.png"))
 
         ctx.close()
-        return results, refusal, wrongcode, errs
+        return results, refusal, wrongcode, errs, by_number
 
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     passed = failed = 0
     try:
-        results, refusal, wrongcode, errs = run()
+        results, refusal, wrongcode, errs, by_number = run()
         checks = []
+        checks.append(("cancel by the document's real number (IS2I/26/0099)",
+                       "cancelled" in by_number.lower()))
         checks.append(("all 7 types cancelled via the screen",
                        len(results) == 7 and all("cancelled" in t.lower() for _, t in results)))
         checks.append(("a blocked invoice refused with its reason on screen",

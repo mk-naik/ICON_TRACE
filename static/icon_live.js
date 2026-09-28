@@ -7844,10 +7844,11 @@ function wireFqcAnomalies() {
         '<div class="grid g2">' +
           '<div class="fld req"><label>Document type</label>' +
             '<select id="cdType">' + opts + '</select></div>' +
-          '<div class="fld req"><label>Document id</label>' +
-            '<input class="mono" id="cdId" placeholder="its id on the list screen"></div>' +
+          '<div class="fld req"><label>Document</label>' +
+            '<input class="mono" id="cdId" placeholder="its number, e.g. IS2I/26/0003 (or its id)"></div>' +
         '</div>' +
-        '<div class="note n-info" id="cdEffect" style="margin:4px 0 12px"></div>' +
+        '<div class="note n-info" id="cdEffect" style="margin:4px 0 8px"></div>' +
+        '<div id="cdState" style="margin:0 0 12px"></div>' +
         '<div class="grid g2">' +
           '<div class="fld req"><label>Reason</label>' +
             '<input id="cdReason" placeholder="why, in your own words"></div>' +
@@ -7860,45 +7861,85 @@ function wireFqcAnomalies() {
       '</div></div></div>';
 
     var typeSel = document.getElementById('cdType');
+    var refEl = document.getElementById('cdId');
     var effect = document.getElementById('cdEffect');
+    var state = document.getElementById('cdState');
     var result = document.getElementById('cdResult');
+
     function showEffect() {
       var t = CANCEL_TYPES[typeSel.value];
       effect.innerHTML = '<span>ℹ</span><span>' + fqcEsc(t.effect) + '</span>';
     }
-    typeSel.addEventListener('change', function () { showEffect(); result.innerHTML = ''; });
+    typeSel.addEventListener('change', function () {
+      showEffect(); state.innerHTML = ''; result.innerHTML = '';
+    });
     showEffect();
+
+    /* Resolve the number a person actually knows to its internal id + current
+       state (server-side, /api/cancel/lookup), so the field takes an indent no
+       like IS2I/26/0003 rather than a row id nobody sees. Returns a promise of
+       {ok, id, status, cancel_url, method} or the refusal. */
+    function resolve(ref) {
+      return api('cancel/lookup?type=' + encodeURIComponent(typeSel.value) +
+                 '&ref=' + encodeURIComponent(ref));
+    }
+    function showState() {
+      var ref = (refEl.value || '').trim();
+      state.innerHTML = ''; result.innerHTML = '';
+      if (!ref) return;
+      var t = CANCEL_TYPES[typeSel.value];
+      resolve(ref).then(function (d) {
+        if (d && d.ok) {
+          state.innerHTML = note('n-info', 'Found ' + t.label.toLowerCase() +
+            ' ' + fqcEsc(ref) + ' — currently ' + fqcEsc(d.status) + '.');
+        } else {
+          state.innerHTML = note('n-bad', fqcEsc((d && d.why) || 'Not found.'));
+        }
+      }).catch(function () { /* leave it; the Cancel click reports properly */ });
+    }
+    refEl.addEventListener('change', showState);
+    refEl.addEventListener('blur', showState);
 
     document.getElementById('cdBtn').addEventListener('click', function () {
       var t = CANCEL_TYPES[typeSel.value];
-      var id = (document.getElementById('cdId').value || '').trim();
+      var ref = (refEl.value || '').trim();
       var reason = (document.getElementById('cdReason').value || '').trim();
       var totp = (document.getElementById('cdTotp').value || '').trim();
       result.innerHTML = '';
-      if (!id) { result.innerHTML = note('n-bad', 'Enter the document id.'); return; }
+      if (!ref) { result.innerHTML = note('n-bad', 'Enter the document.'); return; }
       if (!reason) { result.innerHTML = note('n-bad', 'A reason is required.'); return; }
       if (!totp) { result.innerHTML = note('n-bad', 'Enter your authenticator code.'); return; }
       var btn = document.getElementById('cdBtn');
       btn.disabled = true;
-      api(t.url(id).replace(/^\/api\//, ''),
-          { method: t.method, body: JSON.stringify({ reason: reason, totp_code: totp }) })
-        .then(function (d) {
+      /* resolve first, then cancel the exact id the server gave back - so the
+         number is turned into an id on the server, never smuggled into a URL. */
+      resolve(ref).then(function (r) {
+        if (!r || !r.ok) {
           btn.disabled = false;
-          if (d && d.ok) {
-            result.innerHTML = note('n-info', '✓ ' + t.label + ' ' + fqcEsc(id) +
-              ' cancelled. ' + fqcEsc(t.effect));
-            document.getElementById('cdTotp').value = '';
-            document.getElementById('cdReason').value = '';
-          } else {
-            /* the server's exact reason: a wrong code and a wrong-state document
-               read differently, deliberately (see the comment above). */
-            result.innerHTML = note('n-bad', fqcEsc((d && d.why) || 'That did not work.'));
-          }
-        })
-        .catch(function () {
-          btn.disabled = false;
-          result.innerHTML = note('n-bad', 'The server did not answer.');
-        });
+          result.innerHTML = note('n-bad', fqcEsc((r && r.why) || 'Not found.'));
+          return null;
+        }
+        return api(r.cancel_url.replace(/^\/api\//, ''),
+            { method: r.method, body: JSON.stringify({ reason: reason, totp_code: totp }) })
+          .then(function (d) {
+            btn.disabled = false;
+            if (d && d.ok) {
+              result.innerHTML = note('n-info', '✓ ' + t.label + ' ' + fqcEsc(ref) +
+                ' cancelled. ' + fqcEsc(t.effect));
+              document.getElementById('cdTotp').value = '';
+              document.getElementById('cdReason').value = '';
+              state.innerHTML = '';
+            } else {
+              /* the server's exact reason: a wrong code (403) and a wrong-state
+                 document (400) read differently on purpose - the caller is an
+                 authenticated Admin, and only they see the specific reason. */
+              result.innerHTML = note('n-bad', fqcEsc((d && d.why) || 'That did not work.'));
+            }
+          });
+      }).catch(function () {
+        btn.disabled = false;
+        result.innerHTML = note('n-bad', 'The server did not answer.');
+      });
     });
 
     function note(cls, msg) {

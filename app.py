@@ -3183,6 +3183,79 @@ def api_invoice_cancel_real(invoice_id):
     return jsonify({"ok": True})
 
 
+# Round 34: the Cancel document screen resolves the number a person actually
+# knows (an indent no, a challan no, a gate pass no, an invoice no) to the
+# internal id the cancel endpoints take, and reports the document's current
+# state. Number-based types match on their printed number first, then fall back
+# to a bare numeric id; the id-only types (production entry, loss event,
+# allocation) take the numeric id straight. Admin/Super Admin only, like the
+# cancels it feeds.
+_CANCEL_LOOKUP = {
+    # type:      (table, pk, number_column_or_None, cancel_url_template)
+    #   challan has NO stored number column - it is rendered from date+seq+suffix,
+    #   so it is matched specially below, then by numeric id.
+    "indent":         ("indent", "indent_id", "indent_no", "/api/indent/%s/cancel"),
+    "challan":        ("challan", "challan_id", None, "/api/challan/%s/cancel"),
+    "gatepass":       ("gatepass", "gp_id", "gp_no", "/api/gatepass/%s/cancel"),
+    "invoice":        ("invoice", "invoice_id", "invoice_no", "/api/invoice/%s/cancel"),
+    "prodentry":      ("production_entry", "entry_id", None, "/api/prodentry/%s/cancel"),
+    "loss_event":     ("loss_event", "event_id", None, "/api/loss_event/%s/cancel"),
+    "allocation":     ("allocation", "alloc_id", None, "/api/allocation/%s"),
+}
+
+
+def _resolve_challan_by_number(cur, ref):
+    """Challan carries no number column - the number people read is rendered
+    from its date, seq and suffix. Match it back best-effort (challans are
+    bounded), so the Cancel screen takes a CHN-... number, not a row id."""
+    for ch in store.rows(cur, "SELECT challan_id, challan_date, seq, suffix "
+                              "FROM challan"):
+        try:
+            dt = datetime.date.fromisoformat(ch["challan_date"])
+            rendered = db.render_challan_no(dt, ch["seq"], ch.get("suffix"))
+        except (TypeError, ValueError):
+            rendered = "CHN-%s" % ch["seq"]
+        if rendered == ref:
+            return store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
+                             (ch["challan_id"],))
+    return None
+
+
+@app.route("/api/cancel/lookup")
+@require_role(*_R_ADMIN)
+def api_cancel_lookup():
+    typ = (request.args.get("type") or "").strip()
+    ref = (request.args.get("ref") or "").strip()
+    spec = _CANCEL_LOOKUP.get(typ)
+    if not spec:
+        return jsonify({"ok": False, "why": "Unknown document type."}), 400
+    if not ref:
+        return jsonify({"ok": False, "why": "Enter the document to look up."}), 400
+    table, pk, num_col, url_t = spec
+    with store.conn() as (cx, cur):
+        row = None
+        if num_col:
+            row = store.one(cur, "SELECT * FROM %s WHERE %s=%%s" % (table, num_col),
+                            (ref,))
+        if not row and typ == "challan":
+            row = _resolve_challan_by_number(cur, ref)
+        if not row and ref.isdigit():
+            row = store.one(cur, "SELECT * FROM %s WHERE %s=%%s" % (table, pk),
+                            (int(ref),))
+        if not row:
+            return jsonify({"ok": False, "why":
+                "No %s matches %r." % (typ.replace("_", " "), ref)}), 404
+        rid = row[pk]
+        status = None
+        try:
+            status = row["status"]           # allocation has none - it deletes
+        except (KeyError, IndexError):
+            status = None
+        return jsonify({"ok": True, "id": rid, "status": status or "active",
+                        "cancel_url": url_t % rid,
+                        "method": "DELETE" if typ == "allocation" else "POST"})
+
+
 def _resolve_box_no(cur, box_no):
     """A challan_box row keeps the pallet's PRINTED LABEL, not a row id -
     the label is what the document says. Turn it back into the live box, so
