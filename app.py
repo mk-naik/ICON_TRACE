@@ -3183,6 +3183,201 @@ def api_invoice_cancel_real(invoice_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/indent/line/<int:line_id>/cancel", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_sync_guard
+def api_indent_line_cancel(line_id):
+    """Cancel ONE line of a multi-item indent, leaving the others live. Same
+    refusal as the whole-indent cancel, scoped to this line: refuse if any
+    serial in this line's allocations has left 'planned'. When the last live
+    line goes, the indent is effectively cancelled (its list rows are gone)."""
+    d = request.get_json(force=True) or {}
+    reason = (d.get("reason") or "").strip() or "indent line cancelled"
+    with store.conn() as (cx, cur):
+        err = _require_stepup(cur, d)
+        if err:
+            return err
+        line = store.one(cur, "SELECT * FROM indent_line WHERE indent_line_id=%s",
+                         (line_id,))
+        if not line:
+            return jsonify({"ok": False, "why": "No such indent line."}), 404
+        if line["status"] == "cancelled":
+            return jsonify({"ok": False, "why": "That line is already cancelled."}), 400
+        started = store.one(cur,
+            "SELECT COUNT(*) AS n FROM serial s "
+            "JOIN allocation a ON a.alloc_id = s.alloc_id "
+            "WHERE a.indent_line_id=%s AND s.state<>'planned'", (line_id,))["n"]
+        if started:
+            return jsonify({"ok": False, "why":
+                "%d module(s) allocated against this line have already been "
+                "through production. It cannot be cancelled." % started}), 400
+        cur.execute(
+            "UPDATE indent_line SET status='cancelled', cancelled_reason=%s, "
+            "cancelled_by=%s, cancelled_at=%s WHERE indent_line_id=%s",
+            (reason, actor(), clock.now().isoformat(timespec="seconds"), line_id))
+        ino = store.one(cur, "SELECT indent_no FROM indent i "
+                             "JOIN indent_line il ON il.indent_id=i.indent_id "
+                             "WHERE il.indent_line_id=%s", (line_id,))
+        db.audit(cur, actor(), "indent_line.cancel", "indent_line", line_id,
+                 {"indent_no": (ino or {}).get("indent_no"),
+                  "line_no": line["line_no"], "reason": reason})
+    return jsonify({"ok": True})
+
+
+def _resolve_serial_range(cur, start_serial, end_serial):
+    """The serials from start..end within ONE printed batch - the same
+    same-run rule Production Entry uses (everything before the running number
+    names the run; a running number repeats across runs). Returns (rows, None)
+    or (None, (json, status))."""
+    import icon_challan_import as CI
+    ds, de = CI.decompose(start_serial), CI.decompose(end_serial)
+    if not ds.get("ok"):
+        return None, (jsonify({"ok": False, "why":
+            "Start serial %s - %s." % (start_serial, ds.get("why"))}), 400)
+    if not de.get("ok"):
+        return None, (jsonify({"ok": False, "why":
+            "End serial %s - %s." % (end_serial, de.get("why"))}), 400)
+    seq_len = 4 if ds["format_version"] == 2 else 3
+    batch = start_serial[:-seq_len]
+    if len(end_serial) != len(start_serial) or end_serial[:-seq_len] != batch:
+        return None, (jsonify({"ok": False, "why":
+            "Start and end serial were not printed in the same batch. Cancel "
+            "each printed batch as its own range."}), 400)
+    sr = store.one(cur, "SELECT sequence FROM serial WHERE serial=%s AND "
+                        "build_instance=1", (start_serial,))
+    er = store.one(cur, "SELECT sequence FROM serial WHERE serial=%s AND "
+                        "build_instance=1", (end_serial,))
+    if not sr:
+        return None, (jsonify({"ok": False, "why":
+            "Start serial %s not found." % start_serial}), 400)
+    if not er:
+        return None, (jsonify({"ok": False, "why":
+            "End serial %s not found." % end_serial}), 400)
+    if sr["sequence"] > er["sequence"]:
+        return None, (jsonify({"ok": False, "why":
+            "Start serial is after end serial."}), 400)
+    rows = store.rows(cur,
+        "SELECT * FROM serial WHERE sequence>=%s AND sequence<=%s AND "
+        "build_instance=1 AND length(serial)=%s AND substr(serial,1,%s)=%s "
+        "ORDER BY sequence",
+        (sr["sequence"], er["sequence"], len(start_serial), len(batch), batch))
+    return rows, None
+
+
+def _cancel_targets(cur, d):
+    """A single serial, or a start..end range - shared by the serial and FQC
+    cancels. Returns (rows, None) or (None, error)."""
+    single = (d.get("serial") or "").strip()
+    start = (d.get("start_serial") or "").strip()
+    end = (d.get("end_serial") or "").strip()
+    if single:
+        row = store.one(cur, "SELECT * FROM serial WHERE serial=%s AND "
+                             "build_instance=1", (single,))
+        if not row:
+            return None, (jsonify({"ok": False, "why":
+                "Serial %s not found." % single}), 404)
+        return [row], None
+    if start and end:
+        return _resolve_serial_range(cur, start, end)
+    if start and not end:
+        row = store.one(cur, "SELECT * FROM serial WHERE serial=%s AND "
+                             "build_instance=1", (start,))
+        if not row:
+            return None, (jsonify({"ok": False, "why":
+                "Serial %s not found." % start}), 404)
+        return [row], None
+    return None, (jsonify({"ok": False, "why":
+        "Give a serial, or a start and end serial."}), 400)
+
+
+@app.route("/api/serials/cancel", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_sync_guard
+def api_serials_cancel():
+    """Cancel a single serial or a printed range. A serial can be cancelled
+    while it is still 'planned' or 'produced'; once FQC has graded/rejected/
+    held it, or it is packed or dispatched, it cannot (the line has acted on
+    it - use the FQC cancel, a hold, or a challan cancel as appropriate).
+    Cancelling sets state='cancelled'; all-or-nothing over a range."""
+    d = request.get_json(force=True) or {}
+    reason = (d.get("reason") or "").strip() or "serial cancelled"
+    with store.conn() as (cx, cur):
+        err = _require_stepup(cur, d)
+        if err:
+            return err
+        rows, rerr = _cancel_targets(cur, d)
+        if rerr:
+            return rerr
+        blocked = [r["serial"] for r in rows
+                   if r["state"] not in ("planned", "produced", "cancelled")]
+        if blocked:
+            return jsonify({"ok": False, "why":
+                "%d serial(s) have gone past production (e.g. %s) and cannot be "
+                "cancelled." % (len(blocked), blocked[0])}), 400
+        targets = [r["serial"] for r in rows if r["state"] != "cancelled"]
+        for s in targets:
+            db.set_serial(cur, s, state="cancelled")
+        db.audit(cur, actor(), "serial.cancel", "serial",
+                 targets[0] if targets else None,
+                 {"count": len(targets), "reason": reason,
+                  "range": None if len(targets) <= 1 else
+                  "%s..%s" % (rows[0]["serial"], rows[-1]["serial"])})
+    return jsonify({"ok": True, "cancelled": len(targets)})
+
+
+@app.route("/api/fqc/cancel", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_sync_guard
+def api_fqc_cancel():
+    """Cancel the standing FQC grade of a serial or a printed range - distinct
+    from re-grading (which supersedes). Refused once the module is packed or
+    dispatched (something downstream relied on the grade). On success the FQC
+    record is marked cancelled and the serial reverts to 'produced' so it can
+    be graded again. All-or-nothing over a range; serials with no live grade
+    are skipped."""
+    d = request.get_json(force=True) or {}
+    reason = (d.get("reason") or "").strip() or "FQC grade cancelled"
+    with store.conn() as (cx, cur):
+        err = _require_stepup(cur, d)
+        if err:
+            return err
+        rows, rerr = _cancel_targets(cur, d)
+        if rerr:
+            return rerr
+        blocked = [r["serial"] for r in rows
+                   if r["state"] in ("packed", "dispatched")]
+        if blocked:
+            return jsonify({"ok": False, "why":
+                "%d serial(s) are packed or dispatched (e.g. %s); their FQC "
+                "grade cannot be cancelled." % (len(blocked), blocked[0])}), 400
+        done = 0
+        for r in rows:
+            fq = store.one(cur, "SELECT fqc_id FROM fqc_record WHERE serial=%s "
+                                "AND superseded_by IS NULL AND "
+                                "COALESCE(status,'active')<>'cancelled'",
+                           (r["serial"],))
+            if not fq:
+                continue                       # nothing standing to cancel
+            cur.execute(
+                "UPDATE fqc_record SET status='cancelled', cancelled_reason=%s, "
+                "cancelled_by=%s, cancelled_at=%s WHERE fqc_id=%s",
+                (reason, actor(), clock.now().isoformat(timespec="seconds"),
+                 fq["fqc_id"]))
+            # the grade is void, so the module is no longer judged
+            if r["state"] in ("graded", "rejected", "hold"):
+                db.set_serial(cur, r["serial"], state="produced")
+            done += 1
+        if not done:
+            return jsonify({"ok": False, "why":
+                "No live FQC grade to cancel on that serial/range."}), 400
+        db.audit(cur, actor(), "fqc.cancel", "serial",
+                 rows[0]["serial"] if rows else None,
+                 {"count": done, "reason": reason,
+                  "range": None if len(rows) <= 1 else
+                  "%s..%s" % (rows[0]["serial"], rows[-1]["serial"])})
+    return jsonify({"ok": True, "cancelled": done})
+
+
 # Round 34: the Cancel document screen resolves the number a person actually
 # knows (an indent no, a challan no, a gate pass no, an invoice no) to the
 # internal id the cancel endpoints take, and reports the document's current
@@ -3195,6 +3390,7 @@ _CANCEL_LOOKUP = {
     #   challan has NO stored number column - it is rendered from date+seq+suffix,
     #   so it is matched specially below, then by numeric id.
     "indent":         ("indent", "indent_id", "indent_no", "/api/indent/%s/cancel"),
+    "indent_line":    ("indent_line", "indent_line_id", None, "/api/indent/line/%s/cancel"),
     "challan":        ("challan", "challan_id", None, "/api/challan/%s/cancel"),
     "gatepass":       ("gatepass", "gp_id", "gp_no", "/api/gatepass/%s/cancel"),
     "invoice":        ("invoice", "invoice_id", "invoice_no", "/api/invoice/%s/cancel"),
@@ -3239,6 +3435,15 @@ def api_cancel_lookup():
                             (ref,))
         if not row and typ == "challan":
             row = _resolve_challan_by_number(cur, ref)
+        if not row and typ == "indent_line" and "#" in ref:
+            # "indent_no#line_no" -> the line (indent_no itself contains '/',
+            # so '#' is the separator); a bare line id also works, below.
+            head, _, tail = ref.rpartition("#")
+            if tail.strip().isdigit():
+                row = store.one(cur,
+                    "SELECT il.* FROM indent_line il JOIN indent i "
+                    "ON i.indent_id=il.indent_id WHERE i.indent_no=%s AND "
+                    "il.line_no=%s", (head.strip(), int(tail.strip())))
         if not row and ref.isdigit():
             row = store.one(cur, "SELECT * FROM %s WHERE %s=%%s" % (table, pk),
                             (int(ref),))

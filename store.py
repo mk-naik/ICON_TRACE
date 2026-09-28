@@ -288,8 +288,11 @@ def _migrate(cx, text):
     # challan already carries - so cancel is one shape, not one per type.
     # Existing rows default to 'active'; a NOT NULL DEFAULT is what lets
     # ADD COLUMN backfill them in place (SQLite requires the default).
+    # indent_line (Round 34 follow-up: cancel one line of a multi-item indent)
+    # and fqc_record (cancel an FQC grade) carry the same four. serial is NOT
+    # here - it has its own state machine, and a cancel sets state='cancelled'.
     for _cancel_tbl in ("indent", "gatepass", "production_entry",
-                        "loss_event", "invoice"):
+                        "loss_event", "invoice", "indent_line", "fqc_record"):
         if not cols(_cancel_tbl):
             continue
         for name, decl in (("status", "TEXT NOT NULL DEFAULT 'active'"),

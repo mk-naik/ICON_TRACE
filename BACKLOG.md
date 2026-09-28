@@ -4806,3 +4806,60 @@ Existing suites unchanged: test_challan (55), test_gatepass (11), test_loading
 (14), test_screen_write_gates (9), test_review (8), test_indent (7),
 test_production (12), test_role_gates (11), test_screen_perms (20),
 test_inner_role_checks (7), and the auth/UI harness suites.
+
+### Round 34 follow-up (found in review)
+
+**1. A cancelled document must actually leave the workflow.** The first pass
+flipped `status` but nothing downstream honoured it - a cancelled indent still
+showed in the Indents list (as OPEN), kept its Edit button, and an edit saved.
+Fixed for every type, the challan way (absent from the working list, kept for
+search/history):
+  - working lists now exclude cancelled rows: indent (db.indent_progress),
+    gate pass (gatepasses_list), production entry, loss event, invoice (and the
+    challan invoice picker);
+  - edit/mutate paths refuse a cancelled document: indent edit (PUT), gate pass
+    edit (PUT), loss close, and an induced loss stop may not name a cancelled
+    primary (challan edit already refused a non-issued challan).
+
+**2. The screen took an internal id, not the number a person knows.** Entering an
+indent NUMBER (IS2I/26/0003) built /api/indent/IS2I/26/0003/cancel, which the
+indent GET/PUT route's <path:indent_no> swallowed and rejected as 405 HTML ->
+"The server did not answer." Added /api/cancel/lookup (Admin/SA) resolving the
+real number - indent no, gate pass no, invoice no, a rendered challan no
+(IS-09.09.2026/4242; challan has no stored number column, matched by rendering
+each), indent-no#line-no, or a bare id - to the internal id + current state.
+The screen resolves on the way in and resolves-then-cancels on submit.
+
+**3. New granularities (approved by Mukesh, this round):**
+  - **Indent LINE cancel** - `/api/indent/line/<id>/cancel`. Cancels one line of
+    a multi-item indent, the others stay live; refused if that line's allocation
+    has left 'planned'. indent_line gains the four cancel columns; a cancelled
+    line leaves the list (db.indent_progress subquery); last line cancelled =
+    indent effectively gone.
+  - **Serial cancel (single + printed range)** - `/api/serials/cancel`. Sets
+    state='cancelled' while a serial is still planned/produced; refused once FQC
+    has judged it or it's packed/dispatched. Range uses Production Entry's
+    same-printed-batch rule; all-or-nothing.
+  - **FQC grade cancel (single + range)** - `/api/fqc/cancel`. Voids the standing
+    (non-superseded) FQC record and reverts the serial to 'produced' so it can be
+    graded again; refused once packed/dispatched. Distinct from re-grading, which
+    supersedes. fqc_record gains the four cancel columns.
+  All three are Admin/Super Admin + the shared TOTP step-up, and appear in the
+  Cancel document screen (serial/range go straight to the serial endpoints; the
+  line resolves by indent-no#line-no).
+
+**Refusal rules for the new granularities - flagged for Mukesh** (same as their
+whole-document parents): indent line = its allocation still all-'planned';
+serial = still planned/produced; FQC grade = module not yet packed/dispatched.
+
+**Still deferred:** hierarchical cancellation (request/approve, per-role,
+escalation, second approver). Downstream aggregate filtering on 'cancelled' where
+a list does not already exclude it (e.g. a cancelled loss event dropping out of
+OEE) beyond the working lists fixed above.
+
+Tests: test_cancel_documents.py extended - a cancelled doc leaves every list and
+its edit/close is refused; the lookup resolves numbers/rendered-challan/ids
+(unknown->404, non-admin->403); indent line, serial (single+range) and FQC
+(single+range) cancel with their refusals and the serial-state reversions. 12
+passed. test_cancel_screen.py extended - cancel by real number, and the indent
+line / serial / serial range / FQC grade all through the screen.

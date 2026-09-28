@@ -7824,7 +7824,32 @@ function wireFqcAnomalies() {
     allocation: { label: 'Allocation batch', method: 'DELETE',
       url: function (id) { return '/api/allocation/' + id; },
       effect: 'The allocation is withdrawn and its planned serials released. ' +
-              'Allowed only while every serial in it is still planned.' }
+              'Allowed only while every serial in it is still planned.' },
+    /* Round 34 follow-up. indent_line resolves like a document (by
+       "indent no#line no", e.g. IS2I/26/0001#2, or a line id). serial/fqc take
+       the serial(s) DIRECTLY - no id to resolve - and the *_range ones show a
+       second field and post a start/end range. */
+    indent_line: { label: 'Indent line', mode: 'doc',
+      hint: 'indent no#line no, e.g. IS2I/26/0001#2',
+      effect: 'This one line is voided; the indent’s other lines stay live. ' +
+              'Allowed only while nothing allocated against this line has gone ' +
+              'into production.' },
+    serial: { label: 'Serial (one)', mode: 'serial', endpoint: 'serials/cancel',
+      hint: 'the serial',
+      effect: 'The serial is voided (state → cancelled). Allowed only while ' +
+              'it is still planned or produced - not once FQC has judged it.' },
+    serial_range: { label: 'Serial range', mode: 'range', endpoint: 'serials/cancel',
+      hint: 'start serial', hint2: 'end serial',
+      effect: 'Every serial in the printed range is voided. Allowed only while ' +
+              'all are still planned or produced. All-or-nothing.' },
+    fqc: { label: 'FQC grade (one)', mode: 'serial', endpoint: 'fqc/cancel',
+      hint: 'the serial',
+      effect: 'The serial’s standing FQC grade is voided and it reverts to ' +
+              'produced so it can be graded again. Not once packed or dispatched.' },
+    fqc_range: { label: 'FQC grade range', mode: 'range', endpoint: 'fqc/cancel',
+      hint: 'start serial', hint2: 'end serial',
+      effect: 'The standing FQC grade of every serial in the range is voided and ' +
+              'each reverts to produced. Not once any is packed or dispatched.' }
   };
 
   function cancelDocSetup() {
@@ -7844,9 +7869,11 @@ function wireFqcAnomalies() {
         '<div class="grid g2">' +
           '<div class="fld req"><label>Document type</label>' +
             '<select id="cdType">' + opts + '</select></div>' +
-          '<div class="fld req"><label>Document</label>' +
-            '<input class="mono" id="cdId" placeholder="its number, e.g. IS2I/26/0003 (or its id)"></div>' +
+          '<div class="fld req"><label id="cdLbl1">Document</label>' +
+            '<input class="mono" id="cdId"></div>' +
         '</div>' +
+        '<div class="fld req" id="cdField2" style="display:none">' +
+          '<label id="cdLbl2">End</label><input class="mono" id="cdId2"></div>' +
         '<div class="note n-info" id="cdEffect" style="margin:4px 0 8px"></div>' +
         '<div id="cdState" style="margin:0 0 12px"></div>' +
         '<div class="grid g2">' +
@@ -7862,28 +7889,38 @@ function wireFqcAnomalies() {
 
     var typeSel = document.getElementById('cdType');
     var refEl = document.getElementById('cdId');
+    var ref2El = document.getElementById('cdId2');
+    var field2 = document.getElementById('cdField2');
+    var lbl1 = document.getElementById('cdLbl1');
+    var lbl2 = document.getElementById('cdLbl2');
     var effect = document.getElementById('cdEffect');
     var state = document.getElementById('cdState');
     var result = document.getElementById('cdResult');
 
-    function showEffect() {
-      var t = CANCEL_TYPES[typeSel.value];
-      effect.innerHTML = '<span>ℹ</span><span>' + fqcEsc(t.effect) + '</span>';
-    }
-    typeSel.addEventListener('change', function () {
-      showEffect(); state.innerHTML = ''; result.innerHTML = '';
-    });
-    showEffect();
+    function modeOf() { return CANCEL_TYPES[typeSel.value].mode || 'doc'; }
 
-    /* Resolve the number a person actually knows to its internal id + current
-       state (server-side, /api/cancel/lookup), so the field takes an indent no
-       like IS2I/26/0003 rather than a row id nobody sees. Returns a promise of
-       {ok, id, status, cancel_url, method} or the refusal. */
+    function applyType() {
+      var t = CANCEL_TYPES[typeSel.value];
+      var m = t.mode || 'doc';
+      effect.innerHTML = '<span>ℹ</span><span>' + fqcEsc(t.effect) + '</span>';
+      lbl1.textContent = (m === 'range') ? 'From' : 'Document';
+      refEl.placeholder = t.hint || 'its number, e.g. IS2I/26/0003 (or its id)';
+      field2.style.display = (m === 'range') ? '' : 'none';
+      lbl2.textContent = 'To';
+      ref2El.placeholder = t.hint2 || 'end';
+      state.innerHTML = ''; result.innerHTML = '';
+    }
+    typeSel.addEventListener('change', applyType);
+    applyType();
+
+    /* Only a 'doc' type has a number to resolve to an id + a live state; a
+       serial or range is acted on directly. */
     function resolve(ref) {
       return api('cancel/lookup?type=' + encodeURIComponent(typeSel.value) +
                  '&ref=' + encodeURIComponent(ref));
     }
     function showState() {
+      if (modeOf() !== 'doc') { state.innerHTML = ''; return; }
       var ref = (refEl.value || '').trim();
       state.innerHTML = ''; result.innerHTML = '';
       if (!ref) return;
@@ -7895,24 +7932,63 @@ function wireFqcAnomalies() {
         } else {
           state.innerHTML = note('n-bad', fqcEsc((d && d.why) || 'Not found.'));
         }
-      }).catch(function () { /* leave it; the Cancel click reports properly */ });
+      }).catch(function () { /* the Cancel click reports properly */ });
     }
     refEl.addEventListener('change', showState);
     refEl.addEventListener('blur', showState);
 
+    function done(btn, d, label) {
+      btn.disabled = false;
+      if (d && d.ok) {
+        var n = (typeof d.cancelled === 'number' && d.cancelled > 1)
+                ? (d.cancelled + ' cancelled. ') : (label + ' cancelled. ');
+        result.innerHTML = note('n-info', '✓ ' + n +
+          fqcEsc(CANCEL_TYPES[typeSel.value].effect));
+        document.getElementById('cdTotp').value = '';
+        document.getElementById('cdReason').value = '';
+        state.innerHTML = '';
+      } else {
+        /* the server's exact reason: a wrong code (403) and a wrong-state
+           document (400) read differently on purpose - the caller is an
+           authenticated Admin, and only they see the specific reason. */
+        result.innerHTML = note('n-bad', fqcEsc((d && d.why) || 'That did not work.'));
+      }
+    }
+
     document.getElementById('cdBtn').addEventListener('click', function () {
       var t = CANCEL_TYPES[typeSel.value];
+      var m = t.mode || 'doc';
       var ref = (refEl.value || '').trim();
+      var ref2 = (ref2El.value || '').trim();
       var reason = (document.getElementById('cdReason').value || '').trim();
       var totp = (document.getElementById('cdTotp').value || '').trim();
       result.innerHTML = '';
-      if (!ref) { result.innerHTML = note('n-bad', 'Enter the document.'); return; }
+      if (!ref) { result.innerHTML = note('n-bad', 'Enter the ' +
+        (m === 'range' ? 'start serial.' : 'document.')); return; }
+      if (m === 'range' && !ref2) { result.innerHTML = note('n-bad', 'Enter the end serial.'); return; }
       if (!reason) { result.innerHTML = note('n-bad', 'A reason is required.'); return; }
       if (!totp) { result.innerHTML = note('n-bad', 'Enter your authenticator code.'); return; }
       var btn = document.getElementById('cdBtn');
       btn.disabled = true;
-      /* resolve first, then cancel the exact id the server gave back - so the
-         number is turned into an id on the server, never smuggled into a URL. */
+
+      if (m === 'serial') {
+        api(t.endpoint, { method: 'POST', body: JSON.stringify(
+          { serial: ref, reason: reason, totp_code: totp }) })
+          .then(function (d) { done(btn, d, t.label + ' ' + ref); })
+          .catch(function () { btn.disabled = false;
+            result.innerHTML = note('n-bad', 'The server did not answer.'); });
+        return;
+      }
+      if (m === 'range') {
+        api(t.endpoint, { method: 'POST', body: JSON.stringify(
+          { start_serial: ref, end_serial: ref2, reason: reason, totp_code: totp }) })
+          .then(function (d) { done(btn, d, t.label + ' ' + ref + '..' + ref2); })
+          .catch(function () { btn.disabled = false;
+            result.innerHTML = note('n-bad', 'The server did not answer.'); });
+        return;
+      }
+      /* doc: resolve the number to its id on the server, then cancel that id -
+         so the reference is never smuggled into a URL. */
       resolve(ref).then(function (r) {
         if (!r || !r.ok) {
           btn.disabled = false;
@@ -7921,21 +7997,7 @@ function wireFqcAnomalies() {
         }
         return api(r.cancel_url.replace(/^\/api\//, ''),
             { method: r.method, body: JSON.stringify({ reason: reason, totp_code: totp }) })
-          .then(function (d) {
-            btn.disabled = false;
-            if (d && d.ok) {
-              result.innerHTML = note('n-info', '✓ ' + t.label + ' ' + fqcEsc(ref) +
-                ' cancelled. ' + fqcEsc(t.effect));
-              document.getElementById('cdTotp').value = '';
-              document.getElementById('cdReason').value = '';
-              state.innerHTML = '';
-            } else {
-              /* the server's exact reason: a wrong code (403) and a wrong-state
-                 document (400) read differently on purpose - the caller is an
-                 authenticated Admin, and only they see the specific reason. */
-              result.innerHTML = note('n-bad', fqcEsc((d && d.why) || 'That did not work.'));
-            }
-          });
+          .then(function (d) { done(btn, d, t.label + ' ' + ref); });
       }).catch(function () {
         btn.disabled = false;
         result.innerHTML = note('n-bad', 'The server did not answer.');

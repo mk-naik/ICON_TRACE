@@ -599,8 +599,12 @@ def indent_progress(cur, indent_no=None):
     else:
         # Round 34: a cancelled indent leaves the working list, the same way a
         # cancelled challan does - it stays findable by number for search and
-        # history, but it is not offered for work or edit.
-        sql += " WHERE status<>'cancelled'"
+        # history, but it is not offered for work or edit. A cancelled LINE of a
+        # still-live indent leaves the list too (the view exposes the indent's
+        # status; the line's is checked by subquery so the view needs no change).
+        sql += (" WHERE status<>'cancelled' AND (indent_line_id IS NULL "
+                "OR indent_line_id NOT IN (SELECT indent_line_id FROM "
+                "indent_line WHERE status='cancelled'))")
     cur.execute(sql + " ORDER BY indent_date DESC, line_no", args)
     return cur.fetchall()
 

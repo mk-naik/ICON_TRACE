@@ -156,6 +156,50 @@ def run():
             if kind == "invoice":
                 pg.screenshot(path=os.path.join(SHOTS, "02_success_invoice.png"))
 
+        # the follow-up types: an indent LINE, a serial, a serial range, an FQC
+        # grade - through the same screen (serial/range go straight to the
+        # serial endpoints; the line resolves by indent-no#line-no).
+        newtypes = {}
+        with store.conn() as (cx, cur):
+            iid = store.insert(cur, "indent", {"indent_no": "IS2I/26/0500",
+                "indent_date": "2026-09-09", "customer": "STOCK", "created_by": "t"})
+            store.insert(cur, "indent_line", {"indent_id": iid, "line_no": 1,
+                "item_description": "X", "model": MODEL, "wattage": WATT,
+                "qty": 10, "dcr": "NDCR"})
+            store.insert(cur, "indent_line", {"indent_id": iid, "line_no": 2,
+                "item_description": "X", "model": MODEL, "wattage": WATT,
+                "qty": 20, "dcr": "NDCR"})
+            for i in range(4):
+                store.insert(cur, "serial", {"serial": "ICON630G120212%04d" % (7000 + i),
+                    "build_instance": 1, "model": MODEL, "wattage": WATT,
+                    "format_version": 2, "date_produced": "2026-09-09", "shift": 1,
+                    "sequence": 7000 + i, "state": "planned"})
+            store.insert(cur, "serial", {"serial": "ICON630G1202127100",
+                "build_instance": 1, "model": MODEL, "wattage": WATT,
+                "format_version": 2, "date_produced": "2026-09-09", "shift": 1,
+                "sequence": 7100, "state": "graded"})
+            store.insert(cur, "fqc_record", {"serial": "ICON630G1202127100",
+                "outcome": "pass", "grade": "A", "decided_by": "x",
+                "at": "2026-09-09T10:00:00", "mode": "manual"})
+
+        def screen_cancel(type_value, ref, ref2=None, reason="admin fix"):
+            pg.select_option("#cdType", type_value)
+            pg.fill("#cdId", ref)
+            if ref2 is not None:
+                pg.fill("#cdId2", ref2)
+            pg.fill("#cdReason", reason)
+            pg.fill("#cdTotp", fresh_code(pg))
+            pg.click("#cdBtn")
+            pg.wait_for_selector("#cdResult .note.n-info", timeout=10000)
+            return " ".join(pg.inner_text("#cdResult").split())
+
+        newtypes["indent_line"] = screen_cancel("indent_line", "IS2I/26/0500#1")
+        newtypes["serial"] = screen_cancel("serial", "ICON630G1202127000")
+        newtypes["serial_range"] = screen_cancel("serial_range",
+            "ICON630G1202127001", "ICON630G1202127003")
+        newtypes["fqc"] = screen_cancel("fqc", "ICON630G1202127100")
+        pg.screenshot(path=os.path.join(SHOTS, "05_serial_and_fqc.png"))
+
         # a refusal, shown with the server's exact reason (a blocked invoice)
         blocked = seed("invoice", blocked=True)
         ui_cancel(pg, "invoice", blocked)
@@ -175,19 +219,23 @@ def run():
         pg.screenshot(path=os.path.join(SHOTS, "04_wrong_code.png"))
 
         ctx.close()
-        return results, refusal, wrongcode, errs, by_number
+        return results, refusal, wrongcode, errs, by_number, newtypes
 
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     passed = failed = 0
     try:
-        results, refusal, wrongcode, errs, by_number = run()
+        results, refusal, wrongcode, errs, by_number, newtypes = run()
         checks = []
         checks.append(("cancel by the document's real number (IS2I/26/0099)",
                        "cancelled" in by_number.lower()))
         checks.append(("all 7 types cancelled via the screen",
                        len(results) == 7 and all("cancelled" in t.lower() for _, t in results)))
+        checks.append(("indent line, serial, serial range and FQC grade all "
+                       "cancelled via the screen",
+                       all("cancelled" in (newtypes.get(k) or "").lower()
+                           for k in ("indent_line", "serial", "serial_range", "fqc"))))
         checks.append(("a blocked invoice refused with its reason on screen",
                        "reconcile against this invoice" in refusal.lower()))
         checks.append(("a wrong code refused, and reads differently from a block",

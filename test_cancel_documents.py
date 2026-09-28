@@ -77,6 +77,35 @@ def code(secret):
     return AUTH.totp_code(secret)
 
 
+def fresh_code(login_id, secret):
+    """A code the step-up will accept even seconds after the last one - the
+    replay guard keys on the TOTP step, so a test that cancels twice in one 30s
+    window clears totp_last_step to stand in for the next rolling code."""
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE app_user SET totp_last_step=0 WHERE login_id=%s",
+                    (login_id,))
+    return AUTH.totp_code(secret)
+
+
+def _seed_graded_serial(cur, seq, state="graded"):
+    sn = "ICON630G120212%04d" % seq
+    store.insert(cur, "serial", {"serial": sn, "build_instance": 1,
+        "model": MODEL, "wattage": WATT, "format_version": 2,
+        "date_produced": "2026-09-09", "shift": 1, "sequence": seq, "state": state})
+    store.insert(cur, "fqc_record", {"serial": sn, "outcome": "pass",
+        "grade": "A", "decided_by": "x", "at": "2026-09-09T10:00:00",
+        "mode": "manual"})
+    return sn
+
+
+def _seed_plain_serial(cur, seq, state="planned"):
+    sn = "ICON630G120212%04d" % seq
+    store.insert(cur, "serial", {"serial": sn, "build_instance": 1,
+        "model": MODEL, "wattage": WATT, "format_version": 2,
+        "date_produced": "2026-09-09", "shift": 1, "sequence": seq, "state": state})
+    return sn
+
+
 def cancel(client, spec, **body):
     """POST /cancel for every type except allocation, which is a DELETE on the
     allocation itself (its withdrawal predates this round and keeps its verb)."""
@@ -442,6 +471,110 @@ def t_cancelled_leaves_lists_and_uneditable():
     assert not any(e["entry_id"] == pe for e in admin.get("/api/prodentries").get_json()["entries"]), \
         "cancelled production entry still listed"
     print("      cancelled docs gone from every working list; edits/close refused")
+
+
+@test("indent LINE cancel: one line of a multi-item indent goes, the others "
+     "stay live; refused if that line's allocation has left planned; role+code")
+def t_indent_line_cancel():
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        iid = store.insert(cur, "indent", {"indent_no": "IS2I/26/0001",
+            "indent_date": "2026-09-09", "customer": "ICON STOCK", "created_by": "t"})
+        l1 = store.insert(cur, "indent_line", {"indent_id": iid, "line_no": 1,
+            "item_description": "X", "model": MODEL, "wattage": WATT,
+            "qty": 223, "dcr": "NDCR"})
+        l2 = store.insert(cur, "indent_line", {"indent_id": iid, "line_no": 2,
+            "item_description": "X", "model": MODEL, "wattage": WATT,
+            "qty": 1137, "dcr": "NDCR"})
+    # wrong role, before the code
+    assert op.post("/api/indent/line/%d/cancel" % l1,
+                   json={"reason": "x", "totp_code": code(secret)}).status_code == 403
+    # cancel line 1
+    r = admin.post("/api/indent/line/%d/cancel" % l1,
+                   json={"reason": "drop item 1", "totp_code": code(secret)})
+    assert r.status_code == 200, r.get_json()
+    lines = sorted(x["line_no"] for x in admin.get("/api/indents").get_json()
+                   if x["indent_no"] == "IS2I/26/0001")
+    assert lines == [2], "line 1 still shows or line 2 vanished: %s" % lines
+    # a line whose allocation has left planned cannot be cancelled
+    with store.conn() as (cx, cur):
+        aid = store.insert(cur, "allocation", {"indent_line_id": l2,
+            "model": MODEL, "wattage": WATT, "date_produced": "2026-09-09",
+            "shift": 1, "qty": 1, "seq_from": 1, "seq_to": 1, "created_by": "t"})
+        store.insert(cur, "serial", {"serial": nserial(), "build_instance": 1,
+            "model": MODEL, "wattage": WATT, "format_version": 2,
+            "date_produced": "2026-09-09", "shift": 1, "sequence": nxt(),
+            "alloc_id": aid, "state": "produced"})
+    r = admin.post("/api/indent/line/%d/cancel" % l2,
+                   json={"reason": "x", "totp_code": fresh_code("sa.cancel", secret)})
+    assert r.status_code == 400 and "through production" in r.get_json()["why"], r.get_json()
+    print("      one line cancelled, the other stays; a started line is refused")
+
+
+@test("serial cancel: a single serial and a printed range go to 'cancelled' "
+     "while planned/produced; refused once graded/packed; wrong code untouched")
+def t_serial_cancel():
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        for i in range(5):
+            _seed_plain_serial(cur, 5100 + i, "planned")
+        graded = _seed_graded_serial(cur, 5200, "graded")
+    def sstate(sn):
+        with store.conn() as (cx, cur):
+            return store.one(cur, "SELECT state FROM serial WHERE serial=%s", (sn,))["state"]
+    # single
+    r = admin.post("/api/serials/cancel", json={"serial": "ICON630G1202125100",
+                   "reason": "mis-keyed", "totp_code": code(secret)})
+    assert r.status_code == 200 and sstate("ICON630G1202125100") == "cancelled", r.get_json()
+    # range 5101..5103
+    r = admin.post("/api/serials/cancel", json={"start_serial": "ICON630G1202125101",
+                   "end_serial": "ICON630G1202125103", "reason": "batch void",
+                   "totp_code": fresh_code("sa.cancel", secret)})
+    assert r.status_code == 200 and r.get_json()["cancelled"] == 3, r.get_json()
+    assert sstate("ICON630G1202125104") == "planned", "an out-of-range serial was touched"
+    # a graded serial is refused, and left untouched
+    r = admin.post("/api/serials/cancel", json={"serial": graded, "reason": "x",
+                   "totp_code": fresh_code("sa.cancel", secret)})
+    assert r.status_code == 400 and "past production" in r.get_json()["why"], r.get_json()
+    assert sstate(graded) == "graded"
+    # wrong code leaves everything
+    r = admin.post("/api/serials/cancel", json={"serial": "ICON630G1202125104",
+                   "reason": "x", "totp_code": "000000"})
+    assert r.status_code == 403 and sstate("ICON630G1202125104") == "planned"
+    print("      serial single + range cancelled; graded refused; wrong code untouched")
+
+
+@test("FQC cancel: voids the standing grade of a serial or range and reverts "
+     "it to produced; refused once packed/dispatched")
+def t_fqc_cancel():
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        for i in range(3):
+            _seed_graded_serial(cur, 5300 + i, "graded")
+        packed = _seed_graded_serial(cur, 5400, "packed")
+    def sstate(sn):
+        with store.conn() as (cx, cur):
+            return store.one(cur, "SELECT state FROM serial WHERE serial=%s", (sn,))["state"]
+    def fqstatus(sn):
+        with store.conn() as (cx, cur):
+            return store.one(cur, "SELECT status FROM fqc_record WHERE serial=%s", (sn,))["status"]
+    # single
+    r = admin.post("/api/fqc/cancel", json={"serial": "ICON630G1202125300",
+                   "reason": "wrong grade", "totp_code": code(secret)})
+    assert r.status_code == 200, r.get_json()
+    assert sstate("ICON630G1202125300") == "produced" and fqstatus("ICON630G1202125300") == "cancelled"
+    # range 5301..5302
+    r = admin.post("/api/fqc/cancel", json={"start_serial": "ICON630G1202125301",
+                   "end_serial": "ICON630G1202125302", "reason": "batch re-check",
+                   "totp_code": fresh_code("sa.cancel", secret)})
+    assert r.status_code == 200 and r.get_json()["cancelled"] == 2, r.get_json()
+    assert sstate("ICON630G1202125301") == "produced"
+    # a packed serial's grade cannot be cancelled
+    r = admin.post("/api/fqc/cancel", json={"serial": packed, "reason": "x",
+                   "totp_code": fresh_code("sa.cancel", secret)})
+    assert r.status_code == 400 and "packed or dispatched" in r.get_json()["why"], r.get_json()
+    assert sstate(packed) == "packed" and fqstatus(packed) != "cancelled"
+    print("      FQC grade voided single + range, serials reverted; packed refused")
 
 
 @test("no code at all is refused (400) - the step-up is not optional")
