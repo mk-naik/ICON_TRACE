@@ -23,6 +23,8 @@ import os, json, datetime, threading
 # the file store.py owns.
 import store as _store
 import icon_clock as clock
+import icon_defects
+import icon_evidence as ev
 
 MODE = "sqlite"
 
@@ -214,6 +216,42 @@ def audit(cur, actor, action, entity, entity_id=None, detail=None):
         "VALUES (%s,%s,%s,%s,%s)",
         (actor, action, entity, str(entity_id) if entity_id else None,
          json.dumps(detail, default=str) if detail else None))
+
+
+def record_revision(cur, actor, entity_type, entity_id, action, before, after):
+    """One row per entity CREATED or EDITED - the full row before (NULL on a
+    create) and after, not a free-form detail blob (dispatch_audit) and not
+    a refetch signal (change_log). Append-only; nothing here is ever
+    updated or deleted.
+
+    `before` and `after` are dicts (a row as store.py hands it back) or
+    None - serialized to JSON here so a caller never has to remember to."""
+    if cur is None:
+        return
+    cur.execute(
+        "INSERT INTO entity_revision (at, actor, entity_type, entity_id, "
+        "action, before, after) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+        (clock.now().isoformat(timespec="seconds"), actor, entity_type,
+         str(entity_id), action,
+         json.dumps(before, default=str) if before is not None else None,
+         json.dumps(after, default=str)))
+
+
+def entity_revisions(cur, entity_type, entity_id, n=200):
+    """Every creation/edit on file for one entity, newest first."""
+    if cur is None:
+        return []
+    rows = _store.rows(cur, "SELECT * FROM entity_revision WHERE "
+                            "entity_type=%s AND entity_id=%s "
+                            "ORDER BY revision_id DESC LIMIT %s",
+                       (entity_type, str(entity_id), n))
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["before"] = json.loads(d["before"]) if d.get("before") else None
+        d["after"] = json.loads(d["after"]) if d.get("after") else None
+        out.append(d)
+    return out
 
 
 def get_invoice_by_id(cur, invoice_id):
@@ -743,6 +781,45 @@ def serials_for(cur, alloc_id=None, state=None, limit=500):
 # FQC
 # ==========================================================================
 
+# Bumped only when the PASS/REJECT rules themselves change - not the code
+# around them. Stage 3 removed the propose/confirm-overrule mechanism: the
+# EL verdict can no longer gate a pass or force a reject, only the SS
+# reading and the wattage floor decide whether a pass is available. A
+# record's rule_version says which ruleset it was judged under, so a later
+# rule change never has to guess which old records it would have judged
+# differently.
+FQC_RULE_VERSION = "3-el-advisory"
+
+
+def defect_code_for_text(cur, text):
+    """What an operator TYPED or PICKED means, as a defect_master code -
+    matched against the code itself or the label, never fuzzy. None when it
+    is not on the list: operators cannot mint new defect names, "Other" is
+    the escape hatch for that."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    r = _store.one(cur, "SELECT code FROM defect_master WHERE code=%s "
+                        "OR label=%s COLLATE NOCASE", (text, text))
+    return r["code"] if r else None
+
+
+def fqc_defects_for(cur, fqc_id, source=None):
+    """The defect codes attached to one record, in the order they were
+    attached (EL first when there is one) - fqc_defect is the master list
+    now, fqc_record.defect is history only."""
+    if cur is None:
+        return []
+    sql = ("SELECT fd.defect_code, fd.source, dm.label FROM fqc_defect fd "
+           "JOIN defect_master dm ON dm.code=fd.defect_code "
+           "WHERE fd.fqc_id=%s")
+    args = [fqc_id]
+    if source:
+        sql += " AND fd.source=%s"; args.append(source)
+    sql += " ORDER BY fd.seq"
+    return _store.rows(cur, sql, args)
+
+
 def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
                defect=None, note=None, supersede=True, update_serial=True,
                build_instance=1, hold=False):
@@ -773,26 +850,62 @@ def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
     packable: state 'hold', no grade, until the reading arrives and agrees
     (see app._reconcile_provisional). The record carries no grade either -
     the grade is what the evidence has not yet confirmed.
+
+    `reason` is accepted and ignored - the override-reason mechanism it
+    served is gone, and the column it used to fill is history only now.
+
+    `defect` is the OPERATOR's defect code(s) - already resolved and
+    validated by the caller (defect_code_for_text), never raw text: a
+    single code, a list of codes, or None. The EL verdict is never taken
+    from here - it is read straight off `evidence` and attached
+    automatically, source='el', whether the module passed or rejected. An
+    operator code equal to the EL's own is not attached twice.
     """
     outcome = (outcome or "").strip().lower()
     if outcome not in ("pass", "reject"):
         raise ValueError("outcome must be 'pass' or 'reject', not %r" % outcome)
     grade = "A" if outcome == "pass" and not hold else None
+
+    el_verdict = (evidence.get("el") or "").strip()
+    el_code = None
+    if el_verdict and el_verdict.lower() not in ev.EL_CLEAN and cur is not None:
+        el_code = icon_defects.FOLDER_MAP.get(icon_defects.normalize(el_verdict))
+
+    op_codes = defect if isinstance(defect, (list, tuple)) else \
+              ([defect] if defect else [])
+    op_codes = [c for c in op_codes if c]
+
     rec = {"serial": serial, "outcome": outcome, "grade": grade, "mode": mode,
            "ss_pmax": evidence.get("pmax"), "ss_state": evidence.get("ss_state"),
            "el_verdict": evidence.get("el"), "el_state": evidence.get("el_state"),
-           "proposed": evidence.get("proposed"),
-           "defect": defect, "reason": reason, "note": note,
+           "defect_el_raw": el_verdict or None,
+           "rule_version": FQC_RULE_VERSION,
+           "note": note,
            "decided_by": decided_by, "build_instance": build_instance,
            "at": clock.now().isoformat(timespec="seconds")}
     if cur is None:
+        rec["defect"] = op_codes[0] if op_codes else None
         _demo["fqc"].append(rec)
     else:
+        r = _store.one(cur, "SELECT MAX(test_seq) AS n FROM fqc_record "
+                            "WHERE serial=%s", (serial,))
+        rec["test_seq"] = (r["n"] or 0) + 1
         cols = list(rec.keys())
         cur.execute("INSERT INTO fqc_record (%s) VALUES (%s)"
                     % (", ".join(cols), ", ".join(["%s"] * len(cols))),
                     list(rec.values()))
         new_id = cur.lastrowid
+        seq = 0
+        if el_code:
+            cur.execute("INSERT INTO fqc_defect (fqc_id, defect_code, source, "
+                       "seq) VALUES (%s,%s,'el',%s)", (new_id, el_code, seq))
+            seq += 1
+        for code in op_codes:
+            if code == el_code:
+                continue      # already attached from the EL, never twice
+            cur.execute("INSERT INTO fqc_defect (fqc_id, defect_code, source, "
+                       "seq) VALUES (%s,%s,'fqc',%s)", (new_id, code, seq))
+            seq += 1
         # A module judged again - retested after a rework, or looked at a
         # second time - has ONE live decision. The earlier one is superseded
         # rather than deleted: it is why the module was treated as it was at
@@ -803,6 +916,8 @@ def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
                         "WHERE serial=%s AND fqc_id<>%s AND superseded_by IS NULL",
                         (new_id, rec["at"], serial, new_id))
         rec["fqc_id"] = new_id
+        record_revision(cur, decided_by, "fqc_record", new_id, "create",
+                        None, rec)
     if update_serial:
         if hold and outcome == "pass":
             set_serial(cur, serial, state="hold", grade=None)
@@ -848,6 +963,71 @@ def create_review_item(cur, item_type, serial, fqc_id=None, new_fqc_id=None,
     return cur.lastrowid
 
 
+def ingest_review_item(cur, item_type, serial, raw_id, source, line=None,
+                       created_by="system"):
+    """One review_item written by a SCAN, not a person - a serial not in
+    master, a shift with no SS reading against an EL image, a lookup nobody
+    decided, a Flash Test Report anomaly. Idempotent: (type, raw_id) is
+    unique, so re-running the same scan over the same underlying row or
+    file writes nothing a second time.
+
+    Returns True if this call actually inserted a row, False if it was
+    already on file - callers use this to count how many were genuinely
+    NEW this pass, not how many the scan looked at.
+    """
+    if cur is None:
+        return False
+    at = clock.now().isoformat(timespec="seconds")
+    cur.execute(
+        "INSERT INTO review_item (type, serial, status, dispatched, "
+        "created_at, created_by, raw_id, source, line, detected_at) "
+        "VALUES (%s,%s,'open',0,%s,%s,%s,%s,%s,%s) "
+        "ON CONFLICT(type, raw_id) DO NOTHING",
+        (item_type, serial, at, created_by, raw_id, source, line, at))
+    return cur.rowcount == 1
+
+
+def ingest_review_item_latest(cur, item_type, serial, source, line=None,
+                              created_by="system"):
+    """Like ingest_review_item(), but one row per (type, serial) for good -
+    raw_id IS the serial, so a module scanned five times before it is
+    planned is five updates to one open item, never five items. Returns
+    'created', 'updated', or None (cur is None).
+
+    Only for a kind where the LATEST scan is what matters and an earlier
+    one is not history worth keeping on its own - not_in_master_unplanned,
+    not the person-raised types, which never call this."""
+    if cur is None:
+        return None
+    # rowcount is 1 either way (INSERT or the DO UPDATE branch), so
+    # created-vs-updated has to be read before the write, not after it.
+    existed = _store.one(cur, "SELECT 1 FROM review_item WHERE type=%s "
+                              "AND raw_id=%s", (item_type, serial))
+    at = clock.now().isoformat(timespec="seconds")
+    cur.execute(
+        "INSERT INTO review_item (type, serial, status, dispatched, "
+        "created_at, created_by, raw_id, source, line, detected_at) "
+        "VALUES (%s,%s,'open',0,%s,%s,%s,%s,%s,%s) "
+        "ON CONFLICT(type, raw_id) DO UPDATE SET "
+        "detected_at=excluded.detected_at, line=excluded.line",
+        (item_type, serial, at, created_by, serial, source, line, at))
+    return "updated" if existed else "created"
+
+
+def review_items_unmatched(cur, types, n=200):
+    """Open ingest-found items whose `serial` may not exist in the serial
+    master at all - not_in_master's whole point - so this reads review_item
+    alone, never joined to serial the way review_items_open() joins every
+    person-raised type."""
+    if cur is None:
+        return []
+    marks = ", ".join(["%s"] * len(types))
+    return _store.rows(cur, "SELECT * FROM review_item WHERE status='open' "
+                            "AND type IN (" + marks + ") "
+                            "ORDER BY review_id DESC LIMIT %s",
+                       list(types) + [n])
+
+
 def review_item_get(cur, review_id):
     if cur is None:
         return None
@@ -886,11 +1066,18 @@ def record_quality(cur, serial, grade, decided_by, note=None):
         # onto the LIVE decision, explicitly. A superseded row is why the
         # module was treated as it was before it came round again, and
         # writing a quality call onto it would rewrite that history.
+        before = _store.one(cur, "SELECT * FROM fqc_record WHERE serial=%s "
+                                 "AND superseded_by IS NULL", (serial,))
         cur.execute(
             "UPDATE fqc_record SET quality_grade=%s, quality_note=%s, "
             "quality_by=%s, quality_at=%s "
             "WHERE serial=%s AND superseded_by IS NULL",
             (grade, note, decided_by, at, serial))
+        if before is not None:
+            after = _store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s",
+                               (before["fqc_id"],))
+            record_revision(cur, decided_by, "fqc_record", before["fqc_id"],
+                            "update", dict(before), dict(after))
     set_serial(cur, serial, state="graded", grade=grade)
     return {"serial": serial, "grade": grade, "quality_by": decided_by,
             "quality_note": note, "quality_at": at}
@@ -975,7 +1162,14 @@ def fqc_recent(cur, n=25, include_superseded=False, filters=None):
             where.append("s.wattage = %s")
             args.append(filters["wattage"])
         if filters.get("defect"):
-            where.append("f.defect = %s")
+            # One table, one predicate (icon_defects.py): matches whether
+            # the code or the label was sent, and whichever source attached
+            # it - EL-detected or operator-added, passed or rejected.
+            where.append("EXISTS (SELECT 1 FROM fqc_defect fd "
+                        "JOIN defect_master dm ON dm.code=fd.defect_code "
+                        "WHERE fd.fqc_id=f.fqc_id "
+                        "AND (fd.defect_code=%s OR dm.label=%s COLLATE NOCASE))")
+            args.append(filters["defect"])
             args.append(filters["defect"])
         if filters.get("result"):
             res = filters["result"].lower()
@@ -991,7 +1185,10 @@ def fqc_recent(cur, n=25, include_superseded=False, filters=None):
     # every one of those graded build 1.
     cur.execute(
         "SELECT f.*, s.model AS model, s.wattage AS wattage, "
-        "s.customer AS customer, s.shift AS pack_shift "
+        "s.customer AS customer, s.shift AS pack_shift, "
+        "(SELECT GROUP_CONCAT(dm.label, ', ') FROM fqc_defect fd "
+        " JOIN defect_master dm ON dm.code=fd.defect_code "
+        " WHERE fd.fqc_id=f.fqc_id ORDER BY fd.seq) AS defects "
         "FROM fqc_record f "
         "LEFT JOIN serial s ON s.serial = f.serial "
         "AND s.build_instance = COALESCE(f.build_instance, 1) "
@@ -1010,6 +1207,49 @@ def fqc_history(cur, serial):
     cur.execute("SELECT * FROM fqc_record WHERE serial=%s ORDER BY fqc_id DESC",
                 (serial,))
     return cur.fetchall()
+
+
+def log_fqc_lookup(cur, serial, actor, line=None):
+    """Every FQC lookup - the one thing an ordinary lookup did that used to
+    be thrown away the moment the response was sent. icon_ingest reads this
+    back to find one looked up, never decided."""
+    if cur is None:
+        return
+    cur.execute("INSERT INTO fqc_lookup_log (serial, at, actor, line) "
+               "VALUES (%s,%s,%s,%s)",
+               (serial, clock.now().isoformat(timespec="seconds"), actor, line))
+
+
+def save_ftr_reading(cur, serial, line, tested_at, reading):
+    """The Sun Simulator reading for a serial not yet in the master -
+    captured now because the live CSV and its archive will not hold this
+    row forever, and a stop-the-line re-test once Incharge finally plans it
+    is not worth it when the module was already tested once. One row per
+    serial: a rescan before it is planned replaces the last reading, never
+    adds to it."""
+    if cur is None:
+        return
+    cur.execute(
+        "INSERT INTO ftr_reading (serial, line, tested_at, reading, recorded_at) "
+        "VALUES (%s,%s,%s,%s,%s) ON CONFLICT(serial) DO UPDATE SET "
+        "line=excluded.line, tested_at=excluded.tested_at, "
+        "reading=excluded.reading, recorded_at=excluded.recorded_at",
+        (serial, line, tested_at, json.dumps(reading, default=str),
+         clock.now().isoformat(timespec="seconds")))
+
+
+def get_ftr_reading(cur, serial):
+    """The saved reading for one serial, or None - read() parses `reading`
+    back from JSON so a caller gets the same dict read_sun_simulator()
+    would have handed it live."""
+    if cur is None:
+        return None
+    r = _store.one(cur, "SELECT * FROM ftr_reading WHERE serial=%s", (serial,))
+    if not r:
+        return None
+    r = dict(r)
+    r["reading"] = json.loads(r["reading"])
+    return r
 
 
 # ==========================================================================
@@ -1263,8 +1503,15 @@ DEFAULT_CONFIG.update({"ss_" + k: v for k, v in _SS_COLS.items()})
 for _ln in ("a", "b"):
     DEFAULT_CONFIG["ss_%s_csv_path" % _ln] = ""
     DEFAULT_CONFIG["el_%s_root" % _ln] = ""
+    # Stage 5: the live CSV is manually cut and pasted to an archive each
+    # shift - there is no safe nightly window to read it in. icon_ingest
+    # watches both, so a row moved between polls is still counted once,
+    # never missed and never double-counted (dedupe is on the tester's own
+    # timestamp, not which file it was read from).
+    DEFAULT_CONFIG["ss_%s_archive_path" % _ln] = ""
     for _k, _v in _SS_COLS.items():
         DEFAULT_CONFIG["ss_%s_%s" % (_ln, _k)] = _v
+DEFAULT_CONFIG["ss_archive_path"] = ""     # Line A's archive, single-source systems
 
 
 def get_config(cur):
@@ -1402,6 +1649,36 @@ def set_cell_efficiencies(cur, values):
         cur.execute("INSERT INTO cell_efficiency (value, seq) VALUES (%s,%s) "
                     "ON CONFLICT(value) DO NOTHING", (v, i))
     return len(values)
+
+
+# ==========================================================================
+# Defect vocabulary - see icon_defects.py for how defect_master and
+# defect_folder_map were built and why. Seeded once by store._seed_defects;
+# these are read-only helpers, not another place that writes the list.
+# ==========================================================================
+
+def defects(cur, active_only=True):
+    """The unified defect list - every code FQC or the EL ingest can match
+    against, whichever vocabulary (el/visual/both) it came from."""
+    sql = "SELECT code, label, source_hint, active FROM defect_master"
+    if active_only:
+        sql += " WHERE active=1"
+    sql += " ORDER BY label"
+    cur.execute(sql)
+    return [dict(r) for r in cur.fetchall()]
+
+
+def defect_code_for_folder(cur, raw_folder_name):
+    """The defect_code an EL folder name means, however it was spelled or
+    spaced - matching is always on this code afterwards, never on the raw
+    folder text. None when the share used a category this table has never
+    seen, which the ingest treats as needing a person, not a guess."""
+    key = icon_defects.normalize(raw_folder_name)
+    if not key or key == "ok":
+        return None
+    r = cur.execute("SELECT defect_code FROM defect_folder_map "
+                    "WHERE folder_key=%s", (key,)).fetchone()
+    return r["defect_code"] if r else None
 
 
 def known_customers(cur):

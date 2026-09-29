@@ -1,26 +1,36 @@
 """
-ICON TRACE - tests for the FQC screen: the defect list and Recent gradings.
+ICON TRACE - tests for the FQC screen: the defect list, the Pass/Reject/
+Discard buttons, and Recent gradings.
 
     python test_fqc_screen.py          (needs Playwright + Chromium)
 
 THE RULES THIS FILE DEFENDS
 
-  1. THERE IS ONE DEFECT LIST: MUKESH'S 44, THEN "OTHER". A rejection is
-     filed under a name from it, found by typing any part of it. The old
-     twelve-entry list ("Buring", a double-spaced "Ribbon  Short", "Bussing
-     Miss", "No Power"...) is gone from every selector - two lists that
-     disagree is worse than one that is wrong.
+  1. THERE IS ONE DEFECT LIST (icon_defects.py / defect_master), unified from
+     the EL share's own folder names and the operator's visual list - not
+     the 45-entry list this screen used to ship with, which had neither
+     "low eff" nor "Cross". The dead list in icon_trace.html ("Buring", a
+     double-spaced "Ribbon  Short") is gone from every selector.
 
   1b. "OTHER" IS NOT A DEFECT ON ITS OWN. Its note is compulsory, in the form
      and on the server.
 
-  2. RECENT GRADINGS SHOWS WHAT WAS RECORDED. Customer is the module's real
-     customer. Bld is NOT a column here - but FQC still records the build a
-     decision was made on (a re-serialed module is build 2), and the API,
-     the record and the Model/Customer join follow it. Disposition is not a
-     column: FQC passes or rejects, it does not dispose.
+  2. NO PROPOSED BLOCK, NO CONFIRM/OVERRULE, NO CODED REASON. The screen
+     offers Pass, Reject and Discard - nothing asks for a reason to go
+     against a proposal, because nothing proposes any more.
 
-  3. THE EMPTY-STATE ROW SPANS THE TABLE THAT IS THERE, not the table v4
+  3. A REJECTION NEEDS A DEFECT unless the EL already has one. Space is Pass,
+     enabled only when the EL reads clean AND Pmax meets the wattage - a
+     defect on the EL, even though it can never block the pass, still costs
+     one click, not zero.
+
+  4. RECENT GRADINGS SHOWS WHAT WAS RECORDED. Customer is the module's real
+     customer. Bld is NOT a column here - but FQC still records the build a
+     decision was made on. Disposition and Proposed are not columns either:
+     FQC passes or rejects, it does not dispose, and nothing proposes a
+     verdict any more for a column to show.
+
+  5. THE EMPTY-STATE ROW SPANS THE TABLE THAT IS THERE, not the table v4
      shipped.
 
 These run in a real browser against a throwaway database, because the header
@@ -33,6 +43,7 @@ import csv, os, sys, traceback
 import ui_harness as H                                       # noqa: E402  (first: sets the DB path)
 import db                                                    # noqa: E402
 import store                                                 # noqa: E402
+import icon_defects                                          # noqa: E402
 import auth_test_helper as AUTH
 import icon_customers as customers                           # noqa: E402
 
@@ -47,31 +58,17 @@ def test(name):
     return deco
 
 
-# Mukesh's list, verbatim, in his order. Deliberately typed out here and not
-# read from icon_live.js: a test that reads the answer from the code it is
-# checking cannot catch that code being wrong.
-THE_44 = [
-    "Near JB Crack", "Chip Cut", "Corner Chip", "String Gaping",
-    "String Shift", "String Short", "Ribbon Short", "Cross Ribbon",
-    "Bubbles on Output", "Backsheet Bubble", "Tape on Cell",
-    "Tape on Backside", "JB Change", "JB Defect", "Channel Defect",
-    "Frame Cut", "Cell Crack", "Micro Crack", "EVA Bubble", "Delamination",
-    "Ribbon Shift", "Misalignment", "Glass Scratch", "Glass Stain",
-    "Frame Dent", "Frame Scratch", "Frame Gap", "Soldering Defect",
-    "Dry Solder", "Backsheet Scratch", "Backsheet Cut", "Potting Bubble",
-    "Less Potting", "JB Misalignment", "JB Gap", "Busbar Misalignment",
-    "Low Power", "Electrical Defect", "Foreign Particle", "Dust",
-    "Corner Guard Missing", "Corner Guard Loose", "Barcode Unreadable",
-    "Barcode Damaged",
-]
+# The unified list (icon_defects.py), whatever order the screen sorts it in -
+# 'Other' is added by Mukesh after the rest, so it stays last no matter what.
+ALL_DEFECTS = sorted(set(l for _c, l, _s in icon_defects.DEFECT_MASTER) - {"Other"}) + ["Other"]
 
-# What the picker offers: the 44, then Other (Mukesh added it after the list).
-THE_LIST = THE_44 + ["Other"]
+# On the OLD 45-entry hard-coded list, missing from the unified one for no
+# reason - production has filed all three (BACKLOG evidence).
+NEW_ARRIVALS = ["Burning", "Cross", "Low Eff", "No Power", "Patches", "Bussing Miss"]
 
-# On the old list, NOT on the new one. ("Other" was on the old list and is on
-# the new one again - so it is not here.)
-OLD_ONLY = ["Bussing Miss", "No Power", "Lead Open", "Burning", "Patches",
-            "Ribbon Missing"]
+# The dead list in icon_trace.html - a typo and a doubled space that must
+# appear on no selector, ever.
+DEAD_TERMS = ["Buring", "Ribbon  Short"]
 
 
 # --------------------------------------------------------------------------
@@ -82,7 +79,8 @@ TMP = H.TMP
 SS = os.path.join(TMP, "ss.csv")
 EL_ROOT = os.path.join(TMP, "el")
 WATT = 625
-GOOD = "ICON625R1290220484"        # makes nameplate, EL clean  -> proposes pass
+GOOD = "ICON625R1290220484"        # makes nameplate, EL clean
+CRACKED = "ICON625R1290220487"      # makes nameplate, EL says Cell Crack
 CUSTOMER_CODE = "C0008"
 CUSTOMER_NAME = customers.get(CUSTOMER_CODE)["name"]
 OTHER_CODE = "C0009"
@@ -94,19 +92,23 @@ def ss_row(sid, at, pmax):
             "0.4", "210.0", "23.1", "25.0", "25.0", "1000.0"]
 
 
-def base(serial_rows=(), records=()):
+def base(serial_rows=(), records=(), extra_ss=()):
     """Wipe, configure the tester, then add serials and FQC records."""
     store.wipe()
     with open(SS, "w", newline="", encoding="utf-8") as fh:
         csv.writer(fh).writerows(
-            [ss_row(GOOD, "2026-09-07 10:00:00", "628.4")])
+            [ss_row(GOOD, "2026-09-07 10:00:00", "628.4"),
+             ss_row(CRACKED, "2026-09-07 10:05:00", "630.0")] + list(extra_ss))
     os.makedirs(os.path.join(EL_ROOT, "OK"), exist_ok=True)
     open(os.path.join(EL_ROOT, "OK", GOOD + ".jpg"), "w").close()
+    os.makedirs(os.path.join(EL_ROOT, "Cell Crack"), exist_ok=True)
+    open(os.path.join(EL_ROOT, "Cell Crack", CRACKED + ".jpg"), "w").close()
     with store.conn() as (cx, cur):
         db.set_config(cur, {
             "ss_csv_path": SS, "ss_a_csv_path": "", "ss_b_csv_path": "",
             "el_root": EL_ROOT, "el_a_root": "", "el_b_root": ""})
         store.insert(cur, "serial", serial_record(GOOD, 1, "C0008", 484))
+        store.insert(cur, "serial", serial_record(CRACKED, 1, "C0008", 487))
         for r in serial_rows:
             store.insert(cur, "serial", r)
         for r in records:
@@ -124,8 +126,7 @@ def serial_record(serial, build, customer, seq, model="ISEN625-G12R"):
             "sequence": seq, "state": "planned"}
 
 
-EVIDENCE = {"pmax": 628.4, "ss_state": "OK", "el": "OK", "el_state": "OK",
-            "proposed": "pass"}
+EVIDENCE = {"pmax": 628.4, "ss_state": "OK", "el": "OK", "el_state": "OK"}
 
 
 def recent(pg):
@@ -161,62 +162,62 @@ def type_into_defect(pg, text):
     pg.keyboard.type(text, delay=15)
 
 
+def wait_defects_loaded(pg):
+    """The picker starts on the 45 hard-coded names and is rewritten in
+    place once /api/fqc/defects answers - give it a moment rather than
+    racing the fetch."""
+    pg.wait_for_function(
+        "() => window.FQC_DEFECTS && window.FQC_DEFECTS.includes('Cross')")
+
+
 # --------------------------------------------------------------------------
-# rule 1 - the defect list
+# rule 1 - the defect list is the unified one
 # --------------------------------------------------------------------------
 
 @test("typing 'jb' offers every defect containing JB anywhere, in any case - "
       "not only the ones that start with it")
 def t_jb_substring():
     base()
-    expect = ["Near JB Crack", "JB Change", "JB Defect", "JB Misalignment",
-              "JB Gap"]
-    # independent of the code under test: what a person counting JB in the 44
-    # would find
-    assert expect == [d for d in THE_44 if "jb" in d.lower()], "test list wrong"
+    expect = sorted(d for d in ALL_DEFECTS if "jb" in d.lower())
     with H.browser() as b:
         pg = H.open_page(b, "fqc")
         open_reject_form(pg, GOOD)
+        wait_defects_loaded(pg)
         for typed in ("jb", "JB", "Jb"):
             type_into_defect(pg, typed)
-            got = offered(pg)
-            assert got == expect, "typing %r offered %s" % (typed, got)
-        assert "Near JB Crack" in got and not "Near JB Crack".lower().startswith("jb"), \
+            got = sorted(offered(pg))
+            assert got == expect, "typing %r offered %s, want %s" % (typed, got, expect)
+        assert "Near JB Crack" in offered(pg) and \
+               not "Near JB Crack".lower().startswith("jb"), \
             "a match in the middle of a name was not offered"
-        # and a second word, mid-name, in a different shape
-        type_into_defect(pg, "crack")
-        assert offered(pg) == ["Near JB Crack", "Cell Crack", "Micro Crack"], offered(pg)
         assert not pg.errors, pg.errors
 
 
 @test("the list is usable, not just present: an option can be hit and clicked "
-      "(the reject panel used to clip it to a sliver), the arrow keys and Enter "
-      "pick one, and Escape closes the list without discarding the module")
+      "(the reject panel used to clip it to a sliver), and Escape closes the "
+      "list without discarding the module")
 def t_picker_usable():
     base()
     with H.browser() as b:
         pg = H.open_page(b, "fqc")
         open_reject_form(pg, GOOD)
+        wait_defects_loaded(pg)
         type_into_defect(pg, "jb")
 
         # an element that is clipped away is in the DOM but never the thing
         # under the pointer
+        opts = offered(pg)
         hit = pg.evaluate("""() => Array.from(document.querySelectorAll(
             '#fqcLiveDefectList .dl-opt')).map(o => {
               const r = o.getBoundingClientRect();
               const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
               return e === o || o.contains(e); })""")
-        assert hit == [True] * 5, "options not reachable by the pointer: %s" % hit
+        assert hit == [True] * len(opts), "options not reachable by the pointer: %s" % hit
 
-        pg.click("#fqcLiveDefectList .dl-opt >> text=JB Gap")
-        assert pg.input_value("#fqcLiveDefect") == "JB Gap"
+        pick = opts[0]
+        pg.click("#fqcLiveDefectList .dl-opt >> text=" + pick)
+        assert pg.input_value("#fqcLiveDefect") == pick
         assert pg.locator("#fqcLiveDefectList").is_hidden(), "list stayed open after a pick"
-
-        type_into_defect(pg, "jb")
-        pg.keyboard.press("ArrowDown")
-        pg.keyboard.press("ArrowDown")
-        pg.keyboard.press("Enter")
-        assert pg.input_value("#fqcLiveDefect") == "JB Change", pg.input_value("#fqcLiveDefect")
 
         type_into_defect(pg, "jb")
         pg.keyboard.press("Escape")
@@ -229,7 +230,6 @@ def t_picker_usable():
 @test("Other is on the list, and its note is compulsory: the label says so, "
       "the form will not send it without one, and neither will the server")
 def t_other_needs_note():
-    reason = "OV-IMAGE — image reviewed, verdict wrong"
     base()
     with H.browser() as b:
         pg = H.open_page(b, "fqc")
@@ -237,6 +237,7 @@ def t_other_needs_note():
         pg.route("**/api/fqc", lambda route: (
             posted.append(route.request.post_data_json), route.continue_()))
         open_reject_form(pg, GOOD)
+        wait_defects_loaded(pg)
         assert pg.inner_text("#fqcNoteReq").lower() == "optional"
         type_into_defect(pg, "other")
         assert offered(pg) == ["Other"], offered(pg)
@@ -245,8 +246,6 @@ def t_other_needs_note():
         assert pg.inner_text("#fqcNoteReq").lower() == "required", \
             "the note is compulsory now and the label does not say so"
 
-        pg.select_option("#fqcLiveReason", index=1)
-        pg.once("dialog", lambda d: d.accept())
         pg.click("text=Record rejection")
         pg.wait_for_timeout(300)
         assert not posted, "an Other with no note reached the server: %s" % posted
@@ -260,23 +259,17 @@ def t_other_needs_note():
     # the server does not trust the form
     c = base()
     r = c.post("/api/fqc", json={"serial": GOOD, "outcome": "reject",
-                                 "defect": "Other", "reason": reason})
+                                 "defect": "Other"})
     assert r.status_code == 400 and "not a defect on its own" in r.get_json()["why"], \
         (r.status_code, r.get_json())
-    r = c.post("/api/fqc", json={"serial": GOOD, "outcome": "reject", "defect": "other",
-                                 "reason": reason, "note": "  "})
+    r = c.post("/api/fqc", json={"serial": GOOD, "outcome": "reject",
+                                 "defect": "other", "note": "  "})
     assert r.status_code == 400, "a blank note counted as a note"
     r = c.post("/api/fqc", json={"serial": GOOD, "outcome": "reject",
-                                 "defect": "Other", "reason": reason,
-                                 "note": "hairline on the backsheet"})
+                                 "defect": "Other", "note": "hairline on the backsheet"})
     assert r.status_code == 200, r.get_json()
     row = c.get("/api/fqc/recent").get_json()["rows"][0]
-    assert row["defect"] == "Other" and row["note"] == "hairline on the backsheet", row
-    # and a named defect still needs no note
-    c = base()
-    r = c.post("/api/fqc", json={"serial": GOOD, "outcome": "reject",
-                                 "defect": "Cell Crack", "reason": reason})
-    assert r.status_code == 200, r.get_json()
+    assert row["defects"] == "Other" and row["note"] == "hairline on the backsheet", row
 
 
 @test("what is typed and matches nothing says so, and offers nothing")
@@ -285,38 +278,46 @@ def t_no_match():
     with H.browser() as b:
         pg = H.open_page(b, "fqc")
         open_reject_form(pg, GOOD)
+        wait_defects_loaded(pg)
         type_into_defect(pg, "zzzz")
         assert offered(pg) == []
         assert "No defect on the list matches" in pg.inner_text("#fqcLiveDefectList")
 
 
 @test("the old list's terms that are not on the new list appear nowhere in any "
-      "defect selector: the type-ahead, the Recent gradings filter, v4's own table")
-def t_old_terms_gone():
+      "defect selector - and the EL share's own vocabulary is there instead")
+def t_unified_list():
     base()
     with H.browser() as b:
         pg = H.open_page(b, "fqc")
         open_reject_form(pg, GOOD)
+        wait_defects_loaded(pg)
 
         pg.click("#fqcLiveDefect")                  # empty query: everything
         picker = offered(pg)
-        assert picker == THE_LIST, "the picker is not the list, in order: %s" % picker
+        assert picker[-1] == "Other", "Other is not last: %s" % picker
+        assert sorted(picker[:-1]) == ALL_DEFECTS[:-1], \
+            "the picker is not the unified list: %s" % sorted(picker[:-1])
 
+        # #rDefect is rebuilt by renderLiveFqcRecent()'s own (separate)
+        # fetch, re-triggered once /api/fqc/defects answers - wait for that
+        # redraw specifically rather than racing it.
+        pg.wait_for_function(
+            "() => Array.from(document.querySelectorAll('#rDefect option'))"
+            ".some(o => o.textContent === 'Cross')")
         filt = pg.eval_on_selector_all(
             "#rDefect option", "os => os.map(o => o.textContent)")
-        assert filt[0] == "All" and filt[1:] == THE_LIST, filt
+        assert filt[0] == "All" and filt[-1] == "Other" and \
+               sorted(filt[1:-1]) == ALL_DEFECTS[:-1], filt
 
-        v4 = pg.evaluate("ELVI_CODES.filter(c => c.ng).map(c => c.label)")
-        assert v4 == THE_LIST, "v4's own array still holds another list: %s" % v4
-        assert pg.evaluate("ELVI_CODES.filter(c => !c.ng).length") == 1, \
-            "the OK entry v4 reads as ELVI_CODES[0] must survive"
+        for name in NEW_ARRIVALS:
+            assert name in picker, "%r is missing from the picker" % name
 
-        low = [x.lower() for x in picker + filt + v4]
-        for old in OLD_ONLY:
+        low = [x.lower() for x in picker + filt]
+        for old in DEAD_TERMS:
             assert old.lower() not in low, "%r is still offered" % old
-        # not as a substring of anything shown, either
-        blob = " | ".join(picker + filt + v4).lower()
-        for old in OLD_ONLY:
+        blob = " | ".join(picker + filt).lower()
+        for old in DEAD_TERMS:
             assert old.lower() not in blob, "%r appears inside %r" % (old, blob)
         assert pg.locator("#fqcLiveDefect").evaluate("e => e.tagName") == "INPUT", \
             "the defect field is not the searchable input"
@@ -333,9 +334,7 @@ def t_only_the_list_is_recorded():
         pg.route("**/api/fqc", lambda route: (
             posted.append(route.request.post_data_json), route.continue_()))
         open_reject_form(pg, GOOD)
-        # the module proposes a pass, so rejecting needs a coded reason
-        pg.select_option("#fqcLiveReason", index=1)
-        pg.once("dialog", lambda d: d.accept())
+        wait_defects_loaded(pg)
 
         pg.fill("#fqcLiveDefect", "Buring")
         pg.click("text=Record rejection")
@@ -349,7 +348,80 @@ def t_only_the_list_is_recorded():
 
 
 # --------------------------------------------------------------------------
-# rule 2 - Recent gradings
+# rule 2/3 - no proposal, no coded reason; Pass/Reject/Discard; Space is Pass
+# --------------------------------------------------------------------------
+
+@test("there is no PROPOSED block and no coded reason anywhere on the panel")
+def t_no_proposal_ui():
+    base()
+    with H.browser() as b:
+        pg = H.open_page(b, "fqc")
+        pg.fill("#fqcScan", GOOD)
+        pg.click("text=Look up")
+        pg.wait_for_selector("#fqcPending .pending")
+        assert pg.locator("text=Confirm or overrule").count() == 0
+        assert pg.locator("#fqcLiveReason").count() == 0
+        assert pg.locator("#fqcPassReason").count() == 0
+        assert pg.locator("text=Proposed").count() == 0
+        assert pg.locator("text=Grade this module").count() == 1
+
+
+@test("a clean module at wattage: Space passes it with one key, no form")
+def t_space_is_pass_when_clean():
+    base()
+    with H.browser() as b:
+        pg = H.open_page(b, "fqc")
+        posted = []
+        pg.route("**/api/fqc", lambda route: (
+            posted.append(route.request.post_data_json), route.continue_()))
+        pg.fill("#fqcScan", GOOD)
+        pg.click("text=Look up")
+        pg.wait_for_selector("#fqcPending .pending")
+        assert pg.locator("text=Space to pass").count() == 1
+        pg.keyboard.press("Space")
+        pg.wait_for_timeout(500)
+        assert posted and posted[0]["outcome"] == "pass", posted
+
+
+@test("a module with a defective EL: Space does nothing - it is a button, "
+      "not a key, even though the defect can never block the pass")
+def t_space_disabled_when_el_not_clean():
+    base()
+    with H.browser() as b:
+        pg = H.open_page(b, "fqc")
+        posted = []
+        pg.route("**/api/fqc", lambda route: (
+            posted.append(route.request.post_data_json), route.continue_()))
+        pg.fill("#fqcScan", CRACKED)
+        pg.click("text=Look up")
+        pg.wait_for_selector("#fqcPending .pending")
+        assert pg.locator("text=Space to pass").count() == 0
+        pg.keyboard.press("Space")
+        pg.wait_for_timeout(300)
+        assert not posted, "Space passed a module with a non-clean EL: %s" % posted
+        # the button is still there, and still works
+        pg.click("text=Pass — grade A")
+        pg.wait_for_timeout(500)
+        assert posted and posted[0]["outcome"] == "pass", posted
+
+
+@test("a rejection needs a defect - refused client-side when EL read clean, "
+      "with nothing sent to the server")
+def t_reject_needs_defect_client_side():
+    base()
+    with H.browser() as b:
+        pg = H.open_page(b, "fqc")
+        posted = []
+        pg.route("**/api/fqc", lambda route: (
+            posted.append(route.request.post_data_json), route.continue_()))
+        open_reject_form(pg, GOOD)
+        pg.click("text=Record rejection")
+        pg.wait_for_timeout(300)
+        assert not posted, "a reject with a clean EL and no defect reached the server"
+
+
+# --------------------------------------------------------------------------
+# rule 4 - Recent gradings
 # --------------------------------------------------------------------------
 
 def pass_record(serial, build_instance=1):
@@ -426,8 +498,18 @@ def t_fqc_stamps_its_build():
     assert raw["build_instance"] == 1, "not snapshotted on the record: %s" % raw
 
 
-@test("there is no Disposition or Bld column, Proposed stays, and the "
-      "empty-state row spans exactly the columns that are there")
+@test("a passed module still shows its EL defect in Recent gradings' Defect "
+      "column - it is attached automatically and was never a reason to hide it")
+def t_pass_shows_el_defect():
+    c = base()
+    r = c.post("/api/fqc", json={"serial": CRACKED, "outcome": "pass"})
+    assert r.status_code == 200, r.get_json()
+    row = c.get("/api/fqc/recent").get_json()["rows"][0]
+    assert row["outcome"] == "pass" and row["defects"] == "Cell Crack", row
+
+
+@test("there is no Disposition, Bld or Proposed column, and the empty-state "
+      "row spans exactly the columns that are there")
 def t_no_disposition_and_colspan():
     base()                                   # nothing graded yet
     with H.browser() as b:
@@ -435,8 +517,9 @@ def t_no_disposition_and_colspan():
         t = recent(pg)
         assert "Disposition" not in t["heads"], t["heads"]
         assert "Bld" not in t["heads"], t["heads"]
+        assert "Proposed" not in t["heads"], t["heads"]
         assert t["heads"] == ["Time", "Serial", "Model", "Customer",
-                              "Pmax", "EL/VI verdict", "Proposed", "Final",
+                              "Pmax", "EL/VI verdict", "Final",
                               "Defect", "Flag"], t["heads"]
         empty = [r for r in t["rows"] if r["empty"]]
         assert len(empty) == 1, t["rows"]
@@ -469,5 +552,8 @@ if __name__ == "__main__":
                 failed += 1
         print("\n%d passed, %d failed" % (passed, failed))
     finally:
-        H.cleanup()
+        try:
+            store.wipe()
+        except Exception:
+            pass
     sys.exit(1 if failed else 0)

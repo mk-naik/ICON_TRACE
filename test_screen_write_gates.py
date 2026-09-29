@@ -96,7 +96,7 @@ EXPECTED = {
                   "invoice_cancel", "invoice_confirm", "invoice_parse"},
     "disp":      {"dispatch"},
     "review":    {"api_review_resolve"},
-    "fqc":       {"api_fqc_grade", "fqc"},
+    "fqc":       {"api_fqc_grade"},
     "loadver":   {"api_loading_confirm", "api_loading_submit"},
     "pack":      {"api_box_abandon", "api_box_capacity", "api_box_close",
                   "api_box_remove", "api_box_repack", "api_box_scan",
@@ -160,7 +160,7 @@ def fresh():
 # The map itself
 # --------------------------------------------------------------------------
 
-@test("the map read out of app.py is exactly the reviewed map - 38 view "
+@test("the map read out of app.py is exactly the reviewed map - 37 view "
      "functions on 13 screens, every one a real, non-excluded screen")
 def t_map_is_the_reviewed_map():
     got = {}
@@ -169,7 +169,7 @@ def t_map_is_the_reviewed_map():
     assert got == EXPECTED, "map drifted:\n  got      %s\n  expected %s" % (
         sorted((k, sorted(v)) for k, v in got.items()),
         sorted((k, sorted(v)) for k, v in EXPECTED.items()))
-    assert sum(len(v) for v in got.values()) == 38
+    assert sum(len(v) for v in got.values()) == 37
     for s in got:
         assert s in icon_auth.SCREEN_IDS and s not in icon_auth.EXCLUDED_SCREENS, s
     print("      %d route lines, %d functions" % (

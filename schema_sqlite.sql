@@ -240,6 +240,30 @@ CREATE TABLE IF NOT EXISTS dispatch_audit (
 
 ) ;
 
+-- Not change_log (that is a pub/sub channel - topic, at, by_login, by_client,
+-- telling other open pages to refetch; no entity, no action, no before/after)
+-- and not dispatch_audit (one free-form `detail` blob per action, used all
+-- over the app already). This is neither: one row per entity CREATED or
+-- EDITED, with the row as it stood before the edit and as it stands after -
+-- an edit with no `before` is impossible to tell from a creation with the
+-- same after, so a review of what a screen looks like a week from now can
+-- still say what it looked like before someone touched it.
+--
+-- Append-only. Wired station by station, not all at once - FQC's own write
+-- points (db.record_fqc, db.record_quality) first.
+CREATE TABLE IF NOT EXISTS entity_revision (
+  revision_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at          TEXT NOT NULL,
+  actor       TEXT NOT NULL,
+  entity_type TEXT NOT NULL,          -- 'fqc_record', later others
+  entity_id   TEXT NOT NULL,
+  action      TEXT NOT NULL,          -- 'create' | 'update'
+  before      TEXT NULL,              -- JSON; NULL on a create
+  after       TEXT NOT NULL           -- JSON
+) ;
+CREATE INDEX IF NOT EXISTS ix_entity_revision_entity
+  ON entity_revision (entity_type, entity_id) ;
+
 -- ------------------------------------------------------------
 -- A serial must never sit on two live challans. Enforced in code inside the
 -- issuing transaction; this view is for monitoring.
@@ -623,18 +647,47 @@ CREATE TABLE IF NOT EXISTS fqc_record (
   ss_state    TEXT NULL,
   el_verdict  TEXT NULL,
   el_state    TEXT NULL,
+  -- Stage 3 removed the propose/confirm-overrule mechanism: proposed,
+  -- reason and defect are kept for the rows already written under it, and
+  -- none of the three is written by anything after this. A defect is now
+  -- one or more rows in fqc_defect, matched by defect_code, never by this
+  -- column's raw text.
   proposed    TEXT NULL,
-  defect      TEXT NULL,              -- coded, from the EL/VI code list
-  reason      TEXT NULL,              -- coded override reason
-  note        TEXT NULL,              -- free remark; required when reason=OTHER
+  defect      TEXT NULL,
+  reason      TEXT NULL,
+  -- The EL folder name exactly as filed, whether or not it mapped to a
+  -- known defect_master code - never normalised away, so a folder this
+  -- table has not learned yet is still visible on the record.
+  defect_el_raw TEXT NULL,
+  -- 1, 2, 3… per serial, written at insert - the retest history was
+  -- already right (superseded_by/superseded_at, see below); this is the
+  -- one thing it was missing.
+  test_seq    INTEGER NULL,
+  -- Which ruleset judged this record. Bumped only when the PASS/REJECT
+  -- rules themselves change, so a later rule change never has to guess
+  -- which old records it would have judged differently. NOT NULL with a
+  -- default so ALTER TABLE (store.py, an existing database) can backfill
+  -- every row already on file.
+  rule_version TEXT NOT NULL DEFAULT '',
+  note        TEXT NULL,              -- free remark; required when defect=Other
   decided_by  TEXT NOT NULL,
   at          TEXT    NOT NULL,
 
-  -- Quality's call on a reject, kept beside the evidence it was made from
-  quality_grade TEXT NULL,            -- 'GY' | 'BGY'
+  -- Quality's call on a reject, kept beside the evidence it was made from.
+  -- 'A' is legitimate: Quality can return a reject to A.
+  quality_grade TEXT NULL,            -- 'A' | 'GY' | 'BGY'
   quality_note  TEXT NULL,
   quality_by    TEXT NULL,
   quality_at    TEXT NULL,
+
+  -- Round 34: direct cancellation, the same four columns every cancellable
+  -- table carries. Added by store.py's migration (ADD COLUMN, not here) -
+  -- store.py is authoritative for this table's actual columns; this DDL is
+  -- what a fresh database starts from.
+  status            TEXT NOT NULL DEFAULT 'active',
+  cancelled_reason  TEXT NULL,
+  cancelled_by      TEXT NULL,
+  cancelled_at      TEXT NULL,
 
   -- A module can come round again: retested after a rework, or looked at a
   -- second time. The new decision is the one that counts, and the old one is
@@ -650,6 +703,47 @@ CREATE TABLE IF NOT EXISTS fqc_record (
   -- written before the column existed - every one of those graded build 1,
   -- the only build FQC could reach.
   build_instance INTEGER NULL
+) ;
+
+-- One row per defect against one fqc_record, not two columns. Filtering on
+-- "defect = Burning" this way returns every module carrying it - passed or
+-- rejected, any grade, EL-detected or operator-added - with one predicate,
+-- because it is one table. source keeps the provenance (an export can pivot
+-- EL-defect and FQC-defect into separate columns without storing anything
+-- twice); seq is the order they were attached in, EL first when there is
+-- one. Matching is always on defect_code, never defect_master's label or
+-- fqc_record.defect_el_raw's folder text.
+CREATE TABLE IF NOT EXISTS fqc_defect (
+  fqc_defect_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  fqc_id      INTEGER NOT NULL REFERENCES fqc_record(fqc_id),
+  defect_code TEXT NOT NULL REFERENCES defect_master(code),
+  source      TEXT NOT NULL,          -- 'el' | 'fqc'
+  seq         INTEGER NOT NULL DEFAULT 0
+) ;
+CREATE INDEX IF NOT EXISTS idx_fqc_defect_fqc ON fqc_defect(fqc_id);
+CREATE INDEX IF NOT EXISTS idx_fqc_defect_code ON fqc_defect(defect_code);
+
+-- The defect vocabulary, unified - see icon_defects.py for why: the EL
+-- share's own folder names, the operator's visual-defect list, and a dead
+-- list in icon_trace.html used to disagree on what a defect was called.
+-- One code, one row here, whichever vocabulary it came from.
+CREATE TABLE IF NOT EXISTS defect_master (
+  code        TEXT PRIMARY KEY,       -- 'DF-BURNING'
+  label       TEXT NOT NULL,          -- 'Burning' - Title Case, except OK
+  source_hint TEXT NOT NULL,          -- 'el' | 'visual' | 'both'
+  active      INTEGER NOT NULL DEFAULT 1
+) ;
+
+-- The EL share files a rejected module's images under a category FOLDER,
+-- not a code - and production has already filed the same category two
+-- different ways ('low eff' and ' low eff', a leading space). folder_key is
+-- normalize()'d (icon_defects.py) so both spellings are one row; sample_raw
+-- is one real spelling, kept for anyone reading the table by eye. A defect
+-- is always matched on defect_code afterwards, never on this folder text.
+CREATE TABLE IF NOT EXISTS defect_folder_map (
+  folder_key  TEXT PRIMARY KEY,       -- normalize()'d: collapsed, lowercased
+  sample_raw  TEXT NOT NULL,          -- one spelling actually seen on disk
+  defect_code TEXT NOT NULL REFERENCES defect_master(code)
 ) ;
 
 -- Needs Review, one table for every type of item it holds - a type column,
@@ -676,7 +770,58 @@ CREATE TABLE IF NOT EXISTS review_item (
   resolved_at TEXT NULL,
   resolution  TEXT NULL,             -- 'keep_original' | 'keep_rescanned' |
                                       -- 'acknowledged'
-  reason      TEXT NULL              -- mandatory at resolution, no exceptions
+  reason      TEXT NULL,             -- mandatory at resolution, no exceptions
+
+  -- Stage 5: events an ingest FOUND, not a person raised - previously
+  -- thrown away entirely (a serial not in master, a shift with no SS
+  -- reading against an EL image, a lookup nobody decided, a Flash Test
+  -- Report anomaly). raw_id is what makes re-running the same scan safe:
+  -- the (type, raw_id) pair is unique, so ingesting the same underlying
+  -- CSV row or EL file twice writes one row, not two. NULL on every
+  -- person-raised type above (duplicate_scan, provisional_mismatch) -
+  -- SQLite's UNIQUE treats NULLs as distinct, so they are untouched by it.
+  raw_id      TEXT NULL,
+  source      TEXT NULL,             -- 'ss_ingest' | 'el_ingest' |
+                                      -- 'fqc_lookup' | 'ftr_scan'
+  line        TEXT NULL,             -- 'A' | 'B', when the source is line-specific
+  detected_at TEXT NULL              -- when the ingest found it - the event
+                                      -- itself may be older (the tester's own
+                                      -- timestamp lives in raw_id/detail)
+) ;
+-- The (type, raw_id) uniqueness index is created in store.py's migration,
+-- after the ALTER TABLE that adds raw_id to an existing database - not here,
+-- where it would run before that column exists on one.
+
+-- Every FQC lookup, kept just long enough to answer "looked up, no decision
+-- recorded" - a module scanned and read, then nobody clicked Pass, Reject or
+-- Discard. Not an audit trail (entity_revision is that, for what a decision
+-- actually changed) - this is the ONE thing an ordinary lookup does that is
+-- otherwise thrown away the moment the response is sent.
+CREATE TABLE IF NOT EXISTS fqc_lookup_log (
+  lookup_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+  serial     TEXT NOT NULL,
+  at         TEXT NOT NULL,
+  actor      TEXT NOT NULL,
+  line       TEXT NULL
+) ;
+CREATE INDEX IF NOT EXISTS ix_fqc_lookup_serial ON fqc_lookup_log (serial, at) ;
+
+-- A serial the Sun Simulator read before it was in the master (review_item
+-- type not_in_master_unplanned). The live CSV, and even the archive it gets
+-- cut and pasted into, only cover so much history - by the time Incharge
+-- plans the serial with an indent, the row that first flagged it may have
+-- rotated out from under both. This is what FQC falls back to then: the
+-- module was already tested once, and a stop-the-line re-test to satisfy
+-- bookkeeping that happened late is not worth it. One row per serial -
+-- rescanned before it is planned, the latest reading replaces the last,
+-- never both.
+CREATE TABLE IF NOT EXISTS ftr_reading (
+  serial      TEXT NOT NULL PRIMARY KEY,
+  line        TEXT NULL,
+  tested_at   TEXT NULL,        -- the tester's own timestamp
+  reading     TEXT NOT NULL,    -- JSON: icon_evidence.read_sun_simulator()'s
+                                 -- own OK payload - pmax, params, tested_at
+  recorded_at TEXT NOT NULL     -- when ICON TRACE captured this snapshot
 ) ;
 
 CREATE TABLE IF NOT EXISTS gp_counter (

@@ -97,6 +97,7 @@ EXPECTED = {
     "api_fqc_dashboard_modules": {("dash",)},
     "api_fqc_recent": {("fqc",)}, "api_fqc_anomalies": {("fqc",)},
     "api_fqc_lookup": {("fqc", "review")}, "api_el_image": {("fqc", "review")},
+    "api_fqc_defects": {("fqc", "review")},
     "api_ftr": {("challan", "fqc")},
     "packing_label": {("pack",)},
     "api_box_check": {("pack", "repack")}, "api_box": {("pack", "repack")},

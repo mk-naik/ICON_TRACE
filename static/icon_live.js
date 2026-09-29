@@ -2109,6 +2109,44 @@
   }
   adoptDefectList();
 
+  /* Stage 3: defect_master (server, icon_defects.py) is now the ONE list -
+     the EL share's own folder names ('low eff', 'Cross', 'Burning'...) and
+     the operator's visual list, unified, because two lists disagreeing was
+     the whole problem. FQC_DEFECTS is rewritten in place (same reason
+     ELVI_CODES is, above: closed over, cannot be reassigned) once the
+     server answers, so every picker that reads it - the reject/pass forms,
+     the Defect filter - offers the real vocabulary rather than the 45
+     hard-coded names this array shipped with. */
+  function loadServerDefects() {
+    /* Round 28: a role that cannot view the FQC/Review screens gets a
+       gate-refusal, not data - fetching this unconditionally at parse time
+       (before the session is even known) sent every role a 403 for a
+       screen it may never open. Called instead from renderLiveFqcRecent(),
+       which only runs once the fqc view is actually shown to a role that
+       can see it. */
+    if (typeof can === 'function' && !can('fqc') && !can('review')) return;
+    fetch('/api/fqc/defects', {cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var labels = (d.defects || []).map(function (x) { return x.label; })
+          .filter(function (l) { return l !== 'OK'; });
+        if (!labels.length) return;
+        FQC_DEFECTS.length = 0;
+        labels.sort(function (a, b) {
+          return a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b);
+        }).forEach(function (l) { FQC_DEFECTS.push(l); });
+        adoptDefectList();
+        /* The Defect FILTER dropdown (#rDefect) is built from FQC_DEFECTS
+           inside renderLiveFqcRecent()'s own fetch, which may already have
+           run - on the hard-coded 45 - before this one resolved. Re-render
+           once more so it is never left showing the stale list until
+           something else happens to redraw it. */
+        if (typeof renderLiveFqcRecent === 'function') renderLiveFqcRecent();
+      })
+      .catch(function () { /* the 45 hard-coded names stand until it answers */ });
+  }
+  window.iconLoadServerDefects = loadServerDefects;
+
   /* The type-ahead itself. The input is what is read back (#fqcLiveDefect);
      the list under it is only a way of filling that input in. */
   var pickerPlace = null;
@@ -2211,18 +2249,21 @@
      live layer reshapes it: Customer goes in right after Model, Disposition
      goes - FQC passes or rejects, it no longer disposes, so the column was a
      permanent dash - and so does Bld. The build a decision was made on is
-     recorded with it (and FQC needs it); this list just does not show it. Idempotent, run on every render. Returns the
-     column count, which the empty-state row spans: read from the header
-     itself, so it cannot go stale the next time a column moves. */
+     recorded with it (and FQC needs it); this list just does not show it.
+     Proposed goes too (Stage 3): nothing computes a proposal any more, so
+     the column could only ever read a dash. Idempotent, run on every
+     render. Returns the column count, which the empty-state row spans:
+     read from the header itself, so it cannot go stale the next time a
+     column moves. */
   function fqcRecentHead(host) {
     var table = host.closest ? host.closest('table') : null;
     var tr = table && table.querySelector('thead tr');
-    if (!tr) return 11;
+    if (!tr) return 10;
     var find = function (label) {
       return Array.prototype.filter.call(tr.cells, function (th) {
         return (th.textContent || '').trim() === label; })[0];
     };
-    ['Disposition', 'Bld'].forEach(function (label) {
+    ['Disposition', 'Bld', 'Proposed'].forEach(function (label) {
       var gone = find(label);
       if (gone) gone.parentNode.removeChild(gone);
     });
@@ -2236,7 +2277,7 @@
   }
 
   /* One decision, one row. The cells are in the header's order: Time, Serial,
-     Model, Customer, Pmax, EL/VI verdict, Proposed, Final, Defect, Flag. */
+     Model, Customer, Pmax, EL/VI verdict, Final, Defect, Flag. */
   function fqcRecentRow(r) {
     var pass = r.outcome === 'pass';
     return '<tr><td class="mono">' + fmtIST(r.at) + '</td>' +
@@ -2244,19 +2285,20 @@
       '<td class="mono">' + fqcEsc(r.model || '—') + '</td>' +
       '<td>' + fqcEsc(r.customer || '—') + '</td>' +
       '<td class="num">' + (r.ss_pmax == null ? '—' : r.ss_pmax) + '</td>' +
-      '<td>' + fqcEsc(r.el_verdict || '—') + '</td><td>' + fqcEsc(r.proposed || '—') + '</td>' +
+      '<td>' + fqcEsc(r.el_verdict || '—') + '</td>' +
       '<td><span class="tag ' + (pass && r.mode !== 'provisional' ? 't-pass' : pass ? 't-rev' : 't-fail') + '">' + fqcEsc(r.grade || (pass ? (r.mode === 'provisional' ? 'Held' : 'A') : (r.quality_grade || 'Reject'))) + '</span><span style="display:none">' + (pass ? 'pass' : 'reject') + '</span></td>' +
-      '<td>' + fqcEsc(r.defect || '—') + '</td><td>' + (r.mode === 'provisional' ? '<span class="tag t-rev">Provisional</span> ' : '') +
-      (r.reason ? '<span class="tag t-rev">Override</span> ' : '') + '<span style="display:none">watt:' + (r.wattage || '') + '</span></td></tr>';
+      '<td>' + fqcEsc(r.defects || r.defect || '—') + '</td><td>' + (r.mode === 'provisional' ? '<span class="tag t-rev">Provisional</span> ' : '') +
+      '<span style="display:none">watt:' + (r.wattage || '') + '</span></td></tr>';
   }
 
   function renderLiveFqcRecent() {
+    if (!window.__defectsLoaded) { window.__defectsLoaded = true; loadServerDefects(); }
     var shift = '';
     var cust = '';
     var watt = '';
     var defect = '';
     var result = '';
-    
+
     if (window.fqcRecentApply && window.fqcRecentApply.__live) {
       var sEl = document.getElementById('rShift');
       if (sEl) shift = sEl.value === 'All shifts' ? '' : sEl.value;
@@ -2323,7 +2365,8 @@
         if (document.getElementById('rDefect')) {
           var sel = document.getElementById('rDefect');
           var prev = sel.value;
-          /* the one defect list - the boot payload never carried its own */
+          /* the one defect list, unified (icon_defects.py) - the boot
+             payload never carried its own */
           sel.innerHTML = '<option>All</option>' + FQC_DEFECTS.map(function(d) {
             return '<option value="' + fqcEsc(d) + '">' + fqcEsc(d) + '</option>';
           }).join('');
@@ -2334,7 +2377,20 @@
         var overrides = document.getElementById('fqcOv');
         var blind = document.getElementById('fqcBlind');
         if (count) count.textContent = rows.length.toLocaleString();
-        if (overrides) overrides.textContent = rows.filter(function (r) { return !!r.reason; }).length;
+        /* Stage 3: there is no more override mechanism to count - EL cannot
+           be overruled because it never blocked anything. What replaces it:
+           how often a pass still carries a non-clean EL verdict, i.e. was
+           passed despite it. */
+        if (overrides) {
+          var ovLabel = overrides.previousSibling;
+          if (ovLabel && ovLabel.nodeType === 3 && !/despite/i.test(ovLabel.textContent)) {
+            ovLabel.textContent = 'Passed despite EL ';
+          }
+          overrides.textContent = rows.filter(function (r) {
+            return r.outcome === 'pass' && r.el_verdict &&
+                   !/^(ok|pass)$/i.test(String(r.el_verdict).trim());
+          }).length;
+        }
         if (blind) blind.textContent = rows.filter(function (r) { return r.ss_state !== 'OK'; }).length;
         var cols = fqcRecentHead(host);
         host.innerHTML = rows.length ? rows.map(fqcRecentRow).join('') :
@@ -3196,6 +3252,7 @@ function wireFqcAnomalies() {
           var catRows = [['A', 'Passed', totals.passed || 0],
                          ['GY', 'Rejected', totals.gy || 0],
                          ['BGY', 'Rejected', totals.bgy || 0],
+                         ['Returned-A', 'Rejected → A (Quality)', totals.returned_a || 0],
                          ['Pending', 'Quality Pending', totals.awaiting_quality || 0],
                          ['Anomaly', 'Tester Error', totals.anomalies || 0]];
           var catTot = catRows.reduce(function (a, x) { return a + x[2]; }, 0);
@@ -3619,14 +3676,20 @@ function wireFqcAnomalies() {
     var e = data.evidence || {};
     liveFqcHold = data;
     var bad = e.fault || e.ss_state === 'BAD';
-    var canPass = e.proposed === 'pass';
-    /* Rejected on the EL alone: the power is there, so an operator who has
-       looked at the image may overrule the folder name. A reading below the
-       wattage is a measurement and is not open to argument. */
+    /* Stage 3: EL never gates a pass or forces a reject - only the Sun
+       Simulator reading and the module's own wattage decide whether a pass
+       is available (app._pass_route). 'direct' meets the wattage now;
+       'provisional' means the Sun Simulator is unreachable and a pass would
+       be held until it returns; neither exists is not passable at all. */
+    var route = data.pass_route;
+    var canPass = !!route;
     var powerOk = e.pmax != null && data.wattage != null &&
                   e.pmax >= data.wattage;
     var elClean = !!e.el && /^(ok|pass)$/i.test(String(e.el).trim());
-    var elOnly = e.proposed === 'reject' && powerOk;
+    /* Space is the fast path for the totally clean case only - a defect on
+       the EL, even though it can never block the pass, still means looking
+       at it is one click away, not zero. */
+    var spacePass = route === 'direct' && elClean;
     var p = function (k, unit) {
       var v = e[k];
       return v == null ? '—' : (v + (unit || ''));
@@ -3634,39 +3697,24 @@ function wireFqcAnomalies() {
     document.getElementById('fqcPending').innerHTML =
       '<div class="pending' + (bad ? ' blocked' : '') + '">' +
       '<div class="pending-h"><span class="ph-t">' +
-        (bad ? 'Cannot judge' : 'Confirm or overrule') + '</span>' +
+        (bad ? 'Cannot judge' : 'Grade this module') + '</span>' +
       '<span class="ph-s">' + fqcEsc(data.serial) + '</span><div class="ph-r">' +
       '<span class="tag t-mute">' + fqcEsc(e.ss_line ? 'Line ' + e.ss_line
                                             : (data.model || '')) + '</span>' +
       (bad ? '' :
-        /* Space confirms whatever is proposed - a rejection just as much as
-           a pass. The defect comes off the EL and the note is there for
-           anything worth adding, so agreeing with a rejection is one key. */
-        '<span class="tag t-mute">Space to confirm</span>' +
+        (spacePass ? '<span class="tag t-mute">Space to pass</span>' : '') +
         (canPass
           ? '<button class="btn btn-solar btn-sm" ' +
-              'onclick="fqcCommitLive(\'pass\')">Pass — grade A</button>' +
+              'onclick="fqcCommitLive(\'pass\')">' +
+              (route === 'provisional' ? 'Pass — provisional' : 'Pass — grade A') +
+              '</button>' +
             '<button class="btn btn-ghost btn-sm" ' +
-              'onclick="fqcShowPassOverride()">Add defect / note…</button>' +
-            '<button class="btn btn-ghost btn-sm" ' +
-              'onclick="fqcShowLiveOverride()">Reject…</button>'
-          : '<button class="btn btn-danger btn-sm" ' +
-              'onclick="fqcCommitLive(\'reject\')">Confirm rejection</button>' +
-            '<button class="btn btn-ghost btn-sm" ' +
-              'onclick="fqcShowLiveOverride()">Add defect / note…</button>' +
-            /* the other way round: what a reject can be overruled to, and
-               when it cannot, the button says so and why instead of being
-               absent */
-            (data.pass_route === 'el_only'
-              ? '<button class="btn btn-ghost btn-sm" onclick="fqcShowPassOverride()">' +
-                'Overrule to pass…</button>'
-              : data.pass_route === 'provisional'
-              ? '<button class="btn btn-ghost btn-sm" onclick="fqcShowPassOverride()">' +
-                'Pass — provisional…</button>'
-              : '<button class="btn btn-ghost btn-sm" disabled title="' +
-                fqcEsc(data.pass_why || 'This module cannot be passed.') +
-                '">Overrule to pass…</button>')
-        )) +
+              'onclick="fqcShowPassAddDefect()">Add defect / note…</button>'
+          : '<button class="btn btn-ghost btn-sm" disabled title="' +
+              fqcEsc(data.pass_why || 'This module cannot be passed.') +
+              '">Pass</button>') +
+        '<button class="btn btn-danger btn-sm" ' +
+          'onclick="fqcShowLiveOverride()">Reject…</button>') +
       '<button class="btn btn-ghost btn-sm" onclick="fqcCancelLive()">Discard</button>' +
       '</div></div>' +
 
@@ -3686,11 +3734,10 @@ function wireFqcAnomalies() {
         fqcCell('Existing Decision', fqcPrior(data)) +
       '</div>' +
 
-      /* The two values the decision turns on are coloured: green when they
-         satisfy the rule, red when they do not, so the reason for the
-         proposal is visible before anyone reads the wording. Everything
-         else stays plain - colouring what does not decide anything is how
-         a screen stops meaning anything. */
+      /* Pmax is coloured because it is the whole rule now: at or above the
+         wattage or not. EL/VI verdict is shown for what it is - advisory,
+         never green-means-pass or red-means-fail against the decision -
+         so it stays plain; only whether it read clean or not is visible. */
       '<div class="lookup" style="border-top:1px solid var(--line2)">' +
         fqcCell('Pmax', '<span style="color:' +
           (powerOk ? 'var(--pass)' : 'var(--fail)') + ';font-weight:700">' +
@@ -3700,9 +3747,9 @@ function wireFqcAnomalies() {
         fqcCell('Voc', p('voc', ' V'), e.voc == null) +
         fqcCell('Isc', p('isc', ' A'), e.isc == null) +
         fqcCell('Fill factor', p('ff', ' %'), e.ff == null) +
-        fqcCell('EL/VI verdict', '<span style="color:' +
-          (elClean ? 'var(--pass)' : 'var(--fail)') + ';font-weight:700">' +
-          fqcEsc(e.el || e.el_state || 'NC') + '</span>', !e.el) +
+        fqcCell('EL/VI verdict', '<span style="font-weight:700">' +
+          fqcEsc(e.el || e.el_state || 'NC') + '</span>' +
+          (elClean ? '' : ' <span class="tag t-mute">advisory</span>'), !e.el) +
         fqcCell('EL/VI image', e.el_path ?
           '<button class="lnk" onclick="iconShowEl()">View image</button>' : '—',
           !e.el_path) +
@@ -3719,32 +3766,7 @@ function wireFqcAnomalies() {
         '<span class="gate ' + (e.el_state === 'OK' ? '' : 'warn') + '">' +
           fqcEsc(e.el_note || 'EL evidence unavailable') + '</span>' +
       '</div>' +
-
-      (bad ? '' :
-      '<div class="card-b" style="border-top:1px solid var(--line2);background:' +
-        (canPass ? 'var(--pass-lt)' : 'var(--review-lt)') + '">' +
-        '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">' +
-          '<div><label style="font-size:9.5px;font-weight:700;' +
-            'color:var(--ink3);text-transform:uppercase;letter-spacing:.6px">' +
-            'Proposed</label>' +
-            '<div style="font-family:var(--f-ui),-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;font-size:38px;' +
-            'font-weight:800;letter-spacing:.5px;line-height:1;margin-top:2px;color:' +
-            (canPass ? 'var(--pass)' : e.proposed === 'reject' ? 'var(--fail)'
-              : 'var(--review)') + '">' +
-            /* no proposal at all when a source could not be read: that is not
-               a rejection, and the operator is choosing either way */
-            (canPass ? 'PASS' : e.proposed === 'reject' ? 'REJECT' : 'NO READING') +
-            '</div></div>' +
-          '<div style="font-size:12px;max-width:560px"><b>Why</b><br>' +
-            fqcEsc(e.why || '') +
-            (canPass ? '' : '<br><span style="color:var(--ink3)">' + (
-              data.pass_route === 'el_only'
-                ? 'It makes its wattage, so if the image does not support this ' +
-                  'verdict you may overrule it — with a reason.'
-                : fqcEsc(data.pass_why || '')) +
-              '</span>') +
-          '</div>' +
-        '</div></div><div id="fqcLiveOverride"></div>') +
+      (bad ? '' : '<div id="fqcLiveOverride"></div>') +
       '</div>';
   }
 
@@ -3765,7 +3787,13 @@ function wireFqcAnomalies() {
       .catch(function (e) { toast('FQC lookup failed: ' + e.message); });
   };
   /* Rejecting. No grade here: what is rejected is called GY or BGY by
-     Quality, from the EL, the SS reading and what is captured below. */
+     Quality, from the EL, the SS reading and what is captured below.
+     No coded reason any more (Stage 3): a rejection needs a defect, not a
+     justification for disagreeing with a proposal that no longer exists.
+     A defect is required unless the EL already has one - pre-filled here
+     when it does, and the operator may change or clear it (the EL's own
+     verdict still attaches automatically; it cannot be removed from the
+     record even if this field is cleared). */
   window.fqcShowLiveOverride = function () {
     var host = document.getElementById('fqcLiveOverride');
     if (!host || !liveFqcHold) return;
@@ -3775,27 +3803,15 @@ function wireFqcAnomalies() {
     var verdict = defectCanonical(e.el) || '';
     host.innerHTML =
       '<div class="card-f" style="border-top:1px solid var(--line2);' +
-        'align-items:flex-start;flex-wrap:wrap;gap:10px">' +
+        'align-items:flex-start;flex-wrap:wrap;gap:10px;background:var(--review-lt)">' +
       '<div class="fld defect-pick" style="margin:0;min-width:220px">' +
-        '<label>Defect</label>' +
+        '<label>Defect' + (verdict ? '' :
+          ' <span style="color:var(--ink3)">required — EL read clean</span>') + '</label>' +
         '<input id="fqcLiveDefect" autocomplete="off" role="combobox" ' +
           'aria-expanded="false" aria-controls="fqcLiveDefectList" ' +
           'placeholder="type to search — e.g. jb" value="' + fqcEsc(verdict) + '">' +
         '<div class="defect-list" id="fqcLiveDefectList" role="listbox" hidden>' +
         '</div></div>' +
-      /* The reason is for OVERRULING. Agreeing with a proposed rejection
-         overrules nothing, so the field is not shown there - it was asking
-         for a coded reason to do exactly what the evidence said. */
-      (e.proposed === 'pass' ?
-      '<div class="fld" style="margin:0;min-width:230px">' +
-        '<label>Override reason (required)</label>' +
-        '<select id="fqcLiveReason"><option value="">— coded reason —</option>' +
-        '<option>OV-RETEST — retested, value differs</option>' +
-        '<option>OV-IMAGE — image reviewed, verdict wrong</option>' +
-        '<option>OV-EVIDENCE — evidence missing, judged visually</option>' +
-        '<option>OV-CUST — customer accepts this condition</option>' +
-        '<option>OV-QUALITY — quality engineer instruction</option>' +
-        '<option>OV-OTHER — other</option></select></div>' : '') +
       '<div class="fld" style="margin:0;flex:1;min-width:240px">' +
         '<label>Note / remark <span id="fqcNoteReq" ' +
           'style="color:var(--ink3)">optional</span></label>' +
@@ -3803,51 +3819,31 @@ function wireFqcAnomalies() {
       '<button class="btn btn-danger self-end" ' +
         'onclick="fqcCommitLive(\'reject\')">Record rejection</button></div>';
 
-    /* "Other" says nothing on its own - the note becomes the reason. That is
-       true of the coded reason and of the defect alike, so the note is
-       compulsory when either is Other. */
-    var reason = document.getElementById('fqcLiveReason');
+    /* "Other" says nothing on its own - the note is compulsory with it. */
     var syncNote = function () {
       var d = document.getElementById('fqcLiveDefect');
-      var other = (reason && /^OV-OTHER/.test(reason.value)) ||
-                  defectCanonical(d && d.value) === 'Other';
+      var other = defectCanonical(d && d.value) === 'Other';
       var flag = document.getElementById('fqcNoteReq');
       flag.textContent = other ? 'required' : 'optional';
       flag.style.color = other ? 'var(--fail)' : 'var(--ink3)';
     };
     defectPicker(document.getElementById('fqcLiveDefect'),
                  document.getElementById('fqcLiveDefectList'), syncNote);
-    if (reason) reason.onchange = syncNote;
     syncNote();
   };
-  /* The form for a PASS. Three cases, one form:
-       direct       the evidence proposes a pass - "Add defect / note" on it
-       el_only      overruling an EL-only rejection - a coded reason
-       provisional  the tester is unreachable - a coded reason, and the module
-                    is held until the reading arrives
-     A defect and a note are open in every case (Other -> the note is
-     compulsory); a coded reason is asked for exactly where a decision goes
-     against, or without, the evidence. */
-  window.fqcShowPassOverride = function () {
+  /* The form for a PASS's optional defect/note (Stage 3: no coded reason,
+     on either route - direct or provisional. A defect here is additional,
+     never a replacement: the EL's own verdict attaches automatically and
+     cannot be removed or edited, whatever is typed here.) */
+  window.fqcShowPassAddDefect = function () {
     var host = document.getElementById('fqcLiveOverride');
     if (!host || !liveFqcHold) return;
-    var e = liveFqcHold.evidence || {};
     var route = liveFqcHold.pass_route || 'direct';
-    var needReason = route !== 'direct';
     var intro = route === 'provisional'
       ? '<b>Provisional pass.</b> ' + fqcEsc(liveFqcHold.pass_why || '')
-      : route === 'el_only'
-      ? 'Pmax ' + fqcEsc(e.pmax) + ' W makes the ' + fqcEsc(liveFqcHold.wattage) +
-        ' W wattage. The EL reads <b>' + fqcEsc(e.el || '—') + '</b> — pass it ' +
-        'only if the image does not support that.'
-      : 'The evidence proposes a pass. Record a defect or a note against it if ' +
-        'there is one worth keeping.';
-    var reasons = (route === 'provisional'
-      ? ['OV-EVIDENCE — evidence missing, judged visually'] : [])
-      .concat(['OV-IMAGE — image reviewed, verdict wrong',
-               'OV-RETEST — retested, value differs',
-               'OV-QUALITY — quality engineer instruction',
-               'OV-OTHER — other']);
+      : 'Record a defect or a note against this pass if there is one worth ' +
+        'keeping - the EL verdict is attached automatically and needs nothing ' +
+        'typed here to be recorded.';
     host.innerHTML =
       '<div class="card-f" style="border-top:1px solid var(--line2);' +
         'align-items:flex-start;flex-wrap:wrap;gap:10px;' +
@@ -3861,12 +3857,6 @@ function wireFqcAnomalies() {
           'placeholder="type to search — e.g. jb">' +
         '<div class="defect-list" id="fqcPassDefectList" role="listbox" hidden>' +
         '</div></div>' +
-      (needReason
-        ? '<div class="fld" style="margin:0;min-width:240px">' +
-            '<label>Reason (required)</label>' +
-            '<select id="fqcPassReason"><option value="">— coded reason —</option>' +
-            reasons.map(function (r) { return '<option>' + r + '</option>'; }).join('') +
-            '</select></div>' : '') +
       '<div class="fld" style="margin:0;flex:1;min-width:220px">' +
         '<label>Note / remark <span id="fqcPassNoteReq" ' +
           'style="color:var(--ink3)">optional</span></label>' +
@@ -3876,20 +3866,16 @@ function wireFqcAnomalies() {
         (route === 'provisional' ? 'Pass — provisional' : 'Pass — grade A') +
         '</button></div>';
 
-    /* "Other" says nothing on its own: the note is compulsory with a coded
-       reason of Other and with a defect of Other */
-    var sel = document.getElementById('fqcPassReason');
+    /* "Other" says nothing on its own - the note is compulsory with it. */
     var syncNote = function () {
       var d = document.getElementById('fqcPassDefect');
-      var other = (sel && /^OV-OTHER/.test(sel.value)) ||
-                  defectCanonical(d && d.value) === 'Other';
+      var other = defectCanonical(d && d.value) === 'Other';
       var flag = document.getElementById('fqcPassNoteReq');
       flag.textContent = other ? 'required' : 'optional';
       flag.style.color = other ? 'var(--fail)' : 'var(--ink3)';
     };
     defectPicker(document.getElementById('fqcPassDefect'),
                  document.getElementById('fqcPassDefectList'), syncNote);
-    if (sel) sel.onchange = syncNote;
   };
 
   window.fqcCommitLive = function (outcome) {
@@ -3899,15 +3885,14 @@ function wireFqcAnomalies() {
       var el = document.getElementById(id);
       return el ? (el.value || '').trim() : '';
     };
-    var reason = outcome === 'reject' ? g('fqcLiveReason') : g('fqcPassReason');
     var note = outcome === 'reject' ? g('fqcLiveNote') : g('fqcPassNote');
     var defectText = outcome === 'reject' ? g('fqcLiveDefect') : g('fqcPassDefect');
     var defect = '';
     if (defectText) {
-      /* only a name from the list is recorded - free text here is how the
-         old list grew "Buring" and a second spelling of Ribbon Short. Blank
-         is allowed: on a rejection the server then files it under the EL
-         verdict. */
+      /* only a name from the list is recorded - operators cannot mint new
+         defect names, which is how the old list grew "Buring" and a second
+         spelling of Ribbon Short. Blank is allowed on a reject when the EL
+         already has one; the server then files it under the EL's verdict. */
       defect = defectCanonical(defectText);
       if (!defect) {
         toast('“' + defectText + '” is not on the defect list — ' +
@@ -3921,41 +3906,18 @@ function wireFqcAnomalies() {
       }
     }
 
-    if (outcome === 'pass' && e.proposed !== 'pass') {
-      /* whether it may be passed at all, and how, is the server's rule - it
-         told the screen at lookup, and enforces it again on the save */
-      if (!liveFqcHold.pass_route) {
-        toast(liveFqcHold.pass_why || 'This module cannot be passed.');
-        return;
-      }
-      if (!reason) {
-        /* a reason is what turns "override" into a recorded judgement -
-           offer the form rather than refusing a click the operator meant */
-        fqcShowPassOverride();
-        toast('Passing this needs a coded reason — you are ' +
-              (liveFqcHold.pass_route === 'provisional'
-                ? 'passing it without the tester\'s reading.'
-                : 'overruling the EL verdict.'));
-        return;
-      }
-    }
-    if (outcome === 'reject' && e.proposed === 'pass' && !reason) {
-      toast('The evidence proposes a pass, so rejecting it needs a coded reason.');
+    // whether it may be passed at all is the server's rule - it told the
+    // screen at lookup (EL is never part of this), and enforces it again
+    // on the save
+    if (outcome === 'pass' && !liveFqcHold.pass_route) {
+      toast(liveFqcHold.pass_why || 'This module cannot be passed.');
       return;
     }
-    if (/^OV-OTHER/.test(reason) && !note) {
-      toast('“Other” is not a reason on its own — write what it was in ' +
-            'Note / remark.');
-      return;
-    }
-    /* Going against the evidence is asked about once. Agreeing with it is
-       not - that is the common case and stays a single key. */
-    var against = (outcome !== e.proposed) && e.proposed;
-    if (against && !window.confirm(
-        'The evidence proposes ' + e.proposed.toUpperCase() + ':\n\n' +
-        (e.why || '') + '\n\n' +
-        'You are recording ' + outcome.toUpperCase() + ' instead' +
-        (reason ? ' — ' + reason : '') + '.\n\nRecord it?')) {
+    // a rejection needs a defect on file - the EL's own verdict satisfies
+    // it when EL read something other than clean
+    var elClean = !e.el || /^(ok|pass)$/i.test(String(e.el).trim());
+    if (outcome === 'reject' && !defect && elClean) {
+      toast('A rejection needs a defect - the EL read clean, so pick one.');
       return;
     }
     /* The judgement only. The reading is the server's to take, from the
@@ -3964,7 +3926,7 @@ function wireFqcAnomalies() {
        which reading was on screen, so a tab left open while the module was
        retested is told rather than overwriting the newer one. */
     api('fqc', {method: 'POST', body: JSON.stringify({
-      serial: liveFqcHold.serial, outcome: outcome, reason: reason,
+      serial: liveFqcHold.serial, outcome: outcome,
       defect: defect, note: note,
       evidence_token: liveFqcHold.evidence_token
     })}).then(function (d) {
@@ -4004,13 +3966,14 @@ function wireFqcAnomalies() {
         if (mdl && mdl.classList.contains('on')) return;
         var e2 = liveFqcHold.evidence || {};
         if (e2.fault || e2.ss_state === 'BAD') return;
-        e.preventDefault();
-        /* Space confirms the proposal, whichever way it went. Agreeing with
-           a rejection is the common case and should cost one key: the
-           defect comes off the EL, and the note is there for anyone who
-           wants to add to it. */
-        if (e2.proposed === 'pass' || e2.proposed === 'reject') {
-          fqcCommitLive(e2.proposed);
+        /* Space is Pass, and only the fast path: EL reading clean AND Pmax
+           at or above the wattage. Anything else - a defect on the EL, a
+           short reading, an unreachable tester - is a button, not a key,
+           even though EL alone can never block it. */
+        var elClean = !!e2.el && /^(ok|pass)$/i.test(String(e2.el).trim());
+        if (liveFqcHold.pass_route === 'direct' && elClean) {
+          e.preventDefault();
+          fqcCommitLive('pass');
         }
       }
     });
@@ -7323,8 +7286,15 @@ function wireFqcAnomalies() {
       } else if (r.type === 'provisional_mismatch') {
         action = '<button class="btn btn-ghost btn-sm" onclick="reviewOpenProvisional(' +
           r.id + ')">Resolve</button>';
-      } else {
+      } else if (r.type === 'duplicate_scan') {
         action = '<button class="btn btn-ghost btn-sm" onclick="reviewOpenDuplicate(' +
+          r.id + ')">Resolve</button>';
+      } else {
+        // Stage 5: the ingest-found types (icon_ingest.py) - not_in_master,
+        // ss_skip, looked_up_no_decision, ftr_junk/ftr_failed. One shape,
+        // one reason, no resolution to choose - the server decides
+        // 'planned' vs 'acknowledged' from the type itself.
+        action = '<button class="btn btn-ghost btn-sm" onclick="reviewOpenIngest(' +
           r.id + ')">Resolve</button>';
       }
       return '<tr><td class="mono" style="font-size:11px">' + esc(when) + '</td>' +
@@ -7538,6 +7508,63 @@ function wireFqcAnomalies() {
           toast('Review #' + reviewId + ' resolved: ' + d.resolution.replace(/_/g, ' ') + '.');
         window.iconReviewRefresh();
         if (window.iconRefresh) window.iconRefresh();
+      });
+  };
+
+  /* Stage 5: an event a SCAN found, not a person raised (icon_ingest.py) -
+     not_in_master, ss_skip, looked_up_no_decision, ftr_junk/ftr_failed. One
+     shape for all of them: say why, resolve. not_in_master_unplanned is the
+     one the server itself checks - it refuses until the serial is actually
+     in the master, so a wrong "yes I planned it" cannot close the item. */
+  window.reviewOpenIngest = function (reviewId) {
+    var item = (window.__reviewItems || []).filter(function (r) {
+      return String(r.id) === String(reviewId) && r.type !== 'quality_grade' &&
+             r.type !== 'duplicate_scan' && r.type !== 'provisional_mismatch'; })[0];
+    if (!item) return;
+    var host = document.getElementById('mdlGeneric');
+    var mdl = document.getElementById('mdl');
+    if (!host || !mdl) return;
+    var esc = reviewEsc;
+    var title = document.getElementById('mdlTitle');
+    var sub = document.getElementById('mdlSub');
+    if (title) title.textContent = esc(item.flag) + ' · ' + esc(item.serial);
+    if (sub) sub.textContent = esc(item.detail || '');
+    if (typeof modalMode === 'function') modalMode(true);
+    var isUnplanned = item.type === 'not_in_master_unplanned';
+    host.innerHTML =
+      '<div class="note n-info"><span>ⓘ</span><span>' + esc(item.detail || '') +
+        (isUnplanned ? ' — plan it with an indent first; this only ' +
+          'resolves once the serial is actually in the master.' : '') +
+        '</span></div>' +
+      '<div class="fld"><label>Why? (required)</label>' +
+      '<textarea id="revWhy" rows="3" placeholder="' +
+        (isUnplanned ? 'e.g. planned with indent IND-...' :
+         'what was done about it') + '"></textarea></div>' +
+      '<div class="card-f"><button class="btn btn-primary" ' +
+        'onclick="reviewSubmitIngest(' + reviewId + ',\'' + item.type + '\')">' +
+        'Resolve</button>' +
+      '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>';
+    mdl.classList.add('on');
+    var box = document.getElementById('revWhy');
+    if (box) box.focus();
+  };
+
+  window.reviewSubmitIngest = function (reviewId, itemType) {
+    var box = document.getElementById('revWhy');
+    var why = box ? box.value.trim() : '';
+    if (!why) {
+      if (typeof toast === 'function') toast('Say why before resolving this.');
+      if (box) box.focus();
+      return;
+    }
+    api('review/resolve', { method: 'POST', body: JSON.stringify(
+      { type: itemType, id: reviewId, reason: why }) })
+      .then(function (d) {
+        if (!d.ok) { if (typeof toast === 'function') toast(d.why); return; }
+        if (typeof closeModal === 'function') closeModal();
+        if (typeof toast === 'function')
+          toast('Review #' + reviewId + ' resolved: ' + d.resolution + '.');
+        window.iconReviewRefresh();
       });
   };
 

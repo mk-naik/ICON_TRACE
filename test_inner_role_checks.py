@@ -144,7 +144,8 @@ def dispatch_one(c, i):
 def duplicate_scan(c, i):
     add_rescan_row(i, "2026-09-09 12:00:00", "600.0")
     AUTH.test_login(c, role="FQC Operator")
-    d = c.post("/api/fqc", json={"serial": serial(i), "outcome": "reject"}).get_json()
+    d = c.post("/api/fqc", json={"serial": serial(i), "outcome": "reject",
+                                 "defect": "Cell Crack"}).get_json()
     assert d.get("duplicate_scan") and d.get("agree") is False, d
     return d["review_id"]
 
@@ -178,7 +179,7 @@ def t_inner_quality_grade():
     c = setup()
     AUTH.test_login(c)
     assert c.post("/api/fqc", json={"serial": serial(0), "outcome": "reject",
-                  "reason": "OV-QUALITY — quality engineer instruction"}
+                  "defect": "Cell Crack"}
                   ).status_code == 200
     as_role_with_review_write(c, "Production Incharge")
     r = c.post("/api/review/resolve", json={"type": "quality_grade",
@@ -268,7 +269,7 @@ def t_super_admin_passes_every_inner_check():
     AUTH.test_login(c)                   # Super Admin (the default)
     # quality_grade (_QUALITY_ROLES)
     assert c.post("/api/fqc", json={"serial": serial(0), "outcome": "reject",
-                  "reason": "OV-QUALITY — quality engineer instruction"}
+                  "defect": "Cell Crack"}
                   ).status_code == 200
     AUTH.test_login(c)
     r = c.post("/api/review/resolve", json={"type": "quality_grade",
@@ -318,7 +319,7 @@ def t_right_role_without_flag():
     c = setup()
     AUTH.test_login(c)
     assert c.post("/api/fqc", json={"serial": serial(0), "outcome": "reject",
-                  "reason": "OV-QUALITY — quality engineer instruction"}
+                  "defect": "Cell Crack"}
                   ).status_code == 200
     me = AUTH.test_login(c, role="Quality")["login_id"]
     set_perm(me, "review", True, False)

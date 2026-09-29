@@ -554,49 +554,17 @@ def simulate(serial, wattage):
 EL_CLEAN = ("ok", "pass", "")
 
 
-def propose_outcome(wattage, ss, el):
-    """PASS or REJECT, proposed. Never decided here.
-
-    A module passes when it makes its rated wattage AND the EL is clean:
-
-        Pmax >= wattage   and   EL verdict clean   ->  pass
-        anything else                              ->  reject
-
-    Pmax is measured against the module's own wattage, not a tolerance band
-    below it. A 590 W module reading 585 W is not a 590 W module, and the
-    customer is buying the number on the label.
-
-    Returns (outcome, why) where outcome is 'pass', 'reject', or None when
-    there is not enough evidence to propose anything.
-    """
-    if ss["state"] == BAD:
-        return None, ("The tester could not read this module. That is a "
-                      "fault, not missing data - it has to be looked at "
-                      "before it can be judged.")
-    if ss["state"] != OK or el["state"] != OK:
-        return None, ("Evidence incomplete - decide on what is in front of "
-                      "you and it will be confirmed when the source returns.")
-
-    pmax = ss.get("pmax") or 0
-    want = float(wattage or 0)
-    verdict = (el.get("verdict") or "").strip()
-    clean = verdict.strip().lower() in EL_CLEAN
-
-    if pmax >= want and clean:
-        return "pass", "EL clean and Pmax %.1f W is at or above the %g W " \
-                       "wattage." % (pmax, want)
-    if pmax < want and not clean:
-        return "reject", "EL reads %r and Pmax %.1f W is below the %g W " \
-                         "wattage." % (verdict, pmax, want)
-    if pmax < want:
-        return "reject", "EL is clean but Pmax %.1f W is below the %g W " \
-                         "wattage." % (pmax, want)
-    return "reject", "Pmax %.1f W meets the %g W wattage, but the EL " \
-                     "reads %r." % (pmax, want, verdict)
-
-
 def gather(cfg, serial, wattage, sandbox=False, line=None):
-    """One call for the FQC screen. Returns evidence plus a proposed grade.
+    """One call for the FQC screen. Returns the evidence, nothing more.
+
+    There used to be a PASS/REJECT proposed here too (propose_outcome()),
+    confirmed or overruled on the screen. It went: SS sees power and EL sees
+    two strings, and neither sees a frame dent, a corner chip, or whether a
+    cell crack is minor or major. A verdict built from two of five kinds of
+    evidence produced a 58% reject rate on modules mostly at or above
+    nameplate. FQC decides now, from what is in front of it - the SS
+    wattage floor is still enforced (app._pass_route), but nothing here
+    proposes a verdict for the screen to agree or disagree with.
 
     `line` narrows the lookup to that line's tester - the FQC station knows
     its own line from station_config. Left out, both are searched, because
@@ -607,7 +575,6 @@ def gather(cfg, serial, wattage, sandbox=False, line=None):
     else:
         ss = read_sun_simulator(cfg, serial, line)
         el = read_el(cfg, serial, line)
-    outcome, why = propose_outcome(wattage, ss, el)
     degraded = ss["state"] != OK or el["state"] != OK
     out = {
         "pmax": ss.get("pmax"), "params": ss.get("params") or [],
@@ -618,7 +585,6 @@ def gather(cfg, serial, wattage, sandbox=False, line=None):
         "fault": ss["state"] == BAD,
         "el": el.get("verdict"), "el_state": el["state"], "el_note": el["note"],
         "el_path": el.get("path"),
-        "proposed": outcome, "why": why,
         "degraded": degraded,
         "mode": "provisional" if degraded else "confirmed",
         "sandbox": sandbox,

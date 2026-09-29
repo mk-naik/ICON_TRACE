@@ -883,16 +883,16 @@ button.mchip:focus-visible{outline:2px solid var(--solar);outline-offset:1px;
   <!-- ===== FQC ENTRY ===== -->
   <section class="view" id="v-fqc">
     <div class="pg"><h2>FQC Verification</h2>
-      <p>The grade is derived from the evidence — confirm it, or overrule it with a reason</p>
+      <p>Pass, Reject or Discard - the Sun Simulator reading and the wattage floor decide whether a pass is available, the EL verdict is advisory</p>
       <div class="pg-act">
         <span class="tag t-info" id="fqcStation">FQC-01 · A-Line</span>
         <button class="btn btn-ghost" onclick="go('dash',navBtn('dash'))">Dashboard</button></div></div>
 
-    <div class="note n-info"><span>ⓘ</span><span>FQC does not ask what grade to give. It shows the
-      Sun Simulator result and the EL/VI operator's verdict, proposes a grade from the versioned
-      rule table, and asks you to <b>confirm or overrule</b>. Evidence values are
-      <b>snapshotted onto the record</b>, so a later re-import cannot silently rewrite why a
-      module was graded.</span></div>
+    <div class="note n-info"><span>ⓘ</span><span>FQC does not propose a verdict to agree or
+      disagree with. It shows the Sun Simulator result and the EL/VI operator's verdict, and you
+      decide: <b>Pass</b>, <b>Reject</b> or <b>Discard</b>. EL can add a defect, never block a
+      pass or force a rejection. Evidence values are <b>snapshotted onto the record</b>, so a
+      later re-import cannot silently rewrite why a module was graded.</span></div>
 
     <div class="scanbox">
       <label>Scan module barcode</label>
@@ -901,7 +901,7 @@ button.mchip:focus-visible{outline:2px solid var(--solar);outline-offset:1px;
           onkeydown="if(event.key==='Enter'){event.preventDefault();fqcLookup()}">
         <button class="btn btn-solar" style="padding:0 22px" onclick="fqcLookup()">Look up</button></div>
       <div class="scan-hint"><span><span class="kbd">Enter</span> look up</span>
-        <span><span class="kbd">Space</span> confirm proposal</span>
+        <span><span class="kbd">Space</span> pass (clean EL, at wattage)</span>
         <span><span class="kbd">Esc</span> discard</span>
         <span>This shift <b id="fqcN">1,266</b></span>
         <span>Overridden today <b id="fqcOv">14</b></span>

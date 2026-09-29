@@ -37,6 +37,7 @@ import icon_challan_import as chimport
 import icon_box_number as bx
 import icon_serial as gen
 import icon_evidence as ev
+import icon_ingest
 import icon_models as models
 import icon_customers as customers
 import icon_barcode as bc
@@ -7145,10 +7146,10 @@ def _evidence_token(evidence):
 
     Not data, and never read back as data: it only answers "does what you
     were looking at still hold". Covers what a decision turns on - the
-    state, the power, the EL verdict and the proposal.
+    state, the power and the EL verdict.
     """
     parts = [str(evidence.get(k)) for k in
-             ("ss_state", "pmax", "el_state", "el", "proposed")]
+             ("ss_state", "pmax", "el_state", "el")]
     return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
@@ -7172,6 +7173,31 @@ def _fqc_payload(cur, serial, sandbox=False, line=None):
     # itself carries no line indicator.
     evidence = ev.gather(cfg, serial, rec.get("wattage") or 0,
                          sandbox=sandbox, line=line)
+    # The serial may have been read by the Sun Simulator BEFORE it was in
+    # the master (review_item type not_in_master_unplanned) - icon_ingest
+    # saved that reading (ftr_reading) because the live CSV and its archive
+    # will not hold the row forever. Now that Incharge has planned it and
+    # FQC can look it up, the live scan may already come back NA even
+    # though the module was genuinely tested once - fall back to the saved
+    # reading rather than sending it back to the tester for no reason.
+    if not sandbox and evidence.get("ss_state") == ev.NA:
+        saved = db.get_ftr_reading(cur, serial)
+        if saved:
+            reading = saved["reading"]
+            evidence["ss_state"] = ev.OK
+            evidence["pmax"] = reading.get("pmax")
+            evidence["params"] = reading.get("params") or []
+            evidence["tested_at"] = reading.get("tested_at")
+            evidence["ss_line"] = reading.get("line")
+            evidence["ss_attempts"] = reading.get("attempts")
+            evidence["ss_note"] = (
+                "Saved reading, captured %s - before this serial was in "
+                "the master. Not read live." % (saved.get("recorded_at") or ""))
+            for k, _lab, _i, _u in ev.PARAMS_KEYS:
+                if k in reading:
+                    evidence[k] = reading.get(k)
+            evidence["degraded"] = evidence.get("el_state") != ev.OK
+            evidence["mode"] = "provisional" if evidence["degraded"] else "confirmed"
     prior = next((dict(r) for r in db.fqc_recent(cur, 1000)
                   if r.get("serial") == serial), None)
 
@@ -7214,15 +7240,21 @@ def api_fqc_lookup():
     serial = (request.args.get("serial") or "").strip().upper()
     if not serial:
         return jsonify({"ok": False, "why": "Scan or enter a serial."}), 400
+    sandbox = request.args.get("sandbox") == "1"
+    line = (request.args.get("line") or "").strip() or None
     with store.conn() as (cx, cur):
-        _rec, _evidence, out = _fqc_payload(
-            cur, serial, request.args.get("sandbox") == "1",
-            (request.args.get("line") or "").strip() or None)
+        _rec, _evidence, out = _fqc_payload(cur, serial, sandbox, line)
+        # Stage 5: the one thing an ordinary lookup does that used to be
+        # thrown away the moment the response was sent - logged only for a
+        # real module (found in master) and never in the sandbox, which is
+        # demo data, not a shift's own activity.
+        if out.get("ok") and not sandbox:
+            db.log_fqc_lookup(cur, serial, actor(), line)
     return jsonify(out), 200 if out.get("ok") else 404
 
 
-def _handle_duplicate_scan(cur, rec, evidence, serial, outcome, reason,
-                           defect, note):
+def _handle_duplicate_scan(cur, rec, evidence, serial, outcome,
+                           defect_code, note):
     """serial is already 'packed' or 'dispatched' and has just been graded
     again at FQC. Compare what this attempt would record against the FQC
     record packing (or dispatch) already acted on:
@@ -7258,18 +7290,16 @@ def _handle_duplicate_scan(cur, rec, evidence, serial, outcome, reason,
                               "- no change made." % (original.get("outcome"),
                                                      serial)})
 
-    # Disagreement: the EL verdict is the defect unless the operator named
-    # another - same rule the normal grading path applies.
-    if outcome == "reject" and not defect:
-        verdict = (evidence.get("el") or "").strip()
-        if verdict and verdict.lower() not in ev.EL_CLEAN:
-            defect = verdict
     mode = evidence.get("mode") or "provisional"
     if mode not in ("confirmed", "provisional"):
         mode = "provisional"
 
+    # record_fqc attaches the EL's own verdict as a defect automatically
+    # (source='el'), regardless of outcome - a passed module can still
+    # carry one (e.g. an operator judged past a Burning EL); it is never
+    # the caller's job to compute that here.
     new_rec = db.record_fqc(cur, serial, outcome, evidence, actor(), mode,
-                            reason, defect, note,
+                            defect=defect_code, note=note,
                             supersede=False, update_serial=False)
     review_id = db.create_review_item(
         cur, "duplicate_scan", serial, fqc_id=original["fqc_id"],
@@ -7291,63 +7321,65 @@ def _handle_duplicate_scan(cur, rec, evidence, serial, outcome, reason,
 def _pass_route(evidence):
     """How, if at all, a PASS may be recorded against this evidence.
 
-      direct       the evidence itself proposes a pass
-      el_only      the power is there and the EL verdict is the only objection:
-                   an operator who has looked at the image may overrule it,
-                   with a coded reason
-      provisional  a source is UNREACHABLE (NC), so nothing can be measured or
-                   read: the pass is recorded but the module is HELD until the
-                   evidence arrives (see _reconcile_provisional)
-      None         it cannot: a reading below the wattage is a measurement and
-                   is not open to argument, and BAD (a probe fault) or NA (the
-                   tester is up and has nothing for this serial) are quality
-                   signals that go to review, never through
+    EL never decides this - it cannot block a pass or force a reject
+    (Stage 3). Only the Sun Simulator reading and the module's own wattage
+    do:
+
+      direct       SS reads OK and Pmax meets the wattage
+      provisional  the Sun Simulator is UNREACHABLE (NC): nothing can be
+                   measured, so the pass is recorded but the module is HELD
+                   until the reading arrives (see _reconcile_provisional)
+      None         it cannot: BAD (a probe fault) or NA (the tester is up
+                   and has nothing for this serial) are quality signals that
+                   go to review, and a reading below the wattage is a
+                   measurement, not open to argument - Discard it back to
+                   the tester, or Reject it
 
     Returns (route, why) - `why` is what to tell the operator.
     """
-    if evidence.get("proposed") == "pass":
-        return "direct", None
-    ss, el = evidence.get("ss_state"), evidence.get("el_state")
+    ss = evidence.get("ss_state")
     if ss == ev.BAD:
         return None, ("The Sun Simulator returned BAD for this serial - a "
                       "probe fault. It has to be reviewed before it can be "
                       "judged.")
-    if ss == ev.NA or el == ev.NA:
-        return None, ("The %s is reachable and has nothing for this serial. "
-                      "That is a quality signal - it goes to review, it is "
-                      "not passed." % ("Sun Simulator" if ss == ev.NA
-                                       else "EL/VI"))
+    if ss == ev.NA:
+        return None, ("The Sun Simulator is reachable and has nothing for "
+                      "this serial. That is a quality signal - it goes to "
+                      "review, it is not passed.")
+    if ss == ev.NC:
+        return "provisional", (
+            "The Sun Simulator cannot be reached, so this pass is "
+            "provisional: the module is held in Hold & Deviation until the "
+            "reading is available. If it agrees the module is released to "
+            "pack automatically; if it does not, it goes to Needs Review "
+            "for a Quality decision.")
     want = float(evidence.get("wattage") or 0)
     pmax = evidence.get("pmax")
-    if ss == ev.OK and (pmax is None or pmax < want):
+    if pmax is None or pmax < want:
         return None, ("Retest it in the Sun Simulator - a reading below the "
-                      "wattage cannot be overruled.")
-    if ss == ev.NC or el == ev.NC:
-        return "provisional", (
-            "The %s cannot be reached, so this pass is provisional: the "
-            "module is held in Hold & Deviation until the reading is "
-            "available. If it agrees the module is released to pack "
-            "automatically; if it does not, it goes to Needs Review for a "
-            "Quality decision." % ("Sun Simulator" if ss == ev.NC
-                                   else "EL/VI folder"))
-    return "el_only", None
+                      "wattage cannot be passed. Discard it back to the "
+                      "tester, or Reject it.")
+    return "direct", None
 
 
 _RECONCILE_LOCK = __import__("threading").Lock()
 
 
 def _reconcile_provisional(cur):
-    """Decisions made without all the evidence, checked against it now that
-    the source may be back.
+    """Decisions made without the Sun Simulator reading, checked against it
+    now that the source may be back. EL is never part of this - it cannot
+    gate a pass or force a reject, so only whether Pmax now meets the
+    wattage matters.
 
     For each provisional decision still waiting: read the evidence again. If
-    it is still incomplete, leave it. If it is complete and its proposal is
-    the decision that was made, confirm the decision - a NEW record that
-    supersedes the provisional one, so the trail is whole - and the module is
-    released (a held pass becomes graded and packable). If it disagrees, the
-    software does not pick: the evidence's own record is snapshotted beside
-    the decision, a Needs Review item is raised for Quality, and the module
-    stays held.
+    the Sun Simulator is still unreachable, leave it. If a reading has
+    arrived and it agrees with the decision that was made (a held pass
+    where Pmax now meets the wattage; a provisional reject where it still
+    does not), confirm it - a NEW record that supersedes the provisional
+    one, so the trail is whole - and the module is released (a held pass
+    becomes graded and packable). If it disagrees, the software does not
+    pick: what the evidence now says is snapshotted beside the decision, a
+    Needs Review item is raised for Quality, and the module stays held.
 
     Called with _RECONCILE_LOCK held: two requests reconciling the same
     module at once would raise its review item twice.
@@ -7357,25 +7389,29 @@ def _reconcile_provisional(cur):
     for f in db.provisional_pending(cur):
         f = dict(f)
         e = ev.gather(cfg, f["serial"], f.get("wattage") or 0)
-        if e.get("mode") != "confirmed" or not e.get("proposed"):
+        if e.get("ss_state") == ev.NC:
             out["waiting"] += 1
             continue
-        if e["proposed"] == f["outcome"]:
+        want = float(f.get("wattage") or 0)
+        pmax = e.get("pmax")
+        would_pass = e.get("ss_state") == ev.OK and pmax is not None and pmax >= want
+        agrees = (would_pass and f["outcome"] == "pass") or \
+                 (not would_pass and f["outcome"] == "reject")
+        # whatever the operator attached at hold time carries over - a
+        # held decision reconciling to itself must not lose it
+        op_defects = [r["defect_code"] for r in
+                     db.fqc_defects_for(cur, f["fqc_id"], source="fqc")]
+        if agrees:
             db.record_fqc(cur, f["serial"], f["outcome"], e, "system",
-                          "confirmed", None, f.get("defect"), f.get("note"),
+                          "confirmed", defect=op_defects, note=f.get("note"),
                           build_instance=f.get("build_instance") or 1)
             db.audit(cur, "system", "fqc.reconciled", "serial", f["serial"],
                      {"outcome": f["outcome"], "provisional_fqc_id": f["fqc_id"]})
             out["confirmed"] += 1
             continue
-        defect = None
-        if e["proposed"] == "reject":
-            verdict = (e.get("el") or "").strip()
-            if verdict and verdict.lower() not in ev.EL_CLEAN:
-                defect = verdict
-        snap = db.record_fqc(cur, f["serial"], e["proposed"], e, "system",
-                             "confirmed", None, defect, None, supersede=False,
-                             update_serial=False,
+        outcome_now = "pass" if would_pass else "reject"
+        snap = db.record_fqc(cur, f["serial"], outcome_now, e, "system",
+                             "confirmed", supersede=False, update_serial=False,
                              build_instance=f.get("build_instance") or 1)
         rid = db.create_review_item(
             cur, "provisional_mismatch", f["serial"], fqc_id=f["fqc_id"],
@@ -7383,7 +7419,7 @@ def _reconcile_provisional(cur):
         db.set_serial(cur, f["serial"], state="hold", grade=None)
         db.audit(cur, "system", "review.provisional_mismatch", "serial",
                  f["serial"], {"review_id": rid, "decided": f["outcome"],
-                               "evidence_proposes": e["proposed"]})
+                               "evidence_now": outcome_now})
         out["flagged"] += 1
     return out
 
@@ -7420,6 +7456,46 @@ def _resolve_provisional_mismatch(cur, review_id, resolution, reason):
                 (actor(), at, resolution, reason, review_id))
     db.audit(cur, actor(), "review.resolve", "serial", item["serial"],
              {"review_id": review_id, "type": "provisional_mismatch",
+              "resolution": resolution, "reason": reason})
+    return {"ok": True, "review_id": review_id, "resolution": resolution}
+
+
+# Stage 5: the ingest-found types (icon_ingest.py) - a scan, not a person,
+# raised these, so review_item.serial may not be a real serial at all
+# (not_in_master_malformed is the point of that one).
+_INGEST_TYPES = ("not_in_master_malformed", "not_in_master_unplanned",
+                 "ss_skip", "looked_up_no_decision", "ftr_junk", "ftr_failed")
+
+
+def _resolve_ingest_item(cur, review_id, resolution, reason):
+    """not_in_master_unplanned is the one type with a real check: it is not
+    resolved by saying so, it is resolved by the serial now actually being
+    in the master - Incharge plans it with an indent first, resolves this
+    second. Every other ingest type is acknowledged once someone has looked
+    at it - there is nothing here for software to verify."""
+    item = db.review_item_get(cur, review_id)
+    if not item or item.get("type") not in _INGEST_TYPES:
+        raise _Refuse("No such review item.", 404)
+    if item["status"] != "open":
+        raise _Refuse("Review #%d is already resolved." % review_id)
+    _require_role(*_INCHARGE_ROLES, why="Only a Production Shift Incharge "
+                  "or above can resolve an ingest-found item.")
+
+    if item["type"] == "not_in_master_unplanned":
+        if db.find_serial(cur, item["serial"]) is None:
+            raise _Refuse("%s is still not in the serial master - plan it "
+                          "with an indent before resolving this."
+                          % item["serial"])
+        resolution = "planned"
+    else:
+        resolution = "acknowledged"
+
+    at = clock.now().isoformat(timespec="seconds")
+    cur.execute("UPDATE review_item SET status='resolved', resolved_by=%s, "
+                "resolved_at=%s, resolution=%s, reason=%s WHERE review_id=%s",
+                (actor(), at, resolution, reason, review_id))
+    db.audit(cur, actor(), "review.resolve", "serial", item["serial"],
+             {"review_id": review_id, "type": item["type"],
               "resolution": resolution, "reason": reason})
     return {"ok": True, "review_id": review_id, "resolution": resolution}
 
@@ -7499,30 +7575,27 @@ def api_fqc_grade():
     body saying `{"ss_state":"OK","pmax":631}` was enough to walk a module
     the tester had failed to read twice straight past the BAD block and into
     fqc_record as a 631 W reading. Every value the record keeps - the state,
-    the Pmax, the EL verdict, the proposal it was judged against and whether
-    it was confirmed - is read here, from the same source the screen read.
+    the Pmax and the EL verdict - is read here, from the same source the
+    screen read.
 
-    What the client sends is: serial, grade, an override reason, sandbox if
-    that flag is in use, and the token it was handed at lookup so a screen
-    that has gone stale can be told rather than silently overwritten.
+    Stage 3 removed the propose/confirm-overrule mechanism: EL cannot gate
+    a pass or force a reject, so there is no coded override reason any more
+    either. What the client sends is: serial, outcome (Pass/Reject), an
+    optional defect, a note, sandbox if that flag is in use, and the token
+    it was handed at lookup so a screen that has gone stale can be told
+    rather than silently overwritten.
     """
     d = request.get_json(force=True)
     serial = (d.get("serial") or "").strip().upper()
     outcome = (d.get("outcome") or "").strip().lower()
-    reason = (d.get("reason") or "").strip() or None
-    defect = (d.get("defect") or "").strip() or None
+    defect_text = (d.get("defect") or "").strip() or None
     note = (d.get("note") or "").strip() or None
     if outcome not in ("pass", "reject"):
         return jsonify({"ok": False, "why": "Record a Pass or a Rejection."}), 400
     if not serial:
         return jsonify({"ok": False, "why": "Serial is required."}), 400
-    # A coded reason of OTHER says nothing on its own; the note is the reason.
-    if reason and reason.upper().startswith("OV-OTHER") and not note:
-        return jsonify({"ok": False, "why":
-            "“Other” is not a reason on its own — write what it was in "
-            "Note / Remark."}), 400
-    if _other_needs_note(defect, note):
-        return jsonify({"ok": False, "why": _other_needs_note(defect, note)}), 400
+    if _other_needs_note(defect_text, note):
+        return jsonify({"ok": False, "why": _other_needs_note(defect_text, note)}), 400
 
     with store.conn() as (cx, cur):
         rec, evidence, out = _fqc_payload(
@@ -7540,6 +7613,16 @@ def api_fqc_grade():
             return jsonify({"ok": False, "why":
                 "%s has been cancelled and cannot be graded." % serial}), 400
 
+        # Operators cannot mint new defect names - "Other" (+ a compulsory
+        # note) is the escape hatch for anything not on defect_master.
+        defect_code = None
+        if defect_text:
+            defect_code = db.defect_code_for_text(cur, defect_text)
+            if not defect_code:
+                return jsonify({"ok": False, "why":
+                    "“%s” is not on the defect list — pick one, "
+                    "or use Other with a note." % defect_text}), 400
+
         # A module already packed or dispatched being scanned again at FQC
         # is not a normal grading event - the line has already acted on a
         # decision for it. It is a duplicate scan: compare what this reading
@@ -7547,7 +7630,7 @@ def api_fqc_grade():
         # silently re-judging a module sitting in a real box.
         if rec.get("state") in ("packed", "dispatched"):
             return _handle_duplicate_scan(cur, rec, evidence, serial, outcome,
-                                          reason, defect, note)
+                                          defect_code, note)
 
         if evidence.get("ss_state") == ev.BAD:
             return jsonify({"ok": False, "why":
@@ -7574,40 +7657,29 @@ def api_fqc_grade():
                 "%s. Look again before deciding."
                 % _evidence_summary(evidence)}), 409
 
-        proposed = evidence.get("proposed")
-
-        # THE READING CANNOT BE ARGUED WITH; THE EL VERDICT CAN.
+        # THE READING CANNOT BE ARGUED WITH; THE EL VERDICT NEVER GATES.
         #
-        # Pmax is a measurement: no reason text turns a module that measures
-        # short into one that makes its wattage, so the only way up is the
-        # Sun Simulator, and it is tested again.
-        #
-        # The EL verdict is a person's reading of an image - it is the name
-        # of the folder somebody filed it in. When the power is there and the
-        # EL is the only objection, an operator who has looked at the image
-        # may overrule it, and says why. That is a recorded judgement, not a
-        # way round the measurement.
-        route = None
+        # Pmax is a measurement: nothing turns a module that measures short
+        # into one that makes its wattage, so the only way up is the Sun
+        # Simulator, and it is tested again. EL is advisory only - it can
+        # add a defect, but it cannot block a pass or force a reject.
+        hold = False
         if outcome == "pass":
             route, why_no = _pass_route(evidence)
             if route is None:
                 return jsonify({"ok": False, "why":
                     "This module cannot be passed: %s" % why_no}), 400
-            if route == "el_only" and not reason:
-                return jsonify({"ok": False, "why":
-                    "It makes its wattage and the EL is the only objection, so "
-                    "it can be passed — but say why with a coded reason, "
-                    "having looked at the image."}), 400
-            if route == "provisional" and not reason:
-                return jsonify({"ok": False, "why":
-                    "Without the tester's evidence a pass is provisional and "
-                    "overrules a reading nobody has seen - it needs a coded "
-                    "reason. %s" % _pass_route(evidence)[1]}), 400
-        hold = route == "provisional"
-        if outcome == "reject" and proposed == "pass" and not reason:
+            hold = route == "provisional"
+
+        # A rejection needs at least one defect on file - the EL's own
+        # verdict satisfies it when EL read something other than clean; if
+        # EL read OK, an operator defect is compulsory.
+        el_verdict = (evidence.get("el") or "").strip()
+        el_has_defect = bool(el_verdict) and el_verdict.lower() not in ev.EL_CLEAN
+        if outcome == "reject" and not defect_code and not el_has_defect:
             return jsonify({"ok": False, "why":
-                "The evidence proposes a pass, so rejecting it needs a coded "
-                "reason."}), 400
+                "A rejection needs a defect - the EL read clean, so pick "
+                "one."}), 400
 
         # confirmed or provisional is a property of the evidence, not a field
         # anyone gets to set: a decision made with the tester unreachable is
@@ -7615,19 +7687,11 @@ def api_fqc_grade():
         mode = evidence.get("mode") or "provisional"
         if mode not in ("confirmed", "provisional"):
             mode = "provisional"
-        # the EL verdict is the defect unless the operator named another
-        if outcome == "reject" and not defect:
-            verdict = (evidence.get("el") or "").strip()
-            if verdict and verdict.lower() not in ev.EL_CLEAN:
-                defect = verdict
-        if _other_needs_note(defect, note):
-            return jsonify({"ok": False, "why": _other_needs_note(defect, note)}), 400
         saved = db.record_fqc(cur, serial, outcome, evidence, actor(), mode,
-                              reason, defect, note, hold=hold)
+                              defect=defect_code, note=note, hold=hold)
         db.audit(cur, actor(), "fqc." + outcome, "serial", serial,
-                 {"outcome": outcome, "mode": mode, "reason": reason,
-                  "defect": defect, "proposed": proposed, "held": hold,
-                  "ss_state": evidence.get("ss_state")})
+                 {"outcome": outcome, "mode": mode, "defect": defect_code,
+                  "held": hold, "ss_state": evidence.get("ss_state")})
     return jsonify({"ok": True, "serial": serial, "outcome": outcome,
                     "grade": saved.get("grade"), "mode": mode, "held": hold,
                     "record": saved})
@@ -7751,6 +7815,14 @@ def api_review_list():
     with _RECONCILE_LOCK:
         with store.conn() as (cx, cur):
             _reconcile_provisional(cur)
+            # The background poller (serve.py) does this every 60s; opening
+            # the list is also one of the ways the system notices, same as
+            # the reconcile above - best-effort, a share being unreachable
+            # must not break the page that would otherwise show why.
+            try:
+                icon_ingest.run(db.get_config(cur), cur, db, store)
+            except Exception:
+                pass
     with store.conn() as (cx, cur):
         items = []
         for r in db.quality_pending(cur):
@@ -7807,6 +7879,35 @@ def api_review_list():
                 "user": (orig or {}).get("decided_by"), "at": r.get("created_at"),
                 "locked": viewer not in _QUALITY_ROLES,
                 "evidence": {"original": orig_side, "evidence": new_side},
+            })
+
+        # Stage 5: events an ingest found, not a person raised. No fqc_id to
+        # join - not_in_master's whole point is a serial that may not be in
+        # the master at all, so this reads review_item alone.
+        _INGEST_LABELS = {
+            "not_in_master_malformed": ("Not in master · malformed",
+                "scanned at the Sun Simulator, does not look like a serial"),
+            "not_in_master_unplanned": ("Not in master · unplanned",
+                "scanned at the Sun Simulator, not in the serial master"),
+            "ss_skip": ("SS skip",
+                "an EL image is on file; no Sun Simulator reading anywhere"),
+            "looked_up_no_decision": ("Looked up, no decision",
+                "scanned at FQC; nothing was recorded"),
+            "ftr_junk": ("FTR anomaly · junk ID",
+                "a Sun Simulator row whose ID is not a serial at all"),
+            "ftr_failed": ("FTR anomaly · failed reading",
+                "tested, and every reading came back invalid"),
+        }
+        for r in db.review_items_unmatched(cur, list(_INGEST_LABELS)):
+            r = dict(r)
+            flag, detail = _INGEST_LABELS[r["type"]]
+            items.append({
+                "type": r["type"], "id": r["review_id"], "serial": r["serial"],
+                "model": None, "customer": None,
+                "flag": flag, "stage": r.get("line") or "—", "detail": detail,
+                "user": r.get("created_by"), "at": r.get("detected_at") or
+                        r.get("created_at"),
+                "locked": False, "evidence": None,
             })
     items.sort(key=lambda x: x.get("at") or "", reverse=True)
     return jsonify(items)
@@ -7937,6 +8038,19 @@ def api_review_resolve():
             return jsonify({"ok": False, "why": e.why}), e.code
         return jsonify(out)
 
+    if item_type in _INGEST_TYPES:
+        try:
+            review_id = int(d.get("id"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "why": "No such review item."}), 404
+        try:
+            with store.conn() as (cx, cur):
+                out = _resolve_ingest_item(cur, review_id, d.get("resolution"),
+                                           reason)
+        except _Refuse as e:
+            return jsonify({"ok": False, "why": e.why}), e.code
+        return jsonify(out)
+
     return jsonify({"ok": False, "why": "Unknown review item type."}), 400
 
 
@@ -7983,6 +8097,17 @@ def api_fqc_recent():
         if cr:
             r["customer"] = cr["name"]
     return jsonify({"rows": rows})
+
+
+@app.route("/api/fqc/defects")
+@require_screen_view("fqc", "review")
+def api_fqc_defects():
+    """The unified defect list (icon_defects.py / defect_master) - the
+    screen's picker matches against this, never a name typed free-hand.
+    Operators cannot mint new defect names; "Other" (+ a note) is the
+    escape hatch for anything not on this list."""
+    with store.conn() as (cx, cur):
+        return jsonify({"defects": db.defects(cur)})
 
 
 @app.route("/api/fqc/anomalies")
@@ -8067,6 +8192,7 @@ def api_fqc_dashboard():
             "         THEN 1 ELSE 0 END) AS awaiting_quality, "
             "SUM(CASE WHEN f.quality_grade='GY' THEN 1 ELSE 0 END) AS gy, "
             "SUM(CASE WHEN f.quality_grade='BGY' THEN 1 ELSE 0 END) AS bgy, "
+            "SUM(CASE WHEN f.quality_grade='A' THEN 1 ELSE 0 END) AS returned_a, "
             "SUM(CASE WHEN f.outcome='pass' THEN s.wattage ELSE 0 END) AS watts "
             "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
             "WHERE " + clause, args)
@@ -8080,7 +8206,8 @@ def api_fqc_dashboard():
             "WHERE " + clause + " AND f.outcome='reject' "
             "GROUP BY f.defect ORDER BY qty DESC", args)
     t = dict(totals or {})
-    for k in ("inspected", "passed", "rejected", "awaiting_quality", "gy", "bgy"):
+    for k in ("inspected", "passed", "rejected", "awaiting_quality", "gy", "bgy",
+              "returned_a"):
         t[k] = t.get(k) or 0
         
     try:
@@ -8133,6 +8260,8 @@ def api_fqc_dashboard_modules():
             where.append("f.outcome = 'pass'")
         elif cat in ('GY', 'BGY'):
             where.append("f.quality_grade = %s"); args.append(cat)
+        elif cat == 'Returned-A':
+            where.append("f.quality_grade = 'A'")
         elif cat == 'Pending':
             where.append("f.outcome = 'reject' AND f.quality_grade IS NULL")
     if remark:
@@ -8164,65 +8293,6 @@ def api_fqc_dashboard_modules():
             d["customer"] = cr["name"]
         out.append(d)
     return jsonify(out)
-
-@app.route("/fqc", methods=["GET", "POST"])
-@require_screen_write("fqc")
-def fqc():
-    serial = (request.values.get("serial") or "").strip().upper()
-    rec = evidence = None
-    with db.conn() as (cx, cur):
-        cfg = db.get_config(cur)
-        sandbox = request.values.get("sandbox") == "1"
-        if serial:
-            rec = db.find_serial(cur, serial)
-            if rec:
-                evidence = ev.gather(cfg, serial, rec.get("wattage") or 0,
-                                     sandbox=sandbox)
-        recent = db.fqc_recent(cur)
-        anomalies = ev.scan_anomalies(cfg)
-
-    if request.method == "POST" and request.form.get("action") == "confirm":
-        outcome = (request.form.get("outcome") or "").strip().lower()
-        reason = (request.form.get("reason") or "").strip()
-        defect = (request.form.get("defect") or "").strip()
-        note = (request.form.get("note") or "").strip()
-        proposed = (evidence or {}).get("proposed")
-        if not rec:
-            flash("%s is not in the serial master. Incharge must clear this "
-                  "before it can be judged." % serial, "fail")
-        elif outcome not in ("pass", "reject"):
-            flash("Record a Pass or a Rejection.", "warn")
-        elif outcome == "pass" and proposed != "pass":
-            # the same rule the API enforces: the way up is the tester
-            flash("This module cannot be passed. %s Retest it in the Sun "
-                  "Simulator." % ((evidence or {}).get("why") or ""), "fail")
-        elif reason.upper().startswith("OV-OTHER") and not note:
-            flash("“Other” is not a reason on its own — write what it was in "
-                  "Note / remark.", "fail")
-        elif _other_needs_note(defect, note):
-            flash(_other_needs_note(defect, note), "fail")
-        elif outcome == "reject" and proposed == "pass" and not reason:
-            flash("The evidence proposes a pass, so rejecting it needs a "
-                  "reason.", "fail")
-        else:
-            with db.conn() as (cx, cur):
-                db.record_fqc(cur, serial, outcome, evidence or {}, actor(),
-                              (evidence or {}).get("mode", "provisional"),
-                              reason or None, defect or None, note or None)
-                db.audit(cur, actor(), "fqc." + outcome, "serial", serial,
-                         {"outcome": outcome, "mode": (evidence or {}).get("mode"),
-                          "reason": reason or None, "defect": defect or None})
-            flash("%s recorded as %s%s." % (
-                  serial, "passed — grade A" if outcome == "pass"
-                  else "rejected — Quality decides GY or BGY",
-                  " (provisional - evidence incomplete)"
-                  if (evidence or {}).get("degraded") else ""), "pass")
-            return redirect(url_for("fqc", sandbox="1" if sandbox else ""))
-
-    return render_template("fqc.html", serial=serial, rec=rec,
-                           evidence=evidence, recent=recent,
-                           anomalies=anomalies,
-                           sandbox=request.values.get("sandbox") == "1")
 
 
 # --------------------------------------------------------------------------

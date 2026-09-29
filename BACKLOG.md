@@ -1213,9 +1213,14 @@ Mukesh's answers, 4 Sep:
 
 - [x] **FQC passes or rejects; it does not grade.** A pass is grade A and
       means Pmax at or above the nameplate with a clean EL — the label's
-      number, not a band below it. **A pass cannot be overruled**: a module
+      number, not a band below it. ~~A pass cannot be overruled~~: a module
       that measures short goes back to the Sun Simulator, because a pass is
       the only thing that reaches a customer as a full-power module.
+
+      Prediction was dropped because SS and EL are two of five kinds of
+      evidence and cannot carry a verdict. **The SS wattage floor is
+      unchanged and still enforced** — a module below nameplate is never
+      passable. Revisit if stronger evidence becomes available.
       What is rejected has no grade until Quality calls it GY or BGY on its
       own screen, from the SS reading, the EL image and what FQC recorded —
       coded defect, override reason, note. No grade is what keeps it out of
@@ -5069,3 +5074,166 @@ fixes made along the way are real and tested (20 tests in
 test_cancel_documents.py, 8 checks in test_cancel_screen.py, full regression
 green). What is listed here is what a NEXT pass on this feature should read
 first, rather than rediscovering it.
+
+---
+
+## Round 35 - FQC redesign, defect vocabulary, event recording (Stages 1-5)
+
+Six stages were scoped: 1 unblocked fixes, 2 defect vocabulary (blocked on
+the EL share listing, then unblocked once Mukesh gave the address), 3 the
+FQC screen redesign (propose/confirm-overrule removed), 4 change history
+(entity_revision, station by station), 5 event recording (not-in-master, SS
+skip, looked-up-no-decision, FTR anomalies), 6 export - **not started.**
+Stopped here on usage limits, mid-session, with real production issues found
+live and only partly resolved. Read this whole section before continuing -
+several items below are not "nice to have," they are active data quality
+problems in the live database right now.
+
+### Stage 1 - done
+- A passed module keeps its EL defect (`app.py` duplicate-scan path and the
+  main grading path both dropped the `outcome == 'reject'` guard).
+- Dead legacy `/fqc` form route and `templates/fqc.html` deleted (`_pass_route()`
+  superseded it; nothing posted there).
+- `BACKLOG.md:1216`'s "a pass cannot be overruled" struck through with the
+  SS-wattage-floor-is-unchanged note.
+- Three stale schema comments fixed; dashboard's category rollup now shows
+  "Rejected → A (Quality)" as its own row (`app.py`, `static/icon_live.js`).
+
+### Stage 2 - done
+- `icon_defects.py`: unified 53-code `DEFECT_MASTER` - 45 from the operator
+  visual list (`FQC_DEFECTS` in `icon_live.js`) + 8 confirmed live off
+  `\\169.254.1.247\el` (both lines run the same machine/software, so one
+  listing covers both). `FOLDER_NAMES`/`FOLDER_MAP` normalise spelling/case
+  variants ("low eff" vs " low eff", both seen on the real share) to one
+  code. Labels are Title Case, `OK` excluded (not a defect).
+- `defect_master` / `defect_folder_map` tables, seeded once by
+  `store._seed_defects()`, never re-seeded once populated.
+- `db.defects()` / `db.defect_code_for_folder()` / `db.defect_code_for_text()`.
+
+### Stage 3 - done
+- `icon_evidence.propose_outcome()` deleted. `gather()` returns evidence
+  only - no proposed verdict.
+- `app._pass_route()` rewritten: EL is advisory only, never gates a pass or
+  forces a reject. Only SS state + the module's own wattage decide
+  `direct` / `provisional` (SS unreachable, held) / `None` (BAD, NA, or
+  below wattage).
+- `/api/fqc` POST: no coded reason anywhere any more. Reject requires a
+  defect (the EL's own verdict satisfies it if non-clean); Pass's defect is
+  always optional and the EL verdict auto-attaches regardless of outcome,
+  via the new `fqc_defect` table (`source` = 'el'|'fqc', many rows per
+  `fqc_record`, one predicate for "defect = X" across pass/reject/any
+  grade). `fqc_record.proposed/reason/defect` kept for history, not written.
+  New: `defect_el_raw`, `test_seq`, `rule_version`.
+- Screen (`icon_live.js`): Pass / Reject / Discard, no PROPOSED block.
+  Space = Pass, enabled only when EL reads clean AND Pmax meets wattage
+  (EL can never block a pass, but the one-key shortcut is deliberately more
+  conservative than the rule itself). Defect picker now sourced from
+  `/api/fqc/defects` (fetched once the FQC view actually renders for a role
+  that can see it - an earlier version fetched unconditionally at parse
+  time and 403'd every role with no FQC access, caught by
+  test_dashrath_case.py).
+- `test_fqc_override.py` deleted; `test_fqc.py` / `test_fqc_screen.py`
+  rewritten around the new rules (54 + 15 tests).
+
+### Stage 4 - done, station 1 of N
+- New `entity_revision` table (actor, at, entity_type, entity_id, action
+  'create'|'update', before/after JSON) - distinct from `change_log`
+  (pub/sub refetch signal, no entity/action/before-after) and from
+  `dispatch_audit` (one free-form detail blob, used everywhere already).
+  Deliberately NOT wired everywhere yet - only `db.record_fqc()` (create)
+  and `db.record_quality()` (update, real before/after row). **Extending
+  this to every other write point (cancellation, allocation, indent,
+  gatepass, etc.) is explicitly future work, one station at a time - do not
+  do it all at once, per the original instruction.**
+
+### Stage 5 - done, but see the live findings below before trusting the numbers
+- `review_item` extended: `raw_id`, `source`, `line`, `detected_at`, unique
+  on `(type, raw_id)` for idempotent re-ingest (index created in
+  `store.py`'s migration, after the ALTER, not in the schema file's
+  unconditional executescript - it would fail on an existing database
+  otherwise).
+- `icon_ingest.py`: four detectors - `scan_not_in_master` (split
+  malformed/unplanned), `scan_ss_skip` (in master + EL image + no SS row
+  anywhere), `scan_looked_up_no_decision` (new `fqc_lookup_log` table),
+  `scan_ftr_anomalies` (persists `icon_evidence.scan_anomalies()`'s own
+  junk/failed rows). Reads both the live SS CSV and a configured archive
+  path (`ss_archive_path` / `ss_a_archive_path` / `ss_b_archive_path`,
+  archive-then-live ordered so a truncating tail-slice never starves the
+  live file's own recent rows). `start_background()` polls every 60s,
+  wired into `serve.py` (not `app.py` - tests and the dev reloader must not
+  run a filesystem poller). `/api/review` also runs a best-effort pass on
+  open, so the feed does not depend solely on the poller.
+- `/api/review/resolve` gained ingest-item handling: `not_in_master_unplanned`
+  is refused until the serial is actually found in the master (Incharge
+  plans it with an indent first); every other ingest type is a plain
+  acknowledge. Both gated on Production Shift Incharge or above. Needs
+  Review's action column now routes these to their own modal
+  (`reviewOpenIngest`/`reviewSubmitIngest`) instead of silently mis-firing
+  the duplicate-scan resolver, which is what it did before this fix.
+- **Mid-session addendum, not in the original six-stage brief:** once this
+  ran against the real production feed, `not_in_master_unplanned` was
+  found sitting at 960 open items after a few hours - not five in a shift,
+  hundreds, because a module rescanned repeatedly before Incharge plans it
+  was creating one review item PER SCAN. Fixed:
+  - One review item per SERIAL for `not_in_master_unplanned`, not per scan
+    (`db.ingest_review_item_latest()`, upsert on `(type, raw_id=serial)`).
+    Other ingest types unchanged (still per-raw-scan, since they were not
+    the ones flooding).
+  - New `ftr_reading` table: the Sun Simulator reading is saved (latest
+    scan wins) the moment a serial is flagged unplanned, because the live
+    CSV and its archive will not hold that row forever - by the time
+    Incharge gets to planning it, the original row may have rotated away.
+  - `_fqc_payload()` (`app.py`) falls back to the saved `ftr_reading` when
+    the live scan comes back NA, so FQC can grade a retroactively-planned
+    serial using the reading it already has - no re-test, no stopping the
+    line to satisfy bookkeeping that happened late.
+  - `test_icon_ingest.py` (13 tests) covers all of the above, including the
+    fallback surviving a fully-rotated (empty) live CSV.
+
+### FLAGGED - pending decisions and unfinished cleanup, read before touching this again
+
+- **The running production `serve.py` process has NOT picked up the Stage 5
+  addendum fix.** Python loads modules at process start; editing
+  `icon_ingest.py`/`db.py`/`app.py` on disk does nothing to an already-running
+  process. Until `serve.py` is restarted, the poller is still running the
+  OLD code and will keep creating a new `not_in_master_unplanned` row per
+  scan, not per serial. **Restart is required for the fix to take effect -
+  not done yet, needs sign-off on when.**
+- **~960 duplicate `not_in_master_unplanned` rows are sitting in the live
+  database right now**, all for a much smaller set of genuinely-unplanned
+  serials, product of the per-scan bug above before it was found. The code
+  fix stops NEW duplicates; it does not retroactively collapse what is
+  already there. A one-time cleanup was proposed (keep the most recent open
+  row per serial, re-key it so future rescans update it correctly, mark the
+  rest resolved as `merged_duplicate` - not deleted, closed) but **not run
+  - awaiting explicit go-ahead**, since it is a direct mutation of ~960 rows
+  in the live production database, not a code change.
+- **Whether 960-in-one-day unplanned serials is itself normal for this line
+  is still an open question**, separate from the duplicate-row bug. It may
+  mean Planning/Incharge's indent-and-allocation step is genuinely lagging
+  line output by that much, which would be a real operational problem the
+  software is now correctly surfacing for the first time (it used to be
+  thrown away entirely) rather than a defect in the detector. Needs
+  Mukesh's read on whether that volume is expected for this line right now.
+- **`entity_revision` (Stage 4) is wired for FQC's two write points only.**
+  Cancellation (Round 34), allocation, indent, gatepass and everything else
+  still have no before/after audit trail - deliberately deferred, per the
+  original "station by station, not all at once" instruction, but it is
+  still a gap, not a finished feature.
+- **Stage 6 (export) has not been started at all** - Excel/CSV, the
+  `test_count`/`test_seq` main + test-history feeds, the two known
+  cancelled-row gaps in `db.fqc_recent(include_superseded=True)` and
+  `db.serials_for()` (`/export/serials.csv` currently emits cancelled
+  serials un-marked). All still open exactly as the original brief
+  described them.
+- **The old `/export/fqc.csv` ad hoc export** (`app.py`, `export_csv`) still
+  writes `proposed`/`reason` columns that Stage 3 stopped populating - not
+  broken (they will just read empty for every new row), but stale, and
+  Stage 6 should replace this ad hoc export rather than patch it.
+- **`icon_ingest.scan_ss_skip`'s EL bulk listing is new, unaudited code**
+  (`_el_recent_files()`, walking date/shift/category folders directly,
+  distinct from `read_el()`'s single-serial search). It has unit tests
+  against a synthetic folder tree but has not been run against the real EL
+  share at volume the way Stage 2's vocabulary was confirmed live - worth a
+  live check before trusting its "4 in a shift" count the way the brief
+  described it.

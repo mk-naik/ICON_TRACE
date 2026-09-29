@@ -481,7 +481,7 @@ def t_reason_mandatory_everywhere():
     # setup() gives every serial a clean, full-power reading, so overruling
     # it to a reject needs the same coded reason a real override would.
     assert c.post("/api/fqc", json={"serial": serial(0), "outcome": "reject",
-                 "reason": "OV-QUALITY — quality engineer instruction"}
+                 "defect": "Cell Crack"}
                  ).status_code == 200
     r = c.post("/api/review/resolve",
               json={"type": "quality_grade", "id": serial(0), "grade": "GY"},
@@ -533,7 +533,7 @@ def t_production_sees_but_cannot_act_on_quality():
     # setup() gives every serial a clean, full-power reading, so overruling
     # it to a reject needs the same coded reason a real override would.
     assert c.post("/api/fqc", json={"serial": serial(0), "outcome": "reject",
-                 "reason": "OV-QUALITY — quality engineer instruction"}
+                 "defect": "Cell Crack"}
                  ).status_code == 200
 
     feed = c.get("/api/review", headers=as_role(c, "Production Incharge")).get_json()

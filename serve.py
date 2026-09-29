@@ -92,6 +92,12 @@ if __name__ == "__main__":
     from app import _RESET_ENABLED
     log.info("Database reset endpoint: %s",
              "ENABLED" if _RESET_ENABLED else "DISABLED")
+
+    import icon_ingest
+    icon_ingest.start_background()
+    log.info("Event ingest running: not-in-master, SS skip, looked-up-no-"
+             "decision, FTR anomalies - every 60s")
+
     log.info("Serving on http://%s:%s with %d threads", HOST, PORT, THREADS)
     serve(app, host=HOST, port=PORT, threads=THREADS,
           ident="ICON TRACE", channel_timeout=120)

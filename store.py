@@ -16,6 +16,7 @@ plain, the placeholders are normalised, and nothing depends on SQLite.
 """
 
 import os, re, json, time, sqlite3, datetime, threading
+import icon_defects
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("ICON_DB_FILE", os.path.join(BASE, "icontrace.db"))
@@ -145,6 +146,10 @@ class _Cur:
     def lastrowid(self):
         return self._c.lastrowid
 
+    @property
+    def rowcount(self):
+        return self._c.rowcount
+
 
 class conn:
     """`with store.conn() as (cx, cur):` - commit on clean exit, rollback on
@@ -257,6 +262,15 @@ def _migrate(cx, text):
         if name not in cols("fqc_record"):
             cx.execute("ALTER TABLE fqc_record ADD COLUMN %s %s" % (name, decl))
 
+    # Stage 3: the propose/confirm-overrule mechanism went, replaced by
+    # defect_el_raw (the folder name, never normalised away), test_seq (this
+    # record's place in the serial's own retest history) and rule_version
+    # (which ruleset judged it) - see schema_sqlite.sql's fqc_record header.
+    for name, decl in (("defect_el_raw", "TEXT"), ("test_seq", "INTEGER"),
+                       ("rule_version", "TEXT NOT NULL DEFAULT ''")):
+        if name not in cols("fqc_record"):
+            cx.execute("ALTER TABLE fqc_record ADD COLUMN %s %s" % (name, decl))
+
     # grade was NOT NULL when FQC still graded. A rejected module has no
     # grade until Quality gives it one, so the column has to accept NULL.
     info = cols("fqc_record").get("grade")
@@ -302,6 +316,19 @@ def _migrate(cx, text):
             if name not in cols(_cancel_tbl):
                 cx.execute("ALTER TABLE %s ADD COLUMN %s %s"
                            % (_cancel_tbl, name, decl))
+
+    # Stage 5: events an ingest found, not a person raised - see
+    # schema_sqlite.sql's review_item header. The uniqueness index has to
+    # wait for raw_id to exist, so it is created here, after the ALTER, not
+    # in the schema file where a fresh database already has the column.
+    if cols("review_item"):
+        for name, decl in (("raw_id", "TEXT"), ("source", "TEXT"),
+                           ("line", "TEXT"), ("detected_at", "TEXT")):
+            if name not in cols("review_item"):
+                cx.execute("ALTER TABLE review_item ADD COLUMN %s %s"
+                           % (name, decl))
+        cx.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_review_item_raw "
+                   "ON review_item (type, raw_id)")
     cx.commit()
 
 
@@ -411,6 +438,31 @@ def _stamps_from_created(cx):
     cx.commit()
 
 
+def _seed_defects(cx):
+    """Fill defect_master and defect_folder_map from icon_defects.py, once.
+
+    Never touches either table again once it has a row - a defect list is a
+    master the moment it exists, the same rule seed_materials (db.py)
+    follows, and for the same reason: re-seeding on every restart would undo
+    whatever's been corrected (a code retired, a folder spelling added)
+    since."""
+    def cols(t):
+        return {r[1] for r in cx.execute("PRAGMA table_info(%s)" % t)}
+    if "code" not in cols("defect_master"):
+        return
+    if cx.execute("SELECT 1 FROM defect_master LIMIT 1").fetchone():
+        return
+    for code, label, source_hint in icon_defects.DEFECT_MASTER:
+        cx.execute("INSERT INTO defect_master (code, label, source_hint) "
+                   "VALUES (?, ?, ?)", (code, label, source_hint))
+    for raw, code in icon_defects.FOLDER_NAMES.items():
+        key = icon_defects.normalize(raw)
+        cx.execute("INSERT OR IGNORE INTO defect_folder_map "
+                   "(folder_key, sample_raw, defect_code) VALUES (?, ?, ?)",
+                   (key, raw, code))
+    cx.commit()
+
+
 def ensure():
     """Create the file and the schema on first use."""
     global _ready
@@ -433,6 +485,7 @@ def ensure():
                 _migrate(cx, text)
                 _ist_timestamps(cx)
                 _stamps_from_created(cx)
+                _seed_defects(cx)
         finally:
             cx.close()
         _ready = True
