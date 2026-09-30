@@ -1187,9 +1187,18 @@
            it on the first poll instead left a save made in the seconds after
            sign-in absorbed into the baseline and never reported. */
         _chgSeq = (typeof d.change_seq === 'number') ? d.change_seq : null;
-        _enterBuilt(splash);
+        return true;
       })
-      .catch(function () { _bootFailed(splash); });
+      /* Only a failure to GET the data (refused, unreachable, not JSON) means
+         "the data could not be loaded". Building the screens from it is a
+         different step with its own failure below - it used to share this
+         catch, so ANY exception while assembling the app was reported as a
+         data problem, and the real error was thrown away unseen. */
+      .catch(function () { _bootFailed(splash); return false; })
+      .then(function (loaded) {
+        if (!loaded) return;
+        try { _enterBuilt(splash); } catch (e) { _buildFailed(e, splash); }
+      });
   }
 
   function _enterBuilt(splash) {
@@ -1197,6 +1206,17 @@
     applyWriteLocks();
     wireAutoRefreshToggle();
     startIdleWatch();
+    // the initial value already came free with boot (applyBoot() ->
+    // setNavBadges), same as Hold & Deviation's own badge; this just keeps
+    // both current afterward the same way Hold's has all along
+    if (!window.__navBadgePoll) {
+      window.__navBadgePoll = setInterval(window.iconRefreshNavBadges, 60000);
+    }
+
+    /* Only now is this page known to have been in the app once - see
+       _buildFailed for why that matters on the next sign-in. */
+    window.__iconEntered = true;
+    try { sessionStorage.removeItem('iconRebuildReload'); } catch (e) {}
 
     /* hide() honours its own minimum, so a bootstrap faster than the
        animation does not produce a flicker of half-drawn logo. */
@@ -1217,6 +1237,43 @@
     if (app) app.classList.remove('on');
     setLoginMsg('Signed in, but the app’s data could not be loaded. ' +
                 'Try again in a moment.');
+  }
+
+  /* The data arrived and the screens could not be built from it.
+
+     v4's initAll() and the live layer's wirings were written for ONE run per
+     page load. A second run - somebody signing in again on a page that has
+     already been in the app, after a session timeout or a sign-out - meets a
+     DOM the first run already changed (the live layer replaces v4's Cancel
+     document pane, for one) and can throw. That is how "Signed in, but the
+     app's data could not be loaded" appeared for Admin and Super Admin only,
+     and went away on a plain refresh: a refresh starts from v4's own markup.
+
+     So when this page HAS been in the app before, do exactly that - reload,
+     once. The session is already valid, the hash returns them to the screen
+     they were on, and nothing the server holds is lost. Once only, kept in
+     sessionStorage, so a real fault cannot become a reload loop; after that,
+     say what happened instead of blaming the data. */
+  function _buildFailed(err, splash) {
+    try { console.error('ICON TRACE: signed in, but the screens could not be built.', err); }
+    catch (e) {}
+    var tried = false;
+    try { tried = sessionStorage.getItem('iconRebuildReload') === '1'; } catch (e) {}
+    if (window.__iconEntered && !tried) {
+      try { sessionStorage.setItem('iconRebuildReload', '1'); } catch (e) {}
+      location.reload();
+      return;
+    }
+    try { sessionStorage.removeItem('iconRebuildReload'); } catch (e) {}
+    if (splash) splash.hide();
+    var login = document.getElementById('login');
+    if (login) { login.classList.remove('gone'); login.classList.add('icon-ready'); }
+    var app = document.getElementById('app');
+    if (app) app.classList.remove('on');
+    setLoginMsg('Signed in, but the screens could not be built' +
+                (err && err.message ? ' (' + err.message + ')' : '') +
+                '. Reload the page; if it happens again, tell whoever looks ' +
+                'after ICON TRACE.');
   }
 
   /* The change-password step. Rendered into the login card rather than as
@@ -1413,10 +1470,21 @@
       B.indents.forEach(function (i) { INDENTS[i.indent_no] = i.lines; });
       var sel = document.getElementById('pIndent');
       if (sel) {
+        // iconRefresh() calls this after a submit (a fresh "left to
+        // allocate" is the whole point), and rebuilding the list this way
+        // used to always revert the VISIBLE selection to "-- select --" -
+        // while Indent Item and every field derived from it (Customer,
+        // Ordered, Already allocated...) were never touched here at all and
+        // stayed exactly as they were. One indent chosen, and the screen's
+        // two halves disagreeing about which - not a second form.
+        var keep = sel.value;
         sel.innerHTML = '<option value="">— select —</option>' +
           B.indents.map(function (i) {
             return '<option>' + i.indent_no + '</option>';
           }).join('');
+        if (keep && B.indents.some(function (i) { return i.indent_no === keep; })) {
+          sel.value = keep;
+        }
       }
     }
     if (B.challan_seq && typeof CHALLAN_SEQ !== 'undefined') {
@@ -1483,7 +1551,31 @@
 
     rerender();
     markEmpty();
+    setNavBadges(B.counts || {});
   }
+
+  /* The two persistent sidebar counts v4 shipped as frozen demo numbers,
+     forever, for every account: "Needs review 5", "Drafts 4" - the exact
+     numbers still sitting in icon_trace.html's own markup. Hold & Deviation
+     already has a real one (holdBadge, iconHoldRefresh) - these are its
+     missing siblings, same idea: set from whatever is already on hand
+     (applyBoot, from B.counts - no extra fetch) and kept current afterward
+     by iconRefreshNavBadges()'s own small poll. */
+  function setNavBadges(counts) {
+    var review = document.querySelector('.nav-i[data-v="review"] b');
+    if (review && counts.needs_review !== undefined) {
+      review.textContent = counts.needs_review;
+    }
+    var drafts = document.getElementById('draftBadge');
+    if (drafts && counts.drafts !== undefined) {
+      drafts.textContent = counts.drafts;
+    }
+  }
+  window.iconRefreshNavBadges = function () {
+    api('nav_badges').then(function (d) {
+      if (d) setNavBadges(d);
+    })['catch'](function () {});
+  };
 
   /* Ask v4 to redraw whatever screen is showing, using its own render
      functions. Calling them by name keeps the arithmetic in v4 where it
@@ -2287,7 +2379,11 @@
       '<td class="num">' + (r.ss_pmax == null ? '—' : r.ss_pmax) + '</td>' +
       '<td>' + fqcEsc(r.el_verdict || '—') + '</td>' +
       '<td><span class="tag ' + (pass && r.mode !== 'provisional' ? 't-pass' : pass ? 't-rev' : 't-fail') + '">' + fqcEsc(r.grade || (pass ? (r.mode === 'provisional' ? 'Held' : 'A') : (r.quality_grade || 'Reject'))) + '</span><span style="display:none">' + (pass ? 'pass' : 'reject') + '</span></td>' +
-      '<td>' + fqcEsc(r.defects || r.defect || '—') + '</td><td>' + (r.mode === 'provisional' ? '<span class="tag t-rev">Provisional</span> ' : '') +
+      '<td>' + fqcEsc(r.defects || r.defect || '—') + '</td><td>' +
+      /* graded before Planning: no serial row yet, so no model - it carries on
+         from this decision once Incharge plans it */
+      (!r.model ? '<span class="tag t-mute">Not in master</span> ' : '') +
+      (r.mode === 'provisional' ? '<span class="tag t-rev">Provisional</span> ' : '') +
       '<span style="display:none">watt:' + (r.wattage || '') + '</span></td></tr>';
   }
 
@@ -3200,8 +3296,15 @@ function wireFqcAnomalies() {
         var grid = document.querySelector('#v-dash .grid.g5');
         if (grid) {
           var kwPassed = totals.watts ? Math.round(totals.watts / 1000).toLocaleString() : '0';
+          // Needs Review is a live BACKLOG, not a per-period statistic - an
+          // open item can sit for days before anyone gets to it, so this is
+          // deliberately NOT scoped to the filter the rest of this row obeys
+          // (server-side too: see db.review_open_counts). It used to be a
+          // literal '-' here while the demo subtext underneath still showed
+          // v4's frozen sample numbers, forever, however real data changed.
+          var nr = totals.needs_review || {};
           var vals = [totals.inspected || 0, totals.passed || 0,
-                      totals.rejected || 0, kwPassed, '—'];
+                      totals.rejected || 0, kwPassed, nr.total || 0];
           grid.querySelectorAll('.kpi .v').forEach(function (el, i) {
             el.textContent = vals[i].toLocaleString ? vals[i].toLocaleString() : vals[i];
           });
@@ -3215,7 +3318,18 @@ function wireFqcAnomalies() {
               var c = Object.keys(sMap).length;
               dEl[0].textContent = c + (c === 1 ? ' shift' : ' shifts');
             }
+            // this was v4's OWN frozen demo text ("98.03% yield") - never
+            // recalculated, so it silently disagreed with the real OK
+            // quantity above it the moment the filter changed
+            if (dEl[1]) {
+              dEl[1].textContent = (totals.inspected ?
+                (totals.passed / totals.inspected * 100).toFixed(2) : '0.00') + '% yield';
+            }
             dEl[2].textContent = (totals.gy || 0) + ' GY · ' + (totals.bgy || 0) + ' BGY';
+            if (dEl[4]) {
+              dEl[4].textContent = (nr.duplicate_scan || 0) + ' duplicate · ' +
+                (nr.not_in_master || 0) + ' not in master';
+            }
           }
         }
 
@@ -3287,18 +3401,27 @@ function wireFqcAnomalies() {
         if (days) {
           var byDay = {};
           rows.forEach(function (r) {
-            byDay[r.day] = byDay[r.day] || { inspected: 0, passed: 0, rejected: 0 };
+            byDay[r.day] = byDay[r.day] || { inspected: 0, passed: 0, rejected: 0,
+                                             shifts: {}, watts: 0 };
             byDay[r.day].inspected += r.inspected || 0;
             byDay[r.day].passed += r.passed || 0;
             byDay[r.day].rejected += r.rejected || 0;
+            // "Shifts run" and "KW" were both a literal, never-computed
+            // dash - this accumulator never collected either one
+            byDay[r.day].shifts[r.shift] = 1;
+            byDay[r.day].watts += (r.passed || 0) * (r.wattage || 0);
           });
+          var sMapD = {1: 'A', 2: 'B', 3: 'C'};
           var dayKeys = Object.keys(byDay).sort().reverse();
           days.innerHTML = dayKeys.length ? dayKeys.map(function (day) {
             var x = byDay[day];
             var pct = x.inspected ? (x.rejected / x.inspected * 100).toFixed(2) + '%' : '—';
-            return '<tr><td class="mono">' + day + '</td><td>—</td><td class="num">' +
+            var shiftsRun = Object.keys(x.shifts).sort().map(function (s) {
+              return sMapD[s] || s; }).join(', ') || '—';
+            var kw = x.watts ? Math.round(x.watts / 1000).toLocaleString() : '—';
+            return '<tr><td class="mono">' + day + '</td><td>' + shiftsRun + '</td><td class="num">' +
               x.inspected + '</td><td class="num">' + x.passed + '</td><td class="num">' +
-              x.rejected + '</td><td class="mono">' + pct + '</td><td>—</td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:\''+day+'\',date:\''+day+'\'})">View ' + x.inspected + '</button></td></tr>';
+              x.rejected + '</td><td class="mono">' + pct + '</td><td>' + kw + '</td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:\''+day+'\',date:\''+day+'\'})">View ' + x.inspected + '</button></td></tr>';
           }).join('') : '<tr data-empty><td colspan="8"><div class="empty-state">' +
             'No FQC decisions in this range.</div></td></tr>';
         }
@@ -3314,8 +3437,14 @@ function wireFqcAnomalies() {
         }
         var donutNote = document.getElementById('fqDonutNote');
         if (donutNote) {
-          donutNote.textContent = totals.inspected ?
-            (totals.passed / totals.inspected * 100).toFixed(2) + '% yield' : '—';
+          // FQC can decide before Planning has the serial, and every number
+          // on this screen is read through the serial row - so those
+          // inspections are in none of them. Say how many rather than let
+          // the total quietly be short of what the shift actually did.
+          var waiting = totals.awaiting_planning || 0;
+          donutNote.textContent = (totals.inspected ?
+            (totals.passed / totals.inspected * 100).toFixed(2) + '% yield' : '—') +
+            (waiting ? ' · ' + waiting + ' more not in master yet (counted once planned)' : '');
         }
 
         // Dynamically update available customers, models, and shifts based on current visible data
@@ -3492,8 +3621,14 @@ function wireFqcAnomalies() {
 
   function mdlFacets(m) {
     var pass = m.outcome === 'pass';
+    // A rejected module Quality returned to A is NOT the same thing as one
+    // that simply passed - it needs its own bucket, or nothing loaded here
+    // can ever equal the 'Returned-A' filter openModules({cat:'Returned-A'})
+    // sets, and that drill-down is blank on every date, not only the one it
+    // was first noticed on.
     return { res: pass ? 'Passed only' : 'Rejected only',
-             cat: pass ? 'A' : (m.quality_grade || 'Pending'),
+             cat: pass ? 'A' : (m.quality_grade === 'A' ? 'Returned-A' :
+                                (m.quality_grade || 'Pending')),
              /* the dashboard's own label for a reject with no defect */
              rem: m.defect || (pass ? '—' : '(no defect recorded)'),
              shift: MDL_SHIFT[m.shift] || String(m.shift || '—') };
@@ -3610,7 +3745,7 @@ function wireFqcAnomalies() {
       if (keeps(fc, null)) rows.push(m);
     }
     mdlSetSelect('mdlRes', MDL_ALL.res, counts.res, ['Passed only', 'Rejected only'], sel.res);
-    mdlSetSelect('mdlCat', MDL_ALL.cat, counts.cat, ['A', 'GY', 'BGY', 'Pending'], sel.cat);
+    mdlSetSelect('mdlCat', MDL_ALL.cat, counts.cat, ['A', 'Returned-A', 'GY', 'BGY', 'Pending'], sel.cat);
     mdlSetSelect('mdlRem', MDL_ALL.rem, counts.rem, null, sel.rem);
     mdlSetSelect('mdlShift', MDL_ALL.shift, counts.shift, ['A', 'B', 'C'], sel.shift);
 
@@ -3717,6 +3852,17 @@ function wireFqcAnomalies() {
           'onclick="fqcShowLiveOverride()">Reject…</button>') +
       '<button class="btn btn-ghost btn-sm" onclick="fqcCancelLive()">Discard</button>' +
       '</div></div>' +
+
+      /* Not in the serial master YET - Incharge has not planned it. FQC does
+         not wait: grade it now, it is on Needs Review, and once it is planned
+         it carries on from this decision. No re-test, no stopping the line. */
+      (data.unplanned
+        ? '<div class="note n-info" style="margin:0"><span>ⓘ</span><span>' +
+          '<b>Not in the serial master yet.</b> Grade it now - it goes to ' +
+          'Needs Review for Incharge to plan. Once planned it carries on from ' +
+          'your decision: a pass goes to packing, a rejection to Quality. ' +
+          'It does not need to be tested again.</span></div>'
+        : '') +
 
       '<div class="lookup">' +
         fqcCell('Customer', fqcEsc(data.customer || '—')) +
@@ -3931,7 +4077,9 @@ function wireFqcAnomalies() {
       evidence_token: liveFqcHold.evidence_token
     })}).then(function (d) {
       if (!d.ok) { toast(d.why); return; }
-      toast(d.serial + (d.held
+      if (d.unplanned && d.note) {
+        toast(d.note);
+      } else toast(d.serial + (d.held
         ? ' passed provisionally — held in Hold & Deviation until the ' +
           'reading is available; if it agrees it is released to pack.'
         : d.outcome === 'pass'
@@ -3940,6 +4088,7 @@ function wireFqcAnomalies() {
       renderLiveFqcRecent(); renderLiveFqcDash();
       if (window.iconHoldRefresh) window.iconHoldRefresh();
       if (window.iconQualityRefresh) iconQualityRefresh();
+      if (window.iconRefreshNavBadges) window.iconRefreshNavBadges();
       fqcCancelLive();
     });
   };
@@ -6052,13 +6201,21 @@ function wireFqcAnomalies() {
     searchScreenSetup();
     holdSetup();
     wirePlanChecks();
-    var badge = document.createElement('span');
-    badge.className = 'tb-unit';
+    /* One badge for the life of the page. This whole block runs on EVERY
+       sign-in, and a second sign-in on the same page (a session timeout, a
+       sign-out) used to add another "SQLite" beside the first, one more each
+       time. */
+    var badge = document.getElementById('dbBadge');
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.id = 'dbBadge';
+      badge.className = 'tb-unit';
+      var right = document.querySelector('.tb-right');
+      if (right) right.insertBefore(badge, right.firstChild);
+    }
     badge.title = B.db_file || '';
     badge.textContent = B.live ? 'SQLite' : 'DEMO';
     badge.style.background = B.live ? 'rgba(23,122,71,.35)' : '';
-    var right = document.querySelector('.tb-right');
-    if (right) right.insertBefore(badge, right.firstChild);
 
     /* Round 33: the landing screen may be one addScreens() only just built
        (Indent, Item Master, Loading Verification), which go() could not show
@@ -7253,14 +7410,52 @@ function wireFqcAnomalies() {
     }
   }
 
+  /* Which item types each tab of Needs Review holds. The ingest-found types
+     had no tab at all: they were only reachable under "All", and a thousand
+     unplanned modules there pushed the Quality and Duplicate items - the ones
+     a person has to DECIDE - out of sight. */
+  var REVIEW_TABS = {
+    'Quality': ['quality_grade'],
+    'Duplicate scan': ['duplicate_scan'],
+    'Provisional': ['provisional_mismatch'],
+    'Not in master': ['not_in_master_unplanned', 'not_in_master_malformed'],
+    'Scan events': ['ss_skip', 'looked_up_no_decision', 'ftr_junk', 'ftr_failed']
+  };
+  var REVIEW_LABELS = ['All', 'Quality', 'Duplicate scan', 'Provisional',
+                       'Not in master', 'Scan events'];
+  var REVIEW_DECISIONS = REVIEW_TABS['Quality'].concat(
+    REVIEW_TABS['Duplicate scan'], REVIEW_TABS['Provisional']);
+
+  /* On "All": what a person must decide first, then what a scan noticed;
+     newest first within each. */
+  function reviewOrder(a, b) {
+    var pa = REVIEW_DECISIONS.indexOf(a.type) >= 0 ? 0 : 1;
+    var pb = REVIEW_DECISIONS.indexOf(b.type) >= 0 ? 0 : 1;
+    if (pa !== pb) return pa - pb;
+    var ta = a.at || '', tb = b.at || '';
+    return ta < tb ? 1 : ta > tb ? -1 : 0;
+  }
+
+  /* "Not in master (1,089)" - what each tab holds, at a glance. */
+  function reviewTabCounts(rows) {
+    var seg = document.querySelector('#v-review .card-h .seg');
+    if (!seg) return;
+    Array.prototype.forEach.call(seg.querySelectorAll('button'), function (btn, i) {
+      var label = REVIEW_LABELS[i];
+      if (!label) return;
+      var n = label === 'All' ? rows.length : rows.filter(function (r) {
+        return REVIEW_TABS[label].indexOf(r.type) >= 0; }).length;
+      btn.textContent = label + (n ? ' (' + n.toLocaleString() + ')' : '');
+    });
+  }
+
   function reviewRenderRows(rows, filter) {
     var body = document.getElementById('rvRows');
     if (!body) return;
     window.__reviewFilter = filter;
-    var shown = filter === 'All' ? rows
-      : filter === 'Quality' ? rows.filter(function (r) { return r.type === 'quality_grade'; })
-      : filter === 'Provisional' ? rows.filter(function (r) { return r.type === 'provisional_mismatch'; })
-      : rows.filter(function (r) { return r.type === 'duplicate_scan'; });
+    var shown = filter === 'All' ? rows.slice().sort(reviewOrder)
+      : rows.filter(function (r) {
+          return (REVIEW_TABS[filter] || []).indexOf(r.type) >= 0; });
     // v-review is on TABLE_SCREENS (wireScreenTables(), above), so this
     // card was already auto-marked data-itable="flagged-entries" at sign-in
     // - search, reset, export and a "Nothing matches those filters." empty
@@ -7289,6 +7484,14 @@ function wireFqcAnomalies() {
       } else if (r.type === 'duplicate_scan') {
         action = '<button class="btn btn-ghost btn-sm" onclick="reviewOpenDuplicate(' +
           r.id + ')">Resolve</button>';
+      } else if (r.type === 'not_in_master_unplanned') {
+        /* Nothing to resolve by hand: it closes itself the moment the serial
+           is in the master, and whatever FQC decided carries on from there. */
+        action = (typeof can === 'function' && can('plan'))
+          ? '<button class="btn btn-ghost btn-sm" onclick="go(\'plan\')" ' +
+            'title="Plan it in Planning. This item closes itself once the ' +
+            'serial is in the master.">Plan it</button>'
+          : '<span class="hint">Incharge plans it</span>';
       } else {
         // Stage 5: the ingest-found types (icon_ingest.py) - not_in_master,
         // ss_skip, looked_up_no_decision, ftr_junk/ftr_failed. One shape,
@@ -7315,6 +7518,7 @@ function wireFqcAnomalies() {
       rows = rows || [];
       window.__reviewItems = rows;
       reviewRenderKpis(rows);
+      reviewTabCounts(rows);
       reviewRenderRows(rows, window.__reviewFilter || 'All');
     });
   };
@@ -7324,7 +7528,7 @@ function wireFqcAnomalies() {
     if (!seg || seg.getAttribute('data-review-wired')) return;
     seg.setAttribute('data-review-wired', '1');
     var btns = Array.prototype.slice.call(seg.querySelectorAll('button'));
-    var labels = ['All', 'Quality', 'Duplicate scan', 'Provisional'];
+    var labels = REVIEW_LABELS;
     while (btns.length < labels.length) {
       var extra = document.createElement('button');
       seg.appendChild(extra);
@@ -8059,6 +8263,29 @@ function wireFqcAnomalies() {
   }
   window.iconCancelDocSetup = cancelDocSetup;
 
+  /* v4's cancelCheck() reads the inputs of v4's own Cancel-document form
+     (#cnType, #cnReason) and it is called by renderReasons(), which
+     initAll() runs on EVERY sign-in. cancelDocSetup() above replaces that
+     whole pane with the real one (different ids), so once it has run those
+     two inputs are gone and v4's checker throws on null. On a fresh page
+     load that never showed - the swap happens after the first initAll() -
+     but a second sign-in on the same page (a session timeout, a sign-out)
+     ran initAll() over the swapped pane and the exception surfaced as
+     "Signed in, but the app's data could not be loaded", for Admin and
+     Super Admin only, until the page was refreshed. Wrapped, not replaced:
+     with v4's inputs present it is v4's function exactly. */
+  (function guardCancelCheck() {
+    var orig = window.cancelCheck;
+    if (typeof orig !== 'function' || orig.__mine) return;
+    var patched = function () {
+      if (!document.getElementById('cnType') ||
+          !document.getElementById('cnReason')) return;
+      return orig.apply(this, arguments);
+    };
+    patched.__mine = true;
+    window.cancelCheck = patched;
+  })();
+
   /* Evidence Sources, merged into Admin > Stations & sources.
    *
    * That tab's data_source card already says where evidence comes from; the
@@ -8398,7 +8625,7 @@ function wireFqcAnomalies() {
     repack:           function () { rpLoad(true); },
     disp:             function () { window.dispApply(); },
     invoice:          function () { window.renderInvoiceList(); },
-    'challan-list':   function () { clLoad(); },
+    'challan-list':   function () { clLoad(); window.iconRefreshNavBadges(); },
     'gp-list':        function () { window.gpListLoad(); },
     'loading-list':   function () { window.ldLoad(); },
     indent:           function () { window.indRefresh(); },
@@ -8406,7 +8633,7 @@ function wireFqcAnomalies() {
     prodentry:        function () { window.renderPE(); },
     loss:             function () { window.loFetchAndRender(); },
     hold:             function () { window.iconHoldRefresh(); },
-    review:           function () { window.iconReviewRefresh(); }
+    review:           function () { window.iconReviewRefresh(); window.iconRefreshNavBadges(); }
   };
 
   /* The screens the feed acts on at all: every screen whose LANDING state is

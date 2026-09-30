@@ -236,8 +236,8 @@ python serve.py                    → http://127.0.0.1:8080/
 del icontrace.db                   start clean
 python icon_invoice_parser.py --selftest
 python test_box_number.py          32 tests · box numbering, grade letters
-python test_evidence.py            26 tests · two lines of SS and EL, NC vs NA
-python test_fqc.py                 57 tests · pass/reject, and what a record may hold
+python test_evidence.py            41 tests · two lines of SS and EL, NC vs NA
+python test_fqc.py                 54 tests · pass/reject, the wattage floor, what a record may hold
 python test_indent.py               7 tests · one number, and an edit that cannot empty it
 python test_packing.py             33 tests · the gate that keeps a reject off a truck
 python test_repack.py              29 tests · a printed box number is never edited
@@ -253,10 +253,12 @@ the page is running. `ui_harness.py` starts the app on a throwaway database;
 they need `pip install playwright` and `playwright install chromium`, not Node:
 
 ```
-python test_fqc_override.py          9 tests · override both ways; a decision made without the tester is held
-python test_fqc_screen.py          10 tests · the defect list (44 + Other), and what Recent gradings shows
+python test_fqc_screen.py          15 tests · the defect list, Space = Pass, and what Recent gradings shows
 python test_search_invoice.py      16 tests · Search & Trace opens empty; every number the system issues is found
 python test_indent_export.py        4 tests · one row per indent item, through /api/export/xlsx
+python test_fqc_unplanned.py        37 tests · FQC on a serial the master does not have yet
+python test_defect_readers.py        6 tests · the defect a decision carries is shown on every screen
+python test_relogin.py               6 tests · signing in AGAIN on a page that has been in the app
 ```
 
 The JS tests read their functions out of `icon_live.js`, so they test what
@@ -318,11 +320,11 @@ subtly wrong produces a system that looks right and is not.
 - **Provisioning a real account** (Round 23 on): the CLI and the real app
   (serve.py) both default ICON_DB_FILE to icontrace.db, so
   `python icon_auth_cli.py create-superadmin ...` with no override already
-  writes to the database the real app reads. But app.py has no /enrol
-  route yet (Round 24) — only the lab serves one, and left to ITS OWN
-  default the lab opens auth_lab/lab.db instead, a different file, where
-  the token the CLI just printed does not exist. Point the lab at the
-  SAME database to complete enrolment against the real account:
+  writes to the database the real app reads. app.py serves /enrol itself
+  since Round 25, so the real app can complete an enrolment. The lab, left
+  to ITS OWN default, opens auth_lab/lab.db instead - a different file,
+  where a token the CLI just printed does not exist - so if you enrol
+  through the lab, point it at the SAME database:
   `ICON_DB_FILE=<path to icontrace.db> python auth_lab/lab_app.py`, then
   open the Enrol URL the CLI printed. The CLI prints this exact instruction
   itself now, with the real path filled in, after create-superadmin,

@@ -556,6 +556,61 @@ def t_production_sees_but_cannot_act_on_quality():
 
 
 # --------------------------------------------------------------------------
+# db.review_open_counts() - the FQC Dashboard's "Needs Review" KPI. It used
+# to be a literal '-' there, no matter what was actually open.
+# --------------------------------------------------------------------------
+
+def open_counts():
+    with store.conn() as (cx, cur):
+        return db.review_open_counts(cur)
+
+
+@test("review_open_counts sees a duplicate scan, a rejected-awaiting-Quality "
+      "module, and sums them into one total - the same three things Needs "
+      "Review itself lists, counted rather than fetched")
+def t_open_counts_basic():
+    c = setup()
+    assert open_counts() == {"total": 0, "duplicate_scan": 0, "not_in_master": 0}
+
+    pass_and_pack(c, 0)
+    add_rescan_row(0, "2026-09-09 12:00:00", "600.0")   # disagreeing rescan
+    c.post("/api/fqc", json={"serial": serial(0), "outcome": "reject"},
+           headers=as_role(c, "FQC Operator"))
+    n = open_counts()
+    assert n["duplicate_scan"] == 1 and n["total"] == 1, n
+
+    c.post("/api/fqc", json={"serial": serial(1), "outcome": "reject",
+                             "defect": "Cell Crack"},
+           headers=as_role(c, "FQC Operator"))   # rejected, Quality has not called it
+    n = open_counts()
+    assert n["duplicate_scan"] == 1 and n["not_in_master"] == 0 and n["total"] == 2, n
+
+    # Quality calling it closes it out of the count, same as resolving the
+    # duplicate scan would
+    r = c.get("/api/review", headers=as_role(c, "Quality"))
+    review_id = next(x["id"] for x in r.get_json() if x["type"] == "quality_grade")
+    r = c.post("/api/review/resolve", json={"type": "quality_grade",
+                                            "id": serial(1), "grade": "BGY",
+                                            "reason": "cell crack confirmed"},
+               headers=as_role(c, "Quality"))
+    assert r.status_code == 200, r.get_json()
+    n = open_counts()
+    assert n["total"] == 1, n   # only the still-open duplicate scan left
+
+
+@test("review_open_counts never caps at 200, unlike the row-fetching "
+      "functions it mirrors the WHERE clause of")
+def t_open_counts_uncapped():
+    c = setup(n=1)
+    with store.conn() as (cx, cur):
+        for i in range(205):
+            db.ingest_review_item(cur, "not_in_master_unplanned",
+                                  "ICON625R129%07d" % i, "raw-%d" % i, "test")
+    n = open_counts()
+    assert n["not_in_master"] == 205 and n["total"] == 205, n
+
+
+# --------------------------------------------------------------------------
 # runner
 # --------------------------------------------------------------------------
 

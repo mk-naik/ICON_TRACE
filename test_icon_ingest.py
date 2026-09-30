@@ -66,6 +66,7 @@ JUNK = "NOT-A-SERIAL"
 
 SS = os.path.join(TMP, "ss.csv")
 EL = os.path.join(TMP, "el")
+XML = os.path.join(TMP, "XML")         # the tester's own result files
 
 
 def ss_row(sid, at, pmax):
@@ -78,9 +79,25 @@ def write_ss(rows):
         csv.writer(fh).writerows(rows)
 
 
-def setup():
+def put_xml(serial, day="20260929", pmax="630.0", at="2026/09/29 10:03:00"):
+    """One of the tester's per-module result files - what says a module WAS
+    tested after its CSV row was cut away."""
+    d = os.path.join(XML, day)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, serial + ".xml"), "w", encoding="utf-8") as fh:
+        fh.write('<?xml version="1.0" encoding="UTF-8"?><IVTestData><Result>'
+                 "<Date>%s</Date><ID>%s</ID><Pmax>%s</Pmax><Isc>12.1</Isc>"
+                 "<Voc>48.9</Voc></Result></IVTestData>" % (at, serial, pmax))
+
+
+def setup(xml_root=True):
     store.wipe()
     shutil.rmtree(EL, ignore_errors=True)
+    shutil.rmtree(XML, ignore_errors=True)
+    import icon_evidence as _ev
+    _ev.clear_xml_cache()
+    if xml_root:
+        os.makedirs(XML, exist_ok=True)
     os.makedirs(os.path.join(EL, "2026-09-29", "早班", "Cell Crack"),
                exist_ok=True)
     open(os.path.join(EL, "2026-09-29", "早班", "Cell Crack",
@@ -93,7 +110,8 @@ def setup():
     with store.conn() as (cx, cur):
         db.set_config(cur, {
             "ss_csv_path": SS, "ss_a_csv_path": "", "ss_b_csv_path": "",
-            "el_root": EL, "el_a_root": "", "el_b_root": ""})
+            "el_root": EL, "el_a_root": "", "el_b_root": "",
+            "ss_xml_root": XML if xml_root else ""})
         for i, s in enumerate((IN_MASTER, SS_SKIP_S)):
             store.insert(cur, "serial", {
                 "serial": s, "build_instance": 1, "model": "ISEN625-G12R",
@@ -158,6 +176,47 @@ def t_ss_skip_not_when_read():
     with store.conn() as (cx, cur):
         counts = run_ingest(cur)
     assert "ss_skip" not in counts, counts
+
+
+@test("SS skip is NOT claimed when the tester's own result file has the module - "
+      "its CSV row was cut away, which is not the same as never tested")
+def t_ss_skip_confirmed_against_result_file():
+    setup()
+    put_xml(SS_SKIP_S)                       # tested; the row has since been cut
+    with store.conn() as (cx, cur):
+        counts = run_ingest(cur)
+    assert "ss_skip" not in counts, counts
+    with store.conn() as (cx, cur):
+        assert store.one(cur, "SELECT COUNT(*) AS n FROM review_item WHERE "
+                              "type='ss_skip'")["n"] == 0
+
+
+@test("with no way to confirm - no archive path and no result files - nothing is "
+      "flagged SS skip at all: the cut CSV would make every module look skipped")
+def t_ss_skip_needs_something_to_confirm_against():
+    setup(xml_root=False)
+    with store.conn() as (cx, cur):
+        counts = run_ingest(cur)
+    assert "ss_skip" not in counts, counts
+    # and the rest of the pass still happens
+    assert counts.get("not_in_master_unplanned") == 1, counts
+
+
+@test("the EL day folders are chosen by the DATE they name, so a stray folder "
+      "nobody dated does not take the day's place")
+def t_el_days_by_date():
+    setup()
+    os.makedirs(os.path.join(EL, "New folder", "Burning"), exist_ok=True)
+    os.makedirs(os.path.join(EL, "2026-09-28", "早班", "OK"), exist_ok=True)
+    open(os.path.join(EL, "2026-09-28", "早班", "OK", IN_MASTER + ".jpg"), "w").close()
+    picked = [e.name for e in icon_ingest._el_day_dirs(EL, days=2)]
+    assert picked == ["2026-09-29", "2026-09-28"], picked
+    assert [e.name for e in icon_ingest._el_day_dirs(EL, days=1)] == ["2026-09-29"]
+    assert icon_ingest._el_day_name("New folder") is None
+    assert icon_ingest._el_day_name("16-09-2026") == (2026, 9, 16)   # the real share has one
+    assert icon_ingest._el_day_name("2026-09-29") == (2026, 9, 29)
+    serials = {s for s, _c, _m, _p in icon_ingest._el_recent_files(EL, days=2)}
+    assert serials == {SS_SKIP_S, IN_MASTER}, serials
 
 
 @test("re-running the same scan over the same rows and files writes nothing new")

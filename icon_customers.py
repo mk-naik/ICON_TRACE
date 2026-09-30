@@ -52,22 +52,42 @@ _SEED = [
         "ICON SOLAR-EN POWER TECHNOLOGIES PVT. LTD.",
     ]),
 
-    ("C0001", "Agni Green Power Limited (Mz)", "15AACCA2122Q1ZT", "Mizoram",
-     ["AGNI GREEN POWER LIMITED", "AGNI GREEN POWER", "AGNI"]),
-    ("C0002", "Borosil Renewables Limited", None, "Maharashtra",
-     ["BOROSIL RENEWABLES", "BOROSIL", "BOROSIL (RENEWABLES)"]),
-    ("C0003", "Ravitya Solar Energy LLP - (MH)", "27ABNFR6585K1Z9", "Maharashtra",
-     ["RAVITYA SOLAR ENERGY LLP", "RAVITYA SOLAR ENERGY", "RAVITYA"]),
-    ("C0004", "Agrawal Channel Mills Private Limited", "22AAFCA7929N1ZC",
-     "Chhattisgarh", ["AGRAWAL CHANNEL MILLS", "AGRAWAL CHANNEL"]),
-    ("C0005", "Srvs Solars Limited", "22AACCP9830A1ZV", "Chhattisgarh",
-     ["SRVS SOLARS", "SRVS"]),
-    ("C0006", "Rainbow Tradefin Solutions Private Limited", None, "Chhattisgarh",
-     ["RAINBOW TRADEFIN SOLUTIONS", "RAINBOW TRADEFIN", "RAINBOW"]),
-    ("C0007", "Aditya Green Energy PVT LTD", "27AAJCA4909N1Z8", "Maharashtra",
-     ["ADITYA GREEN ENERGY", "ADITYA GREEN"]),
-    ("C0008", "Sai Babuji Projects", None, None, ["SAI BABUJI"]),
-    ("C0009", "SG Meda", None, None, ["SG-MEDA", "MEDA"]),
+    ("C0001", "Agni Green Power Limited (Mz)", "15AACCA2122Q1ZT", "Mizoram", [
+        "AGNI GREEN POWER LIMITED", "AGNI GREEN POWER", "AGNI"
+        ]),
+
+    ("C0002", "Borosil Renewables Limited", None, "Maharashtra", [
+        "BOROSIL RENEWABLES", "BOROSIL", "BOROSIL (RENEWABLES)"
+        ]),
+
+    ("C0003", "Ravitya Solar Energy LLP - (MH)", "27ABNFR6585K1Z9", "Maharashtra", [
+        "RAVITYA SOLAR ENERGY LLP", "RAVITYA SOLAR ENERGY", "RAVITYA"
+        ]),
+
+    ("C0004", "Agrawal Channel Mills Private Limited", "22AAFCA7929N1ZC", "Chhattisgarh", [
+        "AGRAWAL CHANNEL MILLS", "AGRAWAL CHANNEL"
+        ]),
+
+    ("C0005", "Srvs Solars Limited", "22AACCP9830A1ZV", "Chhattisgarh", [
+        "SRVS SOLARS", "SRVS"
+        ]),
+
+    ("C0006", "Rainbow Tradefin Solutions Private Limited", None, "Chhattisgarh", [
+        "RAINBOW TRADEFIN SOLUTIONS", "RAINBOW TRADEFIN", "RAINBOW"
+        ]),
+
+    ("C0007", "Aditya Green Energy PVT LTD", "27AAJCA4909N1Z8", "Maharashtra", [
+        "ADITYA GREEN ENERGY", "ADITYA GREEN"
+        ]),
+
+    ("C0008", "Sai Babuji Projects", None, None, [
+        "SAI BABUJI"
+        ]),
+
+    ("C0009", "SG Meda", None, None, [
+        "SG-MEDA", "MEDA"
+        ]),
+        
     ("C0010", "Switchsol Systems & Services (OPC) Private Limited", '22ABACS1961N1Z9', "Unknown", [
         "SWITCHSOL SYSTEMS & SERVICES (OPC) PRIVATE LIMITED",
     ]),

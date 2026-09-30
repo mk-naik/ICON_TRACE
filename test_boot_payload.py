@@ -68,7 +68,8 @@ TOP_KEYS = {"live", "build", "db_file", "indents", "challan_seq", "prod",
             # feed counts from, so it belongs with the data, not beside it.
             "change_seq"}
 NESTED = {"challan_seq": {"fy", "next"}, "config": {"pallet_ceiling"},
-          "counts": {"serials", "invoices", "challans", "boxes", "indents"},
+          "counts": {"serials", "invoices", "challans", "boxes", "indents",
+                    "needs_review", "drafts"},
           "range": {"from", "to"}}
 ROW_KEYS = {
     "indents": {"indent_no", "customer", "build_type", "delivery_by", "lines"},
@@ -306,6 +307,108 @@ def t_boot_failure():
         msg = pg.inner_text("#login")
         assert "could not be loaded" in msg, msg
         print("      shown: %r" % [l for l in msg.splitlines() if "loaded" in l][0])
+
+
+# --------------------------------------------------------------------------
+# the two sidebar badges that were v4's own frozen demo numbers forever -
+# "Needs review 5", "Drafts 4" - for every account, however real data changed
+# --------------------------------------------------------------------------
+
+@test("/api/nav_badges: 401 with no session; with one, the real, live counts "
+      "- not v4's frozen 5 and 4")
+def t_nav_badges_endpoint():
+    world()
+    anon = APP.app.test_client()
+    assert anon.get("/api/nav_badges").status_code == 401
+    sa = APP.app.test_client()
+    AUTH.test_login(sa)
+    d = sa.get("/api/nav_badges").get_json()
+    assert d == {"needs_review": 0, "drafts": 0}, d
+
+    with store.conn() as (cx, cur):
+        import db
+        db.ingest_review_item(cur, "not_in_master_unplanned",
+                              "ICON625R1292130999", "raw-badge-test", "test")
+        cur.execute("INSERT INTO challan (fy, seq, challan_date, status, "
+                    "model, wattage, qty, origin, created_at, created_by) "
+                    "VALUES (%s,%s,%s,'draft',%s,%s,%s,'system',%s,%s)",
+                    ("26-27", 9001, "2026-09-09", "ISEN625-G12R", 625, 1,
+                     "2026-09-09T10:00:00", "test"))
+    d = sa.get("/api/nav_badges").get_json()
+    assert d == {"needs_review": 1, "drafts": 1}, d
+    # /api/boot's own counts agree - the first paint after sign-in is
+    # already right, with no extra round trip for it
+    boot_counts = sa.get("/api/boot").get_json()["counts"]
+    assert boot_counts["needs_review"] == 1 and boot_counts["drafts"] == 1, boot_counts
+
+
+@test("the sidebar shows the real counts, not v4's frozen markup - Needs "
+      "review has no id at all in that markup to hang a live number on, so "
+      "this is also proof the live layer finds it a different way")
+def t_nav_badges_on_screen():
+    world()
+    with store.conn() as (cx, cur):
+        import db
+        db.ingest_review_item(cur, "not_in_master_unplanned",
+                              "ICON625R1292130998", "raw-badge-ui", "test")
+        cur.execute("INSERT INTO challan (fy, seq, challan_date, status, "
+                    "model, wattage, qty, origin, created_at, created_by) "
+                    "VALUES (%s,%s,%s,'draft',%s,%s,%s,'system',%s,%s)",
+                    ("26-27", 9002, "2026-09-09", "ISEN625-G12R", 625, 1,
+                     "2026-09-09T10:00:00", "test"))
+    with H.browser() as b:
+        pg = _page(b)
+        _sign_in(pg, PI_LOGIN, PI_PW)
+        pg.wait_for_selector("#app.on", timeout=15000)
+        pg.wait_for_timeout(600)
+        review_badge = pg.eval_on_selector('.nav-i[data-v="review"] b', "e => e.textContent")
+        draft_badge = pg.eval_on_selector('#draftBadge', "e => e.textContent")
+        assert review_badge == "1", "still v4's frozen number: %r" % review_badge
+        assert draft_badge == "1", "still v4's frozen number: %r" % draft_badge
+
+
+# --------------------------------------------------------------------------
+# Planning's Indent No. select keeps its own selection
+# --------------------------------------------------------------------------
+
+@test("iconRefresh() (fired after a submit) rebuilds the Indent No. select "
+      "without losing what was chosen - it used to always revert to '-- "
+      "select --' while Indent Item and everything derived from it (Customer, "
+      "Ordered, Already allocated...) stayed exactly as they were, so the two "
+      "halves of the same screen disagreed about which indent this was")
+def t_indent_select_survives_refresh():
+    world()
+    with H.browser() as b:
+        pg = _page(b)
+        _sign_in(pg, PI_LOGIN, PI_PW)
+        pg.wait_for_selector("#app.on", timeout=15000)
+        pg.evaluate("go('plan')")
+        pg.wait_for_timeout(400)
+        pg.click("#newPlanBtn")          # the plan form starts collapsed
+        pg.wait_for_selector("#pIndent", state="visible", timeout=5000)
+        pg.select_option("#pIndent", INDENT_NO)
+        assert pg.eval_on_selector("#pIndent", "e => e.value") == INDENT_NO
+        pg.evaluate("iconRefresh()")
+        pg.wait_for_timeout(600)
+        assert pg.eval_on_selector("#pIndent", "e => e.value") == INDENT_NO, \
+            "the selection reverted to blank after a refresh"
+        # a SECOND indent that gets cancelled between the choice and the
+        # refresh genuinely is no longer valid - blank is correct THERE
+        r = pg.request.post(H.base_url() + "/api/indent", data=json.dumps({
+            "indent_no": "R29-GONE/2026", "indent_date": "2026-09-09",
+            "customer": "ADITYA GREEN ENERGY PVT LTD", "delivery_by": DELIVERY,
+            "items": [{"item_code": icon_models.all_items()[0]["item_code"], "qty": 5}]}),
+            headers={"Content-Type": "application/json"})
+        assert r.ok, r.text()
+        pg.evaluate("iconRefresh()"); pg.wait_for_timeout(400)
+        pg.select_option("#pIndent", "R29-GONE/2026")
+        with store.conn() as (cx, cur):
+            cur.execute("UPDATE indent SET status='cancelled' WHERE indent_no=%s",
+                       ("R29-GONE/2026",))
+        pg.evaluate("iconRefresh()")
+        pg.wait_for_timeout(600)
+        assert pg.eval_on_selector("#pIndent", "e => e.value") == "", \
+            "an indent that is genuinely gone must not stay selected"
 
 
 # --------------------------------------------------------------------------

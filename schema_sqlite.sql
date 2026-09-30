@@ -723,6 +723,12 @@ CREATE TABLE IF NOT EXISTS fqc_defect (
 CREATE INDEX IF NOT EXISTS idx_fqc_defect_fqc ON fqc_defect(fqc_id);
 CREATE INDEX IF NOT EXISTS idx_fqc_defect_code ON fqc_defect(defect_code);
 
+-- fqc_record had NO index at all, so "the standing decision for this serial"
+-- - asked by every lookup, every Needs Review row and the ingest's
+-- looked-up-no-decision check - was a full scan of every decision ever made.
+-- Cheap while the table is small; quadratic once it is not.
+CREATE INDEX IF NOT EXISTS ix_fqc_record_serial ON fqc_record (serial);
+
 -- The defect vocabulary, unified - see icon_defects.py for why: the EL
 -- share's own folder names, the operator's visual-defect list, and a dead
 -- list in icon_trace.html used to disagree on what a defect was called.
@@ -784,9 +790,14 @@ CREATE TABLE IF NOT EXISTS review_item (
   source      TEXT NULL,             -- 'ss_ingest' | 'el_ingest' |
                                       -- 'fqc_lookup' | 'ftr_scan'
   line        TEXT NULL,             -- 'A' | 'B', when the source is line-specific
-  detected_at TEXT NULL              -- when the ingest found it - the event
-                                      -- itself may be older (the tester's own
-                                      -- timestamp lives in raw_id/detail)
+  detected_at TEXT NULL,             -- when the ingest found it - the event
+                                      -- itself may be older
+  -- The TESTER's own timestamp of the scan this item stands for. For a
+  -- not_in_master_unplanned item (one per SERIAL, raw_id = the serial) it is
+  -- the LATEST scan: a module scanned again replaces it, and an item is only
+  -- written to when a scan is genuinely newer - a pass that finds nothing new
+  -- writes nothing, so it cannot keep telling every open screen "changed".
+  event_at    TEXT NULL
 ) ;
 -- The (type, raw_id) uniqueness index is created in store.py's migration,
 -- after the ALTER TABLE that adds raw_id to an existing database - not here,

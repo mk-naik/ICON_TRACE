@@ -36,6 +36,7 @@ import db                                                    # noqa: E402
 import store                                                 # noqa: E402
 import auth_test_helper as AUTH
 import icon_models as models                                 # noqa: E402
+import icon_customers as customers                            # noqa: E402
 
 APP = H.APP
 _results = []
@@ -50,7 +51,12 @@ def test(name):
 
 INVOICE = "ICON/26-27/822"          # HO's format - and it starts with ICON
 HISTORICAL = "HO/25-26/0917"        # on a paper challan, never uploaded as an invoice
-BUYER = "SAI BABUJI PROJECTS"
+BUYER = "SAI BABUJI PROJECTS"       # as printed on the document - a raw input
+# ...and its canonical display form, from the customer master itself, never
+# retyped by hand - 73eeb5c titlecased that master, so a trace that RESOLVES
+# a customer (Search & Trace's own "customer" and "batch" kinds) now shows
+# this, not the raw all-caps text a document happened to carry
+BUYER_NAME = customers.resolve(BUYER)["name"]
 CUSTOMER_CODE = "C0008"
 VEHICLE = "CG04MM1521"
 V1_SERIAL = "ICON590G1202121001"    # the old (v1) serial format, as on the Try: line
@@ -300,7 +306,7 @@ def t_vehicle():
 def t_batch():
     c = seed()
     d = find(c, "BAT-2609-00007").get_json()
-    assert d["kind"] == "batch" and d["customer"] == BUYER and d["qty"] == 5, d
+    assert d["kind"] == "batch" and d["customer"] == BUYER_NAME and d["qty"] == 5, d
     assert d["counts"] == {"dispatched": 4, "graded": 1}, d["counts"]
     assert [s["serial"] for s in d["serials"]] == S
     assert d["serials"][0]["box_no"] == label(IDS["k1"]), d["serials"][0]
@@ -316,12 +322,48 @@ def t_batch():
 def t_customer():
     c = seed()
     d = find(c, "sai babuji").get_json()
-    assert d["kind"] == "customer" and d["customer"]["name"] == BUYER, d
+    assert d["kind"] == "customer" and d["customer"]["name"] == BUYER_NAME, d
     assert d["counts"] == {"dispatched": 4, "graded": 1, "packed": 1}, d["counts"]
     assert [b["batch_no"] for b in d["batches"]] == ["BAT-2609-00007"]
     assert "IS-05.09.2026/0001" in [x["challan_no"] for x in d["challans"]]
     many = find(c, "LIMITED").get_json()
     assert many["kind"] == "customers" and len(many["matches"]) > 1, many
+
+
+@test("a customer whose rows store the NAME, not the code - and in more than "
+      "one case - is still found completely: every real allocation writes "
+      "the name (not the code, which this file's own seed() happens to use, "
+      "and titlecasing the customer master left live data in two different "
+      "cases with nothing to reconcile them)")
+def t_customer_found_by_name_any_case():
+    c = seed()
+    with store.conn() as (cx, cur):
+        for i, (cust, state) in enumerate((
+                ("Borosil Renewables Limited", "produced"),   # canonical case
+                ("BOROSIL RENEWABLES LIMITED", "graded"))):   # all-caps, same customer
+            s = "ICON625R129%07d" % (9100 + i)
+            store.insert(cur, "serial", {
+                "serial": s, "build_instance": 1, "model": "ISEN625-G12R",
+                "wattage": 625, "customer": cust, "dcr": "NDCR",
+                "format_version": 2, "date_produced": "2026-09-09", "shift": 1,
+                "sequence": 9100 + i, "state": state})
+        iid = store.insert(cur, "indent", {"indent_no": "T/BOROSIL", "indent_date": "2026-09-09",
+                                           "customer": "BOROSIL", "created_by": "test"})
+        lid = store.insert(cur, "indent_line", {
+            "indent_id": iid, "line_no": 1, "model": "ISEN625-G12R",
+            "item_description": "SOLAR PV MODULE-ISEN625-G12R-NDCR",
+            "wattage": 625, "qty": 2, "dcr": "NDCR"})
+        store.insert(cur, "allocation", {
+            "indent_line_id": lid, "model": "ISEN625-G12R", "wattage": 625,
+            "customer": "Borosil Renewables Limited", "dcr": "NDCR",
+            "date_produced": "2026-09-09", "shift": 1, "qty": 2,
+            "seq_from": 9100, "seq_to": 9101, "created_by": "test"})
+    d = find(c, "borosil").get_json()
+    assert d["kind"] == "customer", d
+    assert d["counts"] == {"produced": 1, "graded": 1}, \
+        ("only the canonically-cased row was found - a real name stored in "
+         "a different case went missing: %s" % d["counts"])
+    assert len(d["batches"]) == 1, d["batches"]
 
 
 @test("nothing is answered from v4's sample data: its challan, box and batch "
@@ -430,7 +472,7 @@ def click_hint(pg, text):
 def t_every_hint_opens_its_record():
     seed()
     expect = {
-        "SAI BABUJI": "Customer " + BUYER,
+        "SAI BABUJI": "Customer " + BUYER_NAME,
         "BAT-2609-00007": "Batch BAT-2609-00007",
         "ISPL260905/K001": "Pallet ISPL260905/K001",
         "IS-05.09.2026/0001": "Challan IS-05.09.2026/0001",

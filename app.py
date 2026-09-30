@@ -1304,6 +1304,8 @@ def boot_private():
             cfg_ceiling = int(db.get_config(cur).get("pallet_ceiling") or 36)
         except (TypeError, ValueError):
             cfg_ceiling = 36
+        needs_review_total = db.review_open_counts(cur)["total"]
+        drafts_open = db.draft_challan_count(cur)
     import icon_materials as MM
     mat_cats = MM.MAT_CATS
     return {
@@ -1344,7 +1346,14 @@ def boot_private():
         "config": {"pallet_ceiling": int(cfg_ceiling or 36)},
         "counts": {"serials": counts["serial"], "invoices": counts["invoice"],
                    "challans": counts["challan"], "boxes": counts["box"],
-                   "indents": counts["indent"]},
+                   "indents": counts["indent"],
+                   # the two sidebar badges that were v4's own frozen demo
+                   # numbers ("Needs review 5", "Drafts 4") for every account,
+                   # forever, however real data changed - given here so the
+                   # FIRST paint after sign-in is already correct, not just
+                   # after a visit to either screen
+                   "needs_review": needs_review_total,
+                   "drafts": drafts_open},
     }
 
 
@@ -4516,7 +4525,14 @@ def _module_events(cur, customer="", model=""):
                     WHERE c.status = 'issued' GROUP BY cs.serial)
         SELECT s.serial, s.alloc_id, s.state, s.model,
                COALESCE(s.customer, 'ICON STOCK') AS cust,
-               COALESCE(pe.line, '') AS line,
+               -- FQC can now grade a module before Planning has its serial
+               -- (Round 36), and that path never runs the Production screen
+               -- - there is no production_entry, so pe.line is always blank
+               -- for it. The Sun Simulator that tested it is not unknown
+               -- though: it was saved to ftr_reading at grading time for
+               -- exactly this reason ("keep the FTR"), so it is asked
+               -- second, before this falls back to genuinely blank.
+               COALESCE(pe.line, ftr.line, '') AS line,
                a.created_at AS alloc_at,
                CASE WHEN pe.created_at IS NULL THEN ff.first_at
                     WHEN ff.first_at IS NULL THEN pe.created_at
@@ -4527,6 +4543,7 @@ def _module_events(cur, customer="", model=""):
         FROM serial s
         LEFT JOIN allocation a ON a.alloc_id = s.alloc_id
         LEFT JOIN production_entry pe ON pe.entry_id = s.prod_entry_id
+        LEFT JOIN ftr_reading ftr ON ftr.serial = s.serial
         LEFT JOIN ff ON ff.serial = s.serial
         LEFT JOIN fl ON fl.serial = s.serial
         LEFT JOIN fqc_record f ON f.fqc_id = fl.fqc_id
@@ -4652,11 +4669,29 @@ def api_prod_dashboard():
     kpi = {k: ((kpi_row or {}).get(k) or 0) for k in keys}
     kpi["hold"] = hold or 0
 
+    # Two different conventions name the same physical line: a production
+    # entry's own dropdown writes "A-Line"; ftr_reading (Round 36's fallback
+    # for a module FQC graded before Planning, above) keeps the bare letter
+    # the Sun Simulator sources use, "A". Normalized the same way the
+    # screen's own pdLineName() does (bare letter, uppercase) BEFORE
+    # grouping, or "A" and "A-Line" for the same shift silently overwrite
+    # each other in the JS (rowsBy[key] = {...}, not an accumulate) instead
+    # of being the one real total for that line.
+    def _norm_line(s):
+        s = (s or "").strip().upper()
+        for suf in ("-LINE", "LINE"):
+            if s.endswith(suf):
+                return s[:-len(suf)].strip()
+        return s
     lines = {}
     for r in made:
-        lines.setdefault((r["line"] or "", r["shift"]), {"produced": 0, "scrap": 0})["produced"] = r["n"]
+        k = (_norm_line(r["line"]), r["shift"])
+        cell = lines.setdefault(k, {"produced": 0, "scrap": 0})
+        cell["produced"] += r["n"]
     for r in scrap:
-        lines.setdefault((r["line"] or "", r["shift"]), {"produced": 0, "scrap": 0})["scrap"] = r["n"]
+        k = (_norm_line(r["line"]), r["shift"])
+        cell = lines.setdefault(k, {"produced": 0, "scrap": 0})
+        cell["scrap"] += r["n"]
     lines = [dict(v, line=k[0], shift=k[1])
              for k, v in sorted(lines.items(), key=lambda x: ((x[0][0] or "~"), x[0][1]))]
 
@@ -5105,6 +5140,9 @@ def api_allocation_create():
                 return jsonify({"ok": False, "why":
                     "%d serial(s) already exist, e.g. %s. A serial is issued "
                     "once." % (len(clash), ", ".join(clash[:3]))}), 400
+            bad = _nameplate_refusal(serials, L)
+            if bad:
+                return jsonify({"ok": False, "why": bad}), 400
 
         made_on, made_shift = _alloc_date_shift()
         aid = store.insert(cur, "allocation", {
@@ -5138,12 +5176,67 @@ def api_allocation_create():
                 "format_version": r["format_version"],
                 "date_produced": r["date_produced"], "shift": r["shift"],
                 "sequence": r["sequence"], "state": "planned"})
+        fqc_applied, closed = _planned_serials(cur, serials,
+                                               "planned in allocation #%d" % aid)
         after = _line_state(cur, line_id)
         db.audit(cur, actor(), "planning.allocate", "allocation", aid,
                  {"indent": L["indent_no"], "line": L["line"], "qty": qty,
-                  "left_after": after["left"]})
+                  "left_after": after["left"], "fqc_applied": fqc_applied,
+                  "review_closed": closed})
     return jsonify({"ok": True, "alloc_id": aid, "qty": qty,
-                    "left": after["left"], "indent_no": L["indent_no"]})
+                    "left": after["left"], "indent_no": L["indent_no"],
+                    "fqc_applied": fqc_applied, "review_closed": closed})
+
+
+def _nameplate_refusal(serials, L):
+    """Why this indent item cannot take these serials, or None.
+
+    AN ICON SERIAL CARRIES ITS WATTAGE, AND THAT IS THE NAMEPLATE. It is
+    printed on the module, it is what the customer receives, and every
+    measurement has to meet it - so a serial belongs on an indent item OF ITS
+    OWN WATTAGE, and nothing else. Mukesh, on this: "Icon serial number
+    contains wattage, any measurement must meet the nameplate for allocation."
+
+    Planning used to write the ITEM's model and wattage onto the row without
+    ever looking at the serial's own, so a 625 W module planned on a 630 W
+    item simply became a 630 W module in the database - and with FQC now able
+    to grade before Planning, its pass (judged against the barcode's 625) came
+    with it as grade A. Every one of the 5,360 serials in the live master
+    matches its item, so a mismatch is a slip, never the shape of real work.
+
+    The measurement is NOT what decides: a 625 W module that happens to read
+    631 W is still a 625 W module. That is FQC's floor, checked there."""
+    import icon_challan_import as CI
+    want = L.get("wattage")
+    if not want:
+        return None
+    bad = []
+    for s in serials:
+        r = CI.decompose(s)
+        if r.get("ok") and int(r["wattage"]) != int(want):
+            bad.append((s, int(r["wattage"])))
+    if not bad:
+        return None
+    serial, watt = bad[0]
+    return ("%s is a %d W module and this indent item is %s W (%s). The wattage "
+            "in the serial is the module's nameplate - it cannot be allocated "
+            "as another wattage. %sPlan %s on a %d W item."
+            % (serial, watt, want, L.get("model"),
+               "" if len(bad) == 1 else "%d serial(s) in this range do not match "
+               "the item. " % len(bad),
+               "them" if len(bad) > 1 else "it", watt))
+
+
+def _planned_serials(cur, serials, why):
+    """Serial rows have just been created. Some of these modules may have been
+    through the testers and FQC already - graded while the master did not have
+    them. Carry each on from the decision FQC made (no re-test), and close the
+    "not in master" items that were waiting on exactly this. In the same
+    transaction as the rows themselves, so there is no moment when a module is
+    planned but not yet what FQC said."""
+    fqc_applied = db.apply_standing_fqc(cur, serials)
+    closed = db.close_planned_items(cur, serials, by=actor(), reason=why)
+    return fqc_applied, closed
 
 
 @app.route("/api/allocation/<int:alloc_id>/update", methods=["PUT"])
@@ -5162,8 +5255,7 @@ def api_allocation_update(alloc_id):
         old = store.one(cur, "SELECT * FROM allocation WHERE alloc_id=%s", (alloc_id,))
         if not old:
             return jsonify({"ok": False, "why": "No such allocation."}), 404
-        started = store.one(cur, "SELECT COUNT(*) AS n FROM serial WHERE "
-                                "alloc_id=%s AND state<>'planned'", (alloc_id,))["n"]
+        started = db.production_moved(cur, alloc_id)
         if started:
             return jsonify({"ok": False, "why":
                 "%d module(s) in this allocation have already entered production. "
@@ -5188,6 +5280,9 @@ def api_allocation_update(alloc_id):
             return jsonify({"ok": False, "why":
                 "%d serial(s) already belong to another allocation, e.g. %s."
                 % (len(clash), ", ".join(clash[:3]))}), 400
+        bad = _nameplate_refusal(serials, L)
+        if bad:
+            return jsonify({"ok": False, "why": bad}), 400
         import icon_challan_import as CI
         parsed = []
         for s in serials:
@@ -5206,6 +5301,8 @@ def api_allocation_update(alloc_id):
                      d.get("seq_from") or 0, d.get("seq_to") or 0,
                      _alloc_type(d.get("alloc_type")) or old.get("alloc_type"),
                      alloc_id))
+        was = [r["serial"] for r in store.rows(
+            cur, "SELECT serial FROM serial WHERE alloc_id=%s", (alloc_id,))]
         cur.execute("DELETE FROM serial WHERE alloc_id=%s", (alloc_id,))
         for s, r in zip(serials, parsed):
             store.insert(cur, "serial", {
@@ -5220,11 +5317,21 @@ def api_allocation_update(alloc_id):
                 "alloc_id": alloc_id, "material_no": int(material.get("material_no")),
                 "vendor": material.get("vendor"), "efficiency": material.get("efficiency"),
                 "batch": material.get("batch")})
+        fqc_applied, closed = _planned_serials(
+            cur, serials, "planned in allocation #%d" % alloc_id)
+        # a serial the edit dropped from the range is not in the master any
+        # more, so its "not in master" item is true again
+        reopened = db.reopen_unplanned_items(
+            cur, [s for s in was if s not in set(serials)], by=actor(),
+            reason="dropped from allocation #%d" % alloc_id)
         db.audit(cur, actor(), "planning.update", "allocation", alloc_id,
-                 {"indent": L["indent_no"], "line": L["line"], "qty": qty})
+                 {"indent": L["indent_no"], "line": L["line"], "qty": qty,
+                  "fqc_applied": fqc_applied, "review_closed": closed,
+                  "review_reopened": reopened})
         after = _line_state(cur, line_id)
     return jsonify({"ok": True, "alloc_id": alloc_id, "qty": qty,
-                    "left": after["left"], "indent_no": L["indent_no"]})
+                    "left": after["left"], "indent_no": L["indent_no"],
+                    "fqc_applied": fqc_applied, "review_closed": closed})
 
 
 @app.route("/api/allocation/<int:alloc_id>/detail")
@@ -5269,21 +5376,27 @@ def api_allocation_cancel(alloc_id):
         a = store.one(cur, "SELECT * FROM allocation WHERE alloc_id=%s", (alloc_id,))
         if not a:
             return jsonify({"ok": False, "why": "No such allocation."}), 404
-        started = store.one(cur, "SELECT COUNT(*) AS n FROM serial WHERE "
-                                 "alloc_id=%s AND state<>'planned'",
-                            (alloc_id,))["n"]
+        started = db.production_moved(cur, alloc_id)
         if started:
             return jsonify({"ok": False, "why":
                 "%d module(s) in this allocation have already been through "
                 "production. It cannot be withdrawn — raise a hold instead."
                 % started}), 400
-        n = store.one(cur, "SELECT COUNT(*) AS n FROM serial WHERE alloc_id=%s",
-                      (alloc_id,))["n"]
+        released = [r["serial"] for r in store.rows(
+            cur, "SELECT serial FROM serial WHERE alloc_id=%s", (alloc_id,))]
+        n = len(released)
         cur.execute("DELETE FROM serial WHERE alloc_id=%s", (alloc_id,))
         cur.execute("DELETE FROM allocation_material WHERE alloc_id=%s", (alloc_id,))
         cur.execute("DELETE FROM allocation WHERE alloc_id=%s", (alloc_id,))
+        # A module the testers read is not in the master again, so its Needs
+        # Review item is true again - the same condition, reopened rather than
+        # left to a poller pass that can only see it while the tester's CSV
+        # still holds the row (it is cut every shift).
+        reopened = db.reopen_unplanned_items(
+            cur, released, by=actor(),
+            reason="allocation #%d withdrawn" % alloc_id)
         db.audit(cur, actor(), "planning.cancel", "allocation", alloc_id,
-                 {"serials_released": n})
+                 {"serials_released": n, "review_reopened": reopened})
         after = _line_state(cur, a["indent_line_id"])
     return jsonify({"ok": True, "released": n,
                     "left": after["left"] if after else None})
@@ -5853,18 +5966,31 @@ def _trace_customer(cur, q):
                             for c in hits]}
     c = hits[0]
     code = c["customer_code"]
+    # serial.customer / allocation.customer are free text, and this system
+    # is not consistent about what it writes there: every real allocation
+    # made through Planning stores the NAME (and titlecasing the customer
+    # master, 73eeb5c, then left it in two different cases across the live
+    # data with nothing to reconcile them - "ICON Stock" for 4,530 serials,
+    # "ICON STOCK" for another 1,360) - but at least one other path stores
+    # the short CODE instead ("C0008"), which matches neither spelling of
+    # the name at all. Case-insensitive, and matching either form, catches
+    # every one of these rather than silently dropping whichever this
+    # customer's rows happen to use.
+    name = c["name"]
+    ids = (name, code)
     counts = {r["state"]: r["n"] for r in store.rows(cur,
-        "SELECT state, COUNT(*) AS n FROM serial WHERE customer=%s "
-        "GROUP BY state", (code,))}
+        "SELECT state, COUNT(*) AS n FROM serial WHERE UPPER(customer) IN "
+        "(UPPER(%s), UPPER(%s)) GROUP BY state", ids)}
     batches = [dict(r, batch_no=batch_no(dict(r))) for r in store.rows(cur,
         "SELECT alloc_id, date_produced, model, qty FROM allocation "
-        "WHERE customer=%s ORDER BY alloc_id DESC LIMIT 200", (code,))]
+        "WHERE UPPER(customer) IN (UPPER(%s), UPPER(%s)) "
+        "ORDER BY alloc_id DESC LIMIT 200", ids)]
     chs = store.rows(cur,
         "SELECT DISTINCT c.* FROM challan_serial cs "
         "JOIN serial s ON s.serial=cs.serial AND s.build_instance=cs.build_instance "
         "JOIN challan c ON c.challan_id=cs.challan_id "
-        "WHERE s.customer=%s ORDER BY c.challan_date DESC, c.challan_id DESC "
-        "LIMIT 200", (code,))
+        "WHERE UPPER(s.customer) IN (UPPER(%s), UPPER(%s)) "
+        "ORDER BY c.challan_date DESC, c.challan_id DESC LIMIT 200", ids)
     return {"ok": True, "kind": "customer",
             "customer": {"code": code, "name": c["name"], "gstin": c.get("gstin"),
                          "state": c.get("state")},
@@ -5981,6 +6107,10 @@ def api_trace_serial(serial):
                                (first["alloc_id"],)) if first["alloc_id"] else []
         fqc = store.rows(cur, "SELECT * FROM fqc_record WHERE serial=%s "
                               "ORDER BY at", (s,))
+        # the defects each decision carries (fqc_defect) - fqc_record.defect
+        # is empty for everything decided since Stage 3
+        fqc_defects = {r["fqc_id"]: db.defect_labels(cur, r["fqc_id"], r.get("defect"))
+                       for r in fqc}
         entries = {r["entry_id"]: r for r in store.rows(cur,
             "SELECT entry_id, created_at FROM production_entry WHERE entry_id IN "
             "(SELECT prod_entry_id FROM serial WHERE serial=%s)", (s,))}
@@ -6083,11 +6213,13 @@ def api_trace_serial(serial):
         if f["outcome"] == "pass":
             value, tone = "Pass", "t-pass"
             detail = [f["decided_by"] or "—", f["mode"] or ""]
+            if fqc_defects.get(f["fqc_id"]):
+                detail.append(fqc_defects[f["fqc_id"]])   # e.g. passed despite Burning
             journey.append({"stage": "FQC", "value": value, "done": True,
                             "detail": detail, "tag": f["at"] or "", "tone": tone})
         else:
             value, tone = "Reject", "t-fail"
-            detail = [f["decided_by"] or "—", f["defect"] or ""]
+            detail = [f["decided_by"] or "—", fqc_defects.get(f["fqc_id"]) or ""]
             journey.append({"stage": "FQC", "value": value, "done": True,
                             "detail": detail, "tag": f["at"] or "", "tone": tone})
 
@@ -6474,6 +6606,21 @@ def api_boot():
     if not g.icon_session:
         return jsonify({"ok": False, "why": "Sign in required."}), 401
     return jsonify(boot_private())
+
+
+@app.route("/api/nav_badges")
+def api_nav_badges():
+    """The two persistent sidebar counts that are not otherwise cheap to keep
+    current: Needs Review and Drafts (Hold & Deviation already polls its own
+    real count, /api/hold). Ungated by screen, matching /api/boot's own
+    reasoning - a session is the bar, not a screen gate - because the number
+    on a nav item is no more sensitive than the item itself, which every
+    account already sees or does not see by its own menu."""
+    if not g.icon_session:
+        return jsonify({"ok": False, "why": "Sign in required."}), 401
+    with store.conn() as (cx, cur):
+        return jsonify({"needs_review": db.review_open_counts(cur)["total"],
+                        "drafts": db.draft_challan_count(cur)})
 
 
 @app.route("/api/db/stats")
@@ -7162,11 +7309,52 @@ def _evidence_summary(evidence):
     return "OK, Pmax %s W" % (pmax if pmax is not None else "—")
 
 
+def _unplanned_stub(serial):
+    """A module the master does not have YET, as far as FQC needs one to
+    exist: what the serial itself says about it - the same decompose() that
+    Planning runs when it creates the row. None when it is not even shaped
+    like a serial.
+
+    Only the wattage is used to decide anything (the floor a pass must
+    meet); model is there to be shown. Everything the master would add -
+    customer, indent, batch - is genuinely unknown until Incharge plans it,
+    and is left unknown rather than guessed."""
+    d = chimport.decompose(serial)
+    if not d.get("ok"):
+        return None
+    fam = {v: k for k, v in gen.FAMILY.items()}.get(d["family"])
+    return {"serial": serial, "build_instance": 1, "state": "unplanned",
+            "model": ("ISEN%d-%s" % (d["wattage"], fam)) if fam else None,
+            "wattage": d["wattage"], "grade": None, "customer": None,
+            "dcr": None, "alloc_id": None, "indent_line_id": None}
+
+
+def _tester_knows(evidence):
+    """Something outside this database has positively seen the module: the
+    Sun Simulator has a reading for it (a good one, or a probe fault) or an
+    EL image is filed under its name. What lets FQC grade a serial the master
+    does not have - without it, a mistyped barcode would become a decision
+    on a module that does not exist."""
+    return (evidence.get("ss_state") in (ev.OK, ev.BAD)
+            or bool(evidence.get("el_path")))
+
+
 def _fqc_payload(cur, serial, sandbox=False, line=None):
     rec = db.find_serial(cur, serial)
+    unplanned = False
     if not rec:
-        return None, None, {"ok": False, "why":
-                            "%s is not in the serial master." % serial}
+        # FQC does NOT wait for Planning. A module comes off the line, is
+        # tested, reaches FQC - and Incharge may not have planned its serial
+        # yet. Making the operator stop the line and send it back to be
+        # re-tested after Planning catches up is not worth it: it is graded
+        # now, the decision waits on Needs Review, and once the serial is
+        # planned it carries on from that decision (pass -> pack, reject ->
+        # Quality). PACKING still refuses a serial the master does not have.
+        rec = None if sandbox else _unplanned_stub(serial)
+        if not rec:
+            return None, None, {"ok": False, "why":
+                                "%s is not in the serial master." % serial}
+        unplanned = True
     cfg = db.get_config(cur)
     # The station knows its own line, and reading only that tester is both
     # quicker and unambiguous. Without one, both are searched: the serial
@@ -7198,6 +7386,24 @@ def _fqc_payload(cur, serial, sandbox=False, line=None):
                     evidence[k] = reading.get(k)
             evidence["degraded"] = evidence.get("el_state") != ev.OK
             evidence["mode"] = "provisional" if evidence["degraded"] else "confirmed"
+    if unplanned and not _tester_knows(evidence):
+        # "Nothing filed under it" is only true of a tester that could be
+        # read. One that could not (NC) may well have it - telling the
+        # operator to check a barcode that is right sends them off to fix
+        # the wrong thing while the link is down.
+        down = [name for name, key in (("Sun Simulator", "ss_state"),
+                                       ("EL", "el_state"))
+                if evidence.get(key) == ev.NC]
+        if down:
+            return None, None, {"ok": False, "why":
+                "%s is not in the serial master, and the %s could not be "
+                "read, so it cannot be checked against the testers. Try "
+                "again when the link is back." % (serial, " and the ".join(down))}
+        return None, None, {"ok": False, "why":
+            "%s is not in the serial master, and neither the Sun Simulator "
+            "nor the EL has anything filed under it either. Check the "
+            "barcode - a module has to have been tested before it can be "
+            "graded ahead of Planning." % serial}
     prior = next((dict(r) for r in db.fqc_recent(cur, 1000)
                   if r.get("serial") == serial), None)
 
@@ -7216,6 +7422,7 @@ def _fqc_payload(cur, serial, sandbox=False, line=None):
                            "model": rec.get("model"),
                            "wattage": rec.get("wattage"),
                            "state": rec.get("state"),
+                           "unplanned": unplanned,
                            "grade": rec.get("grade"),
                            "customer": cr["name"] if cr else rec.get("customer"),
                            "lot_name": (line or {}).get("lot_name"),
@@ -7528,7 +7735,8 @@ def api_hold():
                     "customer": cr["name"] if cr else f.get("customer"),
                     "outcome": f["outcome"], "state": f["state"],
                     "reason": f.get("reason"), "note": f.get("note"),
-                    "defect": f.get("defect"), "decided_by": f.get("decided_by"),
+                    "defect": db.defect_labels(cur, f.get("fqc_id"), f.get("defect")),
+                    "decided_by": f.get("decided_by"),
                     "at": f["at"], "waiting_for": _waiting_for(f)})
             for r in db.review_items_open(cur, "provisional_mismatch"):
                 r = dict(r)
@@ -7543,7 +7751,8 @@ def api_hold():
                     "customer": cr["name"] if cr else r.get("customer"),
                     "outcome": orig.get("outcome"), "evidence_says": new.get("outcome"),
                     "state": r.get("state"), "reason": orig.get("reason"),
-                    "note": orig.get("note"), "defect": orig.get("defect"),
+                    "note": orig.get("note"),
+                    "defect": db.defect_labels(cur, orig.get("fqc_id"), orig.get("defect")),
                     "decided_by": orig.get("decided_by"), "at": orig.get("at"),
                     "waiting_for": None})
             month = clock.today().strftime("%Y-%m")
@@ -7603,6 +7812,7 @@ def api_fqc_grade():
             (d.get("line") or "").strip() or None)
         if not rec:
             return jsonify(out), 404
+        unplanned = bool(out.get("unplanned"))
 
         # Round 34: a cancelled serial is void - grading it would make the
         # cancellation meaningless. Checked before the packed/dispatched
@@ -7689,12 +7899,59 @@ def api_fqc_grade():
             mode = "provisional"
         saved = db.record_fqc(cur, serial, outcome, evidence, actor(), mode,
                               defect=defect_code, note=note, hold=hold)
+        if unplanned:
+            _register_unplanned_fqc(cur, serial, evidence)
+        _keep_reading(cur, serial, evidence)
         db.audit(cur, actor(), "fqc." + outcome, "serial", serial,
                  {"outcome": outcome, "mode": mode, "defect": defect_code,
-                  "held": hold, "ss_state": evidence.get("ss_state")})
-    return jsonify({"ok": True, "serial": serial, "outcome": outcome,
-                    "grade": saved.get("grade"), "mode": mode, "held": hold,
-                    "record": saved})
+                  "held": hold, "ss_state": evidence.get("ss_state"),
+                  "unplanned": unplanned})
+    resp = {"ok": True, "serial": serial, "outcome": outcome,
+            "grade": saved.get("grade"), "mode": mode, "held": hold,
+            "record": saved, "unplanned": unplanned}
+    if unplanned:
+        resp["note"] = (
+            "%s is not in the serial master yet. The decision is recorded and "
+            "it is on Needs Review for Incharge to plan. Once planned it "
+            "carries on from here - %s. No re-test." % (
+                serial, "a rejection goes to Quality" if outcome == "reject"
+                else "it is held until the reading is available" if hold
+                else "it goes to packing"))
+    return jsonify(resp)
+
+
+def _register_unplanned_fqc(cur, serial, evidence):
+    """FQC has graded a module the master does not have: put it on Needs
+    Review. The poller may not have seen the scan yet, and a decision on a
+    module nobody is going to plan is exactly what Needs Review is for.
+    """
+    db.upsert_unplanned_item(cur, serial, "fqc", line=evidence.get("ss_line"),
+                             event_at=evidence.get("tested_at"))
+
+
+def _keep_reading(cur, serial, evidence):
+    """Save the reading FQC just judged, when it is newer than the one on
+    file. The decision snapshots the state and the Pmax; this keeps the FULL
+    measurement, which is what the Flash Test Report is built from - and the
+    CSV it was read from is cut every shift.
+
+    For EVERY module, not only one the master lacks. It used to be saved only
+    for an unplanned serial, and the poller only ever looks at unplanned
+    serials, so a module RETESTED after it was planned kept the reading of
+    its first test for ever: the report read 626 W while FQC had judged the
+    live 631 W."""
+    if evidence.get("ss_state") != ev.OK:
+        return
+    tested = evidence.get("tested_at")
+    line = evidence.get("ss_line")
+    reading = {"state": ev.OK, "pmax": evidence.get("pmax"),
+               "params": evidence.get("params") or [],
+               "tested_at": tested, "line": line,
+               "attempts": evidence.get("ss_attempts")}
+    for k, _lab, _i, _u in ev.PARAMS_KEYS:
+        if k in evidence:
+            reading[k] = evidence[k]
+    db.save_ftr_reading_if_newer(cur, serial, line, tested, reading)
 
 
 @app.route("/api/quality/pending")
@@ -7790,12 +8047,16 @@ _QUALITY_ROLES = ("Quality", "Admin", "Super Admin")
 _INCHARGE_ROLES = ("Production Incharge", "Admin", "Super Admin")
 
 
-def _evid_side(r):
+def _evid_side(r, defect=None):
+    """One decision, as Needs Review lays it out. `defect` is what the record
+    carries as words (db.defect_labels) - fqc_record.defect is empty for every
+    decision since Stage 3, so it is only the fallback."""
     if not r:
         return None
     return {"outcome": r.get("outcome"), "pmax": r.get("ss_pmax"),
             "wattage": r.get("wattage"),
-            "el_verdict": r.get("el_verdict"), "defect": r.get("defect"),
+            "el_verdict": r.get("el_verdict"),
+            "defect": defect if defect is not None else r.get("defect"),
             "reason": r.get("reason"), "note": r.get("note"),
             "decided_by": r.get("decided_by"), "at": r.get("at")}
 
@@ -7815,27 +8076,27 @@ def api_review_list():
     with _RECONCILE_LOCK:
         with store.conn() as (cx, cur):
             _reconcile_provisional(cur)
-            # The background poller (serve.py) does this every 60s; opening
-            # the list is also one of the ways the system notices, same as
-            # the reconcile above - best-effort, a share being unreachable
-            # must not break the page that would otherwise show why.
-            try:
-                icon_ingest.run(db.get_config(cur), cur, db, store)
-            except Exception:
-                pass
+            # The event ingest is NOT run here. It used to be, "as another
+            # way the system notices" - but a GET that writes tells every
+            # other open Needs Review window "changed", and each of those
+            # re-runs it in turn: two idle windows on this screen kept each
+            # other refetching for as long as they were open (measured: 20
+            # writes in 45 s, nobody touching anything). serve.py's poller
+            # runs it every 60 s and is the only thing that does.
     with store.conn() as (cx, cur):
         items = []
         for r in db.quality_pending(cur):
             r = dict(r)
             locked = viewer not in _QUALITY_ROLES
+            dtxt = db.defect_labels(cur, r.get("fqc_id"), r.get("defect"))
             items.append({
                 "type": "quality_grade", "id": r["serial"], "serial": r["serial"],
                 "model": r.get("model"), "customer": r.get("customer"),
                 "flag": "Awaiting Quality", "stage": "FQC",
-                "detail": "Rejected" + (" — " + r["defect"] if r.get("defect") else ""),
+                "detail": "Rejected" + (" — " + dtxt if dtxt else ""),
                 "user": r.get("decided_by"), "at": r.get("at"),
                 "locked": locked,
-                "evidence": None if locked else {"original": _evid_side(r)},
+                "evidence": None if locked else {"original": _evid_side(r, dtxt)},
             })
         for r in db.review_items_open(cur, "duplicate_scan"):
             r = dict(r)
@@ -7843,7 +8104,8 @@ def api_review_list():
                              (r["fqc_id"],))
             new = store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s",
                             (r["new_fqc_id"],))
-            orig_side, new_side = _evid_side(orig), _evid_side(new)
+            orig_side = _evid_side(orig, db.defect_labels(cur, (orig or {}).get("fqc_id"), (orig or {}).get("defect")))
+            new_side = _evid_side(new, db.defect_labels(cur, (new or {}).get("fqc_id"), (new or {}).get("defect")))
             # fqc_record itself carries no wattage column - it lives on
             # serial, already joined onto this review row.
             if orig_side is not None: orig_side["wattage"] = r.get("wattage")
@@ -7866,7 +8128,8 @@ def api_review_list():
                              (r["fqc_id"],))
             new = store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s",
                             (r["new_fqc_id"],))
-            orig_side, new_side = _evid_side(orig), _evid_side(new)
+            orig_side = _evid_side(orig, db.defect_labels(cur, (orig or {}).get("fqc_id"), (orig or {}).get("defect")))
+            new_side = _evid_side(new, db.defect_labels(cur, (new or {}).get("fqc_id"), (new or {}).get("defect")))
             if orig_side is not None: orig_side["wattage"] = r.get("wattage")
             if new_side is not None: new_side["wattage"] = r.get("wattage")
             items.append({
@@ -7901,16 +8164,64 @@ def api_review_list():
         for r in db.review_items_unmatched(cur, list(_INGEST_LABELS)):
             r = dict(r)
             flag, detail = _INGEST_LABELS[r["type"]]
+            if r["type"] == "not_in_master_unplanned":
+                detail = _unplanned_detail(r, detail)
             items.append({
                 "type": r["type"], "id": r["review_id"], "serial": r["serial"],
                 "model": None, "customer": None,
                 "flag": flag, "stage": r.get("line") or "—", "detail": detail,
-                "user": r.get("created_by"), "at": r.get("detected_at") or
-                        r.get("created_at"),
+                "user": r.get("created_by"), "at": _iso_ts(r.get("event_at")) or
+                        r.get("detected_at") or r.get("created_at"),
                 "locked": False, "evidence": None,
+                # where FQC stands on a module the master does not have yet
+                "fqc": ({"outcome": r["fqc_outcome"], "by": r.get("fqc_by"),
+                         "at": r.get("fqc_at")} if r.get("fqc_outcome") else None),
             })
     items.sort(key=lambda x: x.get("at") or "", reverse=True)
     return jsonify(items)
+
+
+def _iso_ts(ts):
+    """The testers write 2026/09/29 18:40:31; everything else here is ISO
+    (2026-09-29T18:40:31). Needs Review is sorted and shown by this, so one
+    format - otherwise a tester's timestamp sorts after every ISO one of the
+    same day, whatever the time."""
+    if ts and len(ts) >= 19 and ts[4] == "/" and ts[7] == "/":
+        return ts[:10].replace("/", "-") + "T" + ts[11:19]
+    return ts
+
+
+def _unplanned_detail(r, base):
+    """What an Incharge needs to see on a not-in-master row without opening
+    anything: the reading the tester gave it (saved), and whether FQC has
+    already decided - because the decision stands once it is planned."""
+    bits = [base]
+    pmax = None
+    try:
+        pmax = (json.loads(r["ftr_json"]) if r.get("ftr_json") else {}).get("pmax")
+    except (TypeError, ValueError):
+        pmax = None
+    tested = (r.get("ftr_tested_at") or r.get("event_at") or "")[11:16]
+    bits.append("SS %.1f W%s" % (pmax, " at " + tested if tested else "")
+                if pmax is not None else "no SS reading saved yet")
+    if r.get("fqc_outcome"):
+        # held = a pass with no grade (the provisional route); a pass made
+        # while the EL was unfiled is 'provisional' in mode but graded A
+        held = r.get("fqc_outcome") == "pass" and not r.get("fqc_grade")
+        # What planning actually unlocks, named per outcome. A rejection is
+        # the one that must be said out loud: Quality's queue is built from
+        # serial rows, so until this module has one, Quality cannot call GY
+        # or BGY on it and nothing else can move it either.
+        next_step = ("plan it so Quality can decide" if r["fqc_outcome"] == "reject"
+                     else "held until the reading arrives" if held
+                     else "packable once planned")
+        bits.append("FQC: %s by %s - %s"
+                    % ("held pass" if held else
+                       "pass" if r["fqc_outcome"] == "pass" else "reject",
+                       r.get("fqc_by") or "?", next_step))
+    else:
+        bits.append("FQC not done yet")
+    return " · ".join(bits)
 
 
 def _resolve_duplicate_scan(cur, review_id, resolution, reason):
@@ -8125,6 +8436,45 @@ def api_fqc_anomalies():
     return jsonify(anomalies)
 
 
+NO_DEFECT = "(no defect recorded)"
+
+
+def _reject_reasons(cur, clause, args):
+    """[{defect, qty}] - what the rejections in this slice were FOR, most
+    common first.
+
+    Read from fqc_defect, where every decision since Stage 3 keeps its defects
+    (the EL's, and the operator's beside it); fqc_record.defect is what a
+    decision from before that has, and nothing writes it any more - this
+    used to read only that column, so every rejection since Stage 3 was
+    counted under "no defect recorded" whatever was wrong with it. A
+    rejection carrying two defects counts under both. Names are merged
+    without regard to case: the EL's raw folder name ('low eff', on old
+    decisions) and the master's label ('Low Eff') are one defect."""
+    rows = store.rows(cur,
+        "SELECT f.fqc_id, f.defect AS legacy, "
+        "(SELECT GROUP_CONCAT(dm.label, '|') FROM fqc_defect fd "
+        " JOIN defect_master dm ON dm.code = fd.defect_code "
+        " WHERE fd.fqc_id = f.fqc_id) AS labels "
+        "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
+        "WHERE " + clause + " AND f.outcome='reject'", args)
+    counts, shown = {}, {}
+    for r in rows:
+        labels = [n for n in (r["labels"] or "").split("|") if n]
+        names = labels or ([r["legacy"]] if r.get("legacy") else []) or [NO_DEFECT]
+        seen = set()
+        for n in names:
+            key = n.strip().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            counts[key] = counts.get(key, 0) + 1
+            if key not in shown or n in labels:
+                shown[key] = n           # the master's spelling wins over a raw folder name
+    return sorted(({"defect": shown[k], "qty": q} for k, q in counts.items()),
+                  key=lambda x: (-x["qty"], x["defect"]))
+
+
 @app.route("/api/fqc/dashboard")
 @require_screen_view("dash", "mgmt")
 def api_fqc_dashboard():
@@ -8163,25 +8513,39 @@ def api_fqc_dashboard():
         where.append(fqc_day + " <= %s"); args.append(to)
     if clock.shift_number(shift):
         where.append(fqc_shift + " = %s"); args.append(clock.shift_number(shift))
+    # everything above is about the DECISION and needs no serial row; what
+    # follows is about the module's row, which a module the master does not
+    # have yet does not have (see awaiting_planning below)
+    decision_only = list(where)
+    decision_args = list(args)
     if customer:
         where.append("s.customer = %s"); args.append(customer)
     if model:
         where.append("s.model = %s"); args.append(model)
     if result in ("pass", "reject"):
         where.append("f.outcome = %s"); args.append(result)
+        decision_only.append("f.outcome = %s"); decision_args.append(result)
     clause = " AND ".join(where)
     args = tuple(args)
+    unplanned_clause = " AND ".join(decision_only)
+    unplanned_args = tuple(decision_args)
 
     with store.conn() as (cx, cur):
         cfg = db.get_config(cur)
+        # Not grouped by customer: this screen already HAS a customer filter
+        # for whoever wants that breakdown, so one model in one shift is one
+        # row, whatever mix of customers it was built for - two batches of
+        # the same model, same shift, different customer, used to print as
+        # two rows that looked like an unexplained duplicate (Mukesh: "if
+        # user need customer wise data they will filter").
         summary = store.rows(cur,
             "SELECT " + fqc_day + " AS day, s.model AS model, s.wattage AS wattage, "
-            "s.customer AS customer, " + fqc_shift + " AS shift, COUNT(*) AS inspected, "
+            + fqc_shift + " AS shift, COUNT(*) AS inspected, "
             "SUM(CASE WHEN f.outcome='pass' THEN 1 ELSE 0 END) AS passed, "
             "SUM(CASE WHEN f.outcome='reject' THEN 1 ELSE 0 END) AS rejected "
             "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
             "WHERE " + clause + " "
-            "GROUP BY " + fqc_day + ", s.model, s.wattage, s.customer, " + fqc_shift + " "
+            "GROUP BY " + fqc_day + ", s.model, s.wattage, " + fqc_shift + " "
             "ORDER BY day DESC, shift, s.model, s.wattage",
             args)
         totals = store.one(cur,
@@ -8199,13 +8563,29 @@ def api_fqc_dashboard():
         # Rejection reasons, from the record that was actually made -
         # never grouped away, the way the shift/model summary above groups
         # away everything but the count.
-        by_defect = store.rows(cur,
-            "SELECT COALESCE(f.defect, '(no defect recorded)') AS defect, "
-            "COUNT(*) AS qty "
-            "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
-            "WHERE " + clause + " AND f.outcome='reject' "
-            "GROUP BY f.defect ORDER BY qty DESC", args)
+        by_defect = _reject_reasons(cur, clause, args)
+        # Decisions made on a module the master does not have yet. They JOIN
+        # away above - every count on this screen reads the serial row for
+        # model, wattage and customer, and there is no row until Incharge
+        # plans it - so an inspection that HAPPENED was in none of these
+        # numbers, and nothing said so. Counted separately rather than mixed
+        # in: the module is real and was inspected, but which indent item,
+        # customer and wattage it belongs to is genuinely not known yet. A
+        # customer or model filter is a question about the serial row, so it
+        # cannot be asked of these at all - then the count is not shown.
+        unplanned = 0 if (customer or model) else store.one(cur,
+            "SELECT COUNT(*) AS n FROM fqc_record f "
+            "WHERE " + unplanned_clause + " AND NOT EXISTS "
+            "(SELECT 1 FROM serial s WHERE s.serial=f.serial)",
+            unplanned_args)["n"]
+        # Needs Review: a live backlog, deliberately NOT run through `clause`
+        # - see db.review_open_counts. v4's card showed a literal "-" here
+        # with its demo subtext ("3 duplicate - 2 not in master") frozen
+        # underneath forever, whatever the real data said.
+        needs_review = db.review_open_counts(cur)
     t = dict(totals or {})
+    t["awaiting_planning"] = unplanned or 0
+    t["needs_review"] = needs_review
     for k in ("inspected", "passed", "rejected", "awaiting_quality", "gy", "bgy",
               "returned_a"):
         t[k] = t.get(k) or 0
@@ -8264,8 +8644,18 @@ def api_fqc_dashboard_modules():
             where.append("f.quality_grade = 'A'")
         elif cat == 'Pending':
             where.append("f.outcome = 'reject' AND f.quality_grade IS NULL")
-    if remark:
-        where.append("COALESCE(f.defect, '(no defect recorded)') = %s"); args.append(remark)
+    if remark == NO_DEFECT:
+        where.append("f.defect IS NULL AND NOT EXISTS (SELECT 1 FROM fqc_defect "
+                     "fd0 WHERE fd0.fqc_id = f.fqc_id)")
+    elif remark:
+        # a decision "has" a defect if fqc_defect names it - or, for one made
+        # before Stage 3 (no fqc_defect rows at all), if its old column does
+        where.append("(EXISTS (SELECT 1 FROM fqc_defect fd JOIN defect_master dm "
+                     "ON dm.code = fd.defect_code WHERE fd.fqc_id = f.fqc_id "
+                     "AND LOWER(dm.label) = LOWER(%s)) OR (NOT EXISTS (SELECT 1 "
+                     "FROM fqc_defect fd2 WHERE fd2.fqc_id = f.fqc_id) AND "
+                     "LOWER(f.defect) = LOWER(%s)))")
+        args.extend([remark, remark])
 
     clause = " AND ".join(where)
     args = tuple(args)
@@ -8279,7 +8669,10 @@ def api_fqc_dashboard_modules():
             "SELECT s.serial, s.model, s.customer, s.wattage, "
             + fqc_shift + " AS shift, " + fqc_day + " AS day, "
             "pe.created_at AS entry_at, f.fqc_id, f.at, f.outcome, "
-            "f.quality_grade, f.defect, f.decided_by "
+            "f.quality_grade, COALESCE((SELECT dm.label FROM fqc_defect fd "
+            "JOIN defect_master dm ON dm.code = fd.defect_code WHERE "
+            "fd.fqc_id = f.fqc_id ORDER BY fd.seq LIMIT 1), f.defect) AS defect, "
+            "f.decided_by "
             "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
             "LEFT JOIN production_entry pe ON pe.entry_id = s.prod_entry_id "
             "WHERE " + clause + " ORDER BY f.at DESC LIMIT %d"
@@ -8288,6 +8681,12 @@ def api_fqc_dashboard_modules():
     out = []
     for r in rows:
         d = dict(r)
+        # asked for by a defect: every row here has it, so say it in the
+        # words that were asked for - the screen keeps a row only if its
+        # defect equals the one chosen, and an old decision's raw EL folder
+        # name ('low eff') is the same defect as the master's 'Low Eff'
+        if remark and remark != NO_DEFECT:
+            d["defect"] = remark
         cr = customers.get(d.get("customer"))
         if cr:
             d["customer"] = cr["name"]

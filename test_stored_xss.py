@@ -27,6 +27,7 @@ os.environ["ICON_DB_FILE"] = os.path.join(TMP, "t.db")
 import db                                                    # noqa: E402
 import store                                                 # noqa: E402
 import icon_models                                           # noqa: E402
+import icon_clock as clock                                   # noqa: E402
 import app as APP                                            # noqa: E402
 import auth_test_helper as AUTH                              # noqa: E402
 import ui_harness as H                                       # noqa: E402
@@ -109,8 +110,10 @@ def seed():
     ok(c.post("/api/challan/%d/submit" % ch, json={}), "submit")
     ok(c.post("/api/gatepass", json={"kind": "RGP", "party": X("gp.party"),
        "description": X("gp.desc"), "qty": 1, "delivery_address": X("gp.addr")}), "gatepass")
+    # Round 35 removed the coded reason; a rejection carries a defect and a
+    # free note, and the note is what Quality is shown - so that is the field
     ok(c.post("/api/fqc", json={"serial": serial(1), "outcome": "reject",
-       "reason": "OV-QUALITY - " + X("fqc.reason")}), "reject")
+       "defect": "Cell Crack", "note": X("fqc.note")}), "reject")
     ok(c.post("/api/review/resolve", json={"type": "quality_grade", "id": serial(1),
        "grade": "GY", "reason": X("review.reason")}), "resolve")
     b2 = ok(c.post("/api/box/open", json={"grade": "A", "model": MODEL, "capacity": 2}), "box2")
@@ -118,7 +121,10 @@ def seed():
     ok(c.post("/api/loss_event", json={"line": "A", "mach": X("loss.mach"),
        "reason": "LOP-MACH", "kind": "P", "start": "09:00", "mode": "Live",
        "date": today, "shift": "A"}), "loss")
-    ok(c.post("/api/prodentry", json={"date": today, "shift": "A",
+    # the shift RUNNING now, on the factory day (06:00-06:00): a shift that has
+    # not started is refused, and "A of today" is exactly that between 00:00 and 06:00
+    ok(c.post("/api/prodentry", json={"date": clock.shift_day().isoformat(),
+       "shift": clock.SHIFT_LETTER[clock.shift_of(clock.now().hour)],
        "incharge": X("prod.incharge"), "start_serial": serial(2),
        "end_serial": serial(3)}), "prodentry")
     ok(c.post("/api/users", json={"login_id": "xss.user", "display_name": X("user.name"),

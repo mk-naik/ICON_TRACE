@@ -323,13 +323,62 @@ def _migrate(cx, text):
     # in the schema file where a fresh database already has the column.
     if cols("review_item"):
         for name, decl in (("raw_id", "TEXT"), ("source", "TEXT"),
-                           ("line", "TEXT"), ("detected_at", "TEXT")):
+                           ("line", "TEXT"), ("detected_at", "TEXT"),
+                           ("event_at", "TEXT")):
             if name not in cols("review_item"):
                 cx.execute("ALTER TABLE review_item ADD COLUMN %s %s"
                            % (name, decl))
         cx.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_review_item_raw "
                    "ON review_item (type, raw_id)")
+        _merge_unplanned_per_scan(cx)
     cx.commit()
+
+
+def _merge_unplanned_per_scan(cx):
+    """Once (and harmlessly again): one open item per SERIAL for
+    not_in_master_unplanned.
+
+    Until the per-serial change, a module scanned five times before it was
+    planned raised five items, keyed on the tester's timestamp - raw_id
+    'not_in_master_unplanned|A|<serial>|<timestamp>'. Each serial now has ONE
+    item, raw_id = the serial, and the newest scan is what it stands for. For
+    every serial still carrying old-format rows: the newest OPEN one becomes
+    that item (re-keyed, its scan time kept as event_at) and every other is
+    closed as merged_duplicate - closed, not deleted, with the reason on it.
+    If the new poller has already made the serial's own item, all the old ones
+    are the duplicates. Rows that are already resolved are history and are
+    left exactly as they are."""
+    import icon_clock
+    old = cx.execute(
+        "SELECT review_id, serial, raw_id FROM review_item "
+        "WHERE type='not_in_master_unplanned' AND status='open' "
+        "AND raw_id LIKE 'not_in_master_unplanned|%' "
+        "ORDER BY serial, review_id").fetchall()
+    if not old:
+        return
+    have = {r[0] for r in cx.execute(
+        "SELECT raw_id FROM review_item WHERE type='not_in_master_unplanned' "
+        "AND raw_id NOT LIKE 'not_in_master_unplanned|%'")}
+    by_serial = {}
+    for review_id, serial, raw_id in old:
+        by_serial.setdefault(serial, []).append((review_id, raw_id))
+    now = icon_clock.now().isoformat(timespec="seconds")
+    for serial, rows in by_serial.items():
+        keep = None
+        if serial not in have:
+            keep = rows[-1]                      # the newest scan (highest id)
+            scan_at = (keep[1].split("|", 3) + [""])[3] or None
+            cx.execute("UPDATE review_item SET raw_id=?, event_at=? "
+                       "WHERE review_id=?", (serial, scan_at, keep[0]))
+        for review_id, _raw in rows:
+            if keep and review_id == keep[0]:
+                continue
+            cx.execute(
+                "UPDATE review_item SET status='resolved', "
+                "resolution='merged_duplicate', resolved_by='system', "
+                "resolved_at=?, reason=? WHERE review_id=?",
+                (now, "one item per serial: this was an earlier scan of the "
+                      "same module", review_id))
 
 
 # What SQLite's CURRENT_TIMESTAMP writes: '2026-09-25 05:07:24', UTC, with a

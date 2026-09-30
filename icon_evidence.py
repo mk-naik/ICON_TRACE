@@ -34,7 +34,9 @@ access pattern, and because the file is written live a short row means the
 write is in progress: retry, never report absent.
 """
 
-import os, csv, io, time, random, datetime
+import os, re, csv, io, time, random, datetime
+import xml.etree.ElementTree as ET
+import icon_defects
 
 NC  = "NC"      # source unreachable
 NA  = "NA"      # source reachable, no row at all for this serial
@@ -121,9 +123,19 @@ def sources(cfg, line=None):
         cols = [(k, lab, col(cfg_key[3:], default), unit)
                 for (k, lab, cfg_key, default, unit) in PARAMS]
         by = dict((k, c) for (k, _lab, c, _u) in cols)
+        # The tester keeps one result file per module beside the CSV it
+        # exports - <data>\CSV\FTR.csv and <data>\XML\<yyyymmdd>\<serial>.xml.
+        # The CSV is cut and pasted away each shift; the XML is not, so it is
+        # where a reading is still found after the row has gone. Derived from
+        # the CSV's location unless Settings names it.
+        xml = (cfg.get(p + "xml_root") or "").strip()
+        if ln == "A":
+            xml = xml or (cfg.get("ss_xml_root") or "").strip()
+        if not xml and ss:
+            xml = os.path.join(os.path.dirname(os.path.dirname(ss)), "XML")
         out.append({
             "line": ln, "label": "Line %s" % ln,
-            "ss_path": ss, "el_root": el,
+            "ss_path": ss, "el_root": el, "xml_root": xml,
             "serial_col": col("serial_col", COL_ID),
             "cols": cols, "pmax_col": by["pmax"], "isc_col": by["isc"],
             "voc_col": by["voc"],
@@ -198,6 +210,82 @@ def _read_rows(path, retries=3, pause=0.15):
     return last or []
 
 
+# ---- the tester's own result file, one per module ------------------------
+#
+# The CSV is a convenience export and it is CUT AND PASTED AWAY each shift, so
+# a module tested an hour ago can already have no row in it. The tester keeps
+# every result as <XML root>\<yyyymmdd>\<SERIAL>.xml - one file per module per
+# day, overwritten by a retest, so the file is always the LATEST test. Same
+# machine, same measurement (verified column for column against the CSV row of
+# the same module): where the CSV has lost a row, this still has the reading.
+XML_LOOKBACK_DAYS = 14
+# The tester's XML tag for each parameter this module keeps (icon_evidence.PARAMS)
+XML_TAG = {"pmax": "Pmax", "isc": "Isc", "voc": "Voc", "ipm": "Ipm",
+           "vpm": "Vpm", "ff": "FF", "rs": "Rs", "rsh": "Rsh",
+           "eff": "Eff", "temp": "T_Object", "irr": "Irr_Target"}
+_XML_DAYS = {}          # root -> (fetched_at, [yyyymmdd, ...] newest first)
+
+
+def clear_xml_cache():
+    _XML_DAYS.clear()
+
+
+def _xml_days(root):
+    """The date folders under an XML root, newest first. Listed over the
+    network, so kept for half a minute - an ingest pass asks for many."""
+    now = time.time()
+    hit = _XML_DAYS.get(root)
+    if hit and now - hit[0] < 30:
+        return hit[1]
+    try:
+        days = sorted((e.name for e in os.scandir(root)
+                       if e.is_dir() and len(e.name) == 8 and e.name.isdigit()),
+                      reverse=True)
+    except OSError:
+        days = []
+    _XML_DAYS[root] = (now, days)
+    return days
+
+
+def _xml_fields(path):
+    try:
+        res = ET.parse(path).getroot().find("Result")
+    except (OSError, ET.ParseError):
+        return None
+    if res is None:
+        return None
+    return {c.tag: (c.text or "").strip() for c in res}
+
+
+def _xml_row(s, want):
+    """The tester's result for `want`, shaped like one CSV row for source `s` -
+    every value put at the column Settings maps it to - so everything
+    downstream (validity, the parameter list, the panel) is the code it
+    already was. None when there is no such file. Only a real-shaped serial is
+    ever turned into a file name."""
+    root = s.get("xml_root")
+    if not root or not _looks_like_serial(want) or not os.path.isdir(root):
+        return None
+    for day in _xml_days(root)[:XML_LOOKBACK_DAYS]:
+        path = os.path.join(root, day, want + ".xml")
+        if not os.path.isfile(path):
+            continue
+        f = _xml_fields(path)
+        if not f:
+            continue
+        cols = s["cols"]
+        width = max([COL_TIME, s["serial_col"]] + [c for (_k, _l, c, _u) in cols]) + 1
+        row = [""] * width
+        row[COL_TIME] = f.get("Date", "")
+        row[s["serial_col"]] = want
+        for (k, _lab, col, _u) in cols:
+            tag = XML_TAG.get(k)
+            if tag and tag in f:
+                row[col] = f[tag]
+        return row
+    return None
+
+
 def read_sun_simulator(cfg, serial, line=None):
     """Look up one serial across the Sun Simulators.
 
@@ -247,6 +335,17 @@ def read_sun_simulator(cfg, serial, line=None):
         return {"state": NC, "pmax": None, "attempts": 0,
                 "note": "No Sun Simulator could be read (%s)." % why}
 
+    # No row in the CSV - which is cut and pasted away each shift, so that
+    # does NOT mean the module was never tested. The tester's own result file
+    # for it is asked next, before NA (which means the tester has nothing).
+    via_xml = False
+    if not hits:
+        for s in read:
+            row = _xml_row(s, want)
+            if row is not None:
+                hits.append((s, row))
+                via_xml = True
+
     if not hits:
         if down:
             return {"state": NC, "pmax": None, "attempts": 0,
@@ -269,7 +368,11 @@ def read_sun_simulator(cfg, serial, line=None):
         out = {"state": OK, "pmax": _num(last[src["pmax_col"]]),
                "tested_at": last[COL_TIME], "attempts": len(hits),
                "line": src["line"], "source": src["label"],
-               "note": "Read live from %s%s." % (
+               "from_xml": via_xml,
+               "note": ("Read from the tester's own result file on %s - the "
+                        "CSV no longer holds this module (it is cut each "
+                        "shift)." % src["label"]) if via_xml else
+                       "Read live from %s%s." % (
                    src["label"],
                    " (retested %d times)" % len(hits) if len(hits) > 1 else "")}
         # the full measurement, not just power - each column independently
@@ -448,6 +551,34 @@ def _el_search(dirpath, serial):
     return None
 
 
+_DATE_DIR = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _unfiled(path):
+    """True when the image has not been given a verdict yet.
+
+    The EL station drops every image into the SHIFT folder, and the operator
+    files it under its verdict a few minutes later:
+
+        root / date / shift / category / serial.jpg
+
+    An image still directly under its shift (or date) folder has no verdict
+    yet - and the shift's name is not one. Taking the parent folder's name at
+    face value made FQC show "晚班" as the EL verdict of every module it looked
+    at before the operator got to it, and a rejection then passed the 'needs a
+    defect' check on the strength of a shift name."""
+    parent = os.path.basename(os.path.dirname(path)).strip()
+    grand = os.path.basename(os.path.dirname(os.path.dirname(path))).strip()
+    if _DATE_DIR.match(parent):
+        return True                        # straight under a date folder
+    if not _DATE_DIR.match(grand):
+        return False                       # date / shift / CATEGORY / file: filed
+    # date / X / file: X is either a shift (not yet filed) or a verdict folder
+    # in a shallower tree - it is a verdict if it is OK or a category we know
+    key = icon_defects.normalize(parent)
+    return not (key == "ok" or key in icon_defects.FOLDER_MAP)
+
+
 def read_el(cfg, serial, line=None):
     """EL verdict comes from the folder the image was filed under.
 
@@ -477,6 +608,18 @@ def read_el(cfg, serial, line=None):
             continue
         try:
             match = _el_search(root, serial)
+            if match and _unfiled(match):
+                # There IS an image - the module has been seen - but the EL
+                # operator has not filed it under a verdict yet. No verdict is
+                # not a clean one and not a defect: NA, with the image still
+                # there to be looked at.
+                return {"state": NA, "verdict": None, "path": match,
+                        "line": s["line"], "source": s["label"],
+                        "unfiled": True,
+                        "note": "The EL image is on file (%s) but has not been "
+                                "filed under a verdict yet - the EL operator "
+                                "does that a few minutes after it is taken."
+                                % s["label"]}
             if match:
                 return {"state": OK,
                         "verdict": os.path.basename(os.path.dirname(match)).strip()
@@ -582,6 +725,8 @@ def gather(cfg, serial, wattage, sandbox=False, line=None):
         "ss_state": ss["state"], "ss_note": ss["note"],
         "ss_attempts": ss.get("attempts"), "tested_at": ss.get("tested_at"),
         "ss_line": ss.get("line"), "el_line": el.get("line"),
+        # read from the tester's own result file because the CSV had lost the row
+        "ss_from_xml": bool(ss.get("from_xml")),
         "fault": ss["state"] == BAD,
         "el": el.get("verdict"), "el_state": el["state"], "el_note": el["note"],
         "el_path": el.get("path"),

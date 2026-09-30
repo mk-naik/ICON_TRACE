@@ -326,7 +326,11 @@ def t_entry_counts_when_recorded():
     d = dash(c, today)
     assert d["kpi"]["prod"] == 6 and d["kpi"]["running"] == 6, d["kpi"]
     sh = clock.shift_of(clock.now().hour)
-    assert d["lines"] == [{"line": "B-Line", "shift": sh, "produced": 6, "scrap": 0}], d["lines"]
+    # normalized to the bare letter (Round 36): a module FQC graded before
+    # Planning names its line from ftr_reading ("B"), a production entry's
+    # own dropdown writes "B-Line" - the same real line, so grouping has to
+    # agree on one spelling or the two collide instead of summing
+    assert d["lines"] == [{"line": "B", "shift": sh, "produced": 6, "scrap": 0}], d["lines"]
     empty = dash(c, "2026-09-01")
     assert empty["kpi"]["prod"] == 0 and empty["latest"] == today, empty
 

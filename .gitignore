@@ -45,3 +45,6 @@ extract_lockout.py
 print_test.py
 split_test.py
 ui_test_patch.py
+
+# Editor
+.vscode/

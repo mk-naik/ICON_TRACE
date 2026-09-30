@@ -40,6 +40,12 @@ indent ── indent_line ── allocation ── serial ──┬── fqc_re
                                                 └── challan_serial ── challan
 ```
 
+Beside the spine: `fqc_defect` and `defect_master` (what a decision found),
+`entity_revision` (who created or edited what, with before and after),
+`review_item` (Needs Review - one table, a `type` column), `ftr_reading`
+(the Sun Simulator reading saved for a module the master does not have yet)
+and `fqc_lookup_log`.
+
 **`serial` is the spine.** One row per module, written once at allocation and
 updated as it moves. Everything else joins to it.
 
@@ -72,168 +78,201 @@ format changed once already and will change again.
 This is the contract. Packing reads it directly, and refuses anything that
 does not satisfy it.
 
-### On every decision, two writes in one transaction
+### On every decision, one function
 
-```python
-with store.conn() as (cx, cur):
-    # 1. the evidence, snapshotted
-    store.insert(cur, "fqc_record", {
-        "serial": serial,
-        "outcome": outcome,           # 'pass' | 'reject'
-        "grade": "A" if outcome == "pass" else None,   # NULL until Quality
-        "mode": mode,                 # 'confirmed' | 'provisional'
-        "ss_pmax": ev.get("pmax"),
-        "ss_state": ev.get("ss_state"),      # 'OK' | 'NC' | 'NA' | 'BAD'
-        "el_verdict": ev.get("el"),
-        "el_state": ev.get("el_state"),
-        "proposed": ev.get("proposed"),      # what the evidence suggested
-        "defect": defect,                    # coded, on a rejection
-        "reason": reason,                    # required to overrule a pass
-        "note": note,                        # required when reason is OTHER
-        "decided_by": actor(),
-        "at": datetime.datetime.now().isoformat(timespec="seconds"),
-    })
+`db.record_fqc(cur, serial, outcome, evidence, decided_by, mode, defect=,
+note=, hold=)` does all of it, in the caller's transaction. Use it rather than
+writing any of the parts by hand - a grade with no record behind it is a
+decision with no evidence.
 
-    # 2. the module's own state
-    cur.execute("UPDATE serial SET grade=%s, state=%s "
-                "WHERE serial=%s AND build_instance=1",
-                (grade, "graded" if outcome == "pass" else "rejected", serial))
-```
-
-`db.record_fqc(...)` does both. Use it rather than writing the two by hand —
-a grade on `serial` with no `fqc_record` behind it is a decision with no
-evidence, and the Search screen will show a module that was judged by nobody
-for no reason.
-
-### Evidence is copied, not referenced
-
-Every value from the Sun Simulator and EL is stored **on the fqc_record**, not
-joined to at read time. A re-import of the SS export must never be able to
-change why a module was graded last week. Where a value was unavailable, that
-absence is recorded explicitly rather than left null-and-ambiguous.
-
-### FQC does not grade. It passes or rejects.
-
-A pass is grade A, and **A means Pmax at or above the nameplate with a clean
-EL** — measured against the number on the label, not a tolerance band below
-it. A 590 W module reading 585 W is not a 590 W module.
-
-**A reading below the wattage cannot be overruled.** No reason text turns a
-module that measures short into one that does not; the way up is the Sun
-Simulator, and it is tested again. Rejecting is always allowed — a person may
-see what the evidence does not, and rejecting against a proposed pass needs a
-coded reason.
-
-**How a pass may be recorded** is one function, `app._pass_route(evidence)`,
-which both the lookup (to draw the panel) and `/api/fqc` (to enforce it) ask:
-
-| Route | When | What it costs |
-|---|---|---|
-| `direct` | the evidence itself proposes a pass | nothing |
-| `el_only` | Pmax is at or above the wattage and the EL verdict is the only objection | a coded reason (`OV-OTHER` → note) |
-| `provisional` | a source is `NC` — unreachable — so nothing can be read | a coded reason; the module is **held** (below) |
-| none | Pmax below the wattage; `BAD` (probe fault); `NA` (the tester is up and has nothing) | refused, with the reason — the panel shows the override disabled and says why |
-
-A **defect and a note may be recorded on a pass** as well as a rejection. A
-defect of `Other` says nothing on its own, so its note is compulsory — the
-server enforces it for either outcome. (The dashboard's rejection reasons
-count rejections only.)
-
-What is rejected has **no grade at all**. Quality calls it GY or BGY on its
-own screen, reading the SS figure, the EL verdict and image, and what FQC
-recorded — the coded defect, the override reason, the note. No grade is what
-keeps a reject out of a box: packing wants `state='graded'` with a grade
-matching the label, and a reject is neither.
-
-```
-planned
-  └ FQC pass    → graded   · A        → packable
-  └ FQC reject  → rejected · no grade → NOT packable
-                   └ Quality → graded · GY | BGY → packable
-```
-
-`db.record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason,
-defect, note)` writes the record and the serial's state together, as before.
-The record also snapshots `build_instance` — the build of the serial that was
-judged, `1` by default because `get_serial`/`set_serial` only reach build 1.
-Recent gradings does not list it, but its Model/Customer join follows it.
-`NULL` is a record from before the column existed and reads as 1.
-`db.record_quality(cur, serial, grade, decided_by, note)` is the second half.
-A coded reason of `OV-OTHER` says nothing on its own, so the note becomes
-compulsory with it, and so does a defect of `Other` (enforced by the server as
-well as the form). Tested in `test_fqc.py` and `test_fqc_screen.py`.
+1. **the record** - `fqc_record`: `outcome` (`pass` | `reject`); `grade`
+   (`A` for a confirmed pass, NULL for everything else - a reject has no
+   grade until Quality gives it one); `mode`; the evidence *snapshotted*
+   (`ss_pmax`, `ss_state`, `el_verdict`, `el_state`); `defect_el_raw` (the EL
+   folder name as filed); `rule_version`; `test_seq` (this serial's 1st, 2nd,
+   3rd test); `note`; `decided_by`; `at`.
+2. **its defects** - `fqc_defect`, one row per defect, `source` `el` (the EL's
+   verdict, attached automatically to a pass as well as a reject, never
+   removable) then `fqc` (the operator's). Match on `defect_code`, never on
+   text. `fqc_record.proposed`, `reason` and `defect` are **history only**:
+   nothing writes them, so every reader takes defects from `fqc_defect`
+   (`db.defect_labels`) and uses the old column only for a decision made
+   before Stage 3.
+3. **the module's state** - `serial.state` / `grade`: `graded` + `A`,
+   `rejected`, or `hold` (a held pass). Only when the serial has a row - see
+   *FQC before Planning* below.
+4. **the trail** - an `entity_revision` row, and the earlier live decision for
+   the serial is *superseded*, never deleted.
 
 ### The operator supplies the judgement; the server reads the measurement
 
-`evidence` is gathered **inside the route**, from the tester, and is never
-taken from the request. `/api/fqc` accepts a serial, an outcome, a coded
-defect and reason, a note, `sandbox`, and the `evidence_token` the lookup
-handed out. Nothing
-else it sends is read.
+`evidence` is gathered **inside the route**, from the testers, and is never
+taken from the request. `/api/fqc` accepts a serial, an outcome, an optional
+defect, a note, `sandbox`, and the `evidence_token` the lookup handed out.
+Nothing else it sends is read. (It once accepted the evidence, and a body
+saying `{"ss_state":"OK","pmax":631}` was enough to record a module the tester
+had failed to read twice as a clean 631 W.)
 
-It used to accept the evidence, and this was enough to record a module the
-tester had failed to read twice as a clean 631 W:
+**`evidence_token`** is a fingerprint of the reading the screen was shown -
+state, Pmax, EL verdict - compared and then discarded. If the module was
+retested, or its EL image was filed under a verdict, while the operator was
+deciding, the decision is refused with what it reads now (409) rather than
+silently recorded against a reading that has moved on.
+
+### FQC passes or rejects. It does not grade, and it does not propose.
+
+There used to be a proposed verdict to confirm or overrule, with a coded
+reason to overrule it. It is gone: the Sun Simulator sees power and the EL
+sees two strings, and neither sees a frame dent, a corner chip, or whether a
+cell crack is minor or major; a verdict built from two of five kinds of
+evidence produced a 58% reject rate on modules mostly at or above nameplate.
+**FQC decides from what is in front of it.** The one thing software still
+enforces is the wattage floor:
+
+| The Sun Simulator says | Pass | Reject |
+|---|---|---|
+| `OK`, Pmax at or above the wattage | yes | yes - needs a defect |
+| `OK`, Pmax below the wattage | **no** - a measurement is not open to argument; Discard it back to the tester | yes |
+| `NC` - unreachable | yes, **provisionally**: recorded, the module is HELD | yes, recorded provisional |
+| `NA` - reachable, nothing for this serial anywhere | **no** - retest | yes |
+| `BAD` - a probe fault | **no decision at all** | **no decision at all** |
+
+The reading is looked for in the live CSV, then in the tester's own result
+file (`<data>/XML/<yyyymmdd>/<serial>.xml`, one per module, overwritten by a
+retest) - the CSV is cut and pasted away each shift, so "no row in the CSV"
+does not mean "never tested" - and for a module that was flagged before it was
+planned, in the reading `icon_ingest` saved (`ftr_reading`). `NA` means none of
+those has it.
+
+**The EL is advisory.** It never blocks a pass and never forces a reject. Its
+verdict, when it names a defect, is attached to the record. **A reject needs
+a defect**: the EL's own satisfies it; if the EL read clean or has not spoken,
+the operator picks one from `defect_master`. `Other` says nothing, so its note
+is compulsory (the server enforces it). Operators cannot mint defect names.
+A pass may carry an operator defect and a note too; there is no reason code
+anywhere.
+
+**An EL image the operator has not filed yet is no verdict.** The EL station
+drops each image into the *shift* folder and the operator files it under its
+verdict a few minutes later (`<date>/<shift>/<category>/<serial>.jpg`). An
+image still directly under the shift folder reads `NA` with its path (so it can
+still be looked at) - the shift's name is never taken for a verdict.
+
+What is rejected has **no grade at all**. Quality calls it `A`, `GY` or `BGY`
+on its own screen, reading the SS figure, the EL verdict and image, and what
+FQC recorded - the coded defect(s) and the note. No grade is what keeps a
+reject out of a box: packing wants `state='graded'` with a grade matching the
+label, and a reject is neither.
 
 ```
-POST /api/fqc {"serial":"…","outcome":"pass",
-               "evidence":{"ss_state":"OK","pmax":631.0}}   → 200, stored
+planned
+  └ FQC pass    → graded · A        → packable
+  └ FQC reject  → rejected · no grade → NOT packable
+                   └ Quality → graded · A | GY | BGY → packable
 ```
 
-With the measurement in the body, the `BAD` block is decorative and
-`fqc_record` can hold a reading no tester ever produced — which is the one
-thing this table exists to make impossible. The same applies to `proposed`
-(the override-reason rule has to fire against what the *server* proposed) and
-to `mode`: confirmed or provisional is a property of the evidence, not a
-field a client sets.
-
-**`evidence_token`** is a fingerprint of the reading the screen was shown,
-compared and then discarded — never read back as a value. If the module was
-retested while the operator was deciding, the grade is refused with what it
-reads now rather than silently overwriting the newer reading. A failed
-retest is *not* a change: the latest valid row still wins, which is the
-retest rule.
-
-Tested in `test_fqc.py`.
+A retest writes a new record and supersedes the old; `test_seq` counts them.
+`build_instance` is the build of the serial that was judged (`1` today -
+`get_serial`/`set_serial` only reach build 1).
 
 ### The four evidence states
 
 | State | Means | FQC behaviour |
 |---|---|---|
-| `OK` | read cleanly | propose pass or reject |
-| `NC` | source unreachable | reject or pass **provisionally** — a pass is held |
-| `NA` | reachable, serial absent | review — it may never have been tested |
-| `BAD` | row exists, reading invalid | **no decision at all** — probe fault |
+| `OK` | read cleanly | pass or reject |
+| `NC` | source unreachable | reject, or pass **provisionally** - the pass is held |
+| `NA` | reachable, serial absent from every place the tester keeps it | reject only - it may never have been tested |
+| `BAD` | row exists, reading invalid | **no decision at all** - probe fault |
 
 `BAD` is the strongest signal in the system. Pmax around 0.005 W, Isc `nan`,
-Voc negative — the module *was* tested and could not be read. Junction box,
+Voc negative - the module *was* tested and could not be read. Junction box,
 polarity or soldering. It is not missing data.
 
 ### Confirmed versus provisional
 
-- Evidence present and the operator goes against it → **override**, in either
-  direction: rejecting a proposed pass, or passing an EL-only rejection. A
-  coded reason is required. Not a review item; a recorded judgement. What is
-  never open to argument is a reading below the wattage.
-- Evidence absent (`NC`) and the decision comes from verbal information →
-  **provisional**. A provisional **reject** is `rejected` as ever. A
-  provisional **pass** is recorded with `mode='provisional'`, the serial goes
-  to state **`hold`** with no grade, and Packing refuses it ("on hold —
-  waiting for the tester's reading"). It is listed in **Hold & Deviation**.
+`mode` tracks whether the evidence was all there. It is a property of the
+evidence, not a field a client sets.
 
-  When the evidence is available (`app._reconcile_provisional`, run whenever
+- Evidence complete → `confirmed`.
+- A source absent (`NC`, or an EL image not filed yet) → `provisional`. A
+  provisional **reject** is `rejected` as ever. A provisional **pass** made with
+  the Sun Simulator unreachable is recorded with `mode='provisional'`, the
+  serial goes to state **`hold`** with no grade, and Packing refuses it ("on
+  hold - waiting for the tester's reading"). It is listed in **Hold &
+  Deviation**.
+
+  When the reading is available (`app._reconcile_provisional`, run whenever
   Hold & Deviation or Needs Review is read, and polled by the screen):
   - **it agrees** → a NEW `confirmed` record supersedes the provisional one
-    (the trail stays whole), the module is graded and can be packed —
-    automatically, no one touches it;
-  - **it disagrees** → nothing picks a side. The evidence's own record is
+    (the trail stays whole) and the held module is graded and packable,
+    automatically;
+  - **it disagrees** → nothing picks a side. What the evidence now says is
     snapshotted beside the decision, a `provisional_mismatch` item is raised
     in **Needs Review** for Quality, and the module stays held. Quality keeps
     the decision or the evidence, with a reason; the other record is
-    superseded, never deleted.
-  - **still absent** → it stays, however long. There is no expiry: a hold
-    stays until someone (or the tester) decides.
+    superseded, never deleted;
+  - **the Sun Simulator is still unreachable** → it stays, however long. There
+    is no expiry: a hold stays until someone (or the tester) decides.
 
----
+### FQC before Planning (Round 36)
+
+A module comes off the line, is tested, and reaches FQC - and Incharge may not
+have planned its serial yet, so the serial is not in the master. FQC does
+**not** wait: making the operator stop the line and send the module back to be
+re-tested once Planning catches up is not worth it.
+
+- **FQC accepts it** when the testers have seen it - the Sun Simulator has a
+  reading (a good one, or a probe fault) or an EL image is filed under its
+  name. A serial nobody has seen is refused ("check the barcode"): a mistyped
+  barcode is not a module - unless a tester could not be read (unreachable is
+  NC, not NA), when the refusal names the link that is down instead, because
+  "nothing filed" is only known of a tester that answered. The wattage and model come from the serial itself
+  (`decompose()`, the parse Planning runs when it creates the row); nothing
+  else about the module is guessed.
+- **The decision is recorded against a serial with no row.** The module goes on
+  **Needs Review** as `not_in_master_unplanned` (one item per serial, standing
+  for its latest scan) and its Sun Simulator reading is saved in
+  `ftr_reading` - the latest test if it was scanned again.
+- **Packing still refuses it** until it is planned ("not in the serial
+  master").
+- **Planning carries the decision on** (`db.apply_standing_fqc`, in the same
+  transaction that creates the serial rows): a confirmed pass → `graded` / `A`
+  and packable; a held pass → `hold`; a reject → `rejected`, in Quality's
+  queue. The Needs Review item closes itself (`resolution='planned'`). A
+  decision that was cancelled is not brought back. Nothing is re-tested.
+- **...and only onto an item OF THE SERIAL'S OWN WATTAGE**
+  (`app._nameplate_refusal`, every allocation, FQC or not). The wattage in an
+  ICON serial is the module's **nameplate**: it is printed on the module, it is
+  what the customer receives, and every measurement has to meet it. Planning
+  used to write the item's model and wattage onto the row without looking at
+  the serial's own, so a 625 W module planned on a 630 W item simply became a
+  630 W module - and with FQC grading before Planning, its pass (judged against
+  625) came with it as grade A. The measurement does **not** decide: a 625 W
+  module reading 631 W is still a 625 W module, and is refused on a 630 W item.
+  `apply_standing_fqc` keeps a net for any other route that writes serial rows -
+  a pass measured below the row's wattage leaves it `planned` rather than
+  grading it.
+- **A standing decision LOCKS the allocation, and that is deliberate.** A module
+  graded before Planning has been built and tested: production is running on
+  it, and a running plan is not deleted (`db.production_moved`). A batch
+  containing one cannot be edited or withdrawn; a wrong indent item is undone
+  the way any other post-production mistake is - a **Cancel document** on the
+  serial or the serial range (Round 34), recorded and step-up protected.
+- **Withdrawal puts it back** (`db.reopen_unplanned_items`): deleting the serial
+  rows makes "not in the master" true again, so the item reopens at once rather
+  than waiting for a poller pass that can only see the module while the
+  tester's CSV still holds its row.
+- **The reading is kept for every decision**, not only an unplanned one -
+  otherwise a module retested after planning keeps its first test in
+  `ftr_reading` for ever, and the Flash Test Report and the FQC record disagree.
+- **The FQC dashboard counts these separately** (`awaiting_planning`): every
+  number on that screen is read through the serial row, so a decision made
+  before Planning is in none of them. The screen says how many, instead of
+  showing a shift total quietly short of what was inspected.
+- **A rejection cannot be dispositioned until it is planned.** Quality's queue is
+  built from serial rows and the GY/BGY call is written onto one, so the Needs
+  Review row says "plan it so Quality can decide" rather than leaving an
+  Incharge to work out why nothing moves.
 
 ## 4. What Packing then requires
 
@@ -242,6 +281,8 @@ refusal returns its reason, never a bare 400.
 
 ```
 serial exists in `serial`                    "not in the serial master"
+                                             (FQC may grade a serial ahead of Planning;
+                                             it cannot be PACKED until it is planned)
 serial.state == 'graded'                     "has no FQC grade"
 serial.grade == box.grade                    "the label claims every module matches"
 serial.model == box.model

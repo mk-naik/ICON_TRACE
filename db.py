@@ -928,6 +928,20 @@ def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
     return rec
 
 
+def defect_labels(cur, fqc_id, legacy=None):
+    """The defects recorded on one FQC decision, as words: "No Power, Cell
+    Crack" - the EL's first, then the operator's. From fqc_defect, where every
+    decision made since Stage 3 keeps them; `legacy` is fqc_record.defect,
+    which is all a decision from before that has (and which nothing writes any
+    more - screens that still read only that column showed every new
+    rejection as having no defect at all)."""
+    if cur is not None and fqc_id is not None:
+        labels = [r["label"] for r in fqc_defects_for(cur, fqc_id)]
+        if labels:
+            return ", ".join(labels)
+    return legacy or ""
+
+
 def supersede_fqc(cur, fqc_id, by_id):
     """Mark one fqc_record LOSING - not deleted, not mutated beyond this -
     because another record is the one now trusted. Used both directions: a
@@ -964,12 +978,18 @@ def create_review_item(cur, item_type, serial, fqc_id=None, new_fqc_id=None,
 
 
 def ingest_review_item(cur, item_type, serial, raw_id, source, line=None,
-                       created_by="system"):
+                       created_by="system", event_at=None):
     """One review_item written by a SCAN, not a person - a serial not in
     master, a shift with no SS reading against an EL image, a lookup nobody
     decided, a Flash Test Report anomaly. Idempotent: (type, raw_id) is
     unique, so re-running the same scan over the same underlying row or
     file writes nothing a second time.
+
+    QUIET as well as idempotent: it LOOKS first and writes only when the item
+    is not on file. An INSERT ... DO NOTHING is still a write as far as the
+    change feed is concerned - the poller ran one every minute over rows it
+    had already recorded, and every open Needs Review window was told
+    "changed" every time.
 
     Returns True if this call actually inserted a row, False if it was
     already on file - callers use this to count how many were genuinely
@@ -977,55 +997,311 @@ def ingest_review_item(cur, item_type, serial, raw_id, source, line=None,
     """
     if cur is None:
         return False
+    if _store.one(cur, "SELECT 1 FROM review_item WHERE type=%s AND raw_id=%s",
+                  (item_type, raw_id)):
+        return False
     at = clock.now().isoformat(timespec="seconds")
     cur.execute(
         "INSERT INTO review_item (type, serial, status, dispatched, "
-        "created_at, created_by, raw_id, source, line, detected_at) "
-        "VALUES (%s,%s,'open',0,%s,%s,%s,%s,%s,%s) "
-        "ON CONFLICT(type, raw_id) DO NOTHING",
-        (item_type, serial, at, created_by, raw_id, source, line, at))
-    return cur.rowcount == 1
+        "created_at, created_by, raw_id, source, line, detected_at, event_at) "
+        "VALUES (%s,%s,'open',0,%s,%s,%s,%s,%s,%s,%s)",
+        (item_type, serial, at, created_by, raw_id, source, line, at, event_at))
+    return True
 
 
-def ingest_review_item_latest(cur, item_type, serial, source, line=None,
-                              created_by="system"):
-    """Like ingest_review_item(), but one row per (type, serial) for good -
-    raw_id IS the serial, so a module scanned five times before it is
-    planned is five updates to one open item, never five items. Returns
-    'created', 'updated', or None (cur is None).
+def upsert_unplanned_item(cur, serial, source, line=None, event_at=None,
+                          created_by="system"):
+    """One item per SERIAL for a module the testers have read and the master
+    does not have (not_in_master_unplanned, raw_id = the serial), standing for
+    its LATEST scan - "if the same module is scanned a second time, keep the
+    latest one".
 
-    Only for a kind where the LATEST scan is what matters and an earlier
-    one is not history worth keeping on its own - not_in_master_unplanned,
-    not the person-raised types, which never call this."""
+    Writes only when there is something to say:
+      created   no item yet
+      updated   the tester scanned it again, later (event_at is newer)
+      reopened  it had been closed (planned, then the allocation withdrawn) and
+                the module is not in the master again
+      None      nothing new - and nothing written
+
+    The caller has already established that the serial is not in the master;
+    this does not look."""
     if cur is None:
         return None
-    # rowcount is 1 either way (INSERT or the DO UPDATE branch), so
-    # created-vs-updated has to be read before the write, not after it.
-    existed = _store.one(cur, "SELECT 1 FROM review_item WHERE type=%s "
-                              "AND raw_id=%s", (item_type, serial))
+    row = _store.one(cur, "SELECT review_id, status, event_at FROM review_item "
+                          "WHERE type='not_in_master_unplanned' AND raw_id=%s",
+                     (serial,))
     at = clock.now().isoformat(timespec="seconds")
-    cur.execute(
-        "INSERT INTO review_item (type, serial, status, dispatched, "
-        "created_at, created_by, raw_id, source, line, detected_at) "
-        "VALUES (%s,%s,'open',0,%s,%s,%s,%s,%s,%s) "
-        "ON CONFLICT(type, raw_id) DO UPDATE SET "
-        "detected_at=excluded.detected_at, line=excluded.line",
-        (item_type, serial, at, created_by, serial, source, line, at))
-    return "updated" if existed else "created"
+    if row is None:
+        cur.execute(
+            "INSERT INTO review_item (type, serial, status, dispatched, "
+            "created_at, created_by, raw_id, source, line, detected_at, "
+            "event_at) VALUES ('not_in_master_unplanned',%s,'open',0,%s,%s,%s,"
+            "%s,%s,%s,%s)",
+            (serial, at, created_by, serial, source, line, at, event_at))
+        return "created"
+    if row["status"] != "open":
+        cur.execute(
+            "UPDATE review_item SET status='open', resolved_by=NULL, "
+            "resolved_at=NULL, resolution=NULL, reason=NULL, detected_at=%s, "
+            "event_at=%s, line=%s WHERE review_id=%s",
+            (at, event_at, line, row["review_id"]))
+        return "reopened"
+    if event_at and (row.get("event_at") or "") < event_at:
+        cur.execute("UPDATE review_item SET detected_at=%s, event_at=%s, "
+                    "line=%s WHERE review_id=%s",
+                    (at, event_at, line, row["review_id"]))
+        return "updated"
+    return None
 
 
-def review_items_unmatched(cur, types, n=200):
+def _chunks(seq, n=400):
+    seq = list(seq)
+    for i in range(0, len(seq), n):
+        yield seq[i:i + n]
+
+
+def close_planned_items(cur, serials=None, by="system",
+                        reason="the serial is now in the master"):
+    """A not_in_master_unplanned item is about ONE thing - the serial is not in
+    the master - so when it is, the item is done. Resolved as 'planned'.
+
+    `serials` (Planning, in the same transaction that creates the rows) closes
+    just those; without it the poller's sweep closes every open one whose
+    serial has since been planned by any route. Looks first: nothing to close,
+    nothing written. Returns how many it closed."""
+    if cur is None:
+        return 0
+    at = clock.now().isoformat(timespec="seconds")
+    closed = 0
+    groups = [None] if serials is None else list(_chunks(serials))
+    for group in groups:
+        sql = ("SELECT r.review_id FROM review_item r WHERE "
+               "r.type='not_in_master_unplanned' AND r.status='open' AND "
+               "EXISTS (SELECT 1 FROM serial s WHERE s.serial=r.raw_id "
+               "AND s.build_instance=1)")
+        args = []
+        if group is not None:
+            sql += " AND r.raw_id IN (%s)" % ", ".join(["%s"] * len(group))
+            args = list(group)
+        ids = [r["review_id"] for r in _store.rows(cur, sql, args)]
+        for chunk in _chunks(ids):
+            cur.execute(
+                "UPDATE review_item SET status='resolved', resolution='planned', "
+                "resolved_by=%s, resolved_at=%s, reason=%s WHERE review_id IN (%s)"
+                % ("%s", "%s", "%s", ", ".join(["%s"] * len(chunk))),
+                [by, at, reason] + chunk)
+            closed += len(chunk)
+    return closed
+
+
+def production_moved(cur, alloc_id):
+    """How many serials in this allocation are past 'planned' - the number that
+    decides whether it may still be edited or withdrawn.
+
+    EVERY serial past 'planned' counts, including a module FQC graded before
+    Planning had its serial. That module has physically been built and tested:
+    production IS running on it, and a running plan is not deleted. Mukesh, on
+    exactly this case: "on running production, plan can't be deleted."
+
+    So a batch containing a module that came through the testers ahead of
+    Planning is locked as soon as it is created, and a wrong indent item is
+    corrected the way any other post-production mistake is - Cancel document,
+    on the serial or the serial range (Round 34), which is recorded and needs a
+    step-up. It is not undone by quietly withdrawing the plan.
+
+    One query rather than the same SQL written out in both the allocation edit
+    and the allocation withdraw endpoint (indent cancel asks the same question
+    of a whole indent and keeps its own join)."""
+    if cur is None:
+        return 0
+    return _store.one(cur, "SELECT COUNT(*) AS n FROM serial WHERE alloc_id=%s "
+                           "AND state<>'planned'", (alloc_id,))["n"]
+
+
+def reopen_unplanned_items(cur, serials, by="system",
+                           reason="the allocation was withdrawn"):
+    """The mirror of close_planned_items(): serial rows have just been DELETED
+    (an allocation withdrawn or edited), so a module the testers read is not in
+    the master again and its Needs Review item is true again.
+
+    Without this the item stayed resolved and nothing pointed at the module:
+    the poller only reopens one when the tester's CSV still holds the row, and
+    that file is cut every shift - a withdrawal an hour later left the module
+    with no row, no item, and nowhere on any screen. Returns how many reopened.
+    """
+    if cur is None or not serials:
+        return 0
+    at = clock.now().isoformat(timespec="seconds")
+    n = 0
+    for group in _chunks(serials):
+        marks = ", ".join(["%s"] * len(group))
+        ids = [r["review_id"] for r in _store.rows(
+            cur, "SELECT r.review_id FROM review_item r WHERE "
+                 "r.type='not_in_master_unplanned' AND r.status='resolved' AND "
+                 "r.resolution='planned' AND r.raw_id IN (" + marks + ") AND "
+                 "NOT EXISTS (SELECT 1 FROM serial s WHERE s.serial=r.raw_id)",
+            list(group))]
+        for chunk in _chunks(ids):
+            cur.execute(
+                "UPDATE review_item SET status='open', resolved_by=NULL, "
+                "resolved_at=NULL, resolution=NULL, reason=%s, detected_at=%s "
+                "WHERE review_id IN (%s)"
+                % ("%s", "%s", ", ".join(["%s"] * len(chunk))),
+                ["%s (%s)" % (reason, by), at] + chunk)
+            n += len(chunk)
+    return n
+
+
+def apply_standing_fqc(cur, serials):
+    """FQC ran BEFORE Planning: the module was tested, reached FQC and was
+    graded while the serial was not in the master, so the decision was
+    recorded against a serial with no row. Planning has just created the row
+    (state 'planned'); give it the state its standing decision implies, so the
+    module carries on from where FQC left it instead of being tested again -
+    stopping the line to re-do a check that has been done is not worth it.
+
+      pass, confirmed              graded, grade A     -> packable
+      pass, held (no reading)      hold                -> Hold & Deviation
+      reject, Quality has called   graded, that grade  (cannot be, unplanned -
+                                                        kept for completeness)
+      reject                       rejected            -> Quality decides
+
+    Only a row still 'planned' is touched. Returns {"graded", "hold",
+    "rejected"} counts of what changed."""
+    out = {"graded": 0, "hold": 0, "rejected": 0}
+    if cur is None:
+        return out
+    for group in _chunks(serials):
+        marks = ", ".join(["%s"] * len(group))
+        recs = _store.rows(
+            cur, "SELECT f.* FROM fqc_record f JOIN (SELECT serial, "
+                 "MAX(fqc_id) AS mx FROM fqc_record WHERE superseded_by IS "
+                 "NULL AND COALESCE(status,'active')<>'cancelled' AND serial "
+                 "IN (" + marks + ") GROUP BY serial) m ON m.mx = f.fqc_id",
+            list(group))
+        for f in recs:
+            if f["outcome"] == "pass":
+                state, grade = (("graded", "A") if f.get("grade") == "A"
+                                else ("hold", None))
+                # The safety net behind Planning's nameplate check
+                # (app._nameplate_refusal), for any route that creates serial
+                # rows without it: a pass measured below the wattage the row
+                # now carries does NOT become a grade A module. The row is left
+                # 'planned', so the module is simply still awaiting FQC - it is
+                # physically on the line, it will be scanned again, and the
+                # floor it is judged against is then the one on its row. Via
+                # Planning this cannot fire: the row's wattage is the serial's
+                # own, which is the floor the pass was judged against.
+                if state == "graded":
+                    row = _store.one(cur, "SELECT wattage FROM serial WHERE "
+                                          "serial=%s AND build_instance=1",
+                                     (f["serial"],))
+                    want = float((row or {}).get("wattage") or 0)
+                    if want and f.get("ss_pmax") is not None \
+                            and float(f["ss_pmax"]) < want:
+                        continue
+            elif f.get("quality_grade"):
+                state, grade = "graded", f["quality_grade"]
+            else:
+                state, grade = "rejected", None
+            cur.execute("UPDATE serial SET state=%s, grade=%s WHERE serial=%s "
+                        "AND build_instance=1 AND state='planned'",
+                        (state, grade, f["serial"]))
+            if cur.rowcount:
+                out["graded" if state == "graded" else state] += 1
+    return out
+
+
+def prune_lookup_log(cur, keep_days=14):
+    """fqc_lookup_log answers "looked up, no decision" and nothing else, so it
+    keeps what that question can still ask about. It was never pruned. Looks
+    first: nothing old, nothing written."""
+    if cur is None:
+        return 0
+    cutoff = (clock.now() - datetime.timedelta(days=keep_days)
+              ).isoformat(timespec="seconds")
+    n = _store.one(cur, "SELECT COUNT(*) AS n FROM fqc_lookup_log WHERE at<%s",
+                   (cutoff,))["n"]
+    if n:
+        cur.execute("DELETE FROM fqc_lookup_log WHERE at<%s", (cutoff,))
+    return n
+
+
+def review_items_unmatched(cur, types, n=5000):
     """Open ingest-found items whose `serial` may not exist in the serial
     master at all - not_in_master's whole point - so this reads review_item
     alone, never joined to serial the way review_items_open() joins every
-    person-raised type."""
+    person-raised type.
+
+    Each row carries what an Incharge needs to act without opening anything:
+    the reading saved for it (ftr_reading) and where its FQC stands. NOTHING
+    is hidden: this used to send only the newest 200 of every type together,
+    and one busy type buried the rest - a serial recorded and open for a day
+    was #840 of 1,308 and simply not on the screen."""
     if cur is None:
         return []
     marks = ", ".join(["%s"] * len(types))
-    return _store.rows(cur, "SELECT * FROM review_item WHERE status='open' "
-                            "AND type IN (" + marks + ") "
-                            "ORDER BY review_id DESC LIMIT %s",
-                       list(types) + [n])
+    return _store.rows(
+        cur,
+        "SELECT r.*, fr.reading AS ftr_json, fr.tested_at AS ftr_tested_at, "
+        "f.outcome AS fqc_outcome, f.decided_by AS fqc_by, f.at AS fqc_at, "
+        "f.mode AS fqc_mode, f.grade AS fqc_grade "
+        "FROM review_item r "
+        "LEFT JOIN ftr_reading fr ON fr.serial = r.serial "
+        "LEFT JOIN (SELECT serial, outcome, decided_by, at, mode, grade, "
+        "  MAX(fqc_id) FROM fqc_record WHERE superseded_by IS NULL AND "
+        "  COALESCE(status,'active')<>'cancelled' GROUP BY serial) f "
+        "  ON f.serial = r.serial "
+        "WHERE r.status='open' AND r.type IN (" + marks + ") "
+        "ORDER BY r.review_id DESC LIMIT %s",
+        list(types) + [n])
+
+
+def review_open_counts(cur):
+    """How many things are open on Needs Review right now, and how many of
+    those are a duplicate scan or a serial not in the master - the two the
+    FQC Dashboard's KPI card has always named (v4's own demo text: "3
+    duplicate - 2 not in master").
+
+    A LIVE BACKLOG COUNT, not scoped to any date/shift/customer/model filter:
+    an item can sit open for days before Incharge or Quality gets to it, so
+    counting only what arose "today" would say something misleading about
+    almost everything actually waiting. Every WHERE clause here mirrors
+    quality_pending()/review_items_open() exactly - same definition of
+    "open" everywhere this is asked - as plain COUNT(*), never the default
+    200-row cap those return rows for."""
+    zero = {"total": 0, "duplicate_scan": 0, "not_in_master": 0}
+    if cur is None:
+        return zero
+    quality = _store.one(cur,
+        "SELECT COUNT(*) AS n FROM fqc_record f JOIN serial s "
+        "ON s.serial=f.serial WHERE f.outcome='reject' AND "
+        "f.quality_grade IS NULL AND s.state='rejected' AND "
+        "f.superseded_by IS NULL")["n"]
+    dup = _store.one(cur, "SELECT COUNT(*) AS n FROM review_item WHERE "
+                          "type='duplicate_scan' AND status='open'")["n"]
+    prov = _store.one(cur, "SELECT COUNT(*) AS n FROM review_item WHERE "
+                           "type='provisional_mismatch' AND status='open'")["n"]
+    not_master = _store.one(cur, "SELECT COUNT(*) AS n FROM review_item WHERE "
+                                 "type IN ('not_in_master_unplanned', "
+                                 "'not_in_master_malformed') AND status='open'")["n"]
+    scan_events = _store.one(cur, "SELECT COUNT(*) AS n FROM review_item WHERE "
+                                  "type IN ('ss_skip', 'looked_up_no_decision', "
+                                  "'ftr_junk', 'ftr_failed') AND status='open'")["n"]
+    return {"total": quality + dup + prov + not_master + scan_events,
+            "duplicate_scan": dup, "not_in_master": not_master}
+
+
+def draft_challan_count(cur):
+    """How many challans are still drafts - unissued, reserving the material
+    (serials, boxes) they list, per the Drafts screen's own note. The
+    sidebar's "Drafts" badge was v4's own frozen demo number ("4") for every
+    account, forever - this is its first real source. Only challans have a
+    draft state in this schema; no other document type does."""
+    if cur is None:
+        return 0
+    return _store.one(cur, "SELECT COUNT(*) AS n FROM challan WHERE "
+                           "status='draft'")["n"]
 
 
 def review_item_get(cur, review_id):
@@ -1236,6 +1512,36 @@ def save_ftr_reading(cur, serial, line, tested_at, reading):
         "reading=excluded.reading, recorded_at=excluded.recorded_at",
         (serial, line, tested_at, json.dumps(reading, default=str),
          clock.now().isoformat(timespec="seconds")))
+
+
+def ftr_saved_times(cur, serials):
+    """{serial: tested_at} for the readings already saved among `serials` - so
+    a pass reads a module's files only when it has not been saved, or has
+    been tested again since."""
+    out = {}
+    if cur is None:
+        return out
+    for group in _chunks(serials):
+        for r in _store.rows(
+                cur, "SELECT serial, tested_at FROM ftr_reading WHERE serial "
+                     "IN (%s)" % ", ".join(["%s"] * len(group)), list(group)):
+            out[r["serial"]] = r["tested_at"] or ""
+    return out
+
+
+def save_ftr_reading_if_newer(cur, serial, line, tested_at, reading):
+    """save_ftr_reading(), but only when this reading is newer than the one on
+    file - the tester's own timestamp decides, so a module scanned a second
+    time keeps its LATEST reading and a pass over old rows changes nothing.
+    Returns True if it wrote."""
+    if cur is None:
+        return False
+    row = _store.one(cur, "SELECT tested_at FROM ftr_reading WHERE serial=%s",
+                     (serial,))
+    if row and (row["tested_at"] or "") >= (tested_at or ""):
+        return False
+    save_ftr_reading(cur, serial, line, tested_at, reading)
+    return True
 
 
 def get_ftr_reading(cur, serial):
@@ -1509,9 +1815,13 @@ for _ln in ("a", "b"):
     # never missed and never double-counted (dedupe is on the tester's own
     # timestamp, not which file it was read from).
     DEFAULT_CONFIG["ss_%s_archive_path" % _ln] = ""
+    # Where the tester keeps one result file per module (<root>\<yyyymmdd>\<serial>.xml).
+    # Blank = beside the CSV, at <CSV folder>\..\XML, which is where it is.
+    DEFAULT_CONFIG["ss_%s_xml_root" % _ln] = ""
     for _k, _v in _SS_COLS.items():
         DEFAULT_CONFIG["ss_%s_%s" % (_ln, _k)] = _v
 DEFAULT_CONFIG["ss_archive_path"] = ""     # Line A's archive, single-source systems
+DEFAULT_CONFIG["ss_xml_root"] = ""         # Line A's tester result files, single-source systems
 
 
 def get_config(cur):

@@ -5237,3 +5237,278 @@ problems in the live database right now.
   share at volume the way Stage 2's vocabulary was confirmed live - worth a
   live check before trusting its "4 in a shift" count the way the brief
   described it.
+
+
+---
+
+## Round 36 - signing in again, FQC before Planning, and the defect nobody could see
+
+Three things Mukesh reported, and a fourth found on the way through the same
+flow. Each was checked against real data - the real Sun Simulator CSV, the
+tester's result files and the EL share, all read-only - on a COPY of the live
+database. Nothing was written to the live file.
+
+### 1. "Signed in, but the app's data could not be loaded" after a session timeout
+
+**What he saw.** The session times out, the page says "sign in again", he signs
+in and gets that message. A plain refresh then loads it. Only Admin and Super
+Admin.
+
+**Root cause** (reproduced in a browser, and it was never the data - `/api/boot`
+succeeded). v4's `initAll()` runs on every sign-in and reaches `cancelCheck()`,
+which reads v4's own Cancel-document inputs (`#cnType`, `#cnReason`). Round 34's
+`cancelDocSetup()` replaces that whole pane, so on a SECOND run in the same page
+those inputs are gone and the call throws. On a fresh page load it never showed
+(the swap happens after the first `initAll()`), which is why a refresh fixed it,
+and why only the roles that get the pane were hit. `enterApp()`'s one `.catch`
+then reported every exception as "the data could not be loaded" and threw the
+real error away.
+
+**What changed** (`static/icon_live.js`).
+- `cancelCheck()` is wrapped (not replaced): with v4's inputs absent it does
+  nothing. That is the fix.
+- The catch-all is split. Only a failure to GET the data says "the data could
+  not be loaded". A failure while BUILDING the screens is `_buildFailed()`: the
+  real error goes to the console, and a page that has already been in the app
+  reloads once by itself (the path that always worked; once only, in
+  sessionStorage, so it cannot loop); a permanent fault says "the screens could
+  not be built (<reason>)".
+
+A sweep for what else piles up when the app is entered twice on one page found
+the top-bar "SQLite" badge being added again on EVERY sign-in (3 -> 4 -> 5 -> 6):
+it is now one element, reused. Global `document`/`window` listeners, nav
+buttons, views and element ids do not grow (checked through the debugging
+protocol).
+
+**Proved by** `test_relogin.py` (6, real Chromium): a REAL idle expiry then
+sign-in as Super Admin on the same page; sign-out then sign-in for four roles;
+an unknown re-entry failure reloads once and opens the app; a permanent failure
+is honest and does not loop; a genuine `/api/boot` failure still says the data
+could not be loaded; nothing grows across re-entries. Mutation-checked: with the guard disabled the first two
+fail.
+
+### 2. FQC on a serial the master does not have yet
+
+**What he saw.** `ICON625R1292130846` is in the Sun Simulator AND on the EL and
+not in the master, and "it was not being added for review". His rule: let the FQC
+happen; once Incharge plans it, a pass goes to pack and otherwise Quality
+decides; making the module do FQC again after Planning - stopping the line,
+loading it back - is not worth it; and keep its FTR in the database, the latest
+one if the module is scanned again.
+
+**What it really was.**
+- It WAS recorded (twice, by the old per-scan poller) but Needs Review was sent
+  only the newest 200 open ingest items of ALL types. It was #840 and #681 of
+  1,308. Recorded, and not on the screen.
+- FQC refused any serial not in the master, so the module could not be graded.
+- Its Sun Simulator row had left the CSV (cut at 23:45; no archive is
+  configured), and nothing had saved its reading.
+
+**What changed.**
+- `icon_evidence`: when the CSV has no row, the tester's own result file
+  (`<data>\XML\<yyyymmdd>\<serial>.xml`, one per module, overwritten by a
+  retest - verified column for column against the CSV row of the same module) is
+  read before NA is claimed. `ss_from_xml` says so. The root is derived from the
+  CSV's location unless `ss_xml_root` names it; only a real-shaped serial is ever
+  turned into a file name.
+- `icon_evidence.read_el`: an EL image still directly under its SHIFT folder (the
+  operator files it under its verdict a few minutes later) is NA with its path -
+  it used to read the shift's name ("晚班") as the verdict, which also let a
+  rejection through with no defect at all.
+- `app._fqc_payload` / `api_fqc_grade`: a serial not in the master is accepted
+  when the testers have seen it (a reading, a probe fault, or an EL image); a
+  serial nobody has seen is refused ("check the barcode") - but only when the
+  testers could be READ; if the Sun Simulator or the EL cannot be reached the
+  refusal says which link is down instead, since "nothing filed" is not known.
+  Wattage and model come
+  from `decompose()`, the parse Planning runs. The decision is recorded against a
+  serial with no row; the module goes on Needs Review and its reading is saved.
+  PACKING still refuses it.
+- `api_allocation_create/update` -> `db.apply_standing_fqc` in the SAME
+  transaction as the serial rows: confirmed pass -> graded A (packable); held
+  pass -> hold; reject -> rejected (Quality's queue). The Needs Review item
+  closes itself (`resolution='planned'`, who and why on it). A cancelled decision
+  does not come back. No re-test.
+- `icon_ingest`: reading is separated from writing (a slow share no longer holds
+  the database write lock); one item per SERIAL standing for its LATEST scan
+  (`review_item.event_at`); the SS reading is saved once and refreshed only by a
+  newer test, and backfilled for open items that have none (CSV, then XML,
+  bounded per pass); items close themselves when the serial is planned by any
+  route; an item reopens if the module is not in the master again. A pass that
+  finds nothing new WRITES NOTHING (it used to stamp the change feed every minute
+  - an INSERT ... DO NOTHING is still a write to it).
+- `/api/review` no longer runs the ingest inside the GET. With it, two idle
+  Needs Review windows re-ran it for each other without end (measured: 20 writes
+  in 45 s, nobody touching anything). serve.py's poller is the only thing that
+  runs a pass.
+- `/api/review` sends EVERY open item, not the newest 200, each with the saved
+  reading and where FQC stands. The screen gains "Not in master" and "Scan
+  events" tabs with counts (they had no tab and were buried under "All"), puts
+  what a person must DECIDE first, and offers "Plan it" instead of a manual
+  resolve.
+- Recent gradings tags a decision made before Planning "Not in master" (it has
+  no model yet); Needs Review timestamps are ISO like every other item (the
+  testers' `2026/09/29` format sorted after every ISO one of the same day).
+- `store.py`: one-time, idempotent merge of the old per-scan rows into one per
+  serial (closed as `merged_duplicate`, not deleted). On a copy of the live DB:
+  1,319 open rows for 1,089 serials -> 1,089, 230 merged. Also `fqc_record` had
+  NO index at all (every lookup and the "looked up, no decision" scan were full
+  scans - measured quadratic: 1k rows 0.04 s, 8k rows 1.82 s); `ix_fqc_record_serial`
+  added, that scan bounded to 3 days, and the lookup log pruned at 14.
+
+**Proved by** `test_fqc_unplanned.py` (37), `test_evidence.py` (41, +11:
+result-file fallback, unfiled EL, no path traversal), `test_relogin.py`, and the
+real-data loop below. Existing suites unchanged and green.
+
+### 3. The defect an FQC decision carries was invisible on five screens
+
+Stage 3 moved defects into `fqc_defect` and stopped writing
+`fqc_record.defect`. These still read only that column: the dashboard's
+rejection reasons and its drill-down, Quality's row and popup on Needs Review,
+Hold & Deviation, and the module journey on Search & Trace. Every rejection
+since read "no defect recorded", and Quality decided GY or BGY without being
+shown what FQC found - which is what "otherwise Quality decides" (above) relies
+on. `db.defect_labels()` reads `fqc_defect` (falling back to the old column for
+a decision from before Stage 3); a rejection with two defects counts under both;
+"low eff" and "Low Eff" are one defect; a PASS shows its defects too ("passed
+despite Burning"). The tests that should have caught it seeded the dead column by
+hand. `test_defect_readers.py` (6) goes through the real write path and fails
+6/6 against the previous code.
+
+### Verified on real data (a copy of the live DB, the real sources, read-only)
+
+- `ICON625R1292130846`: now on Needs Review ("SS 631.0 W at 18:40 - FQC not done
+  yet"; the reading came from the tester's XML, the later of its two tests).
+- Two passes over the copy: the first `{'not_in_master_unplanned': 1,
+  'planned_closed': 503}`, the second `{}` - nothing new, nothing written.
+- From the 10th-newest unplanned serial (the newest ones' EL images are not filed
+  yet), random pass/reject through the real API and through the real screens
+  (Chromium, screenshots): every one accepted, on Needs Review with its decision
+  showing; then planned - pass -> graded A and packable, reject -> rejected and
+  in Quality's queue, items resolved as `planned`. One of nine got the existing
+  409 "the reading changed since this screen loaded": its EL image was filed
+  between lookup and save.
+
+### What actually happens, walked scenario by scenario
+
+Mukesh asked the question the docs cannot answer: not what it is supposed to do,
+what it DOES. Twelve situations around "the Sun Simulator read a module before
+Planning knew about it" were run end to end through the real endpoints against a
+planted tester/EL layout (`scenarios.py`, kept out of the repo). Six behaved as
+designed. Six did not, and five of those are fixed here.
+
+**His own case - scanned at the Sun Simulator, never graded, Incharge plans it,
+and only then does it reach FQC.** It is an ordinary FQC from that point on: the
+item closed itself at planning, the serial is `planned`, the lookup reads the
+tester live, one decision, `test_seq` 1, and it counts on the dashboard. With the
+CSV cut in between - the normal case, it is cut every shift - the reading the
+poller saved stands in, so the module is not sent back to the tester. With
+nothing saved and nothing live (the CSV was cut inside the poller's 60 s), SS is
+NA: it cannot be passed, only re-tested or rejected. Same rule as any planned
+module with no reading.
+
+**Fixed: a module could be allocated as a wattage it is not.** Planning wrote the
+INDENT ITEM's model and wattage onto the serial row without ever looking at the
+serial's own, so a 625 W module planned on a 630 W item simply became a 630 W
+module in the database - and now that FQC can grade before Planning, its pass
+(judged against the barcode's 625, the only wattage there is at that point) came
+with it as grade A: packable, as 630 W, on a reading that never made 630.
+
+The rule, from Mukesh: "Icon serial number contains wattage, any measurement
+must meet the nameplate for allocation." The wattage in the serial IS the
+module's nameplate - printed on it, and what the customer receives - so a serial
+belongs on an item of its own wattage and nothing else. The MEASUREMENT does not
+decide: a 625 W module reading 631 W is still a 625 W module and is refused on a
+630 W item (its first draft here had that backwards). Enforced on every
+allocation, new or edited, FQC or not; all 5,360 serials in the live master
+already match their item, and no fixture in the repo mismatches either.
+`apply_standing_fqc` keeps a net for any other route that writes serial rows: a
+pass measured below the row's wattage leaves it `planned` rather than grading
+it.
+
+**Not a defect: one standing pass locks the whole allocation.** A module graded
+before Planning is `graded` the instant the row is created, so a batch
+containing one can be neither edited nor withdrawn. This was raised as a trap
+and Mukesh settled it the other way: "on running production, plan can't be
+deleted." The module has been built and tested - production IS running on it -
+so a wrong indent item is undone the way any other post-production mistake is, a
+**Cancel document** on the serial or the serial range (Round 34), which is
+recorded and needs a step-up, not a quiet withdrawal. A loosening written
+earlier in this round was reverted to keep that rule; `db.production_moved()`
+now just holds the one query both allocation endpoints were spelling out
+separately.
+
+**Fixed: withdrawing an allocation lost the module.** The serial rows are
+deleted, so the module is not in the master again - but its Needs Review item
+stayed resolved, and the poller can only reopen one while the tester's CSV still
+holds the row. An hour later, that file is cut: no row, no item, nothing
+pointing at the module. Withdrawal (and an edit that drops a serial from the
+range) now reopens the item itself.
+
+**Fixed: the saved reading kept the FIRST test for ever.** A module retested
+after it was planned had its `ftr_reading` left at the earlier test, because the
+poller only backfills unplanned serials - the Flash Test Report read 626 W while
+FQC had judged the live 631 W. Every FQC decision now keeps the reading it
+judged, whether or not the master has the serial.
+
+**Fixed: the FQC dashboard did not count these inspections, and did not say so.**
+Every number on that screen is read through the serial row, so a decision made
+before Planning joined away out of all of them: a shift could inspect 40 modules
+and the screen would show 37 with nothing to explain the gap. The totals now
+carry `awaiting_planning` and the screen says "N more not in master yet (counted
+once planned)". They are counted separately rather than mixed in - which indent
+item, customer and wattage the module belongs to is genuinely not known yet -
+and a customer or model filter cannot ask about them at all, so the count is not
+shown then.
+
+**Not a defect, worth knowing.** A rejection made before Planning cannot be
+dispositioned until the serial is planned: Quality's queue is built from serial
+rows, and the GY/BGY call is written onto one. The Needs Review row now says so
+in as many words ("plan it so Quality can decide") rather than leaving the
+Incharge to work out why nothing is happening. And because the day and shift of
+an inspection are the decision's own (which is right), a shift total that is
+already closed goes UP when the serials are planned - `awaiting_planning` is what
+says how much is still to come.
+
+**Also confirmed by the walk-through:** a module scanned again at FQC after
+planning supersedes its earlier decision and a reject goes to Quality; a probe
+fault (BAD) cannot be graded either way and raises two rows - "not in master"
+and "FTR anomaly - failed reading"; a scanner misfire is acknowledged by a
+person, never planned, and FQC refuses it.
+
+### Open, needs a decision, or not touched
+
+- **Restart needed** for any of this to be live; the store migration then runs on
+  the live DB (the per-scan merge above).
+- **FIXED, and it was worse than the note said**: the `ss_skip` detector found
+  nothing at all, ever. `_el_recent_files` took the newest folders BY NAME and
+  the share has a stray `New folder` ('N' sorts above '2'); the poller asks for
+  one day, so that was the only folder it looked in, and it holds verdict
+  folders directly - no images, no candidates, no items. Folders are now chosen
+  by the DATE they name (the share has both `2026-09-29` and one `16-09-2026`),
+  and an undated folder is ignored. Simply pointing it at the right folder would
+  have flooded Needs Review - the CSV is cut each shift and no archive path is
+  set - so each candidate is now confirmed against the tester's own result file
+  before it is flagged, and if nothing can confirm it (no archive, no result
+  files) nothing is flagged at all. Measured on the real share: 622 EL images,
+  15 candidates, all 15 had a result file, so the detector raises 0 items in
+  1.3 s - honest rather than dead. `ss_*_archive_path` is still blank and still
+  only settable through /api/settings.
+- **Line B is not configured** (`el_b_root`, `ss_b_csv_path` blank), so its EL
+  vocabulary has never been listed; Line A's 11 folders all map today.
+- **Still open from the Round 35 review**: `test_seq` is 1 for a retest of any
+  module decided before Stage 3; `_reconcile_provisional` now "confirms" a
+  provisional reject made with SS = NA (it used to wait) and its `system` record
+  takes a `test_seq`; entity_revision covers 2 of at least 6 FQC write points;
+  `/export/fqc.csv` still writes `proposed`/`reason`; Stage 6 not started;
+  `templates/icon_trace.html` was edited above the live-layer marker in Round 35.
+  For Stage 6: a decision made before Planning has NO serial row until it is
+  planned, so a feed that joins `serial` will not list it until then.
+- **Tests red for other reasons**: `test_packing` (2), `test_indent_export` (4),
+  `test_search_invoice` (3) since `73eeb5c` titlecased the customer master
+  (all 5,360 live serials store "ICON STOCK" / "BOROSIL RENEWABLES LIMITED",
+  which no longer equals a canonical name); `test_demo_claims` (2, since Round
+  34); `test_cancel_documents` (1, hard-coded date). `test_stored_xss.py`, the XSS safety
+  net, had been dead since Round 35 (it planted into the removed `reason` field,
+  and filed a production entry for "shift A of today", refused between 00:00 and
+  06:00): repaired, and it passes - 25 screens, 0 payloads ran.

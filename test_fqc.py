@@ -451,7 +451,9 @@ def t_rule_version_and_test_seq():
 # the paths that must not regress
 # --------------------------------------------------------------------------
 
-@test("a serial that is not in the master is refused")
+@test("a serial that is not in the master AND that neither tester has seen is "
+      "refused (one the testers HAVE seen can be graded ahead of Planning - "
+      "test_fqc_unplanned.py)")
 def t_unknown_serial():
     c = setup()
     r = c.post("/api/fqc", json={"serial": "ICON625R1299999999",

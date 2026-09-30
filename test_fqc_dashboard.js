@@ -453,6 +453,90 @@ function () {
     'the old single dummy row is still there: ' + rej);
 });
 
+test('Needs Review is a real live count, not the literal dash v4 shipped ' +
+     'with a frozen "3 duplicate" sample forever underneath it', function () {
+  reset();
+  REPLY = defaultReply();
+  REPLY.totals.needs_review = { total: 7, duplicate_scan: 3, not_in_master: 4 };
+  renderLiveFqcDash();
+  var vals = VIEW.querySelectorAll('.kpi .v');
+  assert(parseFloat(vals[4].textContent) === 7, vals[4].textContent);
+  var subs = VIEW.querySelectorAll('.kpi .d');
+  assert(subs[4].textContent === '3 duplicate · 4 not in master', subs[4].textContent);
+});
+
+test('Needs Review reads 0 rather than showing "-" when the server sends ' +
+     'nothing for it (an older reply shape, or genuinely empty)', function () {
+  reset();
+  REPLY = defaultReply();      // no needs_review key at all
+  renderLiveFqcDash();
+  var vals = VIEW.querySelectorAll('.kpi .v');
+  assert(parseFloat(vals[4].textContent) === 0, vals[4].textContent);
+});
+
+test('the OK-quantity yield% is recalculated, not v4\'s frozen "98.03%" ' +
+     'sample - the exact mismatch a screenshot showed (527/539 shown as ' +
+     '98.03%, not the real 97.77%)', function () {
+  reset();
+  REPLY = { totals: { inspected: 539, passed: 527, rejected: 12 },
+           rows: [], by_defect: [] };
+  renderLiveFqcDash();
+  var subs = VIEW.querySelectorAll('.kpi .d');
+  assert(subs[1].textContent === '97.77% yield', subs[1].textContent);
+});
+
+test('the shift table never prints a customer name - the screen already has ' +
+     'a customer FILTER for whoever wants that breakdown (Mukesh: combine ' +
+     'into one row; filter if you need it split)',
+function () {
+  reset();
+  REPLY = { totals: { inspected: 505 }, by_defect: [],
+           // the server itself no longer groups by customer (below), but
+           // the screen must not show one even if a row ever carried it
+           rows: [{ day: '2026-09-30', shift: 2, model: 'ISEN625-G12R', wattage: 625,
+                    customer: 'BOROSIL RENEWABLES LIMITED', inspected: 505,
+                    passed: 495, rejected: 10 }] };
+  renderLiveFqcDash();
+  var body = document.getElementById('shiftRows').innerHTML;
+  assert(body.indexOf('BOROSIL') === -1, 'a customer name leaked onto the row: ' + body);
+});
+
+test('day-wise Shifts Run and KW are computed, not the two literal dashes ' +
+     'they always were', function () {
+  reset();
+  REPLY = { totals: { inspected: 4 }, by_defect: [],
+           rows: [
+             { day: '2026-09-30', shift: 1, model: 'ISEN625-G12R', wattage: 625,
+               inspected: 2, passed: 2, rejected: 0 },
+             { day: '2026-09-30', shift: 2, model: 'ISEN625-G12R', wattage: 625,
+               inspected: 2, passed: 1, rejected: 1 }
+           ] };
+  renderLiveFqcDash();
+  var day = document.getElementById('dayRows').innerHTML;
+  assert(day.indexOf('<td>A, B</td>') !== -1, 'shifts run should list A, B: ' + day);
+  // (2 + 1) passed modules * 625 W = 1875 W = 2 KW rounded - toLocaleString()
+  // prints "2.00" under JScript, "2" in a real browser; same documented
+  // engine quirk the other tests in this file already work around
+  assert(/<td>2(\.00)?<\/td>/.test(day), 'KW should be computed, not "-": ' + day);
+  assert(!/<td>—<\/td>.*<td class="mono">[\d.]+%<\/td><td>—<\/td>/.test(day),
+    'both columns are still the old hardcoded dash: ' + day);
+});
+
+test('a rejected module Quality returned to A is its own category, ' +
+     'distinct from a plain pass - or its Needs Review drill-down is ' +
+     'blank on every date, which is the bug this defends', function () {
+  var passed = mdlFacets({ outcome: 'pass' });
+  var returned = mdlFacets({ outcome: 'reject', quality_grade: 'A' });
+  var pending = mdlFacets({ outcome: 'reject', quality_grade: null });
+  var gy = mdlFacets({ outcome: 'reject', quality_grade: 'GY' });
+  assert(passed.cat === 'A', passed.cat);
+  assert(returned.cat === 'Returned-A', returned.cat);
+  assert(returned.cat !== passed.cat,
+    'a returned-to-A reject must not collapse into the same bucket as a pass');
+  assert(pending.cat === 'Pending', pending.cat);
+  assert(gy.cat === 'GY', gy.cat);
+});
+
 test('an empty result set is shown as empty, not left holding old numbers',
 function () {
   reset();
