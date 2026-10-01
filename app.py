@@ -4762,11 +4762,13 @@ def _module_events(cur, customer="", model=""):
     here reads the date or shift printed in the serial."""
     where, args = ["s.build_instance = 1"], []
     if customer and customer.lower() != "all customers":
-        if "G2G (M10R)" in customer:
-            where.append("(s.customer IS NULL OR s.customer='ICON STOCK')")
-        else:
-            where.append("s.customer = ?")
-            args.append(customer)
+        # without case, and by name or code (db.customer_match) - v4's demo
+        # option "G2G (M10R)" means general stock, and a module with no
+        # customer at all is stock too
+        g2g = "G2G (M10R)" in customer
+        sql, a = db.customer_match("s.customer", "STOCK" if g2g else customer)
+        where.append("(s.customer IS NULL OR %s)" % sql if g2g else sql)
+        args.extend(a)
     if model and model.lower() not in ("all", "all models"):
         where.append("s.model = ?")
         args.append(model)
@@ -4988,7 +4990,7 @@ def api_prod_dashboard():
                       "oldest": (open_loss or {}).get("oldest")},
         # the factory day it is now, 06:00 to 06:00
         "today": clock.shift_day().isoformat(),
-        "customers": [r["customer"] for r in customers_rows],
+        "customers": db.customer_options(r["customer"] for r in customers_rows),
         "models": [r["model"] for r in models_rows]
     })
 
@@ -5021,11 +5023,12 @@ def api_packing_log():
         where.append(clock.shift_sql("b.created_at") + " = ?")
         args.append(clock.shift_number(shift))
     if customer and customer.lower() != "all customers":
-        if customer == "G2G (M10R) — General stock":
-            where.append("(b.customer IS NULL OR b.customer='ICON STOCK')")
-        else:
-            where.append("b.customer = ?")
-            args.append(customer)
+        # without case, and by name or code: a box stores the CODE, the
+        # dropdown offers the NAME (db.customer_match)
+        g2g = customer == "G2G (M10R) — General stock"
+        sql, a = db.customer_match("b.customer", "STOCK" if g2g else customer)
+        where.append("(b.customer IS NULL OR %s)" % sql if g2g else sql)
+        args.extend(a)
     if model and model.lower() != "all" and model.lower() != "all models":
         where.append("b.model = ?")
         args.append(model)
@@ -8781,7 +8784,8 @@ def api_fqc_dashboard():
     decision_only = list(where)
     decision_args = list(args)
     if customer:
-        where.append("s.customer = %s"); args.append(customer)
+        sql, a = db.customer_match("s.customer", customer)   # any case, name or code
+        where.append(sql); args.extend(a)
     if model:
         where.append("s.model = %s"); args.append(model)
     if result in ("pass", "reject"):
@@ -8810,6 +8814,17 @@ def api_fqc_dashboard():
             "GROUP BY " + fqc_day + ", s.model, s.wattage, " + fqc_shift + " "
             "ORDER BY day DESC, shift, s.model, s.wattage",
             args)
+        # The Customer dropdown's options. It was built in the browser from
+        # the summary rows - and since those stopped being grouped by
+        # customer they carry none, leaving only "All customers". Read here
+        # instead: every customer inspected in this date/shift range, BEFORE
+        # the customer filter (so choosing one does not hide the others),
+        # once per customer however it is spelled on file.
+        cust_options = db.customer_options(r["customer"] for r in store.rows(cur,
+            "SELECT DISTINCT s.customer AS customer "
+            "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
+            "WHERE " + unplanned_clause + " AND s.customer IS NOT NULL",
+            unplanned_args))
         totals = store.one(cur,
             "SELECT COUNT(*) AS inspected, "
             "SUM(CASE WHEN f.outcome='pass' THEN 1 ELSE 0 END) AS passed, "
@@ -8859,6 +8874,7 @@ def api_fqc_dashboard():
         t["anomalies"] = 0
 
     return jsonify({"rows": [dict(r) for r in summary], "totals": t,
+                    "customers": cust_options,
                     "by_defect": [dict(r) for r in by_defect],
                     "filters": {"from": frm, "to": to, "shift": shift,
                                "customer": customer, "model": model,
@@ -8892,7 +8908,8 @@ def api_fqc_dashboard_modules():
     if clock.shift_number(shift):
         where.append(fqc_shift + " = %s"); args.append(clock.shift_number(shift))
     if customer:
-        where.append("s.customer = %s"); args.append(customer)
+        sql, a = db.customer_match("s.customer", customer)   # any case, name or code
+        where.append(sql); args.extend(a)
     if model:
         where.append("s.model = %s"); args.append(model)
     if result in ("pass", "reject"):

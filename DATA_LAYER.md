@@ -318,6 +318,15 @@ the picks.
   Historical, so the backdate limit does not apply. Each range applies under its
   own SAVEPOINT: one bad range never undoes the others.
 
+### Customer columns are free text - filter through `db.customer_match`
+
+`serial.customer`, `allocation.customer` and `box.customer` are not written one
+way: Planning stores the customer's NAME in whatever case the master had that
+day ("ICON STOCK", "ICON Stock", "Icon Stock" all exist), and a box stores the
+CODE. Never filter them with `customer = ?`: use `db.customer_match(col,
+value)` (any case; the value, plus the master's name and code for it), and
+build a dropdown with `db.customer_options()` (one entry per customer).
+
 ## 4. What Packing then requires
 
 `/api/box/<id>/scan` refuses a module unless **all** of these hold. Each

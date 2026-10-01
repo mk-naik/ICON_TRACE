@@ -262,6 +262,7 @@ python test_relogin.py               6 tests · signing in AGAIN on a page that 
 python test_traceability_import.py  19 tests · the monthly traceability Excel -> production entry (+ backfill)
 python test_traceability_import_ui.py 2 tests · the import cascade on the Production Entry screen, in a browser
 python test_fqc_scanner_ui.py      18 tests · the barcode scanner on FQC Entry: focus, lock, status line, missed scans
+python test_customer_filters.py    10 tests · every customer filter matches every spelling, name or code
 ```
 
 The JS tests read their functions out of `icon_live.js`, so they test what

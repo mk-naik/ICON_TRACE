@@ -23,6 +23,7 @@ import os, json, datetime, threading
 # the file store.py owns.
 import store as _store
 import icon_clock as clock
+import icon_customers as _customers
 import icon_defects
 import icon_evidence as ev
 
@@ -1467,8 +1468,9 @@ def fqc_recent(cur, n=25, include_superseded=False, filters=None):
             where.append(clock.shift_sql("f.at") + " = %s")
             args.append(clock.shift_number(filters["shift"]))
         if filters.get("customer"):
-            where.append("s.customer = %s")
-            args.append(filters["customer"])
+            sql, a = customer_match("s.customer", filters["customer"])
+            where.append(sql)                  # any case, name or code
+            args.extend(a)
         if filters.get("model"):
             where.append("s.model = %s")
             args.append(filters["model"])
@@ -1701,7 +1703,8 @@ def gatepasses_list(cur, q=None, date_from=None, date_to=None, customer=None, n=
     if date_to:
         sql += " AND g.gp_date <= %s"; params.append(date_to)
     if customer:
-        sql += " AND g.party = %s"; params.append(customer)
+        m_sql, m_args = customer_match("g.party", customer)   # any case
+        sql += " AND " + m_sql; params.extend(m_args)
     if q:
         lq = "%" + q + "%"
         sql += (" AND (g.party LIKE %s OR g.gp_no LIKE %s OR g.challan_no LIKE %s "
@@ -1727,7 +1730,10 @@ def gatepass_customers(cur):
     rows = _store.rows(cur, "SELECT DISTINCT party FROM gatepass "
                            "WHERE party IS NOT NULL AND party<>'' "
                            "ORDER BY party")
-    return [r["party"] for r in rows]
+    seen = {}
+    for r in rows:                       # "ABC LTD" and "Abc Ltd" are one party
+        seen.setdefault(r["party"].strip().upper(), r["party"].strip())
+    return sorted(seen.values(), key=lambda s: s.upper())
 
 
 def challans_list(cur, q=None, status=None, fy=None, n=200):
@@ -2029,6 +2035,57 @@ def defect_code_for_folder(cur, raw_folder_name):
     return r["defect_code"] if r else None
 
 
+def customer_match(col, value):
+    """(sql, args): a customer FILTER on a free-text customer column, matched
+    the way Search & Trace already matches one (app._trace_customer).
+
+    serial / allocation / box .customer are not written one way. Planning
+    stores the customer's NAME in whatever case the master had that day - the
+    live data holds "ICON Stock" for 4,530 serials and "ICON STOCK" for 1,360,
+    and the master now says "Icon Stock" - while a box, and at least one other
+    path, stores the short CODE ("STOCK", "C0008"). An exact `customer = ?`
+    found one of those spellings and silently dropped the rest.
+
+    This compares without case, against both forms the master knows for the
+    customer the filter names - its name and its code. A name the master does
+    not know is still compared without case, against itself."""
+    v = (value or "").strip()
+    forms = {v.upper()}
+    c = _customers.get(v) or _customers.resolve(v)
+    if c:
+        forms.add((c.get("customer_code") or "").upper())
+        forms.add((c.get("name") or "").upper())
+    forms.discard("")
+    forms = sorted(forms)
+    return ("UPPER(TRIM(%s)) IN (%s)" % (col, ", ".join(["%s"] * len(forms))),
+            forms)
+
+
+def customer_display(value):
+    """The one name a customer goes by on screen: the master's, when the
+    master knows the value - by name or code, in any case; otherwise the
+    value as written."""
+    v = (value or "").strip()
+    if not v:
+        return v
+    c = _customers.get(v) or _customers.resolve(v)
+    return c["name"] if c else v
+
+
+def customer_options(values):
+    """A customer dropdown's options - one per CUSTOMER, not one per
+    spelling. "ICON Stock", "ICON STOCK" and "STOCK" are the same customer and
+    are offered once, under the master's name; names the master does not know
+    are folded without case (first spelling kept). Picking one filters every
+    spelling, because customer_match() matches them all."""
+    seen = {}
+    for v in values:
+        d = customer_display(v)
+        if d:
+            seen.setdefault(d.upper(), d)
+    return sorted(seen.values(), key=lambda s: s.upper())
+
+
 def known_customers(cur):
     """Everyone we have ever shipped to or been ordered by. Feeds the
     type-to-suggest box so the same customer is not spelled three ways."""
@@ -2173,8 +2230,9 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
     bx_conds = []
     bx_params = []
     if customer:
-        bx_conds.append('b.customer = %s')
-        bx_params.append(customer)
+        sql, a = customer_match("b.customer", customer)   # a box stores the code
+        bx_conds.append(sql)
+        bx_params.extend(a)
     if model:
         bx_conds.append('b.model = %s')
         bx_params.append(model)

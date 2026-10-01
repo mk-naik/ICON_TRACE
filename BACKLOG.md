@@ -5541,6 +5541,39 @@ Mukesh's list from the FQC station: scans were being lost or mangled.
   scanner and like a person); a mutation check broke each behaviour on a copy
   of the tree and all 10 mutants were caught.
 
+### Customer filters - every spelling, name or code
+
+Mukesh: "some filters compare customer names case-sensitively, make case
+insensitive". serial / allocation / box .customer are free text and are not
+written one way: production holds stock as "ICON STOCK" (1,360 serials),
+"ICON Stock" (4,530) and, since the master was title-cased, "Icon Stock"
+(7,190) - and a box stores the CODE ("STOCK"). Every filter was
+`customer = ?`, so it found one spelling and dropped the rest.
+
+- **`db.customer_match(col, value)`** - the one matcher: `UPPER(TRIM(col))
+  IN (...)` against the value and, when the master knows the customer, its
+  name and code (the same rule Search & Trace already used). Now used by the
+  FQC dashboard and its module list, FQC Recent gradings, the Production
+  dashboard (module events), Packing Log, Stock & Dispatch and gate passes.
+- **`db.customer_options(values)`** - dropdowns offer each customer ONCE,
+  under the master's name. Gate pass parties are legal names on file, so that
+  list only folds case and keeps a real spelling.
+- **Browser side**: Packing Log's in-page filter compares without case, by
+  name or code; the FQC dashboard's list folds spellings.
+- **A bug of Round 36's own, found by the new browser test**: the FQC
+  dashboard built its Customer dropdown from the shift-table rows, and those
+  stopped carrying a customer when the table stopped being grouped by one -
+  so the dropdown offered only "All customers" (live since 09469d2). The
+  server now returns the list (`customers`, every customer inspected in the
+  date/shift range, before the customer filter).
+- **Proved on a snapshot of the real production DB**: the old exact filter
+  found 743 / 701 / 84 FQC records for the three spellings; the new one finds
+  1,528 - their sum - for any of them.
+- **Not changed**: `known_customers` (the Indent form's type-ahead) - it is a
+  suggestion list, not a filter.
+- `test_customer_filters.py` (10, including one in Chromium); a mutation
+  check broke each piece on a copy of the tree and all 8 mutants were caught.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

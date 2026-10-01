@@ -2597,7 +2597,13 @@ function wireFqcAnomalies() {
           var ok = true;
           if (fDate && b.pack_date && b.pack_date.indexOf(fDate) !== 0) ok = false;
           if (fShift && fShift !== 'All shifts' && b.pack_shift !== fShift) ok = false;
-          if (fCust && fCust !== 'All customers' && b.customer_name !== fCust && b.customer !== fCust) ok = false;
+          /* any case, by name or by code - the box stores the code, the
+             dropdown offers the name, and old rows spell it either way */
+          if (fCust && fCust !== 'All customers') {
+            var fc = String(fCust).trim().toUpperCase();
+            if (String(b.customer_name || '').trim().toUpperCase() !== fc &&
+                String(b.customer || '').trim().toUpperCase() !== fc) ok = false;
+          }
           if (fModel && fModel !== 'All' && b.model !== fModel) ok = false;
           if (fGrade && fGrade !== 'All' && b.grade !== fGrade) ok = false;
           if (fStatus && fStatus !== 'All' && b.state !== fStatus.toLowerCase()) ok = false;
@@ -3448,11 +3454,22 @@ function wireFqcAnomalies() {
         }
 
         // Dynamically update available customers, models, and shifts based on current visible data
-        var custSet = {}, modelSet = {}, shiftSet = {};
+        var custSet = {}, custFold = {}, modelSet = {}, shiftSet = {};
         rows.forEach(function(r) {
           if (r.customer) {
-            var hit = (B.customers || []).find(function(c) { return c.code === r.customer; });
-            custSet[hit ? hit.name : r.customer] = 1;
+            /* rows hold the customer's code OR its name, in any case
+               ("ICON Stock", "ICON STOCK", "STOCK") - one option per
+               customer, under the master's name; the server's filter
+               (db.customer_match) then finds every spelling */
+            var rc = String(r.customer).trim().toUpperCase();
+            var hit = (B.customers || []).find(function(c) {
+              return String(c.code || '').toUpperCase() === rc ||
+                     String(c.name || '').toUpperCase() === rc; });
+            var label = hit ? hit.name : String(r.customer).trim();
+            if (!custFold[label.toUpperCase()]) {
+              custFold[label.toUpperCase()] = 1;
+              custSet[label] = 1;
+            }
           }
           if (r.model) modelSet[r.model] = 1;
           if (r.shift) {
@@ -3475,7 +3492,12 @@ function wireFqcAnomalies() {
         var cSel = document.getElementById('fDashCust');
         if (cSel && (!f.customer || cSel.value === 'All customers')) {
           var cPrev = cSel.value;
-          cSel.innerHTML = '<option>All customers</option>' + Object.keys(custSet).sort().map(function(c) {
+          /* the server's list (every customer inspected in the range, once
+             each); the rows only as a fallback - they are not grouped by
+             customer, so they no longer name one */
+          var custList = (d.customers && d.customers.length) ? d.customers
+                                                              : Object.keys(custSet).sort();
+          cSel.innerHTML = '<option>All customers</option>' + custList.map(function(c) {
             return '<option value="' + fqcEsc(c) + '">' + fqcEsc(c) + '</option>';
           }).join('');
           cSel.value = cPrev;
