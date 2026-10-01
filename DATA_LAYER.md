@@ -274,6 +274,50 @@ re-tested once Planning catches up is not worth it.
   Review row says "plan it so Quality can decide" rather than leaving an
   Incharge to work out why nothing moves.
 
+### Traceability import (Round 36)
+
+ICON's own monthly Excel ("TRACEABILITY SEP-2026") is the record of which serial
+RANGES were produced, on which date and shift, for which customer, with the bill
+of materials that went into them - one row per range. It feeds Production Entry,
+and for months this system was not running, backfill. `icon_traceability_import`
+parses it (never touches the DB); `/api/prodentry/import/{parse,apply}` records
+the picks.
+
+- **Parse** finds the header by keyword (tolerant of the title block above it),
+  forward-fills merged context cells (date/shift/wattage/customer), and validates
+  each row with `icon_challan_import.decompose()`: quantity must equal the serial
+  span, start and end must be one printed batch, and the row's stated wattage
+  must equal the wattage in the serial (the nameplate). A row that fails is a
+  named **problem**, never a silent import. The real September file: 260 ranges,
+  118,280 modules, 29 days - and 4 malformed serials correctly surfaced.
+- **The screen cascades** date → shift → the range(s) in that shift, only the
+  dates and shifts actually present. Customers resolve through the master
+  ('(SGS) AGRAWAL CHANNEL' by stripping the parenthetical tag); an unresolved
+  name imports under ICON Stock and is flagged, never blocked.
+- **"SR MODULE" is not a customer - it is a String Rework module** (and "NORMAL"
+  is ordinary stock). Both are ICON Stock; a rework range marks every serial it
+  backfills `serial.rework=1`. A rework module MAY be packed with regular stock
+  (it is ICON Stock), but `/api/box/<id>/scan` gives a SOFT confirm first -
+  `{ok:false, confirm:"rework"}`, not a refusal - and `/api/box/check` returns
+  `rework` so the preview warns before Add. The operator confirms, the scan
+  re-sends `confirm_rework`, and it packs.
+- **Claim mode** (default) records a range Planning already issued, exactly as
+  the manual Production Entry does; a range never planned is skipped and says so.
+- **Import remaining**: a range is often partly in the system (Planning did some,
+  or a previous import did). Backfill creates only the MISSING serials, never
+  touching the ones present, so a "276/377" range fills the other 101 - and a gap
+  in the middle becomes one contiguous production entry per run. All present →
+  nothing created.
+- **Backfill mode** builds the whole chain a serial needs so it is not an orphan:
+  a per-customer `BACKFILL/<code>` indent (reused), a line per (model, wattage,
+  dcr), an allocation per range with the file's BOM as its final material set
+  (`db.ensure_backfill_indent_line`, `icon_traceability_import.bom_materials`),
+  the serial rows marked produced, and the production entry. It refuses a range
+  whose serials already exist, so it can never duplicate what Planning issued.
+  The file has no DCR column, so backfill takes a per-import DCR (NDCR default).
+  Historical, so the backdate limit does not apply. Each range applies under its
+  own SAVEPOINT: one bad range never undoes the others.
+
 ## 4. What Packing then requires
 
 `/api/box/<id>/scan` refuses a module unless **all** of these hold. Each

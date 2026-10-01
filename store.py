@@ -136,6 +136,16 @@ class _Cur:
         self._c.execute(sql.replace("%s", "?"), tuple(args))
         return self
 
+    def executemany(self, sql, seq):
+        """Bulk insert/update - the backfill importer creates a range's
+        serials in one call rather than hundreds. Tracks the written table
+        for the change feed exactly as execute() does."""
+        t = _written_table(sql)
+        if t:
+            self.written.add(t)
+        self._c.executemany(sql.replace("%s", "?"), [tuple(a) for a in seq])
+        return self
+
     def fetchone(self):
         return self._c.fetchone()
 
@@ -296,6 +306,13 @@ def _migrate(cx, text):
     if cols("serial") and "prod_entry_id" not in cols("serial"):
         cx.execute("ALTER TABLE serial ADD COLUMN prod_entry_id INTEGER "
                    "REFERENCES production_entry(entry_id)")
+
+    # Round 36: String Rework modules (traceability "Special Customer" =
+    # "SR MODULE"). They are ICON Stock and CAN be packed with regular stock,
+    # but are tracked apart and packing warns before mixing one in. A plain
+    # flag on the serial, 0 for every module already on file.
+    if cols("serial") and "rework" not in cols("serial"):
+        cx.execute("ALTER TABLE serial ADD COLUMN rework INTEGER NOT NULL DEFAULT 0")
 
     # Round 34: direct cancellation of every document type (Admin/Super Admin
     # + a TOTP step-up). The SAME four columns on every table - the exact ones

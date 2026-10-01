@@ -1488,7 +1488,9 @@ def api_box_open():
 @require_screen_write("pack")
 @_sync_guard
 def api_box_scan(box_id):
-    serial = (request.get_json(force=True).get("serial") or "").strip().upper()
+    d = request.get_json(force=True)
+    serial = (d.get("serial") or "").strip().upper()
+    confirm_rework = bool(d.get("confirm_rework"))
     with store.conn() as (cx, cur):
         b = store.box_row(cur, box_id)
         if not b or b["state"] != "open":
@@ -1500,6 +1502,16 @@ def api_box_scan(box_id):
         why = _pack_refusal(cur, b, serial)
         if why:
             return jsonify({"ok": False, "why": why}), 400
+        # A String Rework module MAY go in - it is ICON Stock - but packing
+        # warns first, because it is tracked apart and is being mixed into a
+        # box of regular modules. A soft gate (confirm, not refuse): the screen
+        # asks, and re-scans with confirm_rework once the operator says yes.
+        srow = db.find_serial(cur, serial)
+        if srow and srow.get("rework") and not confirm_rework:
+            return jsonify({"ok": False, "confirm": "rework", "serial": serial,
+                            "why": "%s is a String Rework module. Pack it into "
+                                   "box %s (grade %s) with the regular modules?"
+                                   % (serial, _box_label(b), b["grade"])})
         store.add_to_box(cur, box_id, serial, actor())
         # and the module's own state, in the same transaction. Without this a
         # packed module still read 'graded' - the contract in DATA_LAYER says
@@ -1643,6 +1655,9 @@ def api_box_check():
         "customer": cr["name"] if cr else s.get("customer"),
         # the code is what a box stores; the name is what the screen shows
         "customer_code": s.get("customer"),
+        # a String Rework module - packable, but the screen warns before it is
+        # mixed into a box of regular modules
+        "rework": bool(s.get("rework")),
         "graded_at": (rec or {}).get("at"),
         "outcome": (rec or {}).get("outcome"),
     })
@@ -4317,6 +4332,253 @@ def api_prodentry():
         })
         
     return jsonify({"ok": True, "entry_id": eid, "qty": qty})
+
+
+# --------------------------------------------------------------------------
+# Traceability import - ICON's monthly Excel of which serial RANGES were
+# produced, by date and shift. icon_traceability_import parses and validates
+# it (no DB); these two routes turn a chosen range into a production entry.
+#
+#   /parse   reads the file, returns date -> shift -> range(s) with each row's
+#            customer resolved and its problems named. No writes.
+#   /apply   records the chosen ranges. Two modes:
+#              claim (default) - the range must already be planned, exactly as
+#                the manual Production Entry requires; import just records it.
+#              backfill        - for months this system was not running: create
+#                the serial/allocation/indent rows behind the range too, mark
+#                them produced, and keep the file's bill of materials as the
+#                allocation's final material set. Historical, so the backdate
+#                limit does not apply.
+# --------------------------------------------------------------------------
+
+import icon_traceability_import as trace_import
+
+
+def _batch_prefix(serial, format_version):
+    seq_len = 4 if format_version == 2 else 3
+    return serial[:-seq_len], seq_len
+
+
+def _range_in_system(cur, rng):
+    """How many of a range's serials already exist (build 1). A claim needs
+    them all present; a backfill needs none."""
+    ds = chimport.decompose(rng["start"])
+    if not ds.get("ok"):
+        return 0, 0
+    prefix, seq_len = _batch_prefix(rng["start"], ds["format_version"])
+    n = store.one(cur,
+        "SELECT COUNT(*) AS n FROM serial WHERE build_instance=1 AND "
+        "sequence>=%s AND sequence<=%s AND length(serial)=%s AND "
+        "substr(serial,1,%s)=%s",
+        (rng["seq_from"], rng["seq_to"], len(rng["start"]), len(prefix), prefix))["n"]
+    return n, rng["qty"]
+
+
+@app.route("/api/prodentry/import/parse", methods=["POST"])
+@require_screen_write("prodentry")
+def api_prodentry_import_parse():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"ok": False, "why": "Choose a traceability .xlsx file."}), 400
+    if not f.filename.lower().endswith((".xlsx", ".xlsm")):
+        return jsonify({"ok": False, "why": "That is not an .xlsx file."}), 400
+    try:
+        result = trace_import.parse(f.read())
+    except Exception as e:
+        return jsonify({"ok": False, "why": "Could not read the workbook: %s" % e}), 400
+    if not result.get("ok"):
+        return jsonify(result), 400
+    # tell the screen, per range, whether its serials are already in the
+    # system - so it can show "already planned" (claim) vs "not in system"
+    # (needs backfill) without the operator guessing
+    with store.conn() as (cx, cur):
+        for r in result["ranges"]:
+            have, want = _range_in_system(cur, r)
+            r["in_system"] = have
+            r["all_present"] = (have == want and want > 0)
+    return jsonify(result)
+
+
+def _import_claim_range(cur, rng, incharge, stamp):
+    """Record a range whose serials Planning already issued - the same rule
+    the manual Production Entry enforces: every serial present, none already
+    recorded under an earlier entry."""
+    prod_day, shift_letter, refusal = _prod_when(rng["date"], rng["shift"], now=stamp)
+    if refusal:
+        return {"action": "error", "why": refusal}
+    ds = chimport.decompose(rng["start"])
+    prefix, seq_len = _batch_prefix(rng["start"], ds["format_version"])
+    where = ("build_instance=1 AND sequence>=%s AND sequence<=%s AND "
+             "length(serial)=%s AND substr(serial,1,%s)=%s")
+    args = (rng["seq_from"], rng["seq_to"], len(rng["start"]), len(prefix), prefix)
+    in_range = store.rows(cur, "SELECT serial, wattage, prod_entry_id FROM serial "
+                               "WHERE " + where, args)
+    if len(in_range) != rng["qty"]:
+        return {"action": "skipped", "why":
+                "%d of %d serials are in Planning - a claim needs the whole "
+                "range planned. Use backfill for a range this system never "
+                "planned." % (len(in_range), rng["qty"])}
+    already = [s["serial"] for s in in_range if s["prod_entry_id"]]
+    if already:
+        return {"action": "skipped", "why":
+                "already recorded under an earlier production entry (%s...)" % already[0]}
+    watt = in_range[0]["wattage"]
+    eid = store.insert(cur, "production_entry", {
+        "prod_date": prod_day.isoformat(), "shift": shift_letter,
+        "created_at": stamp.isoformat(timespec="seconds"),
+        "shift_incharge": incharge, "line": "", "model": rng["model"],
+        "wattage": watt, "start_serial": rng["start"], "end_serial": rng["end"],
+        "qty": rng["qty"], "kw_output": (rng["qty"] * watt) / 1000.0,
+        "created_by": actor()})
+    cur.execute("UPDATE serial SET prod_entry_id=%s WHERE " + where, (eid,) + args)
+    cur.execute("UPDATE serial SET state='produced' WHERE " + where +
+                " AND state='planned'", args)
+    return {"action": "claimed", "qty": rng["qty"], "eid": eid}
+
+
+def _import_backfill_range(cur, rng, dcr, incharge, stamp):
+    """Create the whole chain behind a range this system never planned:
+    indent line -> allocation (+ the file's BOM as its material set) ->
+    serial rows (produced) -> production entry. Refused if any serial already
+    exists, so backfill can never duplicate what Planning issued."""
+    code = rng.get("customer_code") or "STOCK"
+    if rng.get("customer_resolved"):
+        name = rng.get("customer_name")
+    else:
+        stock = customers.resolve("ICON Stock")     # the master's canonical name
+        name = stock["name"] if stock else "ICON Stock"
+    flagged = not rng.get("customer_resolved")
+    model, watt = rng["model"], rng["wattage"]
+    ds = chimport.decompose(rng["start"])
+    prefix, seq_len = _batch_prefix(rng["start"], ds["format_version"])
+
+    # IMPORT REMAINING: a range is often partly in the system already - Planning
+    # allocated some of it, or a previous import did. Create only the serials
+    # that are MISSING, never touching the ones already there, so a "276/377"
+    # range brings in the other 101. All present -> nothing to do.
+    present = set()
+    for s in store.rows(cur, "SELECT sequence FROM serial WHERE build_instance=1 "
+                             "AND sequence>=%s AND sequence<=%s AND length(serial)=%s "
+                             "AND substr(serial,1,%s)=%s",
+                        (rng["seq_from"], rng["seq_to"], len(rng["start"]),
+                         len(prefix), prefix)):
+        present.add(s["sequence"])
+    missing = [q for q in range(rng["seq_from"], rng["seq_to"] + 1) if q not in present]
+    if not missing:
+        return {"action": "skipped", "why":
+                "all %d serials are already in the system." % rng["qty"]}
+
+    line_id = db.ensure_backfill_indent_line(cur, code, name, model, watt, dcr,
+                                             rng["date"], actor())
+    aid = store.insert(cur, "allocation", {
+        "indent_line_id": line_id, "model": model, "wattage": watt,
+        "customer": name, "dcr": dcr, "alloc_type": "post",
+        "date_produced": rng["date"], "shift": clock.shift_number(rng["shift"]),
+        "qty": len(missing), "seq_from": min(missing), "seq_to": max(missing),
+        "created_by": actor()})
+    cur.execute("UPDATE indent_line SET qty = qty + %s WHERE indent_line_id=%s",
+                (len(missing), line_id))
+    for m in trace_import.bom_materials(rng.get("bom") or {}):
+        store.insert(cur, "allocation_material", {
+            "alloc_id": aid, "material_no": m["material_no"],
+            "vendor": m["vendor"], "efficiency": m["efficiency"], "batch": m["batch"]})
+
+    rework = 1 if rng.get("rework") else 0
+
+    def ser(q):
+        return prefix + str(q).zfill(seq_len)
+
+    # a production entry records ONE contiguous printed run, so the missing
+    # serials are grouped into their contiguous runs - a full range is one run,
+    # a gap-filling import is however many the gaps make.
+    eids = []
+    for run in _contiguous_runs(missing):
+        q0, q1 = run[0], run[-1]
+        eid = store.insert(cur, "production_entry", {
+            "prod_date": rng["date"], "shift": rng["shift"],
+            "created_at": stamp.isoformat(timespec="seconds"),
+            "shift_incharge": incharge, "line": "", "model": model, "wattage": watt,
+            "start_serial": ser(q0), "end_serial": ser(q1), "qty": len(run),
+            "kw_output": (len(run) * watt) / 1000.0, "created_by": actor()})
+        eids.append(eid)
+        rows_ = [(ser(q), 1, aid, line_id, model, watt, name, dcr,
+                  ds["format_version"], ds["date_produced"], ds["shift"], q,
+                  "produced", eid, rework) for q in run]
+        cur.executemany(
+            "INSERT INTO serial (serial, build_instance, alloc_id, indent_line_id, "
+            "model, wattage, customer, dcr, format_version, date_produced, shift, "
+            "sequence, state, prod_entry_id, rework) VALUES "
+            "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", rows_)
+    return {"action": "backfilled", "qty": len(missing),
+            "skipped_present": len(present), "alloc_id": aid, "eid": eids[0],
+            "entries": len(eids), "customer": name, "customer_flagged": flagged,
+            "rework": bool(rework),
+            "why": ("created %d, %d already present" % (len(missing), len(present))
+                    if present else None)}
+
+
+def _contiguous_runs(seqs):
+    """[1,2,3,7,8] -> [[1,2,3],[7,8]] - a production entry is one printed run,
+    so a gap-filling backfill makes one entry per run of missing numbers."""
+    runs, run = [], []
+    for q in sorted(seqs):
+        if run and q == run[-1] + 1:
+            run.append(q)
+        else:
+            if run:
+                runs.append(run)
+            run = [q]
+    if run:
+        runs.append(run)
+    return runs
+
+
+@app.route("/api/prodentry/import/apply", methods=["POST"])
+@require_screen_write("prodentry")
+@_sync_guard
+def api_prodentry_import_apply():
+    d = request.get_json(force=True) or {}
+    ranges = d.get("ranges") or []
+    backfill = bool(d.get("backfill"))
+    incharge = (d.get("incharge") or "").strip()
+    dcr = (d.get("dcr") or "NDCR").strip().upper()
+    if not ranges:
+        return jsonify({"ok": False, "why": "No ranges selected."}), 400
+    if not incharge:
+        return jsonify({"ok": False, "why": "Enter the shift in-charge."}), 400
+    if dcr not in ("DCR", "NDCR"):
+        return jsonify({"ok": False, "why": "DCR must be DCR or NDCR."}), 400
+
+    stamp = clock.now()
+    results = []
+    with store.conn() as (cx, cur):
+        for i, rng in enumerate(ranges):
+            sp = "imp_%d" % i
+            cx.execute("SAVEPOINT %s" % sp)
+            try:
+                res = (_import_backfill_range(cur, rng, dcr, incharge, stamp)
+                       if backfill else
+                       _import_claim_range(cur, rng, incharge, stamp))
+                if res.get("action") in ("error", "skipped"):
+                    cx.execute("ROLLBACK TO %s" % sp)   # undo any partial writes
+            except Exception as e:
+                cx.execute("ROLLBACK TO %s" % sp)
+                res = {"action": "error", "why": str(e)}
+            cx.execute("RELEASE %s" % sp)
+            res.update({"row": rng.get("row"), "start": rng.get("start"),
+                        "end": rng.get("end"), "date": rng.get("date"),
+                        "shift": rng.get("shift")})
+            results.append(res)
+        done = [r for r in results if r["action"] in ("claimed", "backfilled")]
+        if done:
+            db.audit(cur, actor(), "production.import", "production_entry", None,
+                     {"backfill": backfill, "selected": len(ranges),
+                      "recorded": len(done),
+                      "modules": sum(r.get("qty", 0) for r in done)})
+    return jsonify({"ok": True, "results": results, "backfill": backfill,
+                    "recorded": len(done),
+                    "modules": sum(r.get("qty", 0) for r in done),
+                    "total": len(results)})
 
 
 # --------------------------------------------------------------------------

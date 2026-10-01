@@ -1304,6 +1304,44 @@ def draft_challan_count(cur):
                            "status='draft'")["n"]
 
 
+def ensure_backfill_indent_line(cur, customer_code, customer_name, model,
+                                wattage, dcr, on_date, by):
+    """Backfill needs the relational chain the rest of the system assumes:
+    every serial hangs off an allocation, every allocation off an indent line,
+    every line off an indent. Real production from before this system was
+    running was never planned here, so this builds the MINIMUM standing
+    structure to hang it on - one 'BACKFILL/<code>' indent per customer,
+    reused, with one line per (model, wattage, dcr) under it. Returns the
+    indent_line_id. Nothing here is a real order; it exists so the serials
+    are not orphans that break packing, dispatch and the dashboards, all of
+    which join through the allocation.
+
+    Find-or-create, so importing month after month adds to the same backfill
+    indent rather than a new one each run."""
+    code = (customer_code or "STOCK").strip()
+    indent_no = "BACKFILL/" + code
+    ind = _store.one(cur, "SELECT indent_id FROM indent WHERE indent_no=%s",
+                     (indent_no,))
+    if ind:
+        indent_id = ind["indent_id"]
+    else:
+        indent_id = _store.insert(cur, "indent", {
+            "indent_no": indent_no, "indent_date": on_date,
+            "customer": customer_name or code, "build_type": "make_to_stock",
+            "lot_name": "Backfill from traceability", "created_by": by})
+    line = _store.one(cur, "SELECT indent_line_id FROM indent_line WHERE "
+                           "indent_id=%s AND model=%s AND wattage=%s AND dcr=%s",
+                      (indent_id, model, wattage, dcr))
+    if line:
+        return line["indent_line_id"]
+    nxt = (_store.one(cur, "SELECT COALESCE(MAX(line_no),0)+1 AS n FROM "
+                           "indent_line WHERE indent_id=%s", (indent_id,))["n"])
+    return _store.insert(cur, "indent_line", {
+        "indent_id": indent_id, "line_no": nxt,
+        "item_description": "SOLAR PV MODULE-%s-%s" % (model, dcr),
+        "model": model, "wattage": wattage, "qty": 0, "dcr": dcr})
+
+
 def review_item_get(cur, review_id):
     if cur is None:
         return None

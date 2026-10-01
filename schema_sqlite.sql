@@ -616,6 +616,11 @@ CREATE TABLE IF NOT EXISTS serial (
   -- production entry exists, and this column is what Production Entry's own
   -- double-recording check reads instead of `state`.
   prod_entry_id  INTEGER NULL REFERENCES production_entry(entry_id),
+  -- Round 36: a String Rework module (traceability "Special Customer" =
+  -- "SR MODULE"). It is ICON Stock and may be packed with regular stock, but
+  -- is tracked apart and packing warns before mixing one in. store.py adds
+  -- this by ADD COLUMN on an existing database.
+  rework         INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (serial, build_instance)
 
 ) ;

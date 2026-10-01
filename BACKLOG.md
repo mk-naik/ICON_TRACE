@@ -5476,6 +5476,71 @@ fault (BAD) cannot be graded either way and raises two rows - "not in master"
 and "FTR anomaly - failed reading"; a scanner misfire is acknowledged by a
 person, never planned, and FQC refuses it.
 
+### Traceability import - the monthly Excel into Production Entry (+ backfill)
+
+ICON's monthly traceability report is the record of which serial RANGES were
+produced, by date and shift, for which customer, with the BOM that went into
+them. Mukesh asked for it to be importable from the Production Entry screen -
+upload, pick a date, then a shift, then the range(s) - and used for backfill.
+
+- **`icon_traceability_import`** parses the workbook and never touches the DB:
+  header-by-keyword (tolerant of the 11-row title block), merged-cell
+  forward-fill, and per-row validation through `decompose()` - quantity must
+  equal the serial span, one printed batch, and the row's wattage must equal
+  the serial's nameplate. A bad row is a named problem, not a silent import.
+  On the real September file: 260 ranges, 118,280 modules, 29 days, and 4
+  malformed serials surfaced (a non-ICON `LEVT...`, a too-short, two 11-digit).
+- **`/api/prodentry/import/parse`** returns the cascade (dates -> shifts ->
+  ranges), each range's customer resolved (unresolved -> ICON Stock, flagged)
+  and whether its serials are already in the system.
+- **`/api/prodentry/import/apply`**, two modes chosen by a toggle (Mukesh's
+  call): CLAIM records a range Planning already issued, exactly as the manual
+  entry does; BACKFILL builds the chain a serial needs - a per-customer
+  `BACKFILL/<code>` indent, a line per (model, wattage, dcr), an allocation per
+  range with the file's BOM as its final material set, the serials produced,
+  and the production entry - refusing any range whose serials already exist.
+  Each range applies under its own SAVEPOINT. The file has no DCR column, so
+  backfill takes a per-import DCR (NDCR default). Backfill bypasses the
+  backdate limit (it is explicitly historical).
+- **The screen**: the old "Upload Excel" drop-zone (which only toasted the file
+  name) now drives the whole cascade, with a backfill toggle and DCR selector.
+- **Proved by** `test_traceability_import.py` (14) and
+  `test_traceability_import_ui.py` (1, real Chromium, real file end to end).
+
+### FQC Entry - the barcode scanner (focus, lock, status line, missed scans)
+
+Mukesh's list from the FQC station: scans were being lost or mangled.
+
+- **Lost to focus.** The operator clicks away; the scanner types into nothing.
+  A capture-phase key listener, live only while FQC Entry is showing,
+  recognises a scanner burst - keys faster than anyone types (<= 60 ms apart,
+  <= 35 ms on average), ending in Enter, shaped like a serial (letters AND
+  digits, no spaces; no defect name has a digit) - and looks it up wherever
+  focus was. Leftover text in the field is replaced, not appended to; a
+  focused button is not "clicked" by the scanner's Enter. A click on empty
+  space puts the caret back in the field (never stealing one from a text box
+  or a selection being made).
+- **Scan while a module waits for Pass / Reject.** Nothing on screen changes;
+  a toast names the serial and why it waited, and it goes on **Missed scans**.
+  The same serial scanned again is "already on screen", not a miss. A scan
+  that lands in the Defect / Note box hands that box its own text back.
+- **Scan while the lookup is running.** The field now locks the moment Enter
+  is pressed (it used to stay editable, so a second scan was APPENDED to the
+  serial being looked up). One lookup at a time; the second is a miss.
+- **A slow lookup looked like a hang.** After 350 ms a status line appears -
+  a changing word in Claude Code's manner ("Reading the Sun Simulator...",
+  "Untangling..."), the serial, the seconds, "Esc to cancel"; at 10 s "slower
+  than usual". Client-side only: no request, one 1 s timer. Esc lets go at
+  once and a late answer is ignored; 45 s stops it for the operator.
+- **Missed scans** are kept in this browser (localStorage, per station, max
+  50): click one to look it up, x to drop it, Clear all. A serial leaves the
+  list once it has been looked up, however it got there.
+- **Is the scanner being heard?** An indicator in the scan box: Ready to scan /
+  Looking up / Finish this module / Not receiving scans (window lost focus).
+- **Proved by** `test_fqc_scanner_ui.py` (18, real Chromium, typing like a
+  scanner and like a person); a mutation check broke each behaviour on a copy
+  of the tree and all 10 mutants were caught.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

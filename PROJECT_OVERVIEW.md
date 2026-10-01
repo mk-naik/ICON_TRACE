@@ -256,9 +256,12 @@ they need `pip install playwright` and `playwright install chromium`, not Node:
 python test_fqc_screen.py          15 tests · the defect list, Space = Pass, and what Recent gradings shows
 python test_search_invoice.py      16 tests · Search & Trace opens empty; every number the system issues is found
 python test_indent_export.py        4 tests · one row per indent item, through /api/export/xlsx
-python test_fqc_unplanned.py        37 tests · FQC on a serial the master does not have yet
+python test_fqc_unplanned.py        40 tests · FQC on a serial the master does not have yet
 python test_defect_readers.py        6 tests · the defect a decision carries is shown on every screen
 python test_relogin.py               6 tests · signing in AGAIN on a page that has been in the app
+python test_traceability_import.py  19 tests · the monthly traceability Excel -> production entry (+ backfill)
+python test_traceability_import_ui.py 2 tests · the import cascade on the Production Entry screen, in a browser
+python test_fqc_scanner_ui.py      18 tests · the barcode scanner on FQC Entry: focus, lock, status line, missed scans
 ```
 
 The JS tests read their functions out of `icon_live.js`, so they test what

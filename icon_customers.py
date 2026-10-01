@@ -38,8 +38,8 @@ import re
 
 # code, canonical name, gstin, state, aliases
 _SEED = [
-    ("STOCK", "ICON Stock", None, "Chhattisgarh",
-     ["GENERAL STOCK", "STOCK", "ICON", "UNALLOCATED"]),
+    ("STOCK", "Icon Stock", None, "Chhattisgarh",
+     ["GENERAL STOCK", "STOCK", "ICON", "UNALLOCATED", "Normal"]),
     ("ICON", "Icon Solar-En Power Technologies Pvt. Ltd.", {
         "22AADCI5761L3ZE": "Unit-1",
         "22AADCI5761L1Z4": "Unit-2",

@@ -3920,17 +3920,39 @@ function wireFqcAnomalies() {
     var input = document.getElementById('fqcScan');
     var serial = (input && input.value || '').trim().toUpperCase();
     if (!serial) return;
-    fetch('/api/fqc/lookup?serial=' + encodeURIComponent(serial), {cache: 'no-store'})
+    /* One module at a time. A second Enter - a scan arriving mid-lookup, or
+       one while a module waits for Pass/Reject - is told why and kept on the
+       Missed scans list, never looked up over the top of the first. */
+    if (fqcInFlight || liveFqcHold) { fqcScanned(serial); return; }
+    var ctrl = window.AbortController ? new AbortController() : null;
+    var st = fqcInFlight = {serial: serial, ctrl: ctrl, t0: Date.now()};
+    /* Locked from the moment Enter is pressed, not from when the answer
+       comes back: the field used to stay editable for the whole lookup, so
+       a scan fired meanwhile was APPENDED to the serial being looked up. */
+    if (input) { input.value = serial; input.readOnly = true; }
+    fqcStatusStart(st);
+    fqcReadyPaint();
+    fetch('/api/fqc/lookup?serial=' + encodeURIComponent(serial),
+          {cache: 'no-store', signal: ctrl ? ctrl.signal : undefined})
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (!d.ok) { toast(d.why); return; }
+        if (st.cancelled) return;      // let go of - its answer is not wanted now
+        fqcLookupDone(st);
+        if (!d.ok) { toast(d.why); fqcUnlock(); return; }
+        fqcMissedRemove(d.serial || serial);     // looked up - off the list
         fqcShowLive(d);
         /* Enter leaves the caret in the scan box, so the next Space typed a
            space instead of confirming. The module is on screen now and the
            box has nothing more to take. */
         if (input) { input.blur(); input.disabled = true; }
+        fqcReadyPaint();
       })
-      .catch(function (e) { toast('FQC lookup failed: ' + e.message); });
+      .catch(function (e) {
+        if (st.cancelled) return;      // already tidied up and told
+        fqcLookupDone(st);
+        fqcUnlock();
+        toast('FQC lookup failed: ' + (e && e.message || e));
+      });
   };
   /* Rejecting. No grade here: what is rejected is called GY or BGY by
      Quality, from the EL, the SS reading and what is captured below.
@@ -4358,10 +4380,410 @@ function wireFqcAnomalies() {
   window.fqcCancelLive = function () {
     liveFqcHold = null;
     var p = document.getElementById('fqcPending'); if (p) p.innerHTML = '';
-    var s = document.getElementById('fqcScan'); if (s) { s.value = ''; s.disabled = false; s.focus(); }
+    var s = document.getElementById('fqcScan');
+    if (s) { s.value = ''; s.disabled = false; s.readOnly = false; s.focus(); }
+    fqcReadyPaint();
   };
   window.fqcCancel = window.fqcCancelLive;
   window.fqcLookup = window.fqcLookup;
+
+  /* == FQC SCANNER: focus, lock, status line, missed scans ==============
+   *
+   * The scan field lost scans three ways:
+   *   1. the operator clicked away from it, so the scanner typed into
+   *      nothing at all;
+   *   2. a module was on screen waiting for Pass / Reject and the scanner
+   *      fired - the keys went nowhere, or worse into the Defect / Note box;
+   *   3. the lookup was still running and the scanner fired - the field was
+   *      still editable, so the new serial was appended to the old one.
+   * And a slow lookup looked exactly like a hang.
+   *
+   * One capture-phase key listener, live only while FQC Entry is the screen
+   * showing, recognises a SCANNER BURST: keys arriving faster than anyone
+   * types, ending in Enter, shaped like a serial - letters AND digits, no
+   * spaces. Shape matters as much as speed: no defect name has a digit, so
+   * "Burning" typed fast and confirmed with Enter is never taken for a scan.
+   *
+   *   idle -> the scan is looked up, wherever focus was (the field's own
+   *           leftovers replaced, not appended to);
+   *   busy -> nothing on screen changes. A toast says what was scanned and
+   *           why it waited, and the serial goes on the Missed scans list.
+   *
+   * Missed scans live in this browser only (localStorage) - a station's
+   * working list, not a record anyone else needs - and a serial leaves the
+   * list once it has been looked up, or by its own ×.
+   *
+   * The status line costs the server nothing: no request, one 1-second
+   * timer, gone the moment the answer arrives. Esc cancels a lookup that is
+   * taking too long, and one that runs past FQC_LOOKUP_CAP_MS is stopped
+   * for the operator rather than leaving the screen locked. */
+
+  var fqcInFlight = null;           // {serial, ctrl, t0, why, showT, tick, cap}
+  var FQC_SCAN_GAP_MS = 60;         // a key this soon after the last continues a burst
+  var FQC_SCAN_AVG_MS = 35;         // a burst this fast on average is a scanner
+  var FQC_SCAN_ENTER_MS = 250;      // Enter may trail the last character a little
+  var FQC_SCAN_MIN = 8;             // shortest thing taken for a serial
+  var FQC_LOOKUP_CAP_MS = 45000;
+  var FQC_MISSED_KEY = 'icon.fqc.missed.v1';
+  var FQC_MISSED_MAX = 50;
+  var fqcBurst = null;              // {chars, first, last, target, snapshot}
+  var fqcWinBlurred = false;        // the browser window itself lost focus
+
+  /* what the status line says while it waits - Claude Code's habit of a
+     changing word, in the trade's own vocabulary as much as its own */
+  var FQC_VERBS = [
+    'Reading the Sun Simulator', 'Fetching the IV curve', 'Checking the EL image',
+    'Matching the nameplate', 'Measuring Pmax', 'Counting the cells',
+    'Tracing the serial', 'Asking the tester', 'Catching photons',
+    'Warming up the flash', 'Polishing the glass', 'Lining up the busbars',
+    'Soldering the ribbons', 'Laminating', 'Framing', 'Cooking', 'Thinking',
+    'Pondering', 'Brewing', 'Simmering', 'Crunching', 'Percolating', 'Mulling',
+    'Noodling', 'Tinkering', 'Conjuring', 'Forging', 'Wrangling', 'Untangling'];
+
+  function fqcActive() {
+    var v = document.getElementById('v-fqc');
+    return !!(v && v.classList.contains('on'));
+  }
+  function fqcModalOpen() {
+    var mdl = document.getElementById('mdl');
+    return !!(mdl && mdl.classList.contains('on'));
+  }
+  function fqcBusy() { return !!(fqcInFlight || liveFqcHold || fqcModalOpen()); }
+  function fqcEditable(el) {
+    return !!el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName || '') ||
+                    !!el.isContentEditable);
+  }
+  function fqcLooksLikeSerial(s) {
+    return /^[A-Z0-9\-\/]+$/.test(s) && s.length >= FQC_SCAN_MIN &&
+           s.length <= 40 && /[A-Z]/.test(s) && /\d/.test(s);
+  }
+
+  /* the field usable again - unless a module is on screen, which keeps it
+     shut until that module is decided or discarded */
+  function fqcUnlock() {
+    var input = document.getElementById('fqcScan');
+    if (!input || liveFqcHold) return;
+    input.readOnly = false; input.disabled = false;
+    input.focus();
+    input.select();                 // the next scan or keystroke replaces it
+    fqcReadyPaint();
+  }
+
+  /* a scan arrived (from the burst detector, or a second Enter in the field) */
+  function fqcScanned(serial) {
+    var cur = fqcInFlight ? fqcInFlight.serial : liveFqcHold ? liveFqcHold.serial : null;
+    if (cur && cur === serial) {
+      toast(serial + (fqcInFlight ? ' is already being looked up — just wait for it.'
+                                  : ' is already on screen — Pass, Reject or Esc.'));
+      return;
+    }
+    if (fqcBusy()) {
+      fqcMissedAdd(serial);
+      toast(serial + ' scanned while ' +
+            (fqcInFlight ? cur + ' is still loading'
+             : liveFqcHold ? cur + ' waits for Pass / Reject'
+             : 'a window was open') + ' — kept in Missed scans.');
+      return;
+    }
+    var input = document.getElementById('fqcScan');
+    if (input) { input.disabled = false; input.readOnly = false; input.value = serial; }
+    window.fqcLookup();
+  }
+
+  function fqcOnKey(e) {
+    if (!fqcActive()) { fqcBurst = null; return; }
+    var k = e.key, t = e.timeStamp || Date.now();
+
+    if (k === 'Escape' && fqcInFlight) {         // a slow lookup can be let go
+      e.preventDefault(); e.stopPropagation();
+      fqcLookupCancel('Lookup cancelled — scan again when ready.');
+      return;
+    }
+    if (e.ctrlKey || e.altKey || e.metaKey) { fqcBurst = null; return; }
+    if (k === 'Shift' || k === 'CapsLock') return;   // how a scanner types capitals
+
+    if (k && k.length === 1) {
+      if (fqcBurst && t - fqcBurst.last <= FQC_SCAN_GAP_MS) {
+        fqcBurst.chars += k; fqcBurst.last = t;
+        /* mid-burst while busy, on something that is not a text box (the EL
+           viewer, a button): swallow it, so a scan cannot drive their keys */
+        if (fqcBusy() && !fqcEditable(e.target)) e.preventDefault();
+      } else {
+        var tg = e.target;
+        fqcBurst = {chars: k, first: t, last: t, target: tg,
+                    snapshot: fqcEditable(tg) && typeof tg.value === 'string' ? tg.value : null};
+      }
+      return;
+    }
+
+    if (k === 'Enter') {
+      var b = fqcBurst; fqcBurst = null;
+      if (!b || b.chars.length < FQC_SCAN_MIN) return;
+      if (t - b.last > FQC_SCAN_ENTER_MS) return;
+      if ((b.last - b.first) / (b.chars.length - 1) > FQC_SCAN_AVG_MS) return;
+      var serial = b.chars.trim().toUpperCase();
+      if (!fqcLooksLikeSerial(serial)) return;
+      /* A scan. This Enter is ours: no inline handler, no button it would
+         have clicked, no defect it would have picked. */
+      e.preventDefault(); e.stopPropagation();
+      /* and whatever text box it landed in gets its own text back */
+      if (b.snapshot !== null && b.target && b.target.id !== 'fqcScan' &&
+          b.target.value !== b.snapshot) {
+        b.target.value = b.snapshot;
+        try { b.target.dispatchEvent(new Event('input', {bubbles: true})); } catch (x) {}
+      }
+      fqcScanned(serial);
+      return;
+    }
+    fqcBurst = null;                             // Tab, arrows, Backspace...
+  }
+
+  /* -- the status line ------------------------------------------------- */
+
+  function fqcStatusStart(st) {
+    if (!st) return;
+    var last = -1, verb = '';
+    function pick() {
+      var i;
+      do { i = Math.floor(Math.random() * FQC_VERBS.length); }
+      while (i === last && FQC_VERBS.length > 1);
+      last = i; verb = FQC_VERBS[i];
+    }
+    function paint() {
+      if (fqcInFlight !== st) return;
+      var secs = Math.floor((Date.now() - st.t0) / 1000);
+      if (secs % 3 === 0 || !verb) pick();
+      var v = document.getElementById('fqcStatusVerb');
+      var m = document.getElementById('fqcStatusMeta');
+      if (v) v.textContent = verb + '…';
+      if (m) m.textContent = ' ' + st.serial + ' · ' + secs + 's · ' +
+        (secs >= 10 ? 'slower than usual — Esc to cancel' : 'Esc to cancel');
+    }
+    /* a quick lookup never flickers it on */
+    st.showT = setTimeout(function () {
+      if (fqcInFlight !== st) return;
+      var host = document.getElementById('fqcPending');
+      if (!host) return;
+      host.innerHTML = '<div class="fqc-status" id="fqcStatus" role="status" ' +
+        'aria-live="polite"><span class="fqc-status-g" aria-hidden="true">✻</span>' +
+        '<b id="fqcStatusVerb"></b><span id="fqcStatusMeta"></span></div>';
+      paint();
+      st.tick = setInterval(paint, 1000);
+    }, 350);
+    st.cap = setTimeout(function () {
+      if (fqcInFlight === st) fqcLookupCancel('The lookup ran past ' + Math.round(FQC_LOOKUP_CAP_MS / 1000) +
+        ' s and was stopped — scan again. If it keeps happening the Sun ' +
+        'Simulator or the EL share may be unreachable.');
+    }, FQC_LOOKUP_CAP_MS);
+  }
+
+  /* the lookup `st` is over: its timers stop and its status line goes. Only
+     ever the one it is given - a late answer to an old lookup cannot end a
+     newer one. */
+  function fqcLookupDone(st) {
+    if (!st) return;
+    clearTimeout(st.showT); clearInterval(st.tick); clearTimeout(st.cap);
+    if (fqcInFlight !== st) return;
+    fqcInFlight = null;
+    var s = document.getElementById('fqcStatus');
+    if (s && s.parentNode) s.parentNode.removeChild(s);
+    fqcReadyPaint();
+  }
+
+  /* Let go of the running lookup NOW - the screen is the operator's again
+     at once, not when the network gets round to admitting the abort - and
+     whatever answer still arrives for it is ignored (st.cancelled). */
+  function fqcLookupCancel(why) {
+    var st = fqcInFlight;
+    if (!st) return;
+    st.cancelled = true;
+    if (st.ctrl) { try { st.ctrl.abort(); } catch (x) {} }
+    fqcLookupDone(st);
+    fqcUnlock();
+    toast(why || 'Lookup cancelled.');
+  }
+
+  /* -- is the scanner being heard? -------------------------------------- */
+
+  function fqcReadyPaint() {
+    var el = document.getElementById('fqcReady');
+    if (!el) return;
+    var state, text;
+    if (fqcWinBlurred || !document.hasFocus()) {
+      state = 'off'; text = 'Not receiving scans — click this page';
+    } else if (fqcInFlight) {
+      state = 'wait'; text = 'Looking up — new scans wait in Missed scans';
+    } else if (liveFqcHold) {
+      state = 'wait'; text = 'Finish this module — new scans wait in Missed scans';
+    } else {
+      state = 'on'; text = 'Ready to scan';
+    }
+    el.className = 'fqc-ready fqc-ready-' + state;
+    el.textContent = '● ' + text;
+  }
+
+  /* keep the caret where the scanner types, without stealing a click that
+     went to a text box, a selection being made, or an open window */
+  function fqcKeepFocus() {
+    setTimeout(function () {
+      if (!fqcActive() || fqcBusy()) return;
+      var a = document.activeElement;
+      if (a && a !== document.body && fqcEditable(a)) return;
+      var sel = window.getSelection && window.getSelection();
+      if (sel && !sel.isCollapsed) return;
+      var input = document.getElementById('fqcScan');
+      if (input && !input.disabled && !input.readOnly) {
+        try { input.focus({preventScroll: true}); } catch (x) { input.focus(); }
+      }
+    }, 0);
+  }
+
+  /* -- missed scans ----------------------------------------------------- */
+
+  function fqcMissedLoad() {
+    try {
+      var v = JSON.parse(localStorage.getItem(FQC_MISSED_KEY) || '[]');
+      return Array.isArray(v) ? v.filter(function (x) {
+        return x && typeof x.s === 'string' && fqcLooksLikeSerial(x.s);
+      }) : [];
+    } catch (x) { return []; }
+  }
+  function fqcMissedSave(list) {
+    try { localStorage.setItem(FQC_MISSED_KEY, JSON.stringify(list)); } catch (x) {}
+  }
+  function fqcNowHM() {
+    var d = new Date(), p = function (n) { return String(n).padStart(2, '0'); };
+    return p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function fqcMissedAdd(serial) {
+    var list = fqcMissedLoad().filter(function (x) { return x.s !== serial; });
+    var had = fqcMissedLoad().filter(function (x) { return x.s === serial; })[0];
+    list.unshift({s: serial, at: fqcNowHM(), n: had ? (had.n || 1) + 1 : 1});
+    fqcMissedSave(list.slice(0, FQC_MISSED_MAX));
+    fqcMissedRender();
+  }
+  function fqcMissedRemove(serial) {
+    var list = fqcMissedLoad();
+    var left = list.filter(function (x) { return x.s !== serial; });
+    if (left.length !== list.length) { fqcMissedSave(left); fqcMissedRender(); }
+  }
+  window.fqcMissedList = function () { return fqcMissedLoad(); };
+
+  function fqcMissedRender() {
+    var host = document.getElementById('fqcMissed');
+    if (!host) return;
+    var list = fqcMissedLoad();
+    if (!list.length) { host.innerHTML = ''; host.hidden = true; return; }
+    host.hidden = false;
+    host.innerHTML =
+      '<div class="fqc-missed-h"><b>Missed scans · ' + list.length + '</b>' +
+      '<span>scanned while the screen was busy — click one to look it up, ' +
+      '× to drop it</span>' +
+      '<button class="lnk" type="button" data-missed-clear="1">Clear all</button></div>' +
+      '<div class="fqc-missed-list">' + list.map(function (x) {
+        var s = fqcEsc(x.s);
+        return '<span class="fqc-chip"><button type="button" class="fqc-chip-s" ' +
+          'data-missed-pick="' + s + '" title="Look up ' + s + '">' + s + '</button>' +
+          '<span class="fqc-chip-t">' + fqcEsc(x.at || '') +
+            (x.n > 1 ? ' · ×' + x.n : '') + '</span>' +
+          '<button type="button" class="fqc-chip-x" data-missed-drop="' + s +
+          '" aria-label="Remove ' + s + '">×</button></span>';
+      }).join('') + '</div>';
+  }
+
+  function fqcMissedClick(ev) {
+    var t = ev.target.closest && ev.target.closest('[data-missed-pick],[data-missed-drop],[data-missed-clear]');
+    if (!t) return;
+    var pick = t.getAttribute('data-missed-pick');
+    var drop = t.getAttribute('data-missed-drop');
+    if (drop) { fqcMissedRemove(drop); fqcKeepFocus(); return; }
+    if (t.hasAttribute('data-missed-clear')) {
+      var n = fqcMissedLoad().length;
+      if (window.confirm('Clear all ' + n + ' missed scan' + (n === 1 ? '' : 's') +
+                         '? They have not been looked up.')) {
+        fqcMissedSave([]); fqcMissedRender();
+      }
+      fqcKeepFocus();
+      return;
+    }
+    if (pick) {
+      if (fqcBusy()) {
+        toast('Finish ' + (fqcInFlight ? fqcInFlight.serial
+                         : liveFqcHold ? liveFqcHold.serial : 'the open window') +
+              ' first, then pick ' + pick + '.');
+        return;
+      }
+      fqcScanned(pick);
+    }
+  }
+
+  function fqcScannerCss() {
+    if (document.getElementById('iconFqcScanCss')) return;
+    var css = document.createElement('style');
+    css.id = 'iconFqcScanCss';
+    css.textContent =
+      '.scan-in[readonly]{opacity:.75;cursor:progress}' +
+      '.fqc-status{display:flex;align-items:center;gap:8px;padding:11px 15px;' +
+        'margin:0 0 14px;background:var(--panel);border:1px solid var(--line);' +
+        'border-left:3px solid var(--solar);border-radius:var(--r);font-size:13px;' +
+        'color:var(--ink2)}' +
+      '.fqc-status b{color:var(--ink);font-weight:600}' +
+      '.fqc-status span:last-child{color:var(--ink3);font-family:var(--f-mono);font-size:12px}' +
+      '.fqc-status-g{color:var(--solar);display:inline-block;font-size:15px;' +
+        'animation:fqcSpin 1.8s linear infinite}' +
+      '@keyframes fqcSpin{to{transform:rotate(360deg)}}' +
+      '@media (prefers-reduced-motion: reduce){.fqc-status-g{animation:none}}' +
+      '.fqc-ready{font-weight:600}' +
+      '.fqc-ready-on{color:#5FD39A}.fqc-ready-wait{color:#F2B24C}.fqc-ready-off{color:#FF8A7A}' +
+      '.fqc-missed{margin:0 0 14px;padding:10px 14px;background:var(--review-lt);' +
+        'border:1px solid #EBD9A8;border-radius:var(--r)}' +
+      '.fqc-missed-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;' +
+        'font-size:12px;color:var(--ink2)}' +
+      '.fqc-missed-h b{color:var(--review)}' +
+      '.fqc-missed-h .lnk{margin-left:auto}' +
+      '.fqc-missed-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}' +
+      '.fqc-chip{display:inline-flex;align-items:center;background:var(--panel);' +
+        'border:1px solid var(--line);border-radius:var(--r);font-size:12px}' +
+      '.fqc-chip-s{border:0;background:none;padding:4px 6px 4px 9px;cursor:pointer;' +
+        'font-family:var(--f-mono);color:var(--brand);font-size:12px}' +
+      '.fqc-chip-s:hover{text-decoration:underline}' +
+      '.fqc-chip-t{color:var(--ink3);font-size:11px;padding-right:4px}' +
+      '.fqc-chip-x{border:0;background:none;padding:4px 8px;cursor:pointer;' +
+        'color:var(--ink3);font-size:14px;line-height:1}' +
+      '.fqc-chip-x:hover{color:var(--fail)}';
+    document.head.appendChild(css);
+  }
+
+  function wireFqcScanner() {
+    if (document.__fqcScanner) return;
+    document.__fqcScanner = true;
+    fqcScannerCss();
+    var view = document.getElementById('v-fqc');
+    var box = view && view.querySelector('.scanbox');
+    if (box && !document.getElementById('fqcMissed')) {
+      var m = document.createElement('div');
+      m.id = 'fqcMissed';
+      m.className = 'fqc-missed';
+      m.hidden = true;
+      box.parentNode.insertBefore(m, box.nextSibling);
+      m.addEventListener('click', fqcMissedClick);
+    }
+    var hint = box && box.querySelector('.scan-hint');
+    if (hint && !document.getElementById('fqcReady')) {
+      var r = document.createElement('span');
+      r.id = 'fqcReady';
+      r.setAttribute('aria-live', 'polite');
+      hint.insertBefore(r, hint.firstChild);
+    }
+    document.addEventListener('keydown', fqcOnKey, true);       // capture: first to see a scan
+    document.addEventListener('click', function () {
+      if (fqcActive()) fqcKeepFocus();
+    });
+    window.addEventListener('focus', function () { fqcWinBlurred = false; fqcReadyPaint(); });
+    window.addEventListener('blur', function () { fqcWinBlurred = true; fqcReadyPaint(); });
+    fqcMissedRender();
+    fqcReadyPaint();
+  }
 
   /* v4's dashboards each have a Reset button that was decorative. Wire every
      one of them: clear the fields in that filter bar, then call the screen's
@@ -5191,7 +5613,10 @@ function wireFqcAnomalies() {
                 '</div></div>' +
             '</div>' +
             '<div class="gates"><span class="gate ' + (d.ok ? 'ok' : 'no') +
-              '">' + fqcEsc(d.ok ? 'Ready to pack' : d.why) + '</span></div>' +
+              '">' + fqcEsc(d.ok ? 'Ready to pack' : d.why) + '</span>' +
+            (d.rework ? '<span class="gate no" style="margin-left:6px">' +
+              '⚠ String Rework module — you will be asked to confirm</span>' : '') +
+            '</div>' +
             '</div>';
         })
         .catch(function (err) {
@@ -5204,15 +5629,24 @@ function wireFqcAnomalies() {
 
     /* the scan itself - the server decides, and the slot is only drawn
        once the row exists */
-    window.packCommit = function () {
+    window.packCommit = function (confirmRework) {
       if (!packHold || !packHold.ok) return;
       var serial = packHold.s;
       packEnsureBox(packHold.info)
         .then(function (box) {
+          var body = { serial: serial };
+          if (confirmRework) body.confirm_rework = true;
           return api('box/' + box.box_id + '/scan',
-                     { method: 'POST', body: JSON.stringify({ serial: serial }) });
+                     { method: 'POST', body: JSON.stringify(body) });
         })
         .then(function (d) {
+          // String Rework module: packable, but confirm before mixing it in.
+          // The server asks once; on yes we re-scan with the confirmation.
+          if (d && d.ok === false && d.confirm === 'rework') {
+            var go = (typeof window.confirm === 'function') ? window.confirm(d.why) : true;
+            if (go) window.packCommit(true);
+            return;
+          }
           if (d && d.ok === false) {
             if (typeof toast === 'function') toast(d.why);
             return;
@@ -5220,6 +5654,8 @@ function wireFqcAnomalies() {
           packBox.qty = d.qty;
           if (typeof addSlot === 'function') addSlot(serial);
           if (typeof packCancel === 'function') packCancel();
+          if (confirmRework && typeof toast === 'function')
+            toast(serial + ' packed — String Rework module.');
         })
         .catch(function (err) {
           if (typeof toast === 'function')
@@ -6179,6 +6615,7 @@ function wireFqcAnomalies() {
     sidebarToggle();
     wireDateResets();
     wireFqcKeys();
+    wireFqcScanner();
     wirePacking();
     addMissingControls();
     wireScreenTables();
@@ -12543,6 +12980,15 @@ window.gpSetKind = function(k) {
       el.addEventListener('change', peWhenHint);
     });
     if (typeof window.peCalc === 'function') window.peCalc();
+    // the Upload Excel tab's parsed file, its cascade and its result all go
+    // too - "Clear form" means a clean slate, not a half-cleared screen with
+    // last file's ranges still sitting under the manual fields
+    window.__peImport = null;
+    window.__peImpCurrent = null;
+    var impBody = document.getElementById('peImpBody');
+    if (impBody) { impBody.innerHTML = ''; impBody.style.display = 'none'; }
+    var fileIn = document.getElementById('peFileIn');
+    if (fileIn) fileIn.value = '';
   };
 
   /* The date and shift of a production entry are when it is recorded -
@@ -12767,6 +13213,7 @@ window.gpSetKind = function(k) {
     var view = document.getElementById('v-prodentry');
     if (!view) return;
     window.peWireFilters();
+    window.peWireImport();
 
     var tbody = document.getElementById('peRows');
     if (!tbody) return;
@@ -12917,6 +13364,238 @@ window.gpSetKind = function(k) {
         st.innerHTML = '<div class="note n-warn"><span>!</span><span>' + fqcEsc(e.message || e.why || 'Failed to record') + '</span></div>';
       });
   };
+
+  /* == TRACEABILITY IMPORT ==
+   * The "Upload Excel" tab was a drop-zone that only toasted the file name.
+   * It now parses ICON's monthly traceability report (/api/prodentry/import/
+   * parse), lets the operator pick a DATE, then a SHIFT, then the serial
+   * RANGE(S) in that shift, and records the chosen ones - claim mode by
+   * default (the range must already be planned), or backfill for a month this
+   * system was never running (creates the serials + allocation + BOM behind
+   * the range). The v4 markup (#peFile, #peFileIn) is reused, its inline
+   * toast handler replaced. */
+  var PE_INCHARGES = ['RAJESH KUMAR', 'SURESH PATEL', 'AMIT SHARMA',
+                      'VIKRAM SINGH', 'DEEPAK YADAV'];
+
+  window.peWireImport = function () {
+    var pane = document.getElementById('peFile');
+    if (!pane || pane.getAttribute('data-import-wired')) return;
+    pane.setAttribute('data-import-wired', '1');
+
+    // a body for the cascade, after v4's drop-zone
+    var body = document.createElement('div');
+    body.id = 'peImpBody';
+    body.style.display = 'none';
+    body.style.marginTop = '14px';
+    pane.appendChild(body);
+
+    var inp = document.getElementById('peFileIn');
+    if (inp) {
+      inp.setAttribute('accept', '.xlsx,.xlsm');
+      inp.onchange = function () {         // replaces the inline toast handler
+        if (inp.files && inp.files[0]) peImpParse(inp.files[0]);
+      };
+    }
+  };
+
+  function peImpParse(file) {
+    var body = document.getElementById('peImpBody');
+    body.style.display = '';
+    body.innerHTML = '<div class="note n-info"><span>ⓘ</span><span>Reading ' +
+      fqcEsc(file.name) + '…</span></div>';
+    var fd = new FormData(); fd.append('file', file);
+    fetch('/api/prodentry/import/parse', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) {
+          body.innerHTML = '<div class="note n-warn"><span>!</span><span>' +
+            fqcEsc(d.why || 'Could not read that file.') + '</span></div>';
+          return;
+        }
+        window.__peImport = d;
+        peImpRenderShell(d);
+      })
+      ['catch'](function (e) {
+        body.innerHTML = '<div class="note n-warn"><span>!</span><span>' +
+          fqcEsc('Could not read that file: ' + e) + '</span></div>';
+      });
+  }
+
+  function peImpRenderShell(d) {
+    var s = d.summary || {};
+    var incOpts = PE_INCHARGES.map(function (n) {
+      return '<option>' + fqcEsc(n) + '</option>'; }).join('');
+    var dateOpts = (d.dates || []).map(function (iso) {
+      return '<option value="' + iso + '">' + peFmtD(iso) + '</option>'; }).join('');
+    var probs = (d.problems || []);
+    var flagged = (d.unresolved_customers || []);
+    var html =
+      '<div class="note n-info"><span>ⓘ</span><span>' +
+        '<b>' + (d.month_label ? fqcEsc(d.month_label) + ' — ' : '') +
+        s.ranges + ' ranges</b>, ' + Number(s.modules || 0).toLocaleString() +
+        ' modules across ' + s.dates + ' day(s). Pick a date, then a shift, then ' +
+        'the range(s) to record.</span></div>' +
+      (probs.length ? '<div class="note n-warn"><span>!</span><span>' + probs.length +
+        ' row(s) could not be read and are skipped — ' +
+        '<button class="lnk" onclick="peImpToggleProblems()">show</button>.' +
+        '<div id="peImpProblems" style="display:none;margin-top:8px"></div></span></div>' : '') +
+      (flagged.length ? '<div class="note n-warn"><span>!</span><span>Customer(s) not in the ' +
+        'master, imported under ICON Stock and flagged: <b>' +
+        flagged.map(fqcEsc).join(', ') + '</b>. Add them as aliases to place them.</span></div>' : '') +
+      '<div class="grid g3" style="margin-top:12px">' +
+        '<div class="fld req"><label>Date</label><select id="peImpDate" onchange="peImpFillShift()">' +
+          dateOpts + '</select></div>' +
+        '<div class="fld req"><label>Shift</label><select id="peImpShift" onchange="peImpRenderRanges()"></select></div>' +
+        '<div class="fld req"><label>Shift incharge</label><select id="peImpIncharge">' + incOpts + '</select></div>' +
+      '</div>' +
+      '<div style="border-top:1px solid var(--line2);margin-top:12px;padding-top:12px">' +
+        '<label class="chk"><input type="checkbox" id="peImpBackfill" onchange="peImpBackfillToggle()">' +
+        '<span>Backfill mode — create the serials for ranges this system never planned ' +
+        '(for a month it was not yet running)</span></label>' +
+        '<div class="hint" style="margin-left:21px">Off: a range must already be planned, exactly like ' +
+        'the manual entry. On: the serials, allocation and its bill of materials are created and marked produced.</div>' +
+        '<div class="fld" id="peImpDcrWrap" style="display:none;margin-top:10px;max-width:200px">' +
+          '<label>DCR for backfilled ranges</label><select id="peImpDcr"><option>NDCR</option><option>DCR</option></select>' +
+          '<div class="hint">The file has no DCR column.</div></div>' +
+      '</div>' +
+      '<div id="peImpRanges" style="margin-top:12px"></div>' +
+      '<div id="peImpResult"></div>';
+    document.getElementById('peImpBody').innerHTML = html;
+    if (probs.length) {
+      document.getElementById('peImpProblems').innerHTML =
+        '<table style="width:100%;font-size:11px"><thead><tr><th style="text-align:left">Row</th>' +
+        '<th style="text-align:left">Serial</th><th style="text-align:left">Why skipped</th></tr></thead><tbody>' +
+        probs.map(function (p) {
+          return '<tr><td>' + p.row + '</td><td class="mono">' + fqcEsc(p.serial || '') +
+            '</td><td>' + fqcEsc(p.why) + '</td></tr>'; }).join('') + '</tbody></table>';
+    }
+    peImpFillShift();
+  }
+
+  window.peImpToggleProblems = function () {
+    var el = document.getElementById('peImpProblems');
+    if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+  };
+
+  window.peImpBackfillToggle = function () {
+    var on = document.getElementById('peImpBackfill').checked;
+    document.getElementById('peImpDcrWrap').style.display = on ? '' : 'none';
+    peImpRenderRanges();
+  };
+
+  window.peImpFillShift = function () {
+    var d = window.__peImport || {};
+    var date = document.getElementById('peImpDate').value;
+    var shifts = (d.shifts_by_date || {})[date] || [];
+    document.getElementById('peImpShift').innerHTML = shifts.map(function (s) {
+      return '<option>' + s + '</option>'; }).join('');
+    peImpRenderRanges();
+  };
+
+  function peImpRangesFor(date, shift) {
+    return ((window.__peImport || {}).ranges || []).filter(function (r) {
+      return r.date === date && r.shift === shift; });
+  }
+
+  window.peImpRenderRanges = function () {
+    var wrap = document.getElementById('peImpRanges');
+    if (!wrap) return;
+    var date = document.getElementById('peImpDate').value;
+    var shift = document.getElementById('peImpShift').value;
+    var backfill = document.getElementById('peImpBackfill').checked;
+    var rs = peImpRangesFor(date, shift);
+    if (!rs.length) { wrap.innerHTML = '<div class="empty-state">No ranges for that shift.</div>'; return; }
+    var rows = rs.map(function (r, i) {
+      // claim needs the range already planned in full; backfill creates
+      // whatever is MISSING - so a partial range (276/377) is importable in
+      // backfill (it fills the other 101) but not in claim
+      var remaining = r.qty - r.in_system;
+      var ready = backfill ? (remaining > 0) : r.all_present;
+      var status;
+      if (r.in_system === 0) {
+        status = '<span class="tag t-mute">not in system</span>';
+      } else if (r.all_present) {
+        status = '<span class="tag t-pass">in system</span>';
+      } else {
+        status = '<span class="tag t-rev">' + r.in_system + '/' + r.qty +
+          (backfill ? ' — ' + remaining + ' to create' : ' planned') + '</span>';
+      }
+      var cust = fqcEsc(r.customer_name) + (r.customer_resolved ? '' :
+        ' <span class="tag t-rev">flagged</span>');
+      return '<tr>' +
+        '<td><input type="checkbox" class="peImpChk" data-i="' + i + '"' +
+          (ready ? ' checked' : '') + (ready ? '' : ' disabled') + '></td>' +
+        '<td class="mono">' + fqcEsc(r.model) + '</td>' +
+        '<td class="num">' + r.wattage + 'W</td>' +
+        '<td class="mono">' + fqcEsc(r.start) + ' → ' + fqcEsc(r.end) + '</td>' +
+        '<td class="num">' + r.qty + '</td>' +
+        '<td>' + cust + '</td>' +
+        '<td>' + status + '</td></tr>';
+    }).join('');
+    wrap.innerHTML =
+      '<div class="card"><div class="card-h"><h3>Ranges — ' + peFmtD(date) +
+        ' · shift ' + shift + '</h3>' +
+        '<div class="ch-r"><button class="btn btn-primary btn-sm" id="peImpApply" onclick="peImpApply()">' +
+        'Record selected</button></div></div>' +
+      '<div class="card-b flush"><table><thead><tr><th></th><th>Model</th><th>Watt</th>' +
+        '<th>Serial range</th><th style="text-align:right">Qty</th><th>Customer</th><th>Status</th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+    window.__peImpCurrent = rs;
+  };
+
+  window.peImpApply = function () {
+    var backfill = document.getElementById('peImpBackfill').checked;
+    var incharge = document.getElementById('peImpIncharge').value;
+    var dcr = (document.getElementById('peImpDcr') || {}).value || 'NDCR';
+    var rs = window.__peImpCurrent || [];
+    var chosen = [];
+    Array.prototype.forEach.call(document.querySelectorAll('.peImpChk'), function (chk) {
+      if (chk.checked) chosen.push(rs[+chk.getAttribute('data-i')]);
+    });
+    var res = document.getElementById('peImpResult');
+    if (!chosen.length) { res.innerHTML = '<div class="note n-warn"><span>!</span><span>Tick at least one range.</span></div>'; return; }
+    var btn = document.getElementById('peImpApply');
+    btn.disabled = true; btn.textContent = 'Recording…';
+    api('prodentry/import/apply', { method: 'POST', body: JSON.stringify(
+      { ranges: chosen, backfill: backfill, incharge: incharge, dcr: dcr }) })
+      .then(function (d) {
+        btn.disabled = false; btn.textContent = 'Record selected';
+        if (!d.ok) { res.innerHTML = '<div class="note n-warn"><span>!</span><span>' + fqcEsc(d.why) + '</span></div>'; return; }
+        var lines = (d.results || []).map(function (x) {
+          var ok = x.action === 'claimed' || x.action === 'backfilled';
+          return '<tr><td class="mono">' + fqcEsc(x.start || '') + '</td><td>' +
+            '<span class="tag ' + (ok ? 't-pass' : 't-rev') + '">' + x.action + '</span></td>' +
+            '<td>' + fqcEsc(x.why || (x.qty + ' modules')) + '</td></tr>';
+        }).join('');
+        res.innerHTML = '<div class="note ' + (d.recorded ? 'n-ok' : 'n-warn') + '"><span>✓</span><span>' +
+          'Recorded ' + d.recorded + ' of ' + d.total + ' range(s), ' +
+          Number(d.modules || 0).toLocaleString() + ' modules' +
+          (d.backfill ? ' (backfill)' : '') + '.</span></div>' +
+          '<table style="width:100%;font-size:11px;margin-top:8px"><tbody>' + lines + '</tbody></table>';
+        toast('Recorded ' + d.recorded + ' range(s), ' + d.modules + ' modules.');
+        // the ones that landed are now in the system - mark them so the row
+        // reads "planned" and its checkbox disables, never inviting a second
+        // import of the same range
+        var done = {};
+        (d.results || []).forEach(function (x) {
+          if (x.action === 'claimed' || x.action === 'backfilled') done[x.start] = 1;
+        });
+        ((window.__peImport || {}).ranges || []).forEach(function (r) {
+          if (done[r.start]) { r.in_system = r.qty; r.all_present = true; }
+        });
+        if (window.iconRefresh) window.iconRefresh();   // dashboards, KPIs
+        peImpRenderRanges();
+      })
+      ['catch'](function (e) {
+        btn.disabled = false; btn.textContent = 'Record selected';
+        res.innerHTML = '<div class="note n-warn"><span>!</span><span>' + fqcEsc(e.message || e) + '</span></div>';
+      });
+  };
+
+  function peFmtD(iso) {
+    var p = String(iso || '').split('-');
+    return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : iso;
+  }
 
   /* == LOSS OF PRODUCTION WIRING ==
    * v4's own EVENTS sample array and renderLoss()'s machine-capacity math
