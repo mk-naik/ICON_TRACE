@@ -266,6 +266,8 @@ python test_customer_filters.py    13 tests · every customer filter matches eve
 python test_pack_readiness.py      9 tests · Packing: Not FQC'd refused, not in a production entry warned
 python test_indent_properties.py  6 tests · indent: front glass (ARC/NARC), custom-serial checkbox
 python test_pack_build_kind.py     5 tests · make-to-order modules pack only with their own kind
+python test_custom_serials.py     12 tests · custom serial upload, allocation, 'a serial in the master is never issued again'
+python test_custom_serials_ui.py  5 tests · Planning screen for custom serials, in Chromium
 ```
 
 The JS tests read their functions out of `icon_live.js`, so they test what

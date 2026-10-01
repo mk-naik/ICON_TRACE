@@ -5662,6 +5662,36 @@ make to stock modules or even icon stock".
 - Tests: `test_pack_build_kind.py` (5, one in Chromium); a mutation check
   caught all 9 mutants.
 
+### Custom (non-ICON) serial numbers: the Excel upload, and "never issued twice"
+
+Mukesh: for a custom-serial indent, Planning takes the serials from an Excel
+upload (hidden otherwise) in the format Planning exports after a plan (the old
+BARCODE.py layout); and a serial already in the master cannot be generated for
+any customer.
+
+- `icon_custom_serials.py` parses the workbook (no database): BARCODE header,
+  pair by pair, S.NO. ignored; per-cell problems (space, length, ICON-shaped,
+  duplicate). `POST /api/allocation/custom/parse` adds the master check and
+  the quantity left, and refuses an ICON item.
+- `POST /api/allocation` and `PUT .../update` branch on the indent's serial
+  type. One pre-check, `_serial_set_refusal`, runs before anything is written:
+  duplicates in the list, shape, the master (`_serials_in_master`, naming the
+  holder), the nameplate. **A bug the work exposed:** the old create inserted
+  the allocation, THEN decomposed the serials, so a refusal at that point
+  returned 400 but still committed an empty allocation - verified on the
+  committed code (1 left behind). Now none is.
+- Screen: ICON item -> range fields, no upload; custom item -> upload, rail
+  filled from the upload with the model taken from the ITEM (a custom serial
+  says nothing about it), and the bill of materials as usual. A tag line shows
+  make-to-order / custom serial numbers. Changing item drops the upload.
+- Search & Trace: a custom serial has no ICON shape, so the finder now tries an
+  exact serial match first (`_trace_custom_serial`).
+- Tests: `test_custom_serials.py` (12), `test_custom_serials_ui.py` (5, Chromium);
+  a mutation check caught all 12 mutants.
+- Also fixed: `test_screen_write_gates.py` was failing since the Round 36
+  traceability routes (and now this upload route) were added - its reviewed
+  map now lists them (40 routes).
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

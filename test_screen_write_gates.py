@@ -104,11 +104,15 @@ EXPECTED = {
     "repack":    {"api_repack"},
     # api_allocation_cancel moved to a role gate (Admin/Super Admin + TOTP) in
     # Round 34 - see t_critical_surface_keeps_role_gates below.
-    "plan":      {"api_allocation_create",
+    # api_allocation_custom_parse: Round 37, the custom-serial Excel upload
+    # (reads a file and writes nothing, but it is Planning's own tool)
+    "plan":      {"api_allocation_create", "api_allocation_custom_parse",
                   "api_allocation_update", "planning"},
     "indent":    {"api_indent_create", "api_indent_update", "indent_new"},
     "loss":      {"api_loss_event_open", "api_loss_event_close"},
-    "prodentry": {"api_prodentry"},
+    # the two traceability-import routes: Round 36, the monthly Excel
+    "prodentry": {"api_prodentry", "api_prodentry_import_apply",
+                  "api_prodentry_import_parse"},
 }
 
 _GATE_403 = "Not permitted for your role."
@@ -160,7 +164,7 @@ def fresh():
 # The map itself
 # --------------------------------------------------------------------------
 
-@test("the map read out of app.py is exactly the reviewed map - 37 view "
+@test("the map read out of app.py is exactly the reviewed map - 40 view "
      "functions on 13 screens, every one a real, non-excluded screen")
 def t_map_is_the_reviewed_map():
     got = {}
@@ -169,7 +173,7 @@ def t_map_is_the_reviewed_map():
     assert got == EXPECTED, "map drifted:\n  got      %s\n  expected %s" % (
         sorted((k, sorted(v)) for k, v in got.items()),
         sorted((k, sorted(v)) for k, v in EXPECTED.items()))
-    assert sum(len(v) for v in got.values()) == 37
+    assert sum(len(v) for v in got.values()) == 40
     for s in got:
         assert s in icon_auth.SCREEN_IDS and s not in icon_auth.EXCLUDED_SCREENS, s
     print("      %d route lines, %d functions" % (

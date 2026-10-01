@@ -4452,6 +4452,7 @@ def api_prodentry():
 # --------------------------------------------------------------------------
 
 import icon_traceability_import as trace_import
+import icon_custom_serials as custom_serials
 
 
 def _batch_prefix(serial, format_version):
@@ -5523,18 +5524,25 @@ def api_allocation_create():
                    "is" if L["allocated"] == 1 else "are", L["left"], qty),
                 "left": L["left"]}), 400
 
+        custom = bool(L.get("custom_serial"))
         serials = d.get("serials") or []
-        if serials:
-            clash = [s for s in serials
-                     if store.one(cur, "SELECT serial FROM serial WHERE serial=%s",
-                                  (s,))]
-            if clash:
+        if custom:
+            serials = [str(s or "").strip().upper() for s in serials]
+            if not serials:
                 return jsonify({"ok": False, "why":
-                    "%d serial(s) already exist, e.g. %s. A serial is issued "
-                    "once." % (len(clash), ", ".join(clash[:3]))}), 400
-            bad = _nameplate_refusal(serials, L)
-            if bad:
-                return jsonify({"ok": False, "why": bad}), 400
+                    "Indent %s uses custom serial numbers - there is no range "
+                    "to generate. Upload the Excel file of serial numbers."
+                    % L["indent_no"]}), 400
+        if serials and len(serials) != qty:
+            return jsonify({"ok": False, "why":
+                "The quantity (%d) does not match the %d serial numbers "
+                "sent." % (qty, len(serials))}), 400
+        # Everything a serial list can be refused for, BEFORE the first row is
+        # written: a refusal after the allocation was inserted left an empty
+        # allocation behind (the request returns, the transaction commits).
+        refusal = _serial_set_refusal(cur, serials, L, custom)
+        if refusal:
+            return jsonify({"ok": False, "why": refusal}), 400
 
         made_on, made_shift = _alloc_date_shift()
         aid = store.insert(cur, "allocation", {
@@ -5543,7 +5551,8 @@ def api_allocation_create():
             "dcr": L["dcr"], "arc": L["arc"],
             "date_produced": made_on,
             "shift": made_shift, "qty": qty,
-            "seq_from": d.get("seq_from") or 0, "seq_to": d.get("seq_to") or 0,
+            "seq_from": 1 if custom else (d.get("seq_from") or 0),
+            "seq_to": len(serials) if custom else (d.get("seq_to") or 0),
             "alloc_type": _alloc_type(d.get("alloc_type")),
             "created_by": actor()})
         for material in d.get("materials") or []:
@@ -5557,17 +5566,23 @@ def api_allocation_create():
                 "efficiency": material.get("efficiency"),
                 "batch": material.get("batch")})
         import icon_challan_import as CI
-        for s in serials:
-            r = CI.decompose(s)
-            if not r["ok"]:
-                return jsonify({"ok": False, "why": "%s — %s" % (s, r["why"])}), 400
-            store.insert(cur, "serial", {
+        for n, s in enumerate(serials, start=1):
+            if custom:
+                # a custom serial says nothing about when or how it was made:
+                # the allocation's own date and shift, and its place in the
+                # list, fill the columns an ICON serial reads from itself
+                cols = {"format_version": 0, "date_produced": made_on,
+                        "shift": made_shift, "sequence": n}
+            else:
+                r = CI.decompose(s)
+                cols = {"format_version": r["format_version"],
+                        "date_produced": r["date_produced"], "shift": r["shift"],
+                        "sequence": r["sequence"]}
+            store.insert(cur, "serial", dict({
                 "serial": s, "build_instance": 1, "alloc_id": aid,
                 "indent_line_id": line_id, "model": L["model"],
                 "wattage": L["wattage"], "customer": L["cust"], "dcr": L["dcr"],
-                "format_version": r["format_version"],
-                "date_produced": r["date_produced"], "shift": r["shift"],
-                "sequence": r["sequence"], "state": "planned"})
+                "state": "planned"}, **cols))
         fqc_applied, closed = _planned_serials(cur, serials,
                                                "planned in allocation #%d" % aid)
         after = _line_state(cur, line_id)
@@ -5578,6 +5593,120 @@ def api_allocation_create():
     return jsonify({"ok": True, "alloc_id": aid, "qty": qty,
                     "left": after["left"], "indent_no": L["indent_no"],
                     "fqc_applied": fqc_applied, "review_closed": closed})
+
+
+def _serials_in_master(cur, serials, exclude_alloc=None):
+    """Which of these serials the master already has - [(serial, indent_no,
+    customer)]. ANY row counts, whatever its state or build instance."""
+    out = []
+    for group in db._chunks(serials):
+        marks = ", ".join(["%s"] * len(group))
+        sql = ("SELECT s.serial, i.indent_no, s.customer FROM serial s "
+               "LEFT JOIN indent_line l ON l.indent_line_id = s.indent_line_id "
+               "LEFT JOIN indent i ON i.indent_id = l.indent_id "
+               "WHERE s.serial IN (" + marks + ")")
+        args = list(group)
+        if exclude_alloc is not None:
+            sql += " AND (s.alloc_id IS NULL OR s.alloc_id <> %s)"
+            args.append(exclude_alloc)
+        out.extend((r["serial"], r["indent_no"], r["customer"])
+                   for r in store.rows(cur, sql, args))
+    return out
+
+
+def _serial_set_refusal(cur, serials, L, custom, exclude_alloc=None):
+    """Why this list of serials cannot be allocated against indent item L, or
+    None. One gate for the create and the update, run before anything is
+    written.
+
+    A serial number is issued ONCE: if the master has it, it cannot be
+    generated or loaded again - for ANY customer, whatever kind of indent
+    (Mukesh: "if serial number is loaded in master so it can't be generated
+    for any type customer")."""
+    if not serials:
+        return None
+    seen, dup = set(), []
+    for s in serials:
+        if s in seen:
+            dup.append(s)
+        seen.add(s)
+    if dup:
+        return ("%d serial(s) appear more than once in this list, e.g. %s. "
+                "A serial number is issued once." % (len(dup), ", ".join(dup[:3])))
+    if custom:
+        problems = custom_serials.check_list(serials)
+        if problems:
+            i, s, why = problems[0]
+            return ("%d of the %d serial numbers cannot be used - e.g. "
+                    "#%d %s %s." % (len(problems), len(serials), i + 1, s, why))
+    else:
+        import icon_challan_import as CI
+        for s in serials:
+            r = CI.decompose(s)
+            if not r["ok"]:
+                return ("%s — %s. Indent %s uses ICON serial numbers; custom "
+                        "serial numbers need an indent with that box ticked."
+                        % (s, r["why"], L["indent_no"]))
+    have = _serials_in_master(cur, serials, exclude_alloc)
+    if have:
+        s, ind, cust = have[0]
+        return ("%d serial(s) are already in the master, e.g. %s (%s). A serial "
+                "number is issued once - it cannot be generated or loaded "
+                "again for any customer."
+                % (len(have), s, ("indent %s, %s" % (ind, cust)) if ind
+                   else "no indent"))
+    if not custom:
+        return _nameplate_refusal(serials, L)
+    return None
+
+
+@app.route("/api/allocation/custom/parse", methods=["POST"])
+@require_screen_write("plan")
+def api_allocation_custom_parse():
+    """Read a workbook of CUSTOM serial numbers for one indent item and say
+    whether it can be loaded. Writes nothing. Only offered, and only
+    answered, for an item on an indent that uses custom serial numbers."""
+    try:
+        line_id = int(request.form.get("indent_line_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "why": "Choose the indent item first."}), 400
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"ok": False, "why": "Choose an .xlsx file of serial numbers."}), 400
+    if not f.filename.lower().endswith((".xlsx", ".xlsm")):
+        return jsonify({"ok": False, "why": "That is not an .xlsx file."}), 400
+    with store.conn() as (cx, cur):
+        L = _line_state(cur, line_id)
+        if not L:
+            return jsonify({"ok": False, "why": "No such indent item."}), 400
+        if not L.get("custom_serial"):
+            return jsonify({"ok": False, "why":
+                "Indent %s uses ICON serial numbers, which Planning generates. "
+                "The Excel upload is only for an indent with custom serial "
+                "numbers." % L["indent_no"]}), 400
+        res = custom_serials.parse(f.read())
+        if not res.get("ok") and not res.get("serials"):
+            return jsonify(res), 400
+        problems = list(res.get("problems") or [])
+        total = res.get("problem_total", 0)
+        have = _serials_in_master(cur, res["serials"])
+        for s, ind, cust in have[:custom_serials.MAX_PROBLEMS_SHOWN]:
+            problems.append({"cell": "", "serial": s, "why":
+                "is already in the master (%s) - a serial number is issued "
+                "once" % (("indent %s, %s" % (ind, cust)) if ind else "no indent")})
+        total += len(have)
+        n = len(res["serials"])
+        if n > L["left"]:
+            problems.append({"cell": "", "serial": "", "why":
+                "%d serial numbers, but indent %s item %d has only %d left to "
+                "allocate" % (n, L["indent_no"], L["line"], L["left"])})
+            total += 1
+    return jsonify({"ok": total == 0, "serials": res["serials"], "count": n,
+                    "heading": res.get("heading"), "sheet": res.get("sheet"),
+                    "first": res["serials"][0] if n else None,
+                    "last": res["serials"][-1] if n else None,
+                    "left": L["left"], "problems": problems[:100],
+                    "problem_total": total})
 
 
 def _nameplate_refusal(serials, L):
@@ -5666,31 +5795,29 @@ def api_allocation_update(alloc_id):
                 "Only %d serial(s) remain on indent %s item %d after this "
                 "allocation is accounted for." % (L["left"] + old_qty,
                                                    L["indent_no"], L["line"])}), 400
-        clash = [s for s in serials if store.one(cur,
-            "SELECT serial FROM serial WHERE serial=%s AND alloc_id<>%s", (s, alloc_id))]
-        if clash:
-            return jsonify({"ok": False, "why":
-                "%d serial(s) already belong to another allocation, e.g. %s."
-                % (len(clash), ", ".join(clash[:3]))}), 400
-        bad = _nameplate_refusal(serials, L)
-        if bad:
-            return jsonify({"ok": False, "why": bad}), 400
+        custom = bool(L.get("custom_serial"))
+        if custom:
+            serials = [str(s or "").strip().upper() for s in serials]
+        refusal = _serial_set_refusal(cur, serials, L, custom,
+                                      exclude_alloc=alloc_id)
+        if refusal:
+            return jsonify({"ok": False, "why": refusal}), 400
         import icon_challan_import as CI
-        parsed = []
-        for s in serials:
-            r = CI.decompose(s)
-            if not r["ok"]:
-                return jsonify({"ok": False, "why": "%s — %s" % (s, r["why"])}), 400
-            parsed.append(r)
         # an edit is not a new issue - it keeps when it was first allocated
         made_on, made_shift = old["date_produced"], old["shift"]
+        parsed = []
+        for n, s in enumerate(serials, start=1):
+            parsed.append({"format_version": 0, "date_produced": made_on,
+                           "shift": made_shift, "sequence": n} if custom
+                          else CI.decompose(s))
         cur.execute("UPDATE allocation SET indent_line_id=%s, model=%s, wattage=%s, "
                     "customer=%s, dcr=%s, arc=%s, date_produced=%s, shift=%s, "
                     "qty=%s, seq_from=%s, seq_to=%s, alloc_type=%s "
                     "WHERE alloc_id=%s",
                     (line_id, L["model"], L["wattage"], d.get("customer") or L["cust"],
                      L["dcr"], L["arc"], made_on, made_shift, qty,
-                     d.get("seq_from") or 0, d.get("seq_to") or 0,
+                     1 if custom else (d.get("seq_from") or 0),
+                     len(serials) if custom else (d.get("seq_to") or 0),
                      _alloc_type(d.get("alloc_type")) or old.get("alloc_type"),
                      alloc_id))
         was = [r["serial"] for r in store.rows(
@@ -6390,13 +6517,25 @@ def _trace_customer(cur, q):
             "challans": [_challan_brief(x) for x in chs]}
 
 
+def _trace_custom_serial(cur, q):
+    """A serial the master holds under exactly this text - the way a
+    customer's OWN (non-ICON) serial number is found, since it has no ICON
+    shape to recognise. Tried first: an exact serial is the most specific
+    thing a search can be. The screen hands the answer to the serial trace."""
+    if " " in q:
+        return None
+    if store.one(cur, "SELECT serial FROM serial WHERE serial=%s LIMIT 1", (q,)):
+        return {"ok": True, "kind": "serial", "serial": q}
+    return None
+
+
 _TRACE_FINDERS = {"challan": [_trace_challan], "box": [_trace_box],
                   "invoice": [_trace_invoice], "vehicle": [_trace_vehicle],
                   "batch": [_trace_batch], "customer": [_trace_customer]}
 # Auto: the shapes that cannot be anything else first, then a lookup by
 # exact number, and a name last. An invoice number has no shape to sniff.
-_TRACE_AUTO = [_trace_challan, _trace_box, _trace_batch, _trace_vehicle,
-               _trace_invoice, _trace_customer]
+_TRACE_AUTO = [_trace_custom_serial, _trace_challan, _trace_box, _trace_batch,
+               _trace_vehicle, _trace_invoice, _trace_customer]
 _TRACE_MISS = {
     "challan": "%s is not a challan number. They read IS-05.09.2026/0001.",
     "box": "No pallet %s is recorded.",
@@ -6430,7 +6569,8 @@ def api_trace_find():
         why = _TRACE_MISS[kind] % q
     else:
         why = ("Nothing recorded matches “%s”. This screen finds a serial "
-               "(ICON…), a pallet or packing list (ISPL…), a challan "
+               "(ICON… or a customer's own), a pallet or packing list "
+               "(ISPL…), a challan "
                "(IS-…), an invoice number, a batch (BAT-…), a vehicle "
                "number or a customer." % q)
     return jsonify({"ok": False, "why": why}), 404

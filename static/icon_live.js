@@ -6339,6 +6339,9 @@ function wireFqcAnomalies() {
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (!d.ok) { traceNote(out, 'n-bad', fqcEsc(d.why)); return; }
+        /* a customer's own serial number has no ICON shape - the server found
+           it by exact match, and the serial trace takes it from here */
+        if (d.kind === 'serial') { traceSerial(d.serial, out); return; }
         var draw = TRACE_VIEWS[d.kind];
         out.innerHTML = draw ? draw(d) : '';
         if (window.iconTable) window.iconTable.wireAll();
@@ -7135,6 +7138,14 @@ function wireFqcAnomalies() {
     if (typeof rangeCalc !== 'function' || rangeCalc.__crossChecked) return;
     var orig = rangeCalc;
     var patched = function () {
+      /* a custom-serial item has no range to calculate: the upload is what
+         fills the rail (v4's own rangeCalc would complain about an empty
+         start serial) */
+      try { planSerialMode(); } catch (e) {}
+      if (planIsCustom()) {
+        try { planTidy(); planLineFigures(); planCustomRail(); } catch (e) {}
+        return;
+      }
       orig.apply(this, arguments);
       try { planTidy(); planLineFigures(); planCrossCheck(); planGateLoad(); }
       catch (e) {}
@@ -7181,6 +7192,7 @@ function wireFqcAnomalies() {
     planTidy();
     planDropdowns();
     planAllocType();
+    planSerialMode();
     planEntry();
     renderAllocations();
 
@@ -7198,22 +7210,32 @@ function wireFqcAnomalies() {
                   + 'make before loading the range.');
           return;
         }
-        var a = (document.getElementById('rgFrom') || {}).value.trim().toUpperCase();
-        var b = (document.getElementById('rgTo') || {}).value.trim().toUpperCase();
-        if (!a || !b) {
+        var custom = !!L.custom_serial, csr = planCustomState();
+        if (custom && !csr) {
+          if (typeof toast === 'function')
+            toast('Upload the Excel file of serial numbers first.');
+          return;
+        }
+        var a = custom ? '' : (document.getElementById('rgFrom') || {}).value.trim().toUpperCase();
+        var b = custom ? '' : (document.getElementById('rgTo') || {}).value.trim().toUpperCase();
+        if (!custom && (!a || !b)) {
           if (typeof toast === 'function')
             toast('Fill the start and end serial before loading the range.');
           return;
         }
-        if (typeof rangeQty !== 'function') {
+        if (!custom && typeof rangeQty !== 'function') {
           if (typeof toast === 'function')
             toast('Cannot read the range on this build.');
           return;
         }
-        var r = rangeQty(a, b);
-        if (!r.ok) { if (typeof toast === 'function') toast(r.why); return; }
         var serials = [];
-        for (var i = 0; i < r.n; i++) serials.push(bumpSerial(a, i));
+        if (custom) {
+          serials = csr.serials.slice();
+        } else {
+          var r = rangeQty(a, b);
+          if (!r.ok) { if (typeof toast === 'function') toast(r.why); return; }
+          for (var i = 0; i < r.n; i++) serials.push(bumpSerial(a, i));
+        }
         if (!serials.length) {
           if (typeof toast === 'function') toast('That range is empty.');
           return;
@@ -7223,8 +7245,8 @@ function wireFqcAnomalies() {
           method: editingId ? 'PUT' : 'POST', body: JSON.stringify({
             alloc_id: editingId || null,
             indent_line_id: L.id, qty: serials.length, serials: serials,
-            customer: L.cust, shift: serials.length ?
-              (typeof parseSerial === 'function' ? parseSerial(a).shift : 1) : 1,
+            customer: L.cust, shift: (custom || !serials.length) ? 1 :
+              (typeof parseSerial === 'function' ? parseSerial(a).shift : 1),
             date_produced: (document.getElementById('pDate') || {}).value || null,
             alloc_type: (document.getElementById('pAllocType') || {}).value || null,
             materials: planMaterialRows()
@@ -7238,6 +7260,7 @@ function wireFqcAnomalies() {
                 d.why + '</span></div>';
               return;
             }
+            planCustomReset();
             if (typeof toast === 'function')
               toast(d.qty + ' serial(s) allocated against ' + d.indent_no +
                     ' \u2014 ' + d.left + ' left on that line.');
@@ -7340,8 +7363,20 @@ function wireFqcAnomalies() {
             var serials = a.serials || [];
             var from = document.getElementById('rgFrom');
             var to = document.getElementById('rgTo');
-            if (from) from.value = serials[0] || '';
-            if (to) to.value = serials[serials.length - 1] || '';
+            var L2 = planIndentLine();
+            if (L2 && L2.custom_serial) {
+              /* a custom allocation is edited by its serial list, which is
+                 what it holds - upload a new file to replace it */
+              window.__customSerials = { line: L2.id, serials: serials.slice(),
+                                         file: a.batch_no || 'this batch' };
+              planCustomShow({ ok: true, count: serials.length, first: serials[0],
+                last: serials[serials.length - 1], left: L2.left,
+                heading: 'loaded from ' + (a.batch_no || 'the batch') +
+                         ' \u2014 upload a file to replace it' });
+            } else {
+              if (from) from.value = serials[0] || '';
+              if (to) to.value = serials[serials.length - 1] || '';
+            }
           }
           MAT_SEL = {};
           (a.materials || []).forEach(function (m) {
@@ -7359,6 +7394,202 @@ function wireFqcAnomalies() {
   /* Planning opens on what has been allocated, with New plan on top - the
      same shape as Indent. Arriving straight into an empty form gives no sense
      of what is already in flight. */
+  /* ---- Planning: custom (non-ICON) serial numbers ---------------------
+   *
+   * An indent can carry the customer's OWN serial numbers (a checkbox on the
+   * indent, unticked = ICON). Those cannot be generated, so for such an item
+   * the ICON range fields (start / end / quantity) give way to an Excel
+   * upload - the layout Planning itself exports, S.NO. | BARCODE. On an ICON
+   * item the upload is not on the screen at all (and the server refuses it
+   * regardless). What was uploaded is held in window.__customSerials until
+   * the allocation is loaded - the server re-checks every serial then. */
+  function planIsCustom() {
+    var L = planIndentLine();
+    return !!(L && L.custom_serial);
+  }
+
+  function planCustomState() {
+    var L = planIndentLine();
+    var cs = window.__customSerials;
+    return (L && cs && cs.line === L.id && cs.serials && cs.serials.length) ? cs : null;
+  }
+
+  function planCustomReset() {
+    window.__customSerials = null;
+    var f = document.getElementById('pCustomFile');
+    if (f) f.value = '';
+    var r = document.getElementById('pCustomResult');
+    if (r) r.innerHTML = '';
+  }
+
+  function planCustomPanel() {
+    var view = document.getElementById('v-plan');
+    if (!view) return null;
+    var panel = document.getElementById('pCustomPanel');
+    if (panel) return panel;
+    var from = document.getElementById('rgFrom');
+    var host = from && from.closest('.grid');
+    if (!host) return null;
+    panel = document.createElement('div');
+    panel.id = 'pCustomPanel';
+    panel.hidden = true;
+    panel.innerHTML =
+      '<div class="note n-info" style="margin:0 0 11px"><span>\u2139</span><span>' +
+      'This indent uses the <b>customer\u2019s own serial numbers</b>, so there is ' +
+      'no range to generate. Upload the Excel file of serial numbers &mdash; ' +
+      'the layout Planning exports after an allocation: a heading row, then ' +
+      '<b>S.NO. | BARCODE</b> (side by side when there are more than 1,000).' +
+      '</span></div>' +
+      '<div class="grid g4"><div class="fld req" style="grid-column:1/3">' +
+      '<label>Serial numbers (.xlsx)</label>' +
+      '<input type="file" id="pCustomFile" accept=".xlsx,.xlsm">' +
+      '<div class="hint">Format the BARCODE column as Text, so a leading zero ' +
+      'is not lost.</div></div></div>' +
+      '<div id="pCustomResult"></div>';
+    host.parentNode.insertBefore(panel, host.nextSibling);
+    panel.querySelector('#pCustomFile').addEventListener('change', planCustomUpload);
+    return panel;
+  }
+
+  /* ICON item: the range fields, no upload. Custom item: the upload, and only
+     the range fields that mean nothing without a generated serial are put
+     away (allocation date and type stay). */
+  function planSerialMode() {
+    var panel = planCustomPanel();
+    if (!panel) return;
+    var custom = planIsCustom();
+    var L = planIndentLine();
+    var cs = window.__customSerials;
+    if (cs && (!L || cs.line !== L.id)) planCustomReset();    // another item chosen
+    panel.hidden = !custom;
+    ['rgFrom', 'rgTo', 'rgQty'].forEach(function (id) {
+      var el = document.getElementById(id);
+      var fld = el && el.closest('.fld');
+      if (fld) fld.style.display = custom ? 'none' : '';
+    });
+    var view = document.getElementById('v-plan');
+    var rg = document.getElementById('rgMsg');
+    if (rg) rg.style.display = custom ? 'none' : '';
+    view.querySelectorAll('details, .note').forEach(function (el) {
+      if (el.tagName === 'DETAILS' ||
+          /Excel upload has left this screen/.test(el.textContent)) {
+        if (el.closest('#pCustomPanel')) return;
+        el.style.display = custom ? 'none' : '';
+      }
+    });
+    view.querySelectorAll('.card-h').forEach(function (h) {
+      if (!/^\s*Serial range/i.test((h.querySelector('h3') || {}).textContent || '')) return;
+      var tag = h.querySelector('.tag');
+      if (!tag) return;
+      if (!tag.__orig) tag.__orig = tag.textContent;
+      tag.textContent = custom ? 'customer\u2019s own serial numbers' : tag.__orig;
+    });
+    planProps(L);
+  }
+
+  /* what this item's indent is, said where the planner chooses it */
+  function planProps(L) {
+    var note = document.getElementById('pPropsNote');
+    var anchor = document.getElementById('pIndentNote');
+    if (!anchor) return;
+    if (!note) {
+      note = document.createElement('div');
+      note.id = 'pPropsNote';
+      note.style.cssText = 'margin:6px 0 0;display:flex;gap:6px;flex-wrap:wrap';
+      anchor.parentNode.insertBefore(note, anchor);
+    }
+    if (!L) { note.innerHTML = ''; return; }
+    note.innerHTML =
+      '<span class="tag ' + (L.build_type === 'make_to_order' ? 't-rev' : 't-mute') + '">' +
+      (L.build_type === 'make_to_order' ? 'make to order' : 'make to stock') + '</span>' +
+      '<span class="tag ' + (L.custom_serial ? 't-rev' : 't-mute') + '">' +
+      (L.custom_serial ? 'custom serial numbers' : 'ICON serial numbers') + '</span>';
+  }
+
+  function planCustomUpload() {
+    var f = document.getElementById('pCustomFile');
+    var out = document.getElementById('pCustomResult');
+    var L = planIndentLine();
+    window.__customSerials = null;
+    if (!f || !f.files || !f.files[0] || !L) { planCustomRail(); return; }
+    var fd = new FormData();
+    fd.append('file', f.files[0]);
+    fd.append('indent_line_id', String(L.id));
+    if (out) out.innerHTML = '<div class="hint">Reading ' + fqcEsc(f.files[0].name) + '\u2026</div>';
+    fetch('/api/allocation/custom/parse', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) {
+          window.__customSerials = { line: L.id, serials: d.serials, file: f.files[0].name };
+        } else {
+          window.__customSerials = null;
+        }
+        planCustomShow(d);
+        planCustomRail();
+      })
+      .catch(function (e) {
+        if (out) out.innerHTML = '<div class="note n-bad"><span>\u2691</span><span>' +
+          'Could not read the file: ' + fqcEsc(e.message) + '</span></div>';
+        planCustomRail();
+      });
+  }
+
+  function planCustomShow(d) {
+    var out = document.getElementById('pCustomResult');
+    if (!out) return;
+    if (d.ok) {
+      out.innerHTML = '<div class="note n-ok"><span>\u2713</span><span><b>' +
+        d.count.toLocaleString() + '</b> serial numbers \u00b7 <span class="mono">' +
+        fqcEsc(d.first) + '</span> \u2026 <span class="mono">' + fqcEsc(d.last) +
+        '</span>' + (d.heading ? ' \u00b7 ' + fqcEsc(d.heading) : '') +
+        ' \u00b7 ' + d.left.toLocaleString() + ' left on this item before this ' +
+        'batch</span></div>';
+      return;
+    }
+    var rows = (d.problems || []).slice(0, 10).map(function (p) {
+      return '<li>' + (p.cell ? '<b>' + fqcEsc(p.cell) + '</b> ' : '') +
+        (p.serial ? '<span class="mono">' + fqcEsc(p.serial) + '</span> ' : '') +
+        fqcEsc(p.why) + '</li>';
+    }).join('');
+    var total = d.problem_total || (d.problems || []).length;
+    out.innerHTML = '<div class="note n-bad"><span>\u2691</span><span>' +
+      (d.why ? fqcEsc(d.why) :
+        '<b>Nothing was loaded</b> &mdash; ' + total + ' problem' +
+        (total === 1 ? '' : 's') + ' in the file. Correct it and upload again.' +
+        '<ul style="margin:6px 0 0 18px">' + rows + '</ul>' +
+        (total > 10 ? '<div>\u2026and ' + (total - 10) + ' more</div>' : '')) +
+      '</span></div>';
+  }
+
+  /* the rail and the Load button, for a custom item - what rangeCalc() does
+     for an ICON range. The model comes from the INDENT ITEM, since a custom
+     serial says nothing about it. */
+  function planCustomRail() {
+    var L = planIndentLine();
+    var cs = planCustomState();
+    var st = document.getElementById('railStatus');
+    if (!L || !cs) {
+      setRail(null, null, null, null);
+      if (st) st.innerHTML = '<div class="note n-info" style="font-size:11.5px">' +
+        '<span>\u2139</span><span>Upload the Excel file of serial numbers for ' +
+        'this item.</span></div>';
+      return;
+    }
+    var m = (typeof MODELS !== 'undefined' ? MODELS : []).filter(function (x) {
+      return x.model === L.model; })[0];
+    var d = m ? { ok: true, p: null, watt: m.watt, tc: m.tc, type: m.series,
+                  model: m.model, cells: m.cells, ct: m.ct, size: m.size } : null;
+    if (!d) {
+      setRail(null, null, null, L.model + ' is not produced at Unit-2.');
+      return;
+    }
+    setRail(cs.serials[0], cs.serials[cs.serials.length - 1], cs.serials.length, null, d);
+    if (st) st.innerHTML = '<div class="note n-ok" style="font-size:11.5px"><span>\u2713' +
+      '</span><span>' + cs.serials.length.toLocaleString() + ' custom serial numbers ' +
+      'ready \u2014 checked against the master when loaded.</span></div>';
+    planGateLoad();
+  }
+
   function planEntry() {
     var view = document.getElementById('v-plan');
     if (!view || view.__entry) return;
@@ -7394,6 +7625,7 @@ function wireFqcAnomalies() {
           var to = document.getElementById('rgTo');
           if (from) from.value = '';
           if (to) to.value = '';
+          planCustomReset();
           MAT_SEL = {};
           try { planTidy(); planLineFigures(); rangeCalc(); } catch (e) {}
           if (work.scrollIntoView) {

@@ -198,6 +198,27 @@ The Drafts screen is still v4 sample data.
 - **Custom serial number (non-ICON)** is a checkbox on the indent, **unticked by
   default = ICON serial numbers**. It is a property of the whole indent and is
   fixed once serials have been allocated against it. [built]
+- **Custom-serial indents load their serial numbers from Excel.** In Planning,
+  an item on such an indent shows an upload instead of the ICON range fields;
+  an ICON item shows no upload at all, and the server refuses one for it. The
+  workbook is the layout Planning exports after an allocation (and Unit-1's
+  BARCODE.py produced): a heading row, then `S.NO. | BARCODE`, side by side
+  past 1,000. Read by the BARCODE header. A file with ANY problem loads
+  nothing; each problem names its cell. [built]
+- Custom serials are stored **upper-case** (the system upper-cases every scan),
+  in file order (`sequence` 1..n), `format_version` 0, with the allocation's
+  own date and shift. A custom serial must be one printable token that is not
+  ICON-shaped. **[open]** the 4-40 character bounds are assumptions -
+  `icon_custom_serials.MIN_LEN / MAX_LEN`.
+- **A serial the master already has is never issued again** - not generated,
+  not loaded, for any customer, on any kind of indent, on create or edit. The
+  refusal names who holds it. All checks run before the first write (a
+  refused request used to leave an empty allocation behind). [built]
+- Search & Trace finds a custom serial by exact match. [built]
+- **[open]** Production Entry takes ICON serial RANGES only, so a custom-serial
+  module cannot be recorded as produced there (it refuses with a reason);
+  packing warns "not in a production entry" for it. How its production is
+  recorded - a list upload? - needs Mukesh. FQC and packing work on it.
 
 ## 11. Open — needs Mukesh
 
