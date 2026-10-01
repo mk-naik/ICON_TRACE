@@ -215,6 +215,12 @@ The Drafts screen is still v4 sample data.
   refusal names who holds it. All checks run before the first write (a
   refused request used to leave an empty allocation behind). [built]
 - Search & Trace finds a custom serial by exact match. [built]
+- **Planning copies a batch's bill of materials** two ways: "Copy from last
+  batch" (the newest earlier batch that is ALIKE and has a bill of materials -
+  not blindly the newest) and "Copy from batch number" (BAT-...). Two items are
+  alike when build type, serial type (ICON / custom), model, wattage, front
+  glass and cell type all match; a refusal names each difference. Nothing is
+  saved until Load into master. [built]
 - **[open]** Production Entry takes ICON serial RANGES only, so a custom-serial
   module cannot be recorded as produced there (it refuses with a reason);
   packing warns "not in a production entry" for it. How its production is

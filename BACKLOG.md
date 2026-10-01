@@ -5692,6 +5692,31 @@ any customer.
   traceability routes (and now this upload route) were added - its reviewed
   map now lists them (40 routes).
 
+### Planning: copy a batch's bill of materials
+
+Mukesh: enable "Copy from last batch", and add "copy batch from batch number"
+when both indent properties are the same (build type, glass, wattage, model,
+barcode etc.).
+
+- **Why it was dead:** v4's button only toasted "Materials copied from...";
+  `disableDemoClaims` disabled it as a false claim, and the later code that
+  wired a real handler assigned `b.onclick` but left v4's `onclick=` ATTRIBUTE
+  in place - which is what `disableDemoClaims` matches, so it was disabled
+  again every time. The real handler was unreachable.
+- `GET /api/allocation/copy-source` (the server decides): `last=1`, `batch=BAT-`
+  or `alloc_id=` for the item chosen. "Alike" = build type, serial type, model,
+  wattage, front glass, cell type (`_COPY_PROPS`). Refusals say what differs,
+  one entry per property; unknown / malformed / wrongly-dated numbers, a batch
+  with no bill of materials and a cancelled indent's batch are each said.
+  "Last" skips batches that are not alike or have no materials.
+- Screen: the button is enabled; a "Copy from batch number" box sits under
+  the buttons; the copied makes fill the bill of materials, including the
+  alternative a batch used within a group (e.g. the junction box). Planning's
+  item line now shows make to order / custom serial numbers tags.
+- Tests: `test_batch_copy.py` (8, two in Chromium); a mutation check caught
+  11 of 12 (the 12th, "button left disabled", is equivalent - `disabled=false`
+  is defensive).
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

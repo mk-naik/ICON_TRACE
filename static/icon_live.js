@@ -7325,6 +7325,7 @@ function wireFqcAnomalies() {
   }
 
   function planOpenAllocation(id, copy) {
+    if (copy) { planCopyMaterials('&alloc_id=' + encodeURIComponent(id)); return; }
     fetch('/api/allocation/' + id + '/detail', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (a) {
@@ -7345,18 +7346,6 @@ function wireFqcAnomalies() {
             if (line) {
               line.value = String(a.line_no);
               if (typeof indentChange === 'function') indentChange();
-            }
-          } else {
-            window.__editingAlloc = null;
-            var target = planIndentLine();
-            if (!target) { toast('Choose the new indent item before copying materials.'); return; }
-            if (String(target.dcr) !== String(a.dcr) ||
-                String(target.arc || '') !== String(a.arc || '')) {
-              toast('Cannot copy materials: the new indent item requires ' +
-                    target.dcr + ' / ' + (target.arc || 'no ARC choice') +
-                    ', but the source batch is ' + a.dcr + ' / ' +
-                    (a.arc || 'no ARC choice') + '.');
-              return;
             }
           }
           if (!copy) {
@@ -7384,11 +7373,112 @@ function wireFqcAnomalies() {
                                       batch: m.batch || ''};
           });
           if (typeof rangeCalc === 'function') rangeCalc();
-          toast(copy ? 'Material selections copied. Check the range before loading.'
-                     : 'Allocation opened for editing.');
+          toast('Allocation opened for editing.');
         }, 80);
       })
       .catch(function (e) { toast('Could not read allocation ' + id + ': ' + e.message); });
+  }
+
+  /* ---- Planning: copy a batch's bill of materials -------------------
+   *
+   * "Copy from last batch" used to be a v4 demo button that only claimed it
+   * had copied (and was disabled for that reason). Now it asks the server for
+   * the newest earlier batch whose indent item is ALIKE - build type, serial
+   * type (ICON / custom), model, wattage, front glass, cell type - and
+   * "Copy from batch number" takes any batch by its BAT- number, refusing
+   * with exactly what differs. The server decides; this only applies the
+   * answer to the bill of materials on screen, and nothing is written until
+   * Load into master. */
+  function planCopyNote(cls, html) {
+    var n = document.getElementById('pCopyNote');
+    if (n) n.innerHTML = html ? '<div class="note ' + cls +
+      '" style="font-size:11.5px;margin:8px 0 0"><span>' +
+      (cls === 'n-bad' ? '\u2691' : cls === 'n-ok' ? '\u2713' : '\u2139') +
+      '</span><span>' + html + '</span></div>' : '';
+  }
+
+  function planCopyMaterials(params) {
+    var L = planIndentLine();
+    if (!L) {
+      var m0 = 'Choose the indent item first \u2014 a batch is only copied onto ' +
+               'an item like its own.';
+      toast(m0); planCopyNote('n-bad', fqcEsc(m0));
+      return;
+    }
+    fetch('/api/allocation/copy-source?indent_line_id=' + encodeURIComponent(L.id) +
+          params, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { toast(d.why); planCopyNote('n-bad', fqcEsc(d.why)); return; }
+        MAT_SEL = {};
+        var list = (typeof materialsFor === 'function') ? materialsFor(L.model) : [];
+        (d.materials || []).forEach(function (m) {
+          MAT_SEL[m.material_no] = { vendor: m.vendor || '', eff: m.efficiency || '',
+                                     batch: m.batch || '' };
+          /* materials sharing a group are alternatives: show the one the
+             batch actually used */
+          var def = list.filter(function (x) { return x.n === m.material_no; })[0];
+          if (def && def.group && typeof MAT_CHOICE !== 'undefined')
+            MAT_CHOICE[def.group] = def.n;
+        });
+        try { renderMatPanel(); } catch (e) {}
+        planGateLoad();
+        var shown = !!(document.getElementById('matPanel') &&
+                       document.getElementById('matPanel').querySelector('.matrow'));
+        var msg = 'Copied ' + (d.materials || []).length + ' material choices from ' +
+          fqcEsc(d.batch_no) + ' (indent ' + fqcEsc(d.indent_no) + ', item ' +
+          d.line_no + '). ' + (shown ? 'Check them before loading.' :
+          'They appear once the serial range is entered.');
+        toast('Materials copied from ' + d.batch_no + '.');
+        planCopyNote('n-ok', msg);
+      })
+      .catch(function (e) {
+        var m = 'Could not read the batch: ' + e.message;
+        toast(m); planCopyNote('n-bad', fqcEsc(m));
+      });
+  }
+
+  function planWireCopy(view) {
+    /* the button v4 ships (it only claimed "Materials copied") was disabled by
+       disableDemoClaims() - it is real now */
+    view.querySelectorAll('.rail-acts button').forEach(function (b) {
+      if (!/copy from last/i.test(b.textContent) || b.__copyWired) return;
+      b.__copyWired = true;
+      b.disabled = false;
+      b.title = 'The newest earlier batch whose indent item is the same as this one';
+      b.classList.remove('ro-locked');
+      b.removeAttribute('data-demo-claim');
+      /* v4's own onclick="toast('Materials copied from...')" is still an
+         ATTRIBUTE after b.onclick is assigned - and it is what
+         disableDemoClaims() matches on, later, to disable the button again */
+      b.removeAttribute('onclick');
+      b.onclick = function (e) { e.preventDefault(); planCopyMaterials('&last=1'); };
+    });
+    var acts = view.querySelector('.rail-acts');
+    if (acts && !document.getElementById('pCopyBatchNo')) {
+      var box = document.createElement('div');
+      box.className = 'card';
+      box.innerHTML =
+        '<div class="card-b" style="padding:12px 15px"><label style="font-size:11px;' +
+        'font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--ink3)">' +
+        'Copy from batch number</label><div style="display:flex;gap:6px;margin-top:6px">' +
+        '<input id="pCopyBatchNo" class="mono" placeholder="BAT-2610-00011" ' +
+        'style="flex:1;min-width:0;padding:7px 9px;border:1px solid var(--line);' +
+        'border-radius:var(--r)"><button class="btn btn-ghost" id="pCopyBatchBtn">Copy' +
+        '</button></div><div class="hint" style="margin-top:5px">Only onto an item ' +
+        'with the same build type, serial type, glass, wattage and model.</div>' +
+        '<div id="pCopyNote"></div></div>';
+      acts.parentNode.insertBefore(box, acts.nextSibling);
+      var go = function () {
+        var v = (document.getElementById('pCopyBatchNo').value || '').trim().toUpperCase();
+        if (!v) { toast('Type the batch number to copy from.'); return; }
+        planCopyMaterials('&batch=' + encodeURIComponent(v));
+      };
+      document.getElementById('pCopyBatchBtn').onclick = go;
+      document.getElementById('pCopyBatchNo').addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); go(); }
+      });
+    }
   }
 
   /* Planning opens on what has been allocated, with New plan on top - the
@@ -7626,6 +7716,7 @@ function wireFqcAnomalies() {
           if (from) from.value = '';
           if (to) to.value = '';
           planCustomReset();
+          planCopyNote('', '');
           MAT_SEL = {};
           try { planTidy(); planLineFigures(); rangeCalc(); } catch (e) {}
           if (work.scrollIntoView) {
@@ -7635,21 +7726,7 @@ function wireFqcAnomalies() {
       };
       act.insertBefore(b, act.firstChild);
     }
-      var copyBtn = view.querySelector('.rail-acts button:last-child');
-      if (copyBtn && !copyBtn.__copyWired) {
-        copyBtn.__copyWired = true;
-        copyBtn.textContent = 'Copy from last batch';
-        copyBtn.onclick = function (e) {
-          e.preventDefault();
-          fetch('/api/allocations', {cache: 'no-store'}).then(function (r) {
-            if (!r.ok) throw new Error('server returned ' + r.status);
-            return r.json();
-          }).then(function (rows) {
-            if (!rows.length) { toast('No previous batch is available to copy.'); return; }
-            planOpenAllocation(rows[0].alloc_id, true);
-          }).catch(function () { toast('Could not read the last batch.'); });
-        };
-      }
+      planWireCopy(view);
 
     /* the allocations card is outside .work, so it stays visible */
     var card = null;

@@ -25,7 +25,7 @@ Design rules enforced here, not just documented:
 Run:  python serve.py
 """
 
-import os, io, json, time, hashlib, datetime, secrets, traceback, functools, glob, threading
+import os, io, re, json, time, hashlib, datetime, secrets, traceback, functools, glob, threading
 from flask import (Flask, render_template, request, redirect, url_for,
                    session, flash, jsonify, send_file, abort, g, make_response)
 
@@ -5851,6 +5851,133 @@ def api_allocation_update(alloc_id):
     return jsonify({"ok": True, "alloc_id": alloc_id, "qty": qty,
                     "left": after["left"], "indent_no": L["indent_no"],
                     "fqc_applied": fqc_applied, "review_closed": closed})
+
+
+# What an indent item must share with a batch's own item before that batch's
+# bill of materials is copied onto it. Mukesh: "if both indent properties are
+# same (i.e. Build type, Glass, wattage, model and barcode etc.)" - barcode =
+# ICON or custom serial numbers, glass = the front glass (ARC / NARC); the cell
+# type (DCR / NDCR) is part of the item and decides the cells in the BOM.
+_COPY_PROPS = (
+    ("build_type", "Build type"), ("custom_serial", "Serial numbers"),
+    ("model", "Model"), ("wattage", "Wattage"), ("arc", "Front glass"),
+    ("dcr", "Cell type"))
+
+
+def _prop_text(key, v):
+    if key == "build_type":
+        return "make to order" if v == "make_to_order" else "make to stock"
+    if key == "custom_serial":
+        return "custom serial numbers" if v else "ICON serial numbers"
+    if key == "wattage":
+        return "%s W" % v
+    return str(v) if v not in (None, "") else "not set"
+
+
+def _batch_props(cur, alloc_id):
+    """A batch's own indent item, as the properties a copy compares - read
+    from the indent and its item, the same place the target's come from."""
+    r = store.one(cur,
+        "SELECT a.alloc_id, a.date_produced, il.line_no, il.model, il.wattage, "
+        "il.arc, il.dcr, il.status AS line_status, i.indent_no, i.build_type, "
+        "i.custom_serial, i.status AS indent_status, "
+        "(SELECT COUNT(*) FROM allocation_material m WHERE m.alloc_id=a.alloc_id) "
+        "AS n_mat FROM allocation a "
+        "JOIN indent_line il ON il.indent_line_id = a.indent_line_id "
+        "JOIN indent i ON i.indent_id = il.indent_id WHERE a.alloc_id = %s",
+        (alloc_id,))
+    if not r:
+        return None
+    r = dict(r)
+    r["custom_serial"] = bool(r["custom_serial"])
+    r["arc"] = r["arc"] or None
+    return r
+
+
+def _copy_differences(src, target):
+    """[(label, source text, target text)] - empty when they are alike."""
+    out = []
+    for key, label in _COPY_PROPS:
+        a, b = src.get(key), target.get(key)
+        if key == "arc":
+            a, b = a or None, b or None
+        if a != b:
+            out.append((label, _prop_text(key, a), _prop_text(key, b)))
+    return out
+
+
+@app.route("/api/allocation/copy-source")
+@require_screen_view("plan")
+def api_allocation_copy_source():
+    """The bill of materials of an earlier batch, for copying onto the indent
+    item chosen in Planning - only when the two items are alike (build type,
+    serial type, model, wattage, front glass, cell type). Nothing is written.
+
+      ?indent_line_id=N  the item being planned (required)
+      &last=1            the newest batch alike that has a bill of materials
+      &batch=BAT-...     that batch, by its number
+      &alloc_id=N        that batch, by id"""
+    try:
+        line_id = int(request.args.get("indent_line_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "why": "Choose the indent item first."}), 400
+    with store.conn() as (cx, cur):
+        T = _line_state(cur, line_id)
+        if not T:
+            return jsonify({"ok": False, "why": "No such indent item."}), 400
+        target = dict(T)
+        batch = (request.args.get("batch") or "").strip().upper()
+        alloc_id = request.args.get("alloc_id")
+        if request.args.get("last"):
+            src = None
+            for r in store.rows(cur, "SELECT alloc_id FROM allocation "
+                                     "ORDER BY alloc_id DESC LIMIT 500"):
+                p = _batch_props(cur, r["alloc_id"])
+                if (p and p["n_mat"] and p["line_status"] != "cancelled"
+                        and p["indent_status"] != "cancelled"
+                        and not _copy_differences(p, target)):
+                    src = p
+                    break
+            if not src:
+                return jsonify({"ok": False, "why":
+                    "No earlier batch with the same properties as this item "
+                    "(%s, %s, %s, front glass %s, %s) has a bill of materials "
+                    "to copy." % (_prop_text("build_type", target["build_type"]),
+                                  _prop_text("custom_serial", target["custom_serial"]),
+                                  target["model"], _prop_text("arc", target["arc"]),
+                                  target["dcr"])}), 404
+        else:
+            if batch:
+                m = re.match(r"^BAT-(\d{4})-(\d+)$", batch)
+                alloc_id = int(m.group(2)) if m else None
+            try:
+                alloc_id = int(alloc_id)
+            except (TypeError, ValueError):
+                alloc_id = None
+            src = _batch_props(cur, alloc_id) if alloc_id else None
+            if not src or (batch and batch_no(src) != batch):
+                return jsonify({"ok": False, "why":
+                    "No batch %s. Batch numbers read BAT-2610-00011."
+                    % (batch or alloc_id or "")}), 404
+            diff = _copy_differences(src, target)
+            if diff:
+                return jsonify({"ok": False, "differences": [
+                    {"what": w, "batch": a, "item": b} for w, a, b in diff],
+                    "why": "Cannot copy from %s: its indent item is not the same "
+                           "as this one - %s." % (batch_no(src), "; ".join(
+                               "%s is %s there, %s here" % (w, a, b)
+                               for w, a, b in diff))}), 400
+            if not src["n_mat"]:
+                return jsonify({"ok": False, "why":
+                    "%s has no bill of materials recorded, so there is nothing "
+                    "to copy." % batch_no(src)}), 400
+        mats = store.rows(cur, "SELECT material_no, vendor, efficiency, batch "
+                               "FROM allocation_material WHERE alloc_id=%s "
+                               "ORDER BY material_no", (src["alloc_id"],))
+    return jsonify({"ok": True, "batch_no": batch_no(src), "alloc_id": src["alloc_id"],
+                    "indent_no": src["indent_no"], "line_no": src["line_no"],
+                    "date_produced": src["date_produced"],
+                    "materials": [dict(r) for r in mats]})
 
 
 @app.route("/api/allocation/<int:alloc_id>/detail")
