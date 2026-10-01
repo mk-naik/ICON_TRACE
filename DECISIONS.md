@@ -9,7 +9,7 @@ a demo pass.
 Status tags: **[built]** verified in code · **[decided]** agreed, not built ·
 **[NOT ENFORCED]** agreed, code does not do it yet · **[open]** needs Mukesh.
 
-Last checked against code: 2026-10-01, commit `91d3b88`. When you change a rule
+Last checked against code: 2026-10-02, after commit `849ce6b`. When you change a rule
 or finish a `[decided]` item, update this file in the same commit.
 
 ---
@@ -184,7 +184,7 @@ no one signs twice. [enforcement unverified]
 
 Swap in Loading Verification (scrapped) · multi-item module gate passes (a
 module gate pass's items are its pallets) · guard screen · EL image service ·
-replacement-serial workflow · Excel upload for Production Entry · Production
+replacement-serial workflow · Production
 Entry segments (material per serial sub-range; this blocks the Traceability
 Report) · Production Report · FQC Matrix report · sidebar redesign. No OEE or
 efficiency figure until the production head signs off an ideal cycle time.
@@ -225,6 +225,13 @@ The Drafts screen is still v4 sample data.
   module cannot be recorded as produced there (it refuses with a reason);
   packing warns "not in a production entry" for it. How its production is
   recorded - a list upload? - needs Mukesh. FQC and packing work on it.
+
+- **Production Entry takes the monthly traceability Excel** (Round 36, at
+  Mukesh's request - it was on the "not built" list): upload, pick date, shift
+  and range(s); CLAIM mode records ranges Planning already issued, BACKFILL
+  mode builds the indent / allocation / serials / production entry (the file's
+  BOM becomes the allocation's final materials). Bad rows are named, never
+  silently imported. [built]
 
 ## 11. Open — needs Mukesh
 

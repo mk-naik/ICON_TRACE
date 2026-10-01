@@ -35,11 +35,10 @@ def test(name):
 NOT_BUILT = "Not built yet — this does not save anything."
 # (screen, button that opens its form or None, label of the claiming button)
 LIVE_CLAIMS = [("plan", "New plan", "Save as draft"),
-               ("plan", "New plan", "Copy from last batch"),
                ("prodentry", "New production entry", "Save as draft"),
                ("loss", "Record downtime event", "Submit shift")]
-ADMIN_CLAIMS = [("cancel", "Cancel document"), ("access", "Sign off review"),
-                ("mach", "+ Add type")]
+# ("cancel", "Cancel document") is real since Round 34 (direct cancellation)
+ADMIN_CLAIMS = [("access", "Sign off review"), ("mach", "+ Add type")]
 ADMIN_HONEST = [("grade", "+ New version"), ("defects", "+ Add code")]
 CLAIM_WORDS = ["Draft saved.", "Materials copied from", "Shift events submitted",
                "Access review recorded", "Document cancelled.", "Add-machine form opens here."]
@@ -75,13 +74,14 @@ def t_no_claim_handlers_left():
             document.querySelectorAll('[data-demo-claim]'), function (e) {
               var s = e.closest('section.view');
               return (s ? s.id : '?') + ' / ' + e.textContent.trim(); }).sort()""")
-        want = sorted(["v-plan / Save as draft", "v-plan / Copy from last batch",
+        # (Planning's "Copy from last batch" is no longer here: Round 37 made it
+        # real - GET /api/allocation/copy-source - see test_batch_copy.py)
+        want = sorted(["v-plan / Save as draft",
                        "v-prodentry / Save as draft", "v-loss / Submit shift",
                        # the invoice parser's "PDF stored against this
                        # challan" - nothing takes it over; it stored nothing
                        "v-invoice-parser / Store PDF only",
-                       "v-admin / Sign off review", "v-admin / + Add type",
-                       "v-admin / Cancel document"])
+                       "v-admin / Sign off review", "v-admin / + Add type"])
         assert got == want, "disabled placeholders changed:\n  got  %s\n  want %s" % (got, want)
         n = len(got)
         # ...and a button the live layer took over at sign-in is NOT one of

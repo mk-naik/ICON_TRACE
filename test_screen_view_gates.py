@@ -91,6 +91,8 @@ EXPECTED = {
     "api_indents": {("indent",)}, "api_indent_get": {("indent",)},
     "indent_list": {("indent",)},
     "api_allocations": {("plan",)}, "api_allocation_get": {("plan",)},
+    # Round 37: the copy-from-batch lookup (read-only, Planning's own)
+    "api_allocation_copy_source": {("plan",)},
     "allocation_barcodes": {("plan",)}, "allocation_barcodes_print": {("plan",)},
     "api_indent_line": {("plan",)},
     "api_prodentries": {("prodentry",)}, "api_loss_events": {("loss",)},
