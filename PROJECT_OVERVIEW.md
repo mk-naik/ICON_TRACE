@@ -265,6 +265,7 @@ python test_fqc_scanner_ui.py      18 tests · the barcode scanner on FQC Entry:
 python test_customer_filters.py    13 tests · every customer filter matches every spelling, name or code
 python test_pack_readiness.py      9 tests · Packing: Not FQC'd refused, not in a production entry warned
 python test_indent_properties.py  6 tests · indent: front glass (ARC/NARC), custom-serial checkbox
+python test_pack_build_kind.py     5 tests · make-to-order modules pack only with their own kind
 ```
 
 The JS tests read their functions out of `icon_live.js`, so they test what

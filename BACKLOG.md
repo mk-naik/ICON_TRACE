@@ -5643,6 +5643,25 @@ numbers - a checkbox, default ICON.
 - Tests: `test_indent_properties.py` (6, one in Chromium). Also fixed
   `test_indent_export.py`, stale since the customer master was title-cased.
 
+### Packing: make-to-order modules only with their own kind
+
+Mukesh: "if indent is created with make to order then it can't be packed with
+make to stock modules or even icon stock".
+
+- `db.build_kind(serial)` reads a module's kind from its indent (make-to-order
+  vs everything else); `db.box_build_kind(box)` reads what a pallet holds from
+  its modules - nothing stored beside them. `_pack_refusal` refuses a mix in
+  either direction, naming both indents; an empty pallet takes either kind.
+  Repack applies it to each new pallet's whole group.
+- The preview names the kind (a "make to order" tag by the customer).
+- **Found in the real data, not changed:** every indent on file is
+  make-to-stock, including Borosil's (IS2I/26/0002, /0003), although the
+  schema notes call Borosil make-to-order. The rule changes nothing until an
+  indent is make-to-order - Mukesh may want Borosil's header corrected (a
+  header edit works even after allocation).
+- Tests: `test_pack_build_kind.py` (5, one in Chromium); a mutation check
+  caught all 9 mutants.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

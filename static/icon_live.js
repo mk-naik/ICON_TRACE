@@ -5624,7 +5624,11 @@ function wireFqcAnomalies() {
               'Discard</button></div></div>' +
             '<div class="lookup">' +
               '<div><label>Customer</label><div class="lv">' +
-                fqcEsc(d.customer || '—') + '</div></div>' +
+                fqcEsc(d.customer || '—') +
+                /* make-to-order modules only pack with their own kind */
+                (d.build_type === 'order'
+                  ? ' <span class="tag t-rev" title="Indent ' + fqcEsc(d.indent_no || '') +
+                    '">make to order</span>' : '') + '</div></div>' +
               '<div><label>Model</label><div class="lv mono">' +
                 fqcEsc(d.model || '—') + '</div></div>' +
               '<div><label>Wattage</label><div class="lv mono">' +

@@ -1588,7 +1588,38 @@ def _pack_refusal(cur, b, serial):
         # first module is what decides it
         if b.get("model") and s.get("model") != b["model"]:
             return "Box is %s, %s is %s." % (b["model"], serial, s.get("model"))
+        # Make-to-order modules are packed only with their own kind - never
+        # with make-to-stock modules or Icon Stock. Read from the modules the
+        # pallet already holds, so nothing is stored beside them to drift.
+        if b.get("box_id"):
+            mix = _build_mix_refusal(cur, serial, s,
+                                     db.box_build_kind(cur, b["box_id"]))
+            if mix:
+                return mix
     return None
+
+
+def _build_label(kind):
+    return "make-to-order" if kind == "order" else "make-to-stock / Icon Stock"
+
+
+def _build_mix_refusal(cur, serial, s, held):
+    """Why this module may not join a pallet holding `held` (a build_kind
+    tuple, or None while the pallet is empty), or None. Mukesh: "if indent is
+    created with make to order then it can't be packed with make to stock
+    modules or even icon stock"."""
+    mine = db.build_kind(cur, serial, s.get("build_instance"))
+    if not held or not mine or mine[0] == held[0]:
+        return None
+    if mine[0] == "order":
+        return ("%s is make-to-order (indent %s), but this pallet holds "
+                "make-to-stock / Icon Stock modules (e.g. indent %s). A "
+                "make-to-order module is packed only with other "
+                "make-to-order modules." % (serial, mine[1], held[1]))
+    return ("This pallet holds make-to-order modules (indent %s). %s is "
+            "%s (indent %s) and cannot go into it - a make-to-order pallet "
+            "takes make-to-order modules only."
+            % (held[1], serial, _build_label("stock"), mine[1]))
 
 
 def _box_label(b):
@@ -1673,6 +1704,7 @@ def api_box_check():
         # this module's own standing decision - not a search of the newest
         # 1,000 of everyone's, which showed FQC "-" for an older one
         rec = db.latest_fqc(cur, serial, s.get("build_instance")) if s else None
+        kind = db.build_kind(cur, serial, s.get("build_instance")) if s else None
         pe = (store.one(cur, "SELECT prod_date, shift FROM production_entry "
                              "WHERE entry_id=%s", (s["prod_entry_id"],))
               if s.get("prod_entry_id") else None)
@@ -1695,6 +1727,8 @@ def api_box_check():
         "customer": db.customer_display(s.get("customer")) or None,
         "production": ({"date": pe["prod_date"], "shift": pe["shift"]}
                        if pe else None),
+        "build_type": (kind or (None, None))[0],
+        "indent_no": (kind or (None, None))[1],
         "warnings": warnings,
         # the code is what a box stores; the name is what the screen shows
         "customer_code": s.get("customer"),
@@ -1877,6 +1911,21 @@ def _repack(cur, box_ids, groups, release, reason):
             why = _pack_refusal(cur, {"grade": grade, "model": model}, s)
             if why:
                 raise _Refuse(why)
+        # one new pallet = one kind: make-to-order modules are not repacked
+        # in with make-to-stock / Icon Stock ones, whatever pallets they came
+        # from
+        kinds = {}
+        for s in serials:
+            k = db.build_kind(cur, s)
+            if k:
+                kinds.setdefault(k[0], (s, k[1]))
+        if len(kinds) > 1:
+            (so, io_), (ss, is_) = kinds["order"], kinds["stock"]
+            raise _Refuse(
+                "%s is make-to-order (indent %s) and %s is %s (indent %s). "
+                "They cannot go into the same pallet - make-to-order modules "
+                "are packed only with their own kind."
+                % (so, io_, ss, _build_label("stock"), is_))
 
         parents = sorted({owner[s]["box_id"] for s in from_owner})
         src0 = owner[from_owner[0]] if from_owner else None

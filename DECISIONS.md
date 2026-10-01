@@ -145,6 +145,13 @@ no one signs twice. [enforcement unverified]
   Unit-2's 30 mm frame). The indent's pallet instruction is **not** a cap.
   [built]
 - Unallocated stock is General Stock, never blank. [built]
+- **Make-to-order modules pack only with their own kind.** A pallet holding
+  modules from a make-to-order indent refuses make-to-stock and Icon Stock
+  modules, and the other way round. The kind is read from the module's indent
+  (build type); BACKFILL and Icon Stock indents are make-to-stock. Applies to
+  the Pallet scan, its preview and Repack. [built, Round 37]
+- **[open]** Nothing yet stops two DIFFERENT customers' modules sharing one
+  make-to-order pallet (a pallet takes its customer from its first module).
 - Repack: fresh graded modules may be scanned in, leftovers return to unpacked
   stock, lineage is kept. A pallet on a live challan is not offered. [built]
 

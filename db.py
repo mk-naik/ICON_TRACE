@@ -2131,6 +2131,47 @@ def customer_options(values):
     return sorted(seen.values(), key=lambda s: s.upper())
 
 
+def build_kind(cur, serial, build_instance=1):
+    """("order" | "stock", indent_no) for a module, from the indent it was
+    planned on - or None when it has no indent. "order" is a MAKE-TO-ORDER
+    indent; everything else is "stock": make-to-stock indents, Icon Stock and
+    the backfill indents, none of which is built for one customer's order."""
+    if cur is None:
+        return None
+    r = _store.one(cur,
+        "SELECT i.build_type, i.indent_no FROM serial s "
+        "JOIN indent_line l ON l.indent_line_id = s.indent_line_id "
+        "JOIN indent i ON i.indent_id = l.indent_id "
+        "WHERE s.serial = %s AND s.build_instance = %s",
+        (serial, build_instance or 1))
+    if not r:
+        return None
+    return ("order" if r["build_type"] == "make_to_order" else "stock",
+            r["indent_no"])
+
+
+def box_build_kind(cur, box_id):
+    """What a pallet already holds: ("order" | "stock", an indent_no) from its
+    modules, or None while it is empty. A pallet is one kind (the pack check
+    keeps it so); if an old one somehow holds both, "order" wins - it is the
+    stricter side."""
+    if cur is None:
+        return None
+    rows = _store.rows(cur,
+        "SELECT DISTINCT i.build_type, i.indent_no FROM box_serial bs "
+        "JOIN serial s ON s.serial = bs.serial "
+        "AND s.build_instance = COALESCE(bs.build_instance, 1) "
+        "JOIN indent_line l ON l.indent_line_id = s.indent_line_id "
+        "JOIN indent i ON i.indent_id = l.indent_id "
+        "WHERE bs.box_id = %s ORDER BY i.build_type DESC, i.indent_no",
+        (box_id,))
+    if not rows:
+        return None
+    r = rows[0]
+    return ("order" if r["build_type"] == "make_to_order" else "stock",
+            r["indent_no"])
+
+
 def fold_customer_rows(rows, cust_field, group_fields, sum_fields, blank="STOCK"):
     """Rows a query GROUPED BY a raw customer column, merged so each
     CUSTOMER is one row. SQL cannot consult the master, so "Icon Stock",
