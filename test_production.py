@@ -32,6 +32,7 @@ import store                                                 # noqa: E402
 import icon_clock as clock                                   # noqa: E402
 import app as APP                                            # noqa: E402
 import auth_test_helper as AUTH
+import icon_customers as customers
 
 _results = []
 
@@ -227,8 +228,13 @@ def t_list_resolves_customer_from_first_serial():
     assert r2.status_code == 200, r2.get_json()
     entries = r2.get_json()["entries"]
     assert len(entries) == 1, entries
-    assert entries[0]["customer"] == "C0001", entries[0]
+    # the first serial's customer, shown under the master's name (the list's
+    # dropdown is built from these - one entry per customer, not per code)
+    assert entries[0]["customer"] == customers.get("C0001")["name"], entries[0]
     assert entries[0]["qty"] == 3
+    # and filtering by that name finds the entry whose serial stores the CODE
+    by_name = c.get("/api/prodentries?cust=" + customers.get("C0001")["name"]).get_json()
+    assert len(by_name["entries"]) == 1, by_name
 
 
 # --------------------------------------------------------------------------

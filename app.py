@@ -4096,12 +4096,16 @@ def api_prodentries():
             sql += " AND (p.start_serial LIKE %s OR p.end_serial LIKE %s OR p.model LIKE %s)"
             args.extend(["%" + q + "%", "%" + q + "%", "%" + q + "%"])
         if cust:
+            # the dropdown offers the master's NAME; the serial may hold the
+            # name in any case or the CODE - a LIKE on the name missed a
+            # serial that stores "C0001" (db.customer_match)
+            m_sql, m_args = db.customer_match("s.customer", cust)
             sql += """ AND EXISTS (
                 SELECT 1 FROM serial s
                 WHERE s.serial = p.start_serial
-                  AND s.customer LIKE %s
+                  AND """ + m_sql + """
             )"""
-            args.append("%" + cust + "%")
+            args.extend(m_args)
         # By the shift the production RAN in, which is what prod_date and
         # shift now hold - not by when the report was typed. Filtering on
         # created_at listed a C shift under the following morning, so the
@@ -4125,6 +4129,10 @@ def api_prodentries():
     for r in rows:
         r["day"] = str(clock.shift_day(
             datetime.datetime.fromisoformat(r["created_at"]))) if r.get("created_at") else None
+        # the master's name, not whichever spelling the serial row holds -
+        # the screen builds its Customer dropdown from these, one per name
+        if r.get("customer"):
+            r["customer"] = db.customer_display(r["customer"])
     return jsonify({"entries": rows})
 
 
@@ -4960,6 +4968,10 @@ def api_prod_dashboard():
              for k, v in sorted(lines.items(), key=lambda x: ((x[0][0] or "~"), x[0][1]))]
 
     by_cust = []
+    # one row per CUSTOMER and model - "Icon Stock" / "ICON Stock" / "ICON
+    # STOCK" and a name in capitals were each their own row (Mukesh's
+    # screenshot, 01-10-2026)
+    cust_rows = db.fold_customer_rows(cust_rows, "cust", ["model"], keys)
     for r in cust_rows:
         row = {k: (r.get(k) or 0) for k in keys}
         if not any(row[k] for k in ("alloc", "prod", "fqc", "packed", "disp")):

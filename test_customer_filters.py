@@ -213,6 +213,65 @@ def t_gatepasses():
 
 
 # --------------------------------------------------------------------------
+# 6  tables GROUPED by customer show one row per customer
+# --------------------------------------------------------------------------
+
+def add_capitals_borosil():
+    """A second Borosil serial, its name written in capitals - as production
+    really holds it."""
+    with store.conn() as (cx, cur):
+        lid = store.one(cur, "SELECT indent_line_id FROM indent_line LIMIT 1")["indent_line_id"]
+        aid = store.insert(cur, "allocation", {
+            "indent_line_id": lid, "model": MODEL, "wattage": WATT,
+            "customer": OTHER.upper(), "date_produced": DAY, "shift": 1, "qty": 1,
+            "seq_from": 50, "seq_to": 50, "created_at": AT % 50, "created_by": "t"})
+        store.insert(cur, "serial", {
+            "serial": "ICON625R1292410050", "build_instance": 1, "alloc_id": aid,
+            "indent_line_id": lid, "model": MODEL, "wattage": WATT,
+            "customer": OTHER.upper(), "dcr": "NDCR", "format_version": 2,
+            "date_produced": DAY, "shift": 1, "sequence": 50, "state": "planned"})
+
+
+@test("Production dashboard's Customer-wise position: one row per customer, "
+      "every spelling's allocations added into it (Mukesh's screenshot)")
+def t_prod_dashboard_customer_wise():
+    c = seed()
+    add_capitals_borosil()
+    d = c.get("/api/prod/dashboard?from=%s&to=%s" % (DAY, DAY)).get_json()
+    rows = {(r["cust"], r["model"]): r["alloc"] for r in d["by_cust"]}
+    assert rows == {(STOCK_NAME, MODEL): 6, (OTHER, MODEL): 2}, d["by_cust"]
+
+
+@test("Stock & Dispatch's FG-by-customer table: boxes stored as the code, as "
+      "the name in capitals, and with no customer (stock) are one row")
+def t_stock_dispatch_table():
+    c = seed()
+    boxes()
+    d = c.get("/api/stock_dispatch").get_json()
+    stock = [r for r in d["table_fg"] if r["customer_name"] == STOCK_NAME]
+    # "STOCK", "ICON STOCK" and the box with no customer at all - which is
+    # stock, as everywhere else (Packing Log's "General stock")
+    assert len(stock) == 1 and stock[0]["box_count"] == 3, d["table_fg"]
+    assert len(d["table_fg"]) == 2, d["table_fg"]
+
+
+@test("Production Entry's list names each customer once, under the master's "
+      "name, so its Customer dropdown does too")
+def t_prodentries_customer_names():
+    c = seed()
+    with store.conn() as (cx, cur):
+        for n, s in enumerate(["ICON625R1292410001", "ICON625R1292410003",
+                               "ICON625R1292410005", "ICON625R1292410006"], 1):
+            store.insert(cur, "production_entry", {
+                "prod_date": DAY, "shift": "A", "shift_incharge": "X",
+                "model": MODEL, "wattage": WATT, "start_serial": s, "end_serial": s,
+                "qty": 1, "kw_output": 0.625, "created_by": "t",
+                "created_at": AT % n})
+    got = sorted({e["customer"] for e in c.get("/api/prodentries").get_json()["entries"]})
+    assert got == [STOCK_NAME], got      # "ICON Stock", "ICON STOCK", "Icon Stock", "STOCK"
+
+
+# --------------------------------------------------------------------------
 # 5  the browser side
 # --------------------------------------------------------------------------
 

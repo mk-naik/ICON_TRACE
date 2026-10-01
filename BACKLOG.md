@@ -5571,6 +5571,17 @@ written one way: production holds stock as "ICON STOCK" (1,360 serials),
   1,528 - their sum - for any of them.
 - **Not changed**: `known_customers` (the Indent form's type-ahead) - it is a
   suggestion list, not a filter.
+- **Then the TABLES grouped by customer** (Mukesh's screenshot of the
+  Production dashboard's Customer-wise position: "Icon Stock" 8,971 and
+  "ICON Stock" 4,530 on two rows, Borosil twice). SQL cannot consult the
+  master, so `db.fold_customer_rows()` merges the grouped rows after the query
+  - one row per customer under the master's name, counts added (every merged
+  column is a count, and one batch has one spelling, so the sum is exact).
+  Used by that table and Stock & Dispatch's FG-by-customer; Production Entry's
+  list now names each entry's customer under the master's name, so its
+  dropdown lists each once. On the real data: five raw spellings fold to two
+  rows - Icon Stock 13,080 (7,190 + 4,530 + 1,360) and Borosil 6,364
+  (4,000 + 2,364). A box with no customer is stock, as everywhere else.
 - `test_customer_filters.py` (10, including one in Chromium); a mutation
   check broke each piece on a copy of the tree and all 8 mutants were caught.
 

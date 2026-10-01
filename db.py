@@ -2086,6 +2086,29 @@ def customer_options(values):
     return sorted(seen.values(), key=lambda s: s.upper())
 
 
+def fold_customer_rows(rows, cust_field, group_fields, sum_fields, blank="STOCK"):
+    """Rows a query GROUPED BY a raw customer column, merged so each
+    CUSTOMER is one row. SQL cannot consult the master, so "Icon Stock",
+    "ICON Stock", "ICON STOCK" and "STOCK" come back as four groups; this
+    re-keys each by the master's name (customer_display) plus the other
+    grouping fields and adds up the counts. A row with no customer is
+    `blank` (stock). Order of first appearance is kept."""
+    out, order = {}, []
+    for r in rows:
+        r = dict(r)
+        name = customer_display(r.get(cust_field) or blank)
+        key = (name.upper(),) + tuple(r.get(g) for g in group_fields)
+        if key not in out:
+            r[cust_field] = name
+            out[key] = r
+            order.append(key)
+        else:
+            t = out[key]
+            for f in sum_fields:
+                t[f] = (t.get(f) or 0) + (r.get(f) or 0)
+    return [out[k] for k in order]
+
+
 def known_customers(cur):
     """Everyone we have ever shipped to or been ordered by. Feeds the
     type-to-suggest box so the same customer is not spelled three ways."""
@@ -2367,10 +2390,12 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
         ORDER BY b.customer, b.model, b.grade
     """
     cur.execute(sql_table, tuple(bx_params))
-    table_data = [dict(r) for r in cur.fetchall()]
+    # one row per CUSTOMER (and model, grade), however each box spells it
+    table_data = fold_customer_rows(cur.fetchall(), "customer", ["model", "grade"],
+                                    ["box_count", "modules", "kw"])
     
     for r in table_data:
-        cr = customers.get(r.get("customer"))
+        cr = customers.get(r.get("customer")) or customers.resolve(r.get("customer") or "")
         r["customer_name"] = cr["name"] if cr else r.get("customer")
         
     # 6. Recent dispatches

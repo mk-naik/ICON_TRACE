@@ -325,7 +325,9 @@ way: Planning stores the customer's NAME in whatever case the master had that
 day ("ICON STOCK", "ICON Stock", "Icon Stock" all exist), and a box stores the
 CODE. Never filter them with `customer = ?`: use `db.customer_match(col,
 value)` (any case; the value, plus the master's name and code for it), and
-build a dropdown with `db.customer_options()` (one entry per customer).
+build a dropdown with `db.customer_options()` (one entry per customer), and
+merge any `GROUP BY customer` result with `db.fold_customer_rows()` - SQL
+groups by spelling, not by customer.
 
 ## 4. What Packing then requires
 
