@@ -448,6 +448,13 @@ CREATE TABLE IF NOT EXISTS indent (
   build_type    TEXT NOT NULL
                 DEFAULT 'make_to_stock',
 
+  -- Round 37: 1 = the customer's OWN serial numbers (non-ICON), loaded from
+  -- an Excel upload in Planning instead of generated; 0 (default) = ICON
+  -- serial numbers, which Planning generates. A property of the whole indent,
+  -- fixed once serials have been allocated against it. store.py adds this by
+  -- ADD COLUMN on an existing database.
+  custom_serial INTEGER NOT NULL DEFAULT 0,
+
   -- The paper form says things like "NEXT WEEK". Keep what was written for
   -- the record, but store a real date so it can be sorted and chased.
   delivery_by   TEXT         NULL,

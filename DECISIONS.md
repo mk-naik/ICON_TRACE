@@ -1,0 +1,201 @@
+# DECISIONS — settled rules for ICON TRACE
+
+Read this before changing any business behaviour. Every line is a decision
+Mukesh made or approved, or a fact checked against the code. If the code
+contradicts a rule here, the code is wrong unless Mukesh says otherwise. If a
+rule here looks wrong to you, stop and ask — never loosen it to make a test or
+a demo pass.
+
+Status tags: **[built]** verified in code · **[decided]** agreed, not built ·
+**[NOT ENFORCED]** agreed, code does not do it yet · **[open]** needs Mukesh.
+
+Last checked against code: 2026-10-01, commit `91d3b88`. When you change a rule
+or finish a `[decided]` item, update this file in the same commit.
+
+---
+
+## 1. Principles
+
+- The server is the authority. Never accept evidence, identity or a computed
+  total from the browser. The audit name comes from the session. [built]
+- Documents are cancelled or superseded, never deleted or silently rewritten.
+  The module journey shows the history. [built]
+- Every cancel, override and resolution records who, when and a **mandatory
+  reason**. Never substitute a default reason string. [partly — see 3]
+- Software shows evidence; a person decides; the system records who, why, when.
+  It does not score or suggest. [built]
+- No fake success. A button that does nothing is disabled ("Not built yet"),
+  never a success toast. [built]
+- Hide what is consumed; do not grey it out. An invoice or pallet on a live
+  challan vanishes from selectors and returns when that challan is cancelled.
+  [built]
+- An honest blank beats a plausible wrong value (Hi-Pot is `NOT_AVAILABLE`,
+  with no "done" tick).
+- A QR carries identity only (`ICONTRACE|BOX|…`), never data. A scan looks the
+  record up on the server.
+
+## 2. Dispatch chain for modules
+
+Create Challan → Loading Verification (Team 3) → gate pass created
+automatically. Team 1 packs, Team 2 documents, Team 3 loads. The v4 screen says
+no one signs twice. [enforcement unverified]
+
+- Challan v1 is titled "DISPATCH CHALLAN CUM GATE PASS". It is one page, has no
+  serial list, and travels with the vehicle. v2 is the Excel copy: sheet 1 the
+  challan, sheet 2 the FTR. There is no third packing-list document at challan
+  level. [built]
+- v1 and v2 refuse to print until every pallet is `loaded`. Enforced on the
+  server, not only in the UI. [built]
+- QR on challan v1/v2: `ICONTRACE|CHALLAN|<challan_no>`. [decided]
+
+## 3. Challan
+
+- Number `IS-DD.MM.YYYY/SEQ`. The financial year resets on 1 April. Store
+  integers `(fy, seq, suffix)`; padding is display only (4 digits). The number
+  is reserved at draft, not at submit. The key is `(fy, seq, suffix)` because
+  `742` and `742 (A)` are two real documents. The server draws the number,
+  never an offline browser. [built]
+- Invoice first. Offered pallets are General Stock plus the invoice's customer,
+  nothing else. Challan quantity = sum of pallets ticked and must equal the
+  invoice's declared quantity. **No override, ever**; refuse with both numbers.
+  An expired e-Way Bill blocks. A superseded invoice blocks. [built]
+- Ticking a General Stock pallet gives it the invoice's customer. A challan may
+  mix models. kW is always derived (Σ qty × wattage / 1000), never typed.
+  [built]
+- **Edit is not cancel.** Editing an issued challan creates a new row at the
+  same fy/seq with suffix `MA`, then `MB`, and so on. The original becomes
+  `superseded` (a status distinct from `cancelled`). Only the live version can
+  be edited. The invoice is locked; everything else is editable. Abandoning an
+  edit changes nothing. Edit is blocked once a gate pass exists. [built]
+- **Cancel is a separate action: Admin or Super Admin only**, reason mandatory,
+  blocked once a gate pass exists. Serials revert `dispatched → packed`,
+  pallets and invoice return to selectors, the number is never reused.
+  **[NOT ENFORCED]** Today any role with Challan write can cancel, and two
+  endpoints (`/cancel`, `/discard`) implement it differently.
+
+## 4. Loading Verification and Gate Pass
+
+- Landing is a list of **challans**. A session lists that challan's pallets.
+  Type or scan a pallet number or QR; Enter looks it up, Space confirms. Each
+  confirm saves at once (`pending → saved`). Submit needs every pallet saved,
+  promotes all to `loaded` in one transaction, and creates the gate pass.
+  [built]
+- **No swap.** If a pallet is wrong or missing: Team 3 tells Team 2 (verbally),
+  Team 2 edits the challan (→ `MA`), Team 3 rescans on the new version (new rows
+  start `pending`). Per Humesh the challan is final; mismatches are handled
+  offline. [decided]
+- The module gate pass is an NRGP created once per challan when Loading
+  Verification is submitted. It is never created or edited by hand. [built]
+- A standalone gate pass is only for non-module material (equipment, samples,
+  inter-unit moves). RGP or NRGP. Multi-item: Sl, description, unit, qty,
+  remarks. The destination address sits outside the item grid. It is editable.
+  No date picker accepts a future date except an RGP's expected return. Number
+  `ISGP{YYMMDD}/{seq:4}`, financial-year reset. Three copies, one per page.
+  [built]
+- A later security-guard screen will scan the gate pass QR
+  (`ICONTRACE|GATEPASS|<gp_no>|<kind>`) to close an NRGP or track an RGP
+  return. [decided]
+
+## 5. FQC and evidence
+
+- FQC does not grade. It records **PASS or REJECT**. A confirmed pass is grade
+  A. A reject goes to Quality, who assign A, GY or BGY using the FQC defect, the
+  evidence and a physical check. [built]
+- The server reads the evidence: the Sun Simulator export (**Pmax is column 2;
+  column 10 is Rsh**) and the EL folder. Lines A and B have separate exports.
+  [built]
+- States: `OK`; `NC` (source unreachable); `NA` (source reachable, serial not in
+  it); `BAD` (tested and unreadable: probe, polarity, junction box).
+  **BAD blocks a pass** (a reject is allowed). **NC makes a pass provisional**:
+  it needs a coded reason and the module sits in Hold & Deviation, unpackable,
+  until the reading arrives and agrees. A pass needs evidence. Do not remove
+  this to make testing easier; seed a CSV and an EL folder as `test_fqc.py`
+  does. [built]
+- Pass needs Pmax ≥ rated wattage and a clean EL. A reading below wattage can
+  never be overruled. An EL-only objection can be overruled with a coded reason
+  after looking at the image. [built]
+- Calibration rows (`REFE`, `REFERANCE`, short numbers) are counted and ignored.
+  The latest valid row wins when a serial was retested. [built]
+- Reject reasons come from the 44-item list, searchable by any substring,
+  case-insensitive. [built] The 16-item "FQC Matrix" report columns do not map
+  onto it. [open]
+- EL images are kept 1–3 years (GM). Serving them will be a separate service
+  on another machine, not part of this Flask process. [decided]
+
+## 6. Quality, Needs Review, duplicate scans
+
+- Needs Review and Quality Decision are one feed; the standalone Quality screen
+  is gone. Production can see quality items but only Quality, Admin or Super
+  Admin can resolve them. [built]
+- A serial already packed (or later) that gets a new FQC scan is a conflict
+  **only if the new outcome disagrees**. An agreeing retest creates nothing.
+  A Production Incharge (or above) resolves it. "Keep the rescanned one" goes
+  through **Repack**, never a parallel removal path. The original FQC record is
+  cancelled, not deleted. Already dispatched: Admin only, acknowledge only.
+  [built]
+- Replacement-serial workflow for a dispatched conflict. [decided]
+
+## 7. Packing and repack
+
+- Pallet number = packing-list number: one identity, `ISPL{YYMMDD}/{letter}{seq}`
+  with the letter derived from the grade, never stored. One printed document.
+  A pallet is one model and one grade; only graded, un-held modules go in.
+  [built]
+- Capacity: the operator may pack any quantity up to the frame ceiling (36 for
+  Unit-2's 30 mm frame). The indent's pallet instruction is **not** a cap.
+  [built]
+- Unallocated stock is General Stock, never blank. [built]
+- Repack: fresh graded modules may be scanned in, leftovers return to unpacked
+  stock, lineage is kept. A pallet on a live challan is not offered. [built]
+
+## 8. Counting and time
+
+- One IST clock (`icon_clock.py`). The factory day is **06:00–06:00** (01:12 on
+  the 26th is C shift of the 25th). Every dashboard and filter counts by when the
+  thing happened in the system (allocation, FQC decision, packed, challan
+  issued), **never** from the date or shift printed in a serial. The server
+  stamps these and the form fields are locked. [built]
+- Serial format v1/v2 and the hex month (Oct=A, Nov=B, Dec=C): see
+  PROJECT_OVERVIEW.md, "Facts that look like bugs".
+
+## 9. Access control (facts)
+
+- Roles: Super Admin, Admin, Production Incharge (the shift incharge), FQC
+  Operator, Packing Operator, Dispatch Operator, Quality.
+- Operators sign in with ID and password. Higher-ranked accounts also use an
+  authenticator code (exact rule: `icon_auth.py`).
+- Screens carry per-user read and write flags. The Admin and Item Master screens
+  are role-gated, never per-user; master-data changes are Super Admin only.
+- Per-screen flags cannot express a per-action rule, so action limits use an
+  inline role check (`_require_role`). "Cancel a challan" is one of them.
+- Every `/api/*` route must be gated except `/api/session`, `/healthz` and
+  `/api/boot` (which gates itself). A new ungated route is a bug.
+  **[NOT ENFORCED]** `/api/customers` and `/api/customers/resolve` answer
+  anonymous callers.
+
+## 10. Deliberately not built — do not build unless asked
+
+Swap in Loading Verification (scrapped) · multi-item module gate passes (a
+module gate pass's items are its pallets) · guard screen · EL image service ·
+replacement-serial workflow · Excel upload for Production Entry · Production
+Entry segments (material per serial sub-range; this blocks the Traceability
+Report) · Production Report · FQC Matrix report · sidebar redesign. No OEE or
+efficiency figure until the production head signs off an ideal cycle time.
+The Drafts screen is still v4 sample data.
+
+## 12. Indent properties and serial numbers (Round 37)
+
+- An indent item's glass is the **front glass**: ARC, NARC or blank. The
+  **back glass is always NARC** - shown on the form, never chosen or stored.
+  The server accepts nothing but ARC / NARC. (Column is still `arc`.) [built]
+- **Custom serial number (non-ICON)** is a checkbox on the indent, **unticked by
+  default = ICON serial numbers**. It is a property of the whole indent and is
+  fixed once serials have been allocated against it. [built]
+
+## 11. Open — needs Mukesh
+
+- Dates are locked to the server clock, but migrating history from Excel needs
+  real past dates. Needs a restricted, clearly marked "as-of date" import path.
+- How the 16-item FQC Matrix relates to the 44-item defect list.
+- Whether the Rounds 23–29 access-control system is exactly as intended.
+- Cancel permission scope: Admin and Super Admin is assumed.

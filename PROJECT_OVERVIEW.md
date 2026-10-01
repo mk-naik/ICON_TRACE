@@ -264,6 +264,7 @@ python test_traceability_import_ui.py 2 tests · the import cascade on the Produ
 python test_fqc_scanner_ui.py      18 tests · the barcode scanner on FQC Entry: focus, lock, status line, missed scans
 python test_customer_filters.py    13 tests · every customer filter matches every spelling, name or code
 python test_pack_readiness.py      9 tests · Packing: Not FQC'd refused, not in a production entry warned
+python test_indent_properties.py  6 tests · indent: front glass (ARC/NARC), custom-serial checkbox
 ```
 
 The JS tests read their functions out of `icon_live.js`, so they test what

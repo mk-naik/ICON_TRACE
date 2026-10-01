@@ -72,7 +72,11 @@ NESTED = {"challan_seq": {"fy", "next"}, "config": {"pallet_ceiling"},
                     "needs_review", "drafts"},
           "range": {"from", "to"}}
 ROW_KEYS = {
-    "indents": {"indent_no", "customer", "build_type", "delivery_by", "lines"},
+    # Round 37: "custom_serial" - the indent's serial type (ICON vs the
+    # customer's own), which Planning reads to switch its serial range for
+    # the Excel upload. Added deliberately.
+    "indents": {"indent_no", "customer", "build_type", "delivery_by", "lines",
+                "custom_serial"},
     "customers": {"code", "name", "gstin", "state", "stock"},
     "open_boxes": {"box_id", "seq", "pack_date", "model", "grade", "qty",
                    "capacity", "customer"},

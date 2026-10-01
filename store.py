@@ -314,6 +314,11 @@ def _migrate(cx, text):
     if cols("serial") and "rework" not in cols("serial"):
         cx.execute("ALTER TABLE serial ADD COLUMN rework INTEGER NOT NULL DEFAULT 0")
 
+    # Round 37: an indent can carry the customer's own (non-ICON) serial
+    # numbers. 0 for every indent already on file - they are all ICON.
+    if cols("indent") and "custom_serial" not in cols("indent"):
+        cx.execute("ALTER TABLE indent ADD COLUMN custom_serial INTEGER NOT NULL DEFAULT 0")
+
     # Round 34: direct cancellation of every document type (Admin/Super Admin
     # + a TOTP step-up). The SAME four columns on every table - the exact ones
     # challan already carries - so cancel is one shape, not one per type.

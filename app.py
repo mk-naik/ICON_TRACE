@@ -1219,6 +1219,8 @@ def _line_payload(cur, l, i):
     return {"line": l["line_no"], "model": l["model"],
             "item_code": l["item_code"], "item": l["item_description"],
             "dcr": l["dcr"], "arc": l["arc"], "qty": l["qty"],
+            "build_type": i["build_type"],
+            "custom_serial": bool(i.get("custom_serial")),
             "wattage": l["wattage"], "pallet": l["pallet_qty"],
             "cust": cr["name"] if cr else i["customer"],
             "id": l["indent_line_id"], "cancelled": cancelled,
@@ -1290,6 +1292,7 @@ def boot_private():
             indents.append({
                 "indent_no": i["indent_no"], "customer": i["customer"],
                 "build_type": i["build_type"], "delivery_by": i["delivery_by"],
+                "custom_serial": bool(i.get("custom_serial")),
                 "lines": [_line_payload(cur, l, i) for l in lines]})
         fy = db.fin_year()
         r = store.one(cur, "SELECT next_seq FROM challan_counter WHERE fy=%s", (fy,))
@@ -5332,6 +5335,16 @@ def api_settings():
     return jsonify({"ok": True})
 
 
+def _front_glass(raw, n):
+    """(value, error) for an indent item's FRONT glass: ARC, NARC or nothing.
+    Only the front glass has a choice - the back glass is always NARC, so it is
+    shown on the form but never stored or chosen. The column is still `arc`."""
+    v = (raw or "").strip().upper() or None
+    if v not in (None, "ARC", "NARC"):
+        return None, "Item %d: front glass must be ARC or NARC, not %r." % (n, raw)
+    return v, None
+
+
 @app.route("/api/indent", methods=["POST"])
 @require_screen_write("indent")
 def api_indent_create():
@@ -5359,9 +5372,13 @@ def api_indent_create():
         if pal and int(pal) > mm["pallet_ceiling"]:
             errors.append("Item %d: %s per pallet is impossible — the frame "
                           "takes at most %d." % (i, pal, mm["pallet_ceiling"]))
+        arc, arc_err = _front_glass(it.get("arc"), i)
+        if arc_err:
+            errors.append(arc_err)
+            continue
         lines.append({"item_description": mm["item"], "item_code": mm["item_code"],
                       "model": mm["model"], "wattage": mm["wattage"], "qty": q,
-                      "dcr": mm["cell_type"], "arc": it.get("arc"),
+                      "dcr": mm["cell_type"], "arc": arc,
                       "pallet_qty": int(pal) if pal else None, "line_note": None})
     for k, label in (("indent_no", "Indent number"), ("customer", "Customer"),
                      ("indent_date", "Indent date")):
@@ -5388,6 +5405,8 @@ def api_indent_create():
     # defaults for anything the caller omitted, so a partial payload cannot
     # fail on a NOT NULL rather than on a message the operator can act on
     head["build_type"] = head.get("build_type") or "make_to_stock"
+    # ICON serial numbers unless the box was ticked
+    head["custom_serial"] = 1 if d.get("custom_serial") else 0
     head["status"] = "open"
     for k in list(head):
         if head[k] == "":
@@ -6773,10 +6792,21 @@ def api_indent_update(indent_no):
         if pal and int(pal) > mm["pallet_ceiling"]:
             errors.append("Item %d: %s per pallet is impossible — the frame "
                           "takes at most %d." % (n, pal, mm["pallet_ceiling"]))
+        arc, arc_err = _front_glass(it.get("arc"), n)
+        if arc_err:
+            errors.append(arc_err)
+            continue
         lines.append({"item_description": mm["item"], "item_code": mm["item_code"],
                       "model": mm["model"], "wattage": mm["wattage"], "qty": q,
-                      "dcr": mm["cell_type"], "arc": it.get("arc"),
+                      "dcr": mm["cell_type"], "arc": arc,
                       "pallet_qty": int(pal) if pal else None, "line_note": None})
+    # The serial type is fixed once serials exist: 300 ICON serials cannot
+    # become "custom" after the fact, nor the reverse.
+    if used and "custom_serial" in d and \
+            bool(d.get("custom_serial")) != bool(i.get("custom_serial")):
+        errors.append("Serial numbers have already been allocated against %s, "
+                      "so it cannot change between ICON and custom serial "
+                      "numbers." % indent_no)
     # An edit that carries no items would DELETE every one of them below and
     # leave an indent the list can never show - the view joins its lines -
     # while its number still refuses to be used again. That is exactly how
@@ -6799,6 +6829,8 @@ def api_indent_update(indent_no):
     # leave it alone, not null it - NOT NULL columns aside, silently blanking
     # a delivery date because the form did not include it is worse.
     head = {k: v for k, v in head.items() if v is not None}
+    if "custom_serial" in d and not used:
+        head["custom_serial"] = 1 if d.get("custom_serial") else 0
     if not head.get("build_type"):
         head.pop("build_type", None)
     if not head:

@@ -569,7 +569,7 @@ def indent_exists(cur, indent_no):
 
 
 INDENT_COLS = ["indent_no", "indent_date", "customer", "area", "lot_name",
-               "build_type", "status",
+               "build_type", "custom_serial", "status",
                "delivery_by", "delivery_text", "special_instructions",
                "prepared_by", "approved_by", "form_no"]
 
@@ -579,6 +579,8 @@ LINE_COLS = ["line_no", "item_description", "item_code", "model", "wattage", "qt
 
 def insert_indent(cur, head, lines, pdf_path, sha, actor):
     rec = {k: head.get(k) for k in INDENT_COLS}
+    # an explicit NULL would defeat the column's DEFAULT: ICON serials unless said
+    rec["custom_serial"] = 1 if rec.get("custom_serial") else 0
     rec.update({"pdf_path": pdf_path, "pdf_sha256": sha, "created_by": actor})
     if cur is None:
         rec["indent_id"] = len(_demo["indent"]) + 1

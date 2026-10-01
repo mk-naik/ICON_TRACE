@@ -6949,6 +6949,21 @@ function wireFqcAnomalies() {
         .replace(/\bthe line\b/g, 'the item').replace(/\bLine (\d)/g, 'Item $1');
     });
 
+    /* the glass: only the FRONT glass is ARC or NARC; the back glass is
+       always NARC. v4 says "ARC / NARC" on a field that is the front's. */
+    var arcFld = document.getElementById('pArc');
+    arcFld = arcFld && arcFld.closest('.fld');
+    if (arcFld) {
+      var arcLab = arcFld.querySelector('label');
+      if (arcLab) arcLab.textContent = 'Front glass';
+      if (!arcFld.querySelector('.hint')) {
+        var arcHint = document.createElement('div');
+        arcHint.className = 'hint';
+        arcHint.textContent = 'ARC or NARC · back glass is always NARC';
+        arcFld.appendChild(arcHint);
+      }
+    }
+
     /* the customer echo, and the three fields from the other ERP */
     var echo = document.getElementById('pCustEcho');
     if (echo && echo.closest('.fld')) echo.closest('.fld').remove();

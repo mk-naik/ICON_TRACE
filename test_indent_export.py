@@ -45,7 +45,11 @@ def test(name):
 
 ITEMS = [i["item_code"] for i in models.all_items()][:3]
 A, B = "SEP-10/2026", "SEP-09/2026"
-CUST_A, CUST_B = "SAI BABUJI PROJECTS", "SG MEDA"
+# the customer master's own spelling - what the list and the export show
+# (the master was title-cased; "SG MEDA" is only an alias now)
+import icon_customers as _customers                          # noqa: E402
+CUST_A = _customers.resolve("SAI BABUJI PROJECTS")["name"]
+CUST_B = _customers.resolve("SG MEDA")["name"]
 COLUMNS = ["Indent", "Customer", "Item", "Cell type", "Ordered",
            "Dispatched", "Remaining"]
 

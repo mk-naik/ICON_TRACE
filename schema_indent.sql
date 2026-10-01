@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS indent (
   -- only about when the serial is disclosed.
   build_type    ENUM('make_to_stock','make_to_order') NOT NULL
                 DEFAULT 'make_to_stock',
+  -- 1 = the customer's own (non-ICON) serial numbers, loaded from Excel
+  custom_serial TINYINT(1) NOT NULL DEFAULT 0,
 
   -- The paper form says things like "NEXT WEEK". Keep what was written for
   -- the record, but store a real date so it can be sorted and chased.

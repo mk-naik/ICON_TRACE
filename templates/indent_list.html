@@ -22,7 +22,7 @@ the factory and everything downstream hangs off it.</div>{% endif %}</div>
 {% if prog %}
 <div class="card"><div class="card-h"><h3>Lines · ordered, dispatched, remaining</h3><span class="sp"><a class="btn btn-sm" href="{{ url_for('export_csv', what='indents') }}">Export CSV</a></span></div>
 <div class="scroll"><table>
-<thead><tr><th>Indent</th><th>#</th><th>Model</th><th>DCR</th><th>ARC</th>
+<thead><tr><th>Indent</th><th>#</th><th>Model</th><th>DCR</th><th>Front glass</th>
 <th style="text-align:right">Ordered</th><th style="text-align:right">KW</th>
 <th style="text-align:right">Dispatched</th><th style="text-align:right">Remaining</th></tr></thead><tbody>
 {% for p in prog %}<tr>

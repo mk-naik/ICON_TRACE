@@ -5627,6 +5627,22 @@ serials on a copy of the production DB in Chromium, before and after.
 - `test_pack_readiness.py` (9, two in Chromium); the backfill case is in
   `test_traceability_import.py`.
 
+### Indent: front glass, and custom (non-ICON) serial numbers
+
+Mukesh: the indent item's "Glass" is really the FRONT glass (ARC / NARC); the
+back glass is always NARC. And an indent can carry the customer's own serial
+numbers - a checkbox, default ICON.
+
+- Form, list header and Planning's v4 field say "Front glass"; the form notes
+  "Back glass is always NARC". The server refuses anything but ARC / NARC
+  (it accepted any text before).
+- `indent.custom_serial` (new column, ADD COLUMN migration, default 0).
+  Editing may change it only while nothing is allocated. Planning's payload
+  carries it, and `build_type`, on the indent and on every item.
+- `db.insert_indent` defaults it, so no caller can write an explicit NULL.
+- Tests: `test_indent_properties.py` (6, one in Chromium). Also fixed
+  `test_indent_export.py`, stale since the customer master was title-cased.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on
