@@ -93,6 +93,15 @@ if __name__ == "__main__":
     log.info("Database reset endpoint: %s",
              "ENABLED" if _RESET_ENABLED else "DISABLED")
 
+    # FQC decisions that never reached their module (a path that created
+    # rows without the hand-off): carried on now, before anyone packs.
+    import store
+    with store.conn() as (cx, cur):
+        settled = db.settle_standing_fqc(cur)
+    if sum(settled.values()):
+        log.info("FQC decisions carried on to modules that missed them: %s",
+                 settled)
+
     import icon_ingest
     icon_ingest.start_background()
     log.info("Event ingest running: not-in-master, SS skip, looked-up-no-"

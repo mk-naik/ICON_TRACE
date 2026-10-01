@@ -338,7 +338,10 @@ refusal returns its reason, never a bare 400.
 serial exists in `serial`                    "not in the serial master"
                                              (FQC may grade a serial ahead of Planning;
                                              it cannot be PACKED until it is planned)
-serial.state == 'graded'                     "has no FQC grade"
+a live FQC decision on file (latest_fqc)     "Not FQC'd - ... has not been through FQC"
+                                             (a HARD refusal - Mukesh, 01-10-2026)
+serial.state == 'graded'                     rejected -> "waiting on a quality decision";
+                                             hold -> Hold & Deviation
 serial.grade == box.grade                    "the label claims every module matches"
 serial.model == box.model
 not already in a live box                    "already in box N"
@@ -348,6 +351,16 @@ box.qty < box.capacity                       "at its capacity of 36"
 So FQC not writing `grade` and `state='graded'` does not merely lose a record
 — **Packing stops entirely.** That is the intended dependency: packing an
 ungraded module is how a reject reaches a customer.
+
+**Not in a production entry** (`serial.prod_entry_id` empty) is a WARNING, not a
+refusal: the preview names it, the screen asks once before Add, and the scan's
+audit row carries `"unrecorded": true`. An entry is often filed hours after FQC.
+
+**Every path that creates serial rows hands them FQC's standing decisions**
+(`app._planned_serials` -> `db.apply_standing_fqc`, which reaches rows created
+'planned' OR 'produced'). The backfill once did not, and 637 modules FQC had
+passed sat 'produced' and unpackable; `db.settle_standing_fqc` runs at server
+start to carry on any such row.
 
 On a successful scan:
 

@@ -5582,6 +5582,13 @@ function wireFqcAnomalies() {
       .catch(function () { /* nothing open, or the server is down */ });
   }
 
+  /* 2026-10-01 or 2026-10-01T12:00:14 -> 01-10-2026 (12:00) */
+  function packWhen(v) {
+    var m = String(v || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}:\d{2}))?/);
+    if (!m) return String(v || '');
+    return m[3] + '-' + m[2] + '-' + m[1] + (m[4] ? ' ' + m[4] : '');
+  }
+
   function wirePacking() {
     if (typeof packLookup !== 'function' || packLookup.__live) return;
 
@@ -5622,22 +5629,39 @@ function wireFqcAnomalies() {
                 fqcEsc(d.model || '—') + '</div></div>' +
               '<div><label>Wattage</label><div class="lv mono">' +
                 (d.wattage ? d.wattage + 'W' : '—') + '</div></div>' +
+              /* FQC and production are two separate facts, each in its own
+                 cell - "is produced, not ready to pack" used to stand for
+                 both "never inspected" and "passed but not carried on" */
               '<div><label>FQC</label><div class="lv">' +
-                fqcEsc(d.outcome === 'pass' ? 'Passed' :
-                       d.outcome === 'reject' ? 'Rejected' : '—') + '</div></div>' +
+                (d.outcome === 'pass' || d.outcome === 'reject'
+                  ? fqcEsc(d.outcome === 'pass' ? 'Passed' : 'Rejected') +
+                    (d.graded_at ? ' <span class="mono" style="font-size:11px;' +
+                      'color:var(--ink3)">' + fqcEsc(packWhen(d.graded_at)) +
+                      '</span>' : '')
+                  : '<span style="color:var(--fail);font-weight:600">' +
+                    'Not FQC\'d</span>') + '</div></div>' +
               '<div><label>Grade</label><div class="lv">' +
                 (d.grade ? '<span class="tag t-pass">' + fqcEsc(d.grade) +
                   '</span>' : '<span class="tag t-rev">none yet</span>') +
                 '</div></div>' +
-              '<div><label>Judged</label><div class="lv mono" ' +
-                'style="font-size:11px">' +
-                fqcEsc((d.graded_at || '—').replace('T', ' ').slice(0, 16)) +
+              '<div><label>Production</label><div class="lv mono" ' +
+                'style="font-size:12px">' +
+                (d.production
+                  ? fqcEsc(packWhen(d.production.date) + ' · ' +
+                           (d.production.shift || ''))
+                  : '<span style="color:var(--review);font-weight:600">' +
+                    'Not recorded</span>') +
                 '</div></div>' +
             '</div>' +
             '<div class="gates"><span class="gate ' + (d.ok ? 'ok' : 'no') +
               '">' + fqcEsc(d.ok ? 'Ready to pack' : d.why) + '</span>' +
-            (d.rework ? '<span class="gate no" style="margin-left:6px">' +
-              '⚠ String Rework module — you will be asked to confirm</span>' : '') +
+            /* each warning on its own line: the module MAY be packed, and
+               Add to box asks once, naming every one of them */
+            (d.warnings || []).map(function (w) {
+              return '<span class="gate warn" data-warn="' + fqcEsc(w.code) +
+                '" style="margin-left:6px">⚠ ' + fqcEsc(w.why) +
+                (d.ok ? ' — you will be asked to confirm' : '') + '</span>';
+            }).join('') +
             '</div>' +
             '</div>';
         })
@@ -5654,6 +5678,18 @@ function wireFqcAnomalies() {
     window.packCommit = function (confirmRework) {
       if (!packHold || !packHold.ok) return;
       var serial = packHold.s;
+      /* Warnings the preview showed (not in a production entry, String
+         Rework): asked ONCE, all together, before anything is written. A
+         yes to a rework warning is sent on, so the server does not ask a
+         second time. */
+      var warns = (packHold.info && packHold.info.warnings) || [];
+      var noted = warns.map(function (w) { return w.code; });
+      if (confirmRework !== true && warns.length) {
+        var msg = serial + '\n\n' + warns.map(function (w) {
+          return '⚠ ' + w.why; }).join('\n') + '\n\nAdd it to the box anyway?';
+        if (typeof window.confirm === 'function' && !window.confirm(msg)) return;
+        confirmRework = noted.indexOf('rework') >= 0;
+      }
       packEnsureBox(packHold.info)
         .then(function (box) {
           var body = { serial: serial };
@@ -5676,8 +5712,11 @@ function wireFqcAnomalies() {
           packBox.qty = d.qty;
           if (typeof addSlot === 'function') addSlot(serial);
           if (typeof packCancel === 'function') packCancel();
-          if (confirmRework && typeof toast === 'function')
-            toast(serial + ' packed — String Rework module.');
+          if (noted.length && typeof toast === 'function')
+            toast(serial + ' packed — ' + warns.map(function (w) {
+              return w.code === 'rework' ? 'String Rework module'
+                                         : 'not in a production entry yet'; })
+              .join(', ') + '.');
         })
         .catch(function (err) {
           if (typeof toast === 'function')

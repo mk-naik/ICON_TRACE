@@ -1513,12 +1513,16 @@ def api_box_scan(box_id):
                                    "box %s (grade %s) with the regular modules?"
                                    % (serial, _box_label(b), b["grade"])})
         store.add_to_box(cur, box_id, serial, actor())
+        unrecorded = bool(srow) and not srow.get("prod_entry_id")
         # and the module's own state, in the same transaction. Without this a
         # packed module still read 'graded' - the contract in DATA_LAYER says
         # both writes happen together, and the box was the only thing that
         # knew. Removing it puts the state back.
         db.set_serial(cur, serial, state="packed")
-        db.audit(cur, actor(), "box.scan", "serial", serial, {"box": box_id})
+        # packed before its production was recorded: the screen warned and
+        # the operator confirmed - kept on the record, so it can be found
+        db.audit(cur, actor(), "box.scan", "serial", serial,
+                 dict({"box": box_id}, **({"unrecorded": True} if unrecorded else {})))
         b = store.box_row(cur, box_id)
     return jsonify({"ok": True, "qty": b["qty"], "capacity": b["capacity"]})
 
@@ -1541,20 +1545,38 @@ def _pack_refusal(cur, b, serial):
         return "%s is already in box %s." % (serial, _box_label(dup))
 
     state = s.get("state")
-    if state == "rejected":
+    if state in ("packed", "dispatched"):
+        return "%s is already %s." % (serial, state)
+    # FQC is read from FQC's own record, not inferred from the state: "is
+    # produced, not ready to pack" was said both of a module nobody had
+    # inspected and of one FQC had passed - two different problems, one
+    # sentence, and the operator could not tell which.
+    f = db.latest_fqc(cur, serial, s.get("build_instance"))
+    if not f:
+        return ("Not FQC'd - %s has not been through FQC yet. Packing an "
+                "unjudged module is how a reject reaches a customer." % serial)
+    if state == "rejected" or (state != "graded" and f.get("outcome") == "reject"):
         return ("%s was rejected at FQC and is waiting on a quality decision. "
                 "It has no grade yet, so it cannot be packed." % serial)
     if state == "hold":
         return ("%s is on hold - its FQC decision was made without the "
                 "tester's reading and is waiting for it (Hold & Deviation). "
                 "It can be packed once the evidence agrees." % serial)
-    if state == "planned":
-        return ("%s has not been through FQC. Packing an unjudged module is "
-                "how a reject reaches a customer." % serial)
-    if state in ("packed", "dispatched"):
-        return "%s is already %s." % (serial, state)
     if state != "graded":
-        return "%s is %s, not ready to pack." % (serial, state)
+        # a pass FQC made that did not reach the module's record
+        try:
+            short = (f.get("ss_pmax") is not None and s.get("wattage") and
+                     float(f["ss_pmax"]) < float(s["wattage"]))
+        except (TypeError, ValueError):
+            short = False
+        if short:
+            return ("%s passed FQC at %.1f W, below its %s W nameplate - it "
+                    "has to be retested at FQC before it can be packed."
+                    % (serial, float(f["ss_pmax"]), s["wattage"]))
+        return ("%s passed FQC on %s, but its record still reads '%s' and "
+                "has no grade to pack under. Look it up at FQC once more to "
+                "carry the decision on." % (serial,
+                (f.get("at") or "")[:16].replace("T", " "), state))
     if b is not None:
         if s.get("grade") != b["grade"]:
             return ("Box is grade %s, %s is %s. The label claims every module "
@@ -1645,14 +1667,32 @@ def api_box_check():
                  "model": None, "capacity": None, "qty": 0}
         why = _pack_refusal(cur, b, serial)
         s = db.find_serial(cur, serial) or {}
-        rec = next((dict(r) for r in db.fqc_recent(cur, 1000)
-                    if r.get("serial") == serial), None)
-        cr = customers.get(s.get("customer"))
+        # this module's own standing decision - not a search of the newest
+        # 1,000 of everyone's, which showed FQC "-" for an older one
+        rec = db.latest_fqc(cur, serial, s.get("build_instance")) if s else None
+        pe = (store.one(cur, "SELECT prod_date, shift FROM production_entry "
+                             "WHERE entry_id=%s", (s["prod_entry_id"],))
+              if s.get("prod_entry_id") else None)
+    # Warnings, apart from the refusal: the module MAY be packed, the
+    # operator confirms first. Not in a production entry is a warning, not a
+    # refusal - its entry is often filed hours after FQC (875 of the first
+    # 1,549 inspected modules, 7.6 h later on average).
+    warnings = []
+    if s and not s.get("prod_entry_id"):
+        warnings.append({"code": "unrecorded", "why":
+            "Not in a production entry - its production has not been "
+            "recorded yet."})
+    if s and s.get("rework"):
+        warnings.append({"code": "rework", "why":
+            "String Rework module - tracked apart from the regular modules."})
     return jsonify({
         "ok": why is None, "why": why, "serial": serial,
         "model": s.get("model"), "wattage": s.get("wattage"),
         "grade": s.get("grade"), "state": s.get("state"),
-        "customer": cr["name"] if cr else s.get("customer"),
+        "customer": db.customer_display(s.get("customer")) or None,
+        "production": ({"date": pe["prod_date"], "shift": pe["shift"]}
+                       if pe else None),
+        "warnings": warnings,
         # the code is what a box stores; the name is what the screen shows
         "customer_code": s.get("customer"),
         # a String Rework module - packable, but the screen warns before it is
@@ -4517,7 +4557,14 @@ def _import_backfill_range(cur, rng, dcr, incharge, stamp):
             "model, wattage, customer, dcr, format_version, date_produced, shift, "
             "sequence, state, prod_entry_id, rework) VALUES "
             "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", rows_)
+    # Exactly what Planning does with rows it creates: a module FQC judged
+    # before it was in the master carries on from that decision. Without
+    # this, 637 modules backfilled on 01-10-2026 stayed 'produced' - FQC
+    # showed them passed, Packing refused them as "not ready to pack".
+    fqc_applied, _closed = _planned_serials(
+        cur, [ser(q) for q in missing], "backfilled from the traceability import")
     return {"action": "backfilled", "qty": len(missing),
+            "fqc_applied": sum(fqc_applied.values()),
             "skipped_present": len(present), "alloc_id": aid, "eid": eids[0],
             "entries": len(eids), "customer": name, "customer_flagged": flagged,
             "rework": bool(rework),
@@ -7550,6 +7597,7 @@ def planning():
             return redirect(url_for("planning"))
         with db.conn() as (cx, cur):
             aid, serials = db.create_allocation(cur, line, d, shift, qty, actor())
+            _planned_serials(cur, serials, "planned")
             db.audit(cur, actor(), "planning.allocate", "allocation", aid,
                      {"indent": line["indent_no"], "qty": qty,
                       "first": serials[0], "last": serials[-1]})

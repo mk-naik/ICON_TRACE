@@ -1167,8 +1167,12 @@ def apply_standing_fqc(cur, serials):
                                                         kept for completeness)
       reject                       rejected            -> Quality decides
 
-    Only a row still 'planned' is touched. Returns {"graded", "hold",
-    "rejected"} counts of what changed."""
+    Only a row still 'planned' or 'produced' is touched - awaiting FQC
+    either way. 'produced' because the traceability BACKFILL creates its rows
+    already produced: on 01-10-2026 it created 637 modules FQC had judged
+    minutes earlier, the decision never reached them, and Packing refused
+    them as "produced, not ready to pack" while FQC showed them passed.
+    Returns {"graded", "hold", "rejected"} counts of what changed."""
     out = {"graded": 0, "hold": 0, "rejected": 0}
     if cur is None:
         return out
@@ -1206,11 +1210,50 @@ def apply_standing_fqc(cur, serials):
             else:
                 state, grade = "rejected", None
             cur.execute("UPDATE serial SET state=%s, grade=%s WHERE serial=%s "
-                        "AND build_instance=1 AND state='planned'",
+                        "AND build_instance=1 AND state IN ('planned', 'produced')",
                         (state, grade, f["serial"]))
             if cur.rowcount:
                 out["graded" if state == "graded" else state] += 1
     return out
+
+
+def settle_standing_fqc(cur):
+    """Every module still 'planned' or 'produced' that FQC has already
+    judged gets the state that decision implies (apply_standing_fqc). The
+    repair for rows a past path created without the hand-off - run once at
+    server start, so the first restart after a fix carries them on. Writes
+    nothing when nothing is waiting; a pass below the row's nameplate is
+    left for a retest, every time, exactly as apply_standing_fqc leaves it."""
+    out = {"graded": 0, "hold": 0, "rejected": 0}
+    if cur is None:
+        return out
+    waiting = [r["serial"] for r in _store.rows(cur,
+        "SELECT DISTINCT s.serial FROM serial s JOIN fqc_record f "
+        "ON f.serial = s.serial AND f.superseded_by IS NULL "
+        "AND COALESCE(f.status,'active') <> 'cancelled' "
+        "WHERE s.build_instance = 1 AND s.state IN ('planned', 'produced')")]
+    if waiting:
+        out = apply_standing_fqc(cur, waiting)
+        n = sum(out.values())
+        if n:
+            audit(cur, "system", "fqc.standing_applied", "serial", None,
+                  dict(out, first=waiting[:20]))
+    return out
+
+
+def latest_fqc(cur, serial, build_instance=1):
+    """The decision FQC stands by for this module - its newest record that
+    is neither superseded nor cancelled - or None. Read by serial: Packing's
+    preview used to look the serial up in the newest 1,000 decisions of
+    everyone's, so a module judged earlier than that showed FQC "-" (and
+    every scan fetched a thousand rows to find one)."""
+    if cur is None:
+        return None
+    return _store.one(cur,
+        "SELECT * FROM fqc_record WHERE serial = %s "
+        "AND COALESCE(build_instance, 1) = %s AND superseded_by IS NULL "
+        "AND COALESCE(status,'active') <> 'cancelled' "
+        "ORDER BY fqc_id DESC LIMIT 1", (serial, build_instance or 1))
 
 
 def prune_lookup_log(cur, keep_days=14):

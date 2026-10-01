@@ -5585,6 +5585,48 @@ written one way: production holds stock as "ICON STOCK" (1,360 serials),
 - `test_customer_filters.py` (10, including one in Chromium); a mutation
   check broke each piece on a copy of the tree and all 8 mutants were caught.
 
+### Packing: "produced, not ready to pack" for a module FQC had passed
+
+Mukesh's photos from the Pallet screen (01-10-2026): ICON625R1293030154 refused
+as "is produced, not ready to pack" while Search & Trace showed FQC passed it;
+another module ready to pack with FQC "-". Reproduced by packing those real
+serials on a copy of the production DB in Chromium, before and after.
+
+- **Cause 1 - the backfill skipped FQC's hand-off.** FQC passed the module at
+  12:00:14, before it was in the master; the traceability backfill created it
+  at 12:05 as 'produced'. Planning hands new rows FQC's standing decision
+  (`apply_standing_fqc`); the backfill did not, and that function only touched
+  'planned' rows anyway. 637 modules (632 passed, 5 rejected) were stuck.
+  Fixed both; `db.settle_standing_fqc` runs at server start and carries them
+  on (verified on a snapshot: 632 graded, 5 to Quality, nothing else touched;
+  a pass below its nameplate and a cancelled decision are left alone).
+- **Cause 2 - the preview's FQC column searched the newest 1,000 decisions**
+  of everyone's for this serial, so an older module showed FQC "-" (and every
+  scan fetched 1,000 rows). Now `db.latest_fqc` reads the module's own.
+- **Separate messages, as asked.** "Not FQC'd" is a hard refusal in those
+  words (Mukesh: "hard-refuses non-FQC'd modules is true don't change").
+  "Not in a production entry" is a separate amber warning - the module may be
+  packed, Add to box asks once (listing every warning, String Rework too), and
+  the audit row records `unrecorded`. A warning, not a refusal, because the
+  entry is often filed later: 875 of the first 1,549 inspected modules had
+  their entry recorded after FQC, 7.6 h later on average. The preview's
+  Judged cell became Production (entry date and shift, or Not recorded); the
+  FQC cell carries Passed / Rejected / Not FQC'd with its time. A rejection
+  that never reached the record now says "rejected at FQC", not "produced".
+- **Customer on the preview** is the master's name, not the raw spelling.
+- **Found, not changed - needs Mukesh's decision:** a box takes its customer
+  from its first module and NOTHING compares later modules' customers - a
+  Borosil module can go into an Icon Stock box once it is FQC'd.
+- **Found, not changed:** the legacy server-rendered `/planning` form is broken
+  on SQLite (`create_allocation` writes `allocation.indent_no`, a column that
+  does not exist). The screen plans through `/api/allocation`. The hand-off
+  was added there too, for if it is ever revived.
+- Fixtures that faked "graded" without an FQC record (gate pass x2, the String
+  Rework pack test) now insert the pass FQC would leave - real data has no
+  graded module without one.
+- `test_pack_readiness.py` (9, two in Chromium); the backfill case is in
+  `test_traceability_import.py`.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

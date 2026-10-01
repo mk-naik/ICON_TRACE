@@ -362,6 +362,35 @@ def t_apply_backfill_rework():
     assert s1["customer"] == STOCK_NAME and s1["rework"] == 1, s1
 
 
+@test("a module FQC judged BEFORE the backfill created it carries on from that "
+      "decision - a pass is graded A and packs, a reject goes to Quality - not "
+      "left 'produced' (637 modules on 01-10-2026)")
+def t_backfill_carries_standing_fqc():
+    c = client()
+    with store.conn() as (cx, cur):
+        store.insert(cur, "fqc_record", {"serial": S(1), "outcome": "pass",
+            "grade": "A", "mode": "confirmed", "decided_by": "t",
+            "at": "2026-09-01T07:00:00"})
+        store.insert(cur, "fqc_record", {"serial": S(2), "outcome": "reject",
+            "mode": "confirmed", "decided_by": "t", "defect": "Cell Crack",
+            "at": "2026-09-01T07:01:00"})
+    data = wb_bytes([{"date": D1, "shift": "A", "watt": "625W", "start": S(1),
+                      "end": S(7), "qty": 7, "customer": "BOROSIL"}])
+    rng = parse_upload(c, data).get_json()["ranges"][0]
+    r = c.post("/api/prodentry/import/apply",
+               json={"ranges": [rng], "incharge": "X", "backfill": True}).get_json()
+    assert r["results"][0]["action"] == "backfilled", r
+    assert r["results"][0]["fqc_applied"] == 2, r
+    assert (serial_row(S(1))["state"], serial_row(S(1))["grade"]) == ("graded", "A")
+    assert serial_row(S(2))["state"] == "rejected", serial_row(S(2))
+    assert serial_row(S(3))["state"] == "produced", "an uninspected module stays produced"
+    # and Packing takes the passed one
+    box = c.post("/api/box/open", json={"grade": "A", "model": "ISEN625-G12R",
+                                        "capacity": 36}).get_json()
+    r = c.post("/api/box/%d/scan" % box["box_id"], json={"serial": S(1)}).get_json()
+    assert r["ok"], r
+
+
 @test("a String Rework module warns at packing (soft confirm) and packs once "
       "confirmed - it is ICON Stock, mixable with regular modules")
 def t_pack_rework_warns():
@@ -371,8 +400,12 @@ def t_pack_rework_warns():
     rng = parse_upload(c, data).get_json()["ranges"][0]
     c.post("/api/prodentry/import/apply",
            json={"ranges": [rng], "incharge": "X", "backfill": True})
-    # make one pass FQC so it is packable (backfill leaves it 'produced')
+    # make one pass FQC so it is packable (backfill leaves it 'produced') -
+    # with the FQC record a pass leaves, which Packing reads
     with store.conn() as (cx, cur):
+        store.insert(cur, "fqc_record", {"serial": S(1), "outcome": "pass",
+            "grade": "A", "mode": "confirmed", "decided_by": "t",
+            "at": "2026-09-01T09:00:00"})
         cur.execute("UPDATE serial SET state='graded', grade='A' WHERE serial=%s", (S(1),))
     box = c.post("/api/box/open", json={"grade": "A", "model": "ISEN625-G12R",
                                         "capacity": 36}).get_json()

@@ -64,6 +64,11 @@ def packed_box(c, idx):
                 "wattage": WATT, "customer": "STOCK", "dcr": "DCR",
                 "format_version": 2, "date_produced": "2026-09-09",
                 "shift": 1, "sequence": i, "state": "planned", "grade": "A"})
+            # graded the way FQC grades: with the pass on record, which
+            # Packing reads
+            store.insert(cur, "fqc_record", {"serial": serial(i),
+                "outcome": "pass", "grade": "A", "mode": "confirmed",
+                "decided_by": "t", "at": "2026-09-09T10:00:00"})
             db.set_serial(cur, serial(i), state="graded")
     b = c.post("/api/box/open",
               json={"grade": "A", "model": MODEL, "capacity": len(idx)}).get_json()
