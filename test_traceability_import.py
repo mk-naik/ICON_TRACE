@@ -31,6 +31,10 @@ import io, os, sys, tempfile, traceback, datetime
 
 TMP = tempfile.mkdtemp(prefix="icontrace_trace_")
 os.environ["ICON_DB_FILE"] = os.path.join(TMP, "test.db")
+# The file's dates are fixed (September 2026). Claim mode keeps the 30-day
+# backdate guard (backfill bypasses it, by design), which is not what this
+# suite tests - without this the suite fails once September is 31 days old.
+os.environ["ICON_PROD_BACKDATE_DAYS"] = "3650"
 
 import openpyxl                                                # noqa: E402
 import db                                                     # noqa: E402
