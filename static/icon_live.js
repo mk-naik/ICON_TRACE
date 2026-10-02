@@ -2535,7 +2535,7 @@
           html += '<p style="margin-bottom:10px"><b>' + anomalies.junk.length + ' row(s) under a hand-typed ID.</b> The barcode would not scan, so the operator entered something to let the test run. The module exists; its result is filed under nothing.</p>';
           html += '<div class="scroll" style="max-height:180px;margin-bottom:20px"><table><thead><tr><th>Time</th><th>ID as typed</th><th>Pmax</th></tr></thead><tbody>';
           anomalies.junk.forEach(function(j) {
-            html += '<tr><td>' + (j.at || '') + '</td><td class="mono"><span class="tag t-fail">' + fqcEsc(j.id) + '</span></td><td class="mono">' + (j.pmax || '') + '</td></tr>';
+            html += '<tr><td>' + (j.at || '') + '</td><td class="mono"><span class="tag t-fail">' + ctlVisible(j.id) + '</span></td><td class="mono">' + (j.pmax || '') + '</td></tr>';
           });
           html += '</tbody></table></div>';
         }
@@ -8268,6 +8268,26 @@ function wireFqcAnomalies() {
     });
   }
 
+  /* A scanner leaves invisible characters around a serial - a Ctrl-V (0x16) in
+     front, a stray "-" behind - and "ICON625R12A0212460" that LOOKS right but is
+     "malformed" is the worst kind of error to be shown: nothing on screen says
+     why. Escaped text with every invisible character made visible, in red. */
+  function ctlVisible(s) {
+    return reviewEsc(s).replace(/[\u0000-\u001f\u007f\u200b-\u200f\u2028\u2029\ufeff]/g, function (c) {
+      var h = c.charCodeAt(0).toString(16).toUpperCase();
+      if (h.length < 2) h = '0' + h;
+      return '<b style="color:var(--fail,#B42318)" title="an invisible character, 0x' + h +
+             ', came with the scan">\u2039' + '0x' + h + '\u203a</b>';
+    });
+  }
+  /* the same for text that goes in through textContent */
+  function ctlText(s) {
+    return String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f\u200b-\u200f\u2028\u2029\ufeff]/g, function (c) {
+      var h = c.charCodeAt(0).toString(16).toUpperCase();
+      return '\u20390x' + (h.length < 2 ? '0' + h : h) + '\u203a';
+    });
+  }
+
   function reviewCanActDuplicate(item) {
     if (typeof USER === 'undefined' || !USER) return false;
     /* the same sets as the server's checks, Super Admin included (Round 28) */
@@ -8398,7 +8418,7 @@ function wireFqcAnomalies() {
         }
       }
       return '<tr><td class="mono" style="font-size:11px">' + esc(when) + '</td>' +
-        '<td class="mono">' + esc(r.serial) + '</td>' +
+        '<td class="mono">' + ctlVisible(r.serial) + '</td>' +
         '<td>' + flagTag + '</td>' +
         '<td>' + esc(r.stage || '—') + '</td>' +
         '<td>' + esc(r.detail || '—') + '</td>' +
@@ -8702,12 +8722,12 @@ function wireFqcAnomalies() {
     var esc = reviewEsc;
     var title = document.getElementById('mdlTitle');
     var sub = document.getElementById('mdlSub');
-    if (title) title.textContent = esc(item.flag) + ' · ' + esc(item.serial);
+    if (title) title.textContent = esc(item.flag) + ' · ' + ctlText(item.serial);
     if (sub) sub.textContent = esc(item.detail || '');
     if (typeof modalMode === 'function') modalMode(true);
     var isUnplanned = item.type === 'not_in_master_unplanned';
     var discard = mode === 'discard';
-    if (discard && title) title.textContent = 'Discard · ' + esc(item.serial);
+    if (discard && title) title.textContent = 'Discard · ' + ctlText(item.serial);
     host.innerHTML =
       '<div class="note n-info"><span>ⓘ</span><span>' + esc(item.detail || '') +
         (discard ? ' — discarding says this is not a module that will be planned ' +

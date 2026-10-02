@@ -5954,7 +5954,13 @@ be discarded.
   discard sticks for the scan looked at (`db.upsert_unplanned_item` no longer reopens
   a discarded item for the same row still in the tester's file) and a later scan
   brings it back. A failed reading / skipped tester / lookup stay acknowledge-only.
-- `test_review_discard.py` (7); mutation check caught 5 of 5.
+- On the real production DB (read-only): 26 open malformed + their 26 twin junk items,
+  784 open unplanned, 142 open failed readings. Several junk IDs are a REAL serial with
+  an INVISIBLE scanner character in front (0x16, Ctrl-V: "ICON625R12A0212460" looks
+  perfect on screen and is "malformed"); others end in a stray "-". Needs Review and
+  the Tester Anomalies list now show such characters (red "<0x16>") so the reason is
+  visible.
+- `test_review_discard.py` (8); mutation check caught 6 of 6.
 
 ### Excel exports: text that starts like a formula is written as text
 

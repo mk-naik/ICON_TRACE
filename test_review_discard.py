@@ -289,6 +289,27 @@ def t_screen():
     assert all(x["status"] == "resolved" for x in items() if x["type"] in ("not_in_master_malformed", "ftr_junk"))
 
 
+@test("a scanner's invisible character in front of a serial is SHOWN, not hidden: what looks like "
+      "a valid serial but is 'malformed' says why, in Needs Review and in the Tester Anomalies list")
+def t_invisible_chars():
+    world()
+    dirty = "ICON625R1290220995"                          # Ctrl-V from the scanner, then a real serial
+    write(base_rows() + [row(dirty, "2026/09/29 10:07:00", "610.0")])
+    ingest()
+    assert one("not_in_master_malformed", dirty)["status"] == "open"
+    with H.browser() as b:
+        pg = H.open_page(b, "review")
+        pg.wait_for_selector("#rvRows tr", timeout=8000)
+        pg.click("#v-review .card-h .seg button:has-text('Not in master')")
+        pg.wait_for_timeout(400)
+        rows = pg.inner_text("#rvRows")
+        assert "‹0x16›ICON625R1290220995" in rows.replace("‹", "‹"), rows[:600]
+        pg.locator("#rvRows tr", has_text="ICON625R1290220995").first.locator("button:has-text('Discard')").click()
+        pg.wait_for_selector("#revWhy", timeout=4000)
+        assert "0x16" in pg.inner_text("#mdlTitle"), pg.inner_text("#mdlTitle")
+        assert not pg.errors, pg.errors
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     only = [a for a in sys.argv[1:] if not a.startswith("-")]
