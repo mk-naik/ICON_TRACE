@@ -269,6 +269,7 @@ python test_pack_build_kind.py     5 tests · make-to-order modules pack only wi
 python test_custom_serials.py     12 tests · custom serial upload, allocation, 'a serial in the master is never issued again'
 python test_custom_serials_ui.py  5 tests · Planning screen for custom serials, in Chromium
 python test_batch_copy.py          8 tests · Planning: copy a batch's bill of materials (last / by number)
+python test_challan_cancel_ui.py   2 tests · Cancel button: Admin only, asks reason + authenticator code
 ```
 
 The JS tests read their functions out of `icon_live.js`, so they test what

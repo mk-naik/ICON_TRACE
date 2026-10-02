@@ -5717,6 +5717,25 @@ barcode etc.).
   11 of 12 (the 12th, "button left disabled", is equivalent - `disabled=false`
   is defensive).
 
+### Cancelling an issued challan was open to any Challan writer (Fix A)
+
+- **Wrong:** `/api/challan/<id>/discard` has an "issued" branch that cancels the
+  challan - the path the Cancel button uses - with NO role check and no
+  authenticator step-up, while `/cancel` (Round 34) was Admin + step-up. Two
+  copies of one action; they also reverted serials differently, and `/cancel`
+  swapped a blank reason for a default string.
+- **Change:** `_cancel_issued_challan` is the one implementation (role, mandatory
+  reason BEFORE the step-up so a blank reason does not burn the one-time code,
+  step-up, issued-only, no gate pass, serials via `db.set_serial`, audit).
+  `/cancel` is a thin caller (the Admin Cancel-document screen uses it);
+  `/discard` calls it for an issued challan and is otherwise the draft discard,
+  unchanged. The Cancel button is rendered for Admin / Super Admin (`USER.role`)
+  and now asks for the authenticator code. Edit and draft discard are untouched.
+- **Tests:** `test_challan.py` +6 (operator 403 on both routes, reason mandatory
+  and the code not burned, gate pass on both, full cancel via /discard with
+  selectors and audit, operator keeps Edit and draft discard, number not
+  reused); `test_challan_cancel_ui.py` (2, Chromium). A mutation check caught 8/8.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

@@ -67,11 +67,13 @@ no one signs twice. [enforcement unverified]
   `superseded` (a status distinct from `cancelled`). Only the live version can
   be edited. The invoice is locked; everything else is editable. Abandoning an
   edit changes nothing. Edit is blocked once a gate pass exists. [built]
-- **Cancel is a separate action: Admin or Super Admin only**, reason mandatory,
-  blocked once a gate pass exists. Serials revert `dispatched → packed`,
-  pallets and invoice return to selectors, the number is never reused.
-  **[NOT ENFORCED]** Today any role with Challan write can cancel, and two
-  endpoints (`/cancel`, `/discard`) implement it differently.
+- **Cancel is a separate action: Admin or Super Admin only**, reason mandatory
+  (never defaulted), plus the authenticator step-up (Round 34). Blocked once a
+  gate pass exists. Serials revert `dispatched -> packed`, pallets and invoice
+  return to selectors, the number is never reused. One implementation,
+  `_cancel_issued_challan`, behind both `/cancel` and the issued branch of
+  `/discard` (the challan screen's Cancel button, shown to Admin / Super Admin
+  only). Discarding a DRAFT stays open to whoever has Challan write. [built]
 
 ## 4. Loading Verification and Gate Pass
 

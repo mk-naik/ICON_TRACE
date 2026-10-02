@@ -11618,10 +11618,15 @@ function wireFqcAnomalies() {
         actions += '<button class="btn btn-ghost btn-sm" ' +
           'onclick="clEditChallan(' + ch.challan_id + ')" ' +
           'title="Open this challan for editing — nothing changes until you save">Edit</button> ';
-        actions += '<button class="btn btn-ghost btn-sm" ' +
-          'style="color:var(--fail)" ' +
-          'onclick="clCancelChallan(' + ch.challan_id + ')" ' +
-          'title="Cancel this issued challan — serials revert to packed">Cancel</button> ';
+        /* Cancelling an issued challan is Admin / Super Admin only. The
+           server is the real gate (and asks for the authenticator code);
+           hiding the button just stops everyone else being offered it. */
+        if (USER.role === 'Admin' || USER.role === 'Super Admin') {
+          actions += '<button class="btn btn-ghost btn-sm" ' +
+            'style="color:var(--fail)" ' +
+            'onclick="clCancelChallan(' + ch.challan_id + ')" ' +
+            'title="Cancel this issued challan — serials revert to packed">Cancel</button> ';
+        }
       }
       /* Loading is always available on issued challans, even after a
          gate pass locks editing (split loads). There is no "Create gate
@@ -11705,10 +11710,12 @@ function wireFqcAnomalies() {
     var ch = clRows.filter(function (r) { return r.challan_id === id; })[0] || {};
     var no = ch.challan_no || ('challan #' + id);
     var reason = prompt('Cancel ' + no + '? Every serial on it will revert to packed. Reason:');
-    if (!reason) return;
+    if (!reason || !reason.trim()) return;
+    var totp = prompt('Your authenticator code, to confirm the cancellation:');
+    if (!totp || !totp.trim()) return;
     fetch('/api/challan/' + id + '/discard', {
       method: 'POST',
-      body: JSON.stringify({ reason: reason })
+      body: JSON.stringify({ reason: reason.trim(), totp_code: totp.trim() })
     })
       .then(api)
       .then(function (d) {

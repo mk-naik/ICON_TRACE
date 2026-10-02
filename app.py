@@ -2986,21 +2986,11 @@ def api_challan_discard(challan_id):
             return jsonify({"ok": False, "why": "Challan is already cancelled."}), 400
 
         if ch["status"] == "issued":
-            # Check for gate passes
-            cur.execute("SELECT COUNT(*) as c FROM gatepass WHERE challan_id=%s", (challan_id,))
-            gp_cnt = cur.fetchone()["c"]
-            if gp_cnt > 0:
-                return jsonify({"ok": False, "why": "Cannot cancel: a gate pass already references this challan."}), 400
-            
-            if not body.get("reason"):
-                return jsonify({"ok": False, "why": "Reason is required to cancel an issued challan."}), 400
-
-            # Revert serial states from 'dispatched' to 'packed'
-            cur.execute(
-                "UPDATE serial SET state='packed' WHERE serial IN ("
-                "  SELECT serial FROM challan_serial WHERE challan_id=%s"
-                ")", (challan_id,)
-            )
+            # Cancelling an ISSUED challan is not discarding a draft: Admin or
+            # Super Admin only, with a reason and the authenticator step-up.
+            # One shared implementation with /cancel (DECISIONS.md section 3).
+            err = _cancel_issued_challan(cur, challan_id, body)
+            return err if err else jsonify({"ok": True})
 
         cur.execute(
             "UPDATE challan SET status='cancelled', cancelled_reason=%s, "
@@ -3095,37 +3085,66 @@ def api_challan_cancel(challan_id):
     them to a new challan - you must repack or reopen them normally first).
     """
     d = request.get_json(force=True) or {}
-    reason = (d.get("reason") or "").strip() or "issued challan cancelled by operator"
     with store.conn() as (cx, cur):
-        err = _require_stepup(cur, d)
+        err = _cancel_issued_challan(cur, challan_id, d)
         if err:
             return err
-        ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
-                       (challan_id,))
-        if not ch:
-            return jsonify({"ok": False, "why": "No such challan."}), 404
-        if ch["status"] != "issued":
-            return jsonify({"ok": False, "why":
-                            "Only an issued challan can be cancelled this way. "
-                            "Use /discard to abandon a draft."}), 400
-        # Guard: any gate pass references this challan via the real FK
-        gpc = db.gp_count_for_challan(cur, challan_id)
-        if gpc:
-            return jsonify({"ok": False, "why":
-                            "%d gate pass(es) reference this challan. It is "
-                            "locked and cannot be cancelled." % gpc}), 400
-        # Revert serials dispatched -> packed
-        for s in store.rows(cur, "SELECT serial FROM challan_serial "
-                                 "WHERE challan_id=%s", (challan_id,)):
-            db.set_serial(cur, s["serial"], state="packed")
-        cur.execute(
-            "UPDATE challan SET status='cancelled', cancelled_reason=%s, "
-            "cancelled_by=%s, cancelled_at=%s WHERE challan_id=%s",
-            (reason, actor(),
-             clock.now().isoformat(timespec="seconds"), challan_id))
-        db.audit(cur, actor(), "challan.cancel", "challan", challan_id,
-                 {"fy": ch["fy"], "seq": ch["seq"], "reason": reason})
     return jsonify({"ok": True})
+
+
+def _cancel_issued_challan(cur, challan_id, body):
+    """The ONE implementation of cancelling an ISSUED challan - behind both
+    /api/challan/<id>/cancel and the issued branch of /discard (the path the
+    challan screen's Cancel button takes). Two copies of this action used to
+    differ: /discard had no role check at all, and /cancel swapped an empty
+    reason for a default string.
+
+    Returns None on success, else a (json, status) error to return as-is.
+    Nothing is written before every check has passed.
+
+      1. Admin or Super Admin only (403 / 401)
+      2. a reason, non-empty - never a default (400). Checked BEFORE the
+         step-up, so a blank reason does not burn the one-time code
+      3. the authenticator step-up (Round 34), before anything that would say
+         what state the challan is in
+      4. it exists and is issued
+      5. no gate pass references it
+    then serials revert dispatched -> packed through db.set_serial, the challan
+    is marked cancelled (reason / by / at), and the audit row names the actor."""
+    try:
+        _require_role(*_R_ADMIN, why="Only an Admin or Super Admin can cancel "
+                                     "an issued challan.")
+    except _Refuse as e:
+        return jsonify({"ok": False, "why": e.why}), e.code
+    reason = ((body or {}).get("reason") or "").strip()
+    if not reason:
+        return jsonify({"ok": False, "why":
+            "A reason is required to cancel an issued challan."}), 400
+    err = _require_stepup(cur, body)
+    if err:
+        return err
+    ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s", (challan_id,))
+    if not ch:
+        return jsonify({"ok": False, "why": "No such challan."}), 404
+    if ch["status"] != "issued":
+        return jsonify({"ok": False, "why":
+                        "Only an issued challan can be cancelled this way. "
+                        "Use /discard to abandon a draft."}), 400
+    gpc = db.gp_count_for_challan(cur, challan_id)
+    if gpc:
+        return jsonify({"ok": False, "why":
+                        "%d gate pass(es) reference this challan. It is "
+                        "locked and cannot be cancelled." % gpc}), 400
+    for s in store.rows(cur, "SELECT serial FROM challan_serial "
+                             "WHERE challan_id=%s", (challan_id,)):
+        db.set_serial(cur, s["serial"], state="packed")
+    cur.execute(
+        "UPDATE challan SET status='cancelled', cancelled_reason=%s, "
+        "cancelled_by=%s, cancelled_at=%s WHERE challan_id=%s",
+        (reason, actor(), clock.now().isoformat(timespec="seconds"), challan_id))
+    db.audit(cur, actor(), "challan.cancel", "challan", challan_id,
+             {"fy": ch["fy"], "seq": ch["seq"], "reason": reason})
+    return None
 
 
 # ==========================================================================

@@ -44,7 +44,10 @@ _TOTP_SECRET = None
 
 
 def _cancel_body(extra=None):
+    """A cancel request that passes every gate: a fresh authenticator code and
+    - since the reason became mandatory, never defaulted - a reason."""
     b = dict(extra or {})
+    b.setdefault("reason", "test cancellation")
     b["totp_code"] = AUTH.totp_code(_TOTP_SECRET)
     return b
 
@@ -1283,6 +1286,149 @@ def t_edit_save_refuses_non_issued():
     assert dict(challan_row(chid))["superseded_by"] == ma_id
     assert dict(challan_row(ma_id))["status"] == "issued"
     assert dict(challan_row(ma_id))["vehicle_no"] != "SHOULD-NOT-LAND"
+
+
+# --------------------------------------------------------------------------
+# Cancelling an ISSUED challan is Admin / Super Admin only (DECISIONS.md
+# section 3). Two routes reach it - /cancel and the issued branch of /discard,
+# which the challan screen's Cancel button uses - and both run the one shared
+# helper, so every rule below is checked on BOTH.
+# --------------------------------------------------------------------------
+
+def _dispatch_client():
+    """A second client signed in as a Dispatch Operator - Challan write, not
+    an Admin. (Its flags come from default_perms_for_role.)"""
+    c2 = APP.app.test_client()
+    AUTH.test_login(c2, role="Dispatch Operator", login_id="disp.cancel")
+    return c2
+
+
+def _both_routes(c, chid, body):
+    """The same request to /cancel and to /discard -> [(route, response)]"""
+    return [("cancel", c.post("/api/challan/%d/cancel" % chid, json=dict(body))),
+            ("discard", c.post("/api/challan/%d/discard" % chid, json=dict(body)))]
+
+
+@test("a Dispatch Operator cannot cancel an issued challan - 403 on BOTH routes, "
+      "even with a reason and a valid code - and the challan is untouched")
+def t_cancel_operator_refused():
+    c = setup()
+    b = packed_box(c, [300, 301])
+    inv = make_invoice(qty=2, invoice_no="INV-OPCAN")
+    chid = make_issued_challan(c, [b], inv)
+    op = _dispatch_client()
+    for route, r in _both_routes(op, chid, _cancel_body({"reason": "customer asked"})):
+        assert r.status_code == 403, (route, r.status_code, r.get_json())
+        # refused for the ROLE - not merely because an operator has no
+        # authenticator code, which would refuse it too
+        assert "authenticator" not in r.get_json()["why"].lower(), (route, r.get_json())
+    assert challan_row(chid)["status"] == "issued"
+    assert state_of_serial(serial(300)) == "dispatched", "the refused cancel moved a serial"
+
+
+def state_of_serial(s):
+    with store.conn() as (cx, cur):
+        return dict(db.find_serial(cur, s) or {}).get("state")
+
+
+@test("an Admin must give a reason, on both routes: none, or blanks, is 400 - "
+      "never a default string - and a refused attempt does not burn the code")
+def t_cancel_reason_mandatory():
+    c = setup()
+    b = packed_box(c, [302, 303])
+    inv = make_invoice(qty=2, invoice_no="INV-NOREASON")
+    chid = make_issued_challan(c, [b], inv)
+    for body in ({}, {"reason": ""}, {"reason": "   "}):
+        for route, r in _both_routes(c, chid, dict(body, totp_code=AUTH.totp_code(_TOTP_SECRET))):
+            assert r.status_code == 400 and "reason" in r.get_json()["why"].lower(),                 (route, body, r.status_code, r.get_json())
+    row = challan_row(chid)
+    assert row["status"] == "issued" and not row["cancelled_reason"], dict(row)
+    # the code was not spent by those refusals: the same code now cancels it
+    code = AUTH.totp_code(_TOTP_SECRET)
+    r = c.post("/api/challan/%d/discard" % chid,
+               json={"reason": "wrong vehicle", "totp_code": code})
+    assert r.status_code == 200, r.get_json()
+
+
+@test("an Admin cannot cancel a challan a gate pass references - on BOTH routes "
+      "(one challan each: the authenticator code is spent by the first attempt)")
+def t_cancel_gatepass_both_routes():
+    c = setup()
+    for n, route in enumerate(("cancel", "discard")):
+        b = packed_box(c, [304 + 20 * n, 305 + 20 * n])
+        inv = make_invoice(qty=2, invoice_no="INV-GPBOTH%d" % n)
+        chid = make_issued_challan(c, [b], inv)
+        add_gatepass(c, chid)
+        r = c.post("/api/challan/%d/%s" % (chid, route), json=_cancel_body({"reason": "x"}))
+        assert r.status_code == 400 and "gate pass" in r.get_json()["why"].lower(),             (route, r.status_code, r.get_json())
+        assert challan_row(chid)["status"] == "issued"
+        # let the next attempt use a new code window: a spent code is refused
+        import icon_auth
+        with store.conn() as (cx, cur):
+            cur.execute("UPDATE app_user SET totp_last_step = 0")
+
+
+@test("an Admin's cancel through the Cancel button's route (/discard) does the "
+      "whole job: serials back to packed, the pallet and the invoice selectable "
+      "again, the audit row names the real actor and the reason")
+def t_cancel_via_discard_does_everything():
+    c = setup()
+    b = packed_box(c, [306, 307])
+    inv = make_invoice(qty=2, invoice_no="INV-VIADISC")
+    chid = make_issued_challan(c, [b], inv)
+    assert state_of_serial(serial(306)) == "dispatched"
+    r = c.post("/api/challan/%d/discard" % chid,
+               json=_cancel_body({"reason": "wrong consignee"}))
+    assert r.status_code == 200, r.get_json()
+    row = challan_row(chid)
+    assert row["status"] == "cancelled" and row["cancelled_reason"] == "wrong consignee", dict(row)
+    assert row["cancelled_by"] == "Test Super Admin" and row["cancelled_at"], dict(row)
+    assert state_of_serial(serial(306)) == "packed" and state_of_serial(serial(307)) == "packed"
+    boxes = [x["box_id"] for x in c.get("/api/boxes?state=closed&exclude_live_challan=1").get_json()]
+    assert b in boxes, "the pallet is not selectable again"
+    invs = [x["id"] for x in c.get("/api/invoices?for_challan=1").get_json()["invoices"]]
+    assert inv in invs, "the invoice is not selectable again"
+    with store.conn() as (cx, cur):
+        a = store.one(cur, "SELECT actor, detail FROM dispatch_audit WHERE action='challan.cancel' "
+                           "AND entity_id=%s", (str(chid),))
+    assert a and a["actor"] == "Test Super Admin" and "wrong consignee" in a["detail"], a
+
+
+@test("a Dispatch Operator can still EDIT an issued challan and DISCARD a draft - "
+      "only cancelling an issued one is Admin-only")
+def t_operator_keeps_edit_and_draft_discard():
+    c = setup()
+    b1 = packed_box(c, [308, 309])
+    b2 = packed_box(c, [310, 311])
+    inv = make_invoice(qty=2, invoice_no="INV-OPEDIT")
+    chid = make_issued_challan(c, [b1], inv)
+    op = _dispatch_client()
+    r = op.post("/api/challan/%d/edit-draft" % chid, json={})
+    assert r.status_code == 200, r.get_json()
+    r = op.post("/api/challan/%d/edit-save" % chid,
+                json={"boxes": [b2], "invoice_id": inv, "vehicle_no": "CG04AB1234"})
+    assert r.status_code == 200 and r.get_json()["suffix"] == "MA", r.get_json()
+    b3 = packed_box(c, [312, 313])
+    inv2 = make_invoice(qty=2, invoice_no="INV-OPDRAFT")
+    d = op.post("/api/challan", json={"action": "draft", "boxes": [b3], "invoice_id": inv2})
+    assert d.status_code == 200, d.get_json()
+    r = op.post("/api/challan/%d/discard" % d.get_json()["challan_id"], json={})
+    assert r.status_code == 200, r.get_json()
+
+
+@test("a cancelled challan's number is never reused")
+def t_cancelled_number_not_reused():
+    c = setup()
+    b1 = packed_box(c, [314, 315])
+    inv1 = make_invoice(qty=2, invoice_no="INV-REUSE1")
+    first = make_issued_challan(c, [b1], inv1)
+    seq1 = challan_row(first)["seq"]
+    r = c.post("/api/challan/%d/discard" % first, json=_cancel_body({"reason": "redo"}))
+    assert r.status_code == 200, r.get_json()
+    inv2 = make_invoice(qty=2, invoice_no="INV-REUSE2")
+    second = make_issued_challan(c, [b1], inv2)
+    assert challan_row(second)["seq"] != seq1 and challan_row(second)["seq"] > seq1, \
+        (seq1, challan_row(second)["seq"])
 
 
 if __name__ == "__main__":
