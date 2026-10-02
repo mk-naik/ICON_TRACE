@@ -272,7 +272,7 @@ python test_batch_copy.py          8 tests · Planning: copy a batch's bill of m
 python test_bom_match.py          16 tests · traceability BOM read against the material master
 python test_bom_match_ui.py        5 tests · BOM defaults in Planning, notes + refresh in the import, Trace > View full details (Chromium)
 python test_review_discard.py      7 tests · Needs Review: discard junk / unplanned scans, twins, bulk, anomaly flow (Chromium)
-python test_trace_export.py        8 tests · traceability report as Excel: month / range / one day, one material per column
+python test_trace_export.py       10 tests · traceability report as Excel: month / range / one day, one material per column
 python test_material_defaults.py   5 tests · a material's default make; Barcode Label / Pallet Packing
 python test_incharge_master.py     9 tests · shift incharge master: individuals, several per entry joined with ',' (Chromium)
 python test_challan_cancel_ui.py   2 tests · Cancel button: Admin only, asks reason + authenticator code

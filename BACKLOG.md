@@ -5956,6 +5956,16 @@ be discarded.
   brings it back. A failed reading / skipped tester / lookup stay acknowledge-only.
 - `test_review_discard.py` (7); mutation check caught 5 of 5.
 
+### Excel exports: text that starts like a formula is written as text
+
+Found in my own new export, then in an older one. openpyxl turns a string that begins
+with "=" into a FORMULA, so a batch / make / customer text read from an imported file
+("=HYPERLINK(...)") would have been evaluated when somebody opened the report, and a
+custom serial may begin with "=" (the validator accepts any printable token) in
+Planning's barcodes.xlsx. Both now write such cells as text (`data_type = "s"`); the
+report's own formulas are untouched. The CSV exports already neutralised theirs
+(`_csv_cell`). `test_trace_export.py` (+2).
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

@@ -37,6 +37,11 @@ _MONTHS = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY",
 _LABEL = re.compile(r"\s+\d+\s*WP$", re.I)
 _BB = re.compile(r"(\d+)\s*BB", re.I)
 
+# What a spreadsheet treats as the start of a formula. A batch, a make or a name
+# read from an imported file may begin with one ("=HYPERLINK(...)"): it is written
+# as TEXT, never evaluated when somebody opens the report.
+_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
 # the report's own check on a row: the quantity matches the serial span
 CHECK = ('=IF($G{r}="","",IF(OR($G{r}=1,IF(ISERROR(RIGHT($F{r},4)-RIGHT($E{r},4)),'
          'FALSE,(RIGHT($F{r},4)-RIGHT($E{r},4)+1)=$G{r})),TRUE,FALSE))')
@@ -299,6 +304,8 @@ def build(rows, catalog, categories, models, dfrom, dto):
             else:
                 v = cells.get(k, "")
             c = ws.cell(r, first + i, v if v != "" else None)
+            if k != "check" and isinstance(v, str) and v[:1] in _FORMULA_LEAD:
+                c.data_type = "s"          # text that merely STARTS like a formula stays text
             c.font = Font(name="Calibri", size=11)
             c.alignment = mid
             c.border = box

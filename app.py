@@ -6408,6 +6408,8 @@ def allocation_barcodes(alloc_id):
         ws.cell(r, c, i + 1).alignment = ctr
         ws.cell(r, c).border = thin
         cell = ws.cell(r, c + 1, sn)
+        if sn[:1] in ("=", "+", "-", "@"):
+            cell.data_type = "s"        # a custom serial may start like a formula: text, never evaluated
         cell.alignment = ctr
         cell.border = thin
 

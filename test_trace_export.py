@@ -190,6 +190,48 @@ def t_agni_green():
         assert store.one(cur, "SELECT customer FROM serial WHERE serial=%s", (S(1, 1),))["customer"]             .upper().startswith("AGNI GREEN POWER"), "filed against Icon Stock"
 
 
+@test("text that merely STARTS like a formula - a batch or name read from an imported file - is "
+      "written as text, never evaluated when the report is opened; the report's own formulas stay")
+def t_formula_text():
+    cat = [{"n": 1, "name": "Flux", "cat": "Flux", "series": ""}]
+    rows = [{"date": datetime.date(2026, 9, 1), "shift": "A", "wattage": 625, "model": "ISEN625-G12R",
+             "start": "ICON625R1290110001", "end": "ICON625R1290110002", "qty": 2, "customer": "=1+1",
+             "incharge": "@x", "rework": False,
+             "bom": {1: {"vendor": "+cmd", "efficiency": None, "batch": '=HYPERLINK("http://x","y")'}}}]
+    import icon_models
+    ws = openpyxl.load_workbook(io.BytesIO(TX.build(rows, cat, ["Flux"], icon_models.BY_CODE,
+                                                    datetime.date(2026, 9, 1), datetime.date(2026, 9, 1)))).active
+    hot = [c for c in ws[13] if isinstance(c.value, str) and c.value[:1] in "=+-@"]
+    assert len(hot) == 5, [(c.coordinate, c.value) for c in hot]
+    assert sorted(c.data_type for c in hot) == ["f", "s", "s", "s", "s"], [(c.coordinate, c.data_type) for c in hot]
+    assert ws["I13"].data_type == "f" and ws["E5"].data_type == "f"      # the report's own formulas
+
+
+@test("Planning's own serial-list workbook (barcodes.xlsx) writes a custom serial that starts like "
+      "a formula as text too")
+def t_barcodes_formula_text():
+    store.wipe()
+    with store.conn() as (cx, cur):
+        iid = store.insert(cur, "indent", {"indent_no": "T/1", "indent_date": "2026-09-01",
+                                           "customer": "STOCK", "created_by": "t"})
+        lid = store.insert(cur, "indent_line", {"indent_id": iid, "line_no": 1, "model": "ISEN625-G12R",
+            "item_description": "x", "wattage": 625, "qty": 2, "dcr": "NDCR"})
+        aid = store.insert(cur, "allocation", {"indent_line_id": lid, "model": "ISEN625-G12R",
+            "wattage": 625, "customer": "STOCK", "date_produced": "2026-09-01", "shift": 1,
+            "qty": 2, "seq_from": 1, "seq_to": 2, "created_by": "t"})
+        for i, sn in enumerate(("=1+1", "-ABC-123"), 1):
+            store.insert(cur, "serial", {"serial": sn, "build_instance": 1, "alloc_id": aid,
+                "indent_line_id": lid, "model": "ISEN625-G12R", "wattage": 625, "customer": "STOCK",
+                "dcr": "NDCR", "format_version": 0, "date_produced": "2026-09-01", "shift": 1,
+                "sequence": i, "state": "planned"})
+    c = H.APP.app.test_client()
+    AUTH.test_login(c)
+    r = c.get("/allocation/%d/barcodes.xlsx" % aid)
+    assert r.status_code == 200
+    ws = openpyxl.load_workbook(io.BytesIO(r.data)).active
+    assert [(ws["B3"].value, ws["B3"].data_type), (ws["B4"].value, ws["B4"].data_type)] == [("=1+1", "s"), ("-ABC-123", "s")]
+
+
 @test("the summary lists the wattages built, most first, and folds the rest into 'other'; "
       "a legacy-only material has a column only when something was recorded against it")
 def t_summary_and_legacy():
