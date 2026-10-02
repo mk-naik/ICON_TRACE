@@ -806,7 +806,9 @@ def t_cancelled_loss_event_leaves_prod_dashboard():
             "shift": "A", "line": "A-Line", "machine": "LAM-1",
             "reason": "LOP-POWER", "kind": "P", "start_time": "10:00",
             "end_time": "10:30", "minutes": 30, "entry_mode": "Live",
-            "created_by": "t"})
+            "created_by": "t",
+            # the dashboard counts by this, in IST - SQLite's own default is UTC
+            "created_at": "2026-09-28T10:00:00"})
     before = admin.get("/api/prod/dashboard?from=2026-09-28&to=2026-09-28").get_json()
     assert before["loss"], "setup: the live downtime should show on the dashboard"
 

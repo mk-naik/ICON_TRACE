@@ -31,6 +31,10 @@ import auth_test_helper as AUTH
 
 _results = []
 
+# the customer master's own spelling of stock (it was title-cased: "Icon Stock")
+import icon_customers as _customers                          # noqa: E402
+STOCK_NAME = _customers.get("STOCK")["name"]
+
 
 def test(name):
     def deco(fn):
@@ -215,7 +219,7 @@ def t_preview_fields():
     d = c.get("/api/box/check?serial=" + serial(0)).get_json()
     assert d["ok"] and d["grade"] == "A" and d["model"] == MODEL, d
     assert d["outcome"] == "pass" and d["graded_at"], d
-    assert d["customer"] == "ICON STOCK", d["customer"]
+    assert d["customer"] == STOCK_NAME, d["customer"]
 
 
 # --------------------------------------------------------------------------
@@ -281,7 +285,7 @@ def t_box_identity():
     # what the screen fills the pallet header from, rather than offering a
     # customer dropdown and grade buttons of its own
     chk = c.get("/api/box/check?serial=" + serial(0)).get_json()
-    assert chk["customer"] == "ICON STOCK", chk["customer"]
+    assert chk["customer"] == STOCK_NAME, chk["customer"]
     assert chk["customer_code"] == "STOCK", \
         "the box stores the code; the screen shows the name"
     assert chk["grade"] == "A" and chk["model"] == MODEL, chk
@@ -295,7 +299,7 @@ def t_box_identity():
 
     c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(0)})
     row = c.get("/api/boxes?state=open").get_json()[0]
-    assert row["customer_name"] == "ICON STOCK", row["customer_name"]
+    assert row["customer_name"] == STOCK_NAME, row["customer_name"]
     assert row["grade"] == "A" and row["label"] == b["label"], row
 
 
