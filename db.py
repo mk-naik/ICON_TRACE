@@ -2018,7 +2018,7 @@ def seed_materials(cur):
 # materials added to the catalog after databases were already seeded: a database
 # is its own master, so these are inserted - once, if absent - rather than
 # re-seeding. Round 37: the 15 mm Lead Bending Tape (alternative to the 20 mm).
-_ADDED_MATERIALS = (31, 32, 33)
+_ADDED_MATERIALS = (31, 32, 33, 34)
 
 
 def ensure_material_additions(cur):
@@ -2036,10 +2036,16 @@ def ensure_material_additions(cur):
     # LOOK first: this runs on every boot read, and a write statement - even one
     # that changes no row - is a change as far as the change feed is concerned.
     # (n, the group its existing member joins, the added member it needs)
-    for n, grp, partner in ((21, "LBT", 31), (14, "SICE", 32)):
+    for n, grp, partner in ((21, "LBT", 31), (14, "SICE", 32), (8, "FRM", 34)):
         t = cur.execute("SELECT grp FROM material WHERE n=%s", (n,)).fetchone()
         if t is not None and not (t["grp"] or "") and (partner in have or added):
             cur.execute("UPDATE material SET grp=%s WHERE n=%s", (grp, n))
+    # the G12R frame the master already had says which mounting holes it is - the
+    # model master's 1000 - only while its size is still the seeded one
+    t = cur.execute("SELECT size, updated_by FROM material WHERE n=8").fetchone()
+    if t is not None and not t["updated_by"] and t["size"] == "2382 x 1134 x 30 mm":
+        cur.execute("UPDATE material SET size=%s, note=COALESCE(note, %s) WHERE n=8",
+                    ("2382 x 1134 x 30 mm · holes 1000, 1400, 1094 mm", "Mounting holes"))
     return added
 
 

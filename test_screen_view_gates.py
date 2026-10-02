@@ -98,6 +98,8 @@ EXPECTED = {
     "allocation_barcodes": {("plan",)}, "allocation_barcodes_print": {("plan",)},
     "api_indent_line": {("plan",)},
     "api_prodentries": {("prodentry",)}, "api_loss_events": {("loss",)},
+    # Round 38: the traceability report as Excel - Production Entry's own screen
+    "export_traceability": {("prodentry",)},
     "api_fqc_dashboard_modules": {("dash",)},
     "api_fqc_recent": {("fqc",)}, "api_fqc_anomalies": {("fqc",)},
     "api_fqc_lookup": {("fqc", "review")}, "api_el_image": {("fqc", "review")},

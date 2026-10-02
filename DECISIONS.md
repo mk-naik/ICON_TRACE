@@ -261,6 +261,21 @@ The Drafts screen is still v4 sample data.
   Box) Search & Trace > View full details lists the member(s) with a recorded row;
   v4's default member (20 mm, 0.40) is shown only when none was recorded, as the gap
   it is. [built]
+- **The frame's mounting holes are variants of the frame** (group FRM, G12R):
+  `2382 x 1134 x 30 mm · holes 1000, 1400, 1094 mm` (material 8, the model master's
+  value) and `... · holes 790, 1400, 1094 mm` (34, what the September file states).
+  The import picks one from the file's "Modules Sizes" column; Planning offers both.
+  The G2X frame states none, so its export falls back to the model master. [built]
+- **The traceability report is exported as Excel** (Round 38, the plant's own
+  layout, document IS-MP2-PDN-FM-02): Production Entry > Download traceability
+  report - a MONTH, a FROM-TO range, or FROM alone for ONE day. Rows are production
+  entries counted by the shift they ran in (`prod_date`), cancelled ones never; one
+  row per run of serials built from one batch. **One material, one column**: nothing
+  is merged (both potting parts, the centre and edge ribbon, the cell's make,
+  efficiency and batch are each their own); a group of alternatives shares a column
+  and names the variant beside the make. SR MODULE = rework, NORMAL = unallocated
+  stock, otherwise the customer master's name. Gated on Production Entry's view
+  flag. [built]
 - A material the file does not mention, with **one possible make, takes it** -
   in the import and pre-selected in Planning (EPE Strip -> RenewSys, the 625 W
   back label -> Kvell). [built]

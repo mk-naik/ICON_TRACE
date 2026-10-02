@@ -13621,7 +13621,15 @@ window.gpSetKind = function(k) {
           '<div style="display:flex;gap:8px;padding-bottom:2px">' +
           '<button class="btn btn-ghost" id="peFilterReset">Reset</button>' +
           '<span class="tag t-mute" id="peFilterCount" style="align-self:center;margin-bottom:0"></span>' +
-          '</div></div></div>');
+          '</div></div>' +
+          /* the traceability report: a month, a range, or one day - the FROM / TO
+             above are its dates, FROM alone is a single day */
+          '<div style="display:flex;gap:12px;align-items:end;margin-top:14px;flex-wrap:wrap">' +
+          '<div class="fld"><label>MONTH</label><input type="month" id="peExportMonth"></div>' +
+          '<button class="btn btn-primary" id="peExportXlsx">Download traceability report (Excel)</button>' +
+          '<span class="hint" style="align-self:center;max-width:520px">Pick a month, or the FROM and TO dates ' +
+          'above (FROM alone is one day). The whole period is exported - the shift, customer and search ' +
+          'filters do not apply.</span></div></div>');
       }
 
       var refetch = function() { window.renderPE(); };
@@ -13639,6 +13647,17 @@ window.gpSetKind = function(k) {
       // per-card Reset buttons.
       peReset.__reset = true;
       peReset.onclick = function() { window.peResetFilters(); };
+
+      /* a month fills FROM and TO with its first and last day */
+      document.getElementById('peExportMonth').onchange = function() {
+        var p = (this.value || '').split('-');
+        if (p.length !== 2) return;
+        var y = +p[0], m = +p[1], last = new Date(y, m, 0).getDate();
+        document.getElementById('peFilterFrom').value = this.value + '-01';
+        document.getElementById('peFilterTo').value = this.value + '-' + (last < 10 ? '0' : '') + last;
+        refetch();
+      };
+      document.getElementById('peExportXlsx').onclick = function() { window.peExportTraceability(); };
     }
 
     if (!document.getElementById('peKpis')) {
@@ -13657,8 +13676,39 @@ window.gpSetKind = function(k) {
     }
   };
 
+  /* The traceability report as Excel. FROM and TO are the period; FROM alone, or
+     TO alone, is one day. Fetched rather than navigated to, so a refusal (no
+     dates, an end before its start) is said here instead of replacing the page
+     with the server's JSON. */
+  window.peExportTraceability = function() {
+    var from = (document.getElementById('peFilterFrom') || {}).value || '';
+    var to = (document.getElementById('peFilterTo') || {}).value || '';
+    if (!from && !to) {
+      if (typeof toast === 'function') toast('Pick a month, or a date (FROM alone is one day).');
+      return;
+    }
+    var qs = '?from=' + encodeURIComponent(from || to) + '&to=' + encodeURIComponent(to || from);
+    fetch('/export/traceability.xlsx' + qs, { credentials: 'same-origin' }).then(function(r) {
+      if (!r.ok) {
+        return r.json().then(function(d) { throw new Error(d.why || ('HTTP ' + r.status)); },
+                             function() { throw new Error('HTTP ' + r.status); });
+      }
+      var name = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
+      return r.blob().then(function(b) {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(b);
+        a.download = name ? name[1] : 'traceability.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function() { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      });
+    }).catch(function(e) {
+      if (typeof toast === 'function') toast('Not exported - ' + e.message);
+    });
+  };
+
   window.peResetFilters = function() {
-    ['peFilterFrom', 'peFilterTo', 'peFilterShift', 'peFilterCust', 'peFilterQ']
+    ['peFilterFrom', 'peFilterTo', 'peFilterShift', 'peFilterCust', 'peFilterQ', 'peExportMonth']
       .forEach(function(id) { var el = document.getElementById(id); if (el) el.value = ''; });
     window.renderPE();
   };

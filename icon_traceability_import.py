@@ -464,17 +464,25 @@ def _note(kind, material, text, detail):
     return {"kind": kind, "material": material, "text": text, "detail": detail}
 
 
-def _pick(members, text):
+def _pick(members, text, holes=None):
     """One master material out of several that are alternatives (Junction Box
     0.4 / 0.3 mtr, Lead Bending Tape 20 / 15 mm): the one whose size the file's
     text states. (member, matched?) - matched is None when the text states no
-    size to go by."""
+    size to go by. Variants that share their size and differ in the frame's
+    mounting holes (790 / 1000, 1400, 1094) are told apart by the file's
+    "Modules Sizes" column, `holes`."""
     if len(members) == 1:
         return members[0], None
-    for m in members:
-        if BM.same_dims(text, m.get("size")):
-            return m, True
+    same = [m for m in members if BM.same_dims(text, m.get("size"))]
     live = [m for m in members if not m.get("legacy")] or members
+    pool = same or live
+    if len(pool) > 1 and holes and BM.holes(holes) and any(BM.holes(m.get("size")) for m in pool):
+        for m in pool:
+            if BM.holes(m.get("size")) == BM.holes(holes):
+                return m, (True if same else False)
+        return pool[0], False                  # the file's holes are not in the master
+    if same:
+        return same[0], True
     return live[0], (None if not BM.dims(text) else False)
 
 
@@ -522,11 +530,32 @@ def bom_materials(bom, catalog, wattage=None, known_efficiencies=()):
                 notes.append(_note("missing", name, text,
                                    "%s is not in the material master" % name))
                 continue
-            m, matched = _pick(mem, text or "")
-            if matched is False:
+            m, matched = _pick(mem, text or "",
+                               bom.get("sizes") if name == "Aluminium Frame" else None)
+            # A size that is exactly another module type's (the G2X / M10R frame on a
+            # G12R module) is physically impossible - the FILE is wrong, never the
+            # master (Mukesh). Checked before any "no variant has this size" note.
+            dims_off = BM.same_dims(text, m.get("size")) is False
+            other = [x for x in catalog if x["name"] == name
+                     and (x.get("series") or "") not in ("", fam)
+                     and BM.same_dims(text, x.get("size"))] if dims_off else []
+            if other:
+                notes.append(_note("file_error", name, text,
+                    "the file's size is the %s module's (%s); a %s module "
+                    "cannot take it, so the FILE is wrong, not the master - "
+                    "recorded as the %s one (%s), please correct the file"
+                    % (other[0]["series"], other[0]["size"], fam, fam, m.get("size"))))
+            elif matched is False:
                 notes.append(_note("size", name, text,
-                    "no %s in the master has the size the file states; recorded "
-                    "against %s (%s)" % (name, m.get("size"), m["n"])))
+                    "no %s in the master has the %s the file states%s; recorded "
+                    "against %s (%s)" % (name,
+                        "size" if dims_off else "mounting holes",
+                        " (%s)" % bom.get("sizes") if not dims_off and bom.get("sizes") else "",
+                        m.get("size"), m["n"])))
+            elif dims_off:
+                notes.append(_note("size", name, text,
+                    "the size in the file differs from the master's (%s) - make "
+                    "recorded, size not changed" % m.get("size")))
             vendor = None
             if text:
                 got, left = BM.match_makes(text, m.get("makes") or [])
@@ -535,23 +564,6 @@ def bom_materials(bom, catalog, wattage=None, known_efficiencies=()):
                     notes.append(_note("make", name, text,
                         "make not in the master: %s - kept as written; add it to "
                         "the master's makes, or correct the file" % ", ".join(left)))
-                if got and matched is None and BM.same_dims(text, m.get("size")) is False:
-                    # A size that is exactly another module type's (the G2X / M10R
-                    # frame on a G12R module) is physically impossible - the FILE
-                    # is wrong, never the master (Mukesh).
-                    other = [x for x in catalog if x["name"] == name
-                             and (x.get("series") or "") not in ("", fam)
-                             and BM.same_dims(text, x.get("size"))]
-                    if other:
-                        notes.append(_note("file_error", name, text,
-                            "the file's size is the %s module's (%s); a %s module "
-                            "cannot take it, so the FILE is wrong, not the master - "
-                            "recorded as the %s one (%s), please correct the file"
-                            % (other[0]["series"], other[0]["size"], fam, fam, m.get("size"))))
-                    else:
-                        notes.append(_note("size", name, text,
-                            "the size in the file differs from the master's (%s) - make "
-                            "recorded, size not changed" % m.get("size")))
             eff = None
             if key == "cell":
                 vals = BM.efficiencies(text or "")

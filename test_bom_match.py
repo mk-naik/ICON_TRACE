@@ -186,8 +186,9 @@ def workbook(rows=None, **over):
     for n, ov in enumerate(rows):
         v = dict(DEFAULT)
         v.update(ov)
-        vals = [datetime.datetime(2026, 9, 1), "A", "625W", v.get("start", S(1)), v.get("end", S(7)),
-                v.get("qty", 7), "BOROSIL", True] + [v[k] for k in ORDER] + ["YAMAN & RAJKUMAR", None]
+        vals = [v.get("date", datetime.datetime(2026, 9, 1)), v.get("shift", "A"), v.get("watt", "625W"),
+                v.get("start", S(1)), v.get("end", S(7)),
+                v.get("qty", 7), v.get("cust", "BOROSIL"), True] + [v[k] for k in ORDER] + ["YAMAN & RAJKUMAR", None]
         for c, x in enumerate(vals):
             if x is not None:
                 ws.cell(13 + n, 2 + c, x)
@@ -236,7 +237,7 @@ def t_full_bom():
     assert b[9]["vendor"] == "Alishan,Sheetsol" and b[19]["vendor"] == "RCPV"
     assert b[20]["vendor"] == "H.B. Fuller" and b[22]["vendor"] == "H.B. Fuller"
     assert b[16]["vendor"] == "Fasto" and b[17]["vendor"] == b[18]["vendor"] == "Fasto"
-    assert b[8]["vendor"] == "Jiangyin Yuanshuo (YS)" and b[15]["vendor"] == "Finotech"
+    assert b[34]["vendor"] == "Jiangyin Yuanshuo (YS)" and b[15]["vendor"] == "Finotech"
     assert b[10]["vendor"] == "GenX" and b[10]["batch"] == "GX03092627310"
 
 
@@ -263,6 +264,23 @@ def t_alternatives():
         out, _, _ = bom_of(workbook(sic="DHASH 6.0X0.40 AND DHASH 4.0X%s" % thick))
         got = [n for n in (14, 32, 33) if n in by_no(out)]
         assert got == [want] and not [n for n in out["notes"] if n["kind"] != "default"], (thick, got, out["notes"])
+
+
+@test("the frame's mounting holes are a variant: the file's 790, 1400, 1094 picks the 790 frame, "
+      "1000 the 1000 one, none the master's default, and holes the master lacks are a note")
+def t_frame_holes():
+    store.wipe()
+    for sizes, want in (("790, 1400, 1094 MM", 34), ("1000, 1400, 1094 MM", 8), (None, 8)):
+        out, cat, r0 = bom_of(workbook())
+        bom = dict(r0["ranges"][0]["bom"], sizes=sizes)
+        o = T.bom_materials(bom, cat, wattage=625, known_efficiencies=[])
+        got = [x["material_no"] for x in o["rows"] if x["material_no"] in (8, 34)]
+        assert got == [want], (sizes, got)
+        assert not [n for n in o["notes"] if n["kind"] == "size"], (sizes, o["notes"])
+    bom = dict(r0["ranges"][0]["bom"], sizes="800, 1400, 1094 MM")
+    o = T.bom_materials(bom, cat, wattage=625, known_efficiencies=[])
+    assert [x["material_no"] for x in o["rows"] if x["material_no"] in (8, 34)] == [8]
+    assert any(n["kind"] == "size" and "mounting holes" in n["detail"] for n in o["notes"]), o["notes"]
 
 
 @test("a material the file is silent about takes its single make (EPE Strip, the "
@@ -307,7 +325,7 @@ def t_notes():
     fe = [n for n in out["notes"] if n["kind"] == "file_error"][0]
     assert "G2X" in fe["detail"] and "FILE is wrong" in fe["detail"], fe
     assert ("make", "Solar Glass \u2014 Rear") in kinds, kinds
-    assert b[8]["vendor"] == "Aluvoltec" and b[7]["vendor"] == "ZEBRA GLASS", (b[8], b[7])
+    assert b[34]["vendor"] == "Aluvoltec" and b[7]["vendor"] == "ZEBRA GLASS", (b[34], b[7])
     assert out["new_efficiencies"] == ["23.3%"], out["new_efficiencies"]
     assert b[5]["efficiency"] == "23.3%" and b[5]["vendor"] == "Premier Energies"
 
@@ -452,7 +470,7 @@ def t_real_file():
     rg = [x for x in r["ranges"] if x["start"] == "ICON625R1293030001"][0]
     b = by_no(T.bom_materials(rg["bom"], cat, wattage=625, known_efficiencies=known))
     assert (b[5]["vendor"], b[5]["efficiency"]) == ("Lion Solar", "25.6%"), b[5]
-    assert b[6]["vendor"] == "Borosil" and b[8]["vendor"] == "Jiangyin Yuanshuo (YS)"
+    assert b[6]["vendor"] == "Borosil" and b[34]["vendor"] == "Jiangyin Yuanshuo (YS)"
     assert 31 in b and 21 not in b, "the 15 mm lead bending tape was not chosen"
 
 

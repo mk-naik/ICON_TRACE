@@ -96,6 +96,38 @@ def t_edit_survives():
     assert mat(30)["makes"] == ["Sunsol"] and mat(30).get("default_make") is None, mat(30)
 
 
+@test("the G12R frame's mounting holes are variants of ONE material: the 1000 frame the master "
+      "already had, and the 790 one, in one group - an existing database gets it once, "
+      "and a frame somebody edited is left alone")
+def t_frame_variants():
+    store.wipe()
+    with store.conn() as (cx, cur):
+        db.seed_materials(cur)
+    assert mat(8)["group"] == "FRM" and mat(34)["group"] == "FRM"
+    assert "holes 1000, 1400, 1094" in mat(8)["size"] and "holes 790, 1400, 1094" in mat(34)["size"]
+    # a database seeded before: the frame as it was, no 790 variant
+    store.wipe()
+    with store.conn() as (cx, cur):
+        db.seed_materials(cur)
+        cur.execute("DELETE FROM material WHERE n=34")
+        cur.execute("UPDATE material SET size='2382 x 1134 x 30 mm', grp=NULL, note=NULL, updated_by=NULL WHERE n=8")
+        db.seed_materials(cur)
+    assert mat(34)["size"].endswith("holes 790, 1400, 1094 mm") and mat(8)["group"] == "FRM", (mat(8), mat(34))
+    assert mat(8)["size"] == "2382 x 1134 x 30 mm · holes 1000, 1400, 1094 mm", mat(8)["size"]
+    before = changes()
+    with store.conn() as (cx, cur):
+        db.seed_materials(cur)
+        db.seed_materials(cur)
+    assert changes() == before, "a boot read wrote although there was nothing to change"
+    # a frame somebody edited keeps its size
+    store.wipe()
+    with store.conn() as (cx, cur):
+        db.seed_materials(cur)
+        cur.execute("UPDATE material SET size='2382 x 1134 x 32 mm', grp=NULL, updated_by='Mukesh Naik' WHERE n=8")
+        db.seed_materials(cur)
+    assert mat(8)["size"] == "2382 x 1134 x 32 mm", mat(8)["size"]
+
+
 @test("the master refuses a default that is not one of the makes, and accepts one that is")
 def t_validation():
     store.wipe()

@@ -214,6 +214,28 @@ def master_dims(size):
     return tuple(sorted(float(x) for x in _NUM.findall(head)))
 
 
+_HOLES = re.compile(r"holes?\s*([\d.,\s]+)", re.I)
+
+
+def holes(text):
+    """The mounting-hole positions a text carries, IN ORDER - (790.0, 1400.0, 1094.0)
+    from the file's '790, 1400, 1094 MM' or the master's '... · holes 790, 1400,
+    1094 mm'. Order matters (H then F), so it is not sorted. () when none."""
+    t = str(text or "")
+    m = _HOLES.search(t)
+    t = m.group(1) if m else t
+    return tuple(float(x) for x in _NUM.findall(t))
+
+
+def holes_text(master_size):
+    """'790, 1400, 1094 MM' for a master size carrying holes, else None."""
+    m = _HOLES.search(str(master_size or ""))
+    if not m:
+        return None
+    nums = [x for x in re.findall(r"\d+(?:\.\d+)?", m.group(1))]
+    return ", ".join(nums) + " MM" if nums else None
+
+
 def same_dims(file_text, master_size):
     """None when the file states no size (nothing to compare); else a bool."""
     a = dims(file_text)

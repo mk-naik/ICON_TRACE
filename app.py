@@ -4250,6 +4250,111 @@ def api_prodentries():
     return jsonify({"entries": rows})
 
 
+# --------------------------------------------------------------------------
+# The traceability report as Excel (Round 38): the plant's monthly report, for a
+# month, a range of dates, or a single day - one material to a column.
+# --------------------------------------------------------------------------
+TRACE_EXPORT_MAX_DAYS = 366
+
+
+def _trace_export_period():
+    """(from, to, refusal) from ?month=YYYY-MM, or ?from= with an optional ?to=.
+    A `from` alone is ONE day - that is how a single date is asked for."""
+    month = (request.args.get("month") or "").strip()
+    dfrom = (request.args.get("from") or "").strip()
+    dto = (request.args.get("to") or "").strip()
+    try:
+        if month and not (dfrom or dto):
+            first = datetime.date.fromisoformat(month + "-01")
+            last = (first.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)                 - datetime.timedelta(days=1)
+            return first, last, None
+        if not dfrom and not dto:
+            return None, None, "Pick a month, or a date (a range needs both ends)."
+        a = datetime.date.fromisoformat(dfrom or dto)
+        b = datetime.date.fromisoformat(dto or dfrom)
+    except ValueError:
+        return None, None, "That is not a date or month (use YYYY-MM-DD / YYYY-MM)."
+    if b < a:
+        return None, None, "The end date is before the start date."
+    if (b - a).days + 1 > TRACE_EXPORT_MAX_DAYS:
+        return None, None, "Pick at most %d days at a time." % TRACE_EXPORT_MAX_DAYS
+    return a, b, None
+
+
+@app.route("/export/traceability.xlsx")
+@require_screen_view("prodentry")
+def export_traceability():
+    """Every production entry of the period, one row per run of serials built from
+    one batch, with the batch's bill of materials - each material in its own
+    column (icon_trace_export). The period is by the shift the production RAN in
+    (prod_date, the factory day), like the Production Entry list."""
+    import icon_trace_export as TX
+    import icon_materials as MM
+    from flask import Response
+    dfrom, dto, why = _trace_export_period()
+    if why:
+        return jsonify({"ok": False, "why": why}), 400
+    rows = []
+    with store.conn() as (cx, cur):
+        db.seed_materials(cur)
+        catalog = db.materials(cur)
+        boms = {}
+
+        def bom_of(aid):
+            if aid not in boms:
+                boms[aid] = {r["material_no"]: r for r in store.rows(
+                    cur, "SELECT material_no, vendor, efficiency, batch FROM allocation_material "
+                         "WHERE alloc_id=%s", (aid,))}
+            return boms[aid]
+
+        entries = store.rows(
+            cur, "SELECT * FROM production_entry WHERE prod_date>=%s AND prod_date<=%s "
+                 "AND status<>'cancelled' ORDER BY prod_date, shift, entry_id",
+            (dfrom.isoformat(), dto.isoformat()))
+        # The serials of every entry in TWO grouped scans - serial.prod_entry_id has
+        # no index, so asking per entry read the whole table once per entry. In a
+        # group, a bare column takes its value from the MIN / MAX row.
+        per_entry = {}
+        if entries:
+            lo, hi = min(e["entry_id"] for e in entries), max(e["entry_id"] for e in entries)
+            span = (lo, hi)
+            for g in store.rows(
+                    cur, "SELECT prod_entry_id, alloc_id, COUNT(*) AS n, MAX(rework) AS rework, "
+                         "MAX(customer) AS customer, serial AS first, MIN(sequence) AS q0 FROM serial "
+                         "WHERE prod_entry_id BETWEEN %s AND %s AND build_instance=1 "
+                         "GROUP BY prod_entry_id, alloc_id", span):
+                per_entry.setdefault(g["prod_entry_id"], {})[g["alloc_id"]] = dict(g)
+            for g in store.rows(
+                    cur, "SELECT prod_entry_id, alloc_id, serial AS last, MAX(sequence) AS q1 FROM serial "
+                         "WHERE prod_entry_id BETWEEN %s AND %s AND build_instance=1 "
+                         "GROUP BY prod_entry_id, alloc_id", span):
+                per_entry[g["prod_entry_id"]][g["alloc_id"]]["last"] = g["last"]
+        for e in entries:
+            groups = sorted(per_entry.get(e["entry_id"], {}).values(), key=lambda g: g["q0"])
+            base = {"date": datetime.date.fromisoformat(e["prod_date"]), "shift": e["shift"],
+                    "wattage": e["wattage"], "model": e["model"],
+                    "incharge": e["shift_incharge"]}
+            if not groups:           # an entry with no serial rows: what the entry itself says
+                rows.append(dict(base, start=e["start_serial"], end=e["end_serial"],
+                                 qty=e["qty"], customer="", rework=False, bom={}))
+                continue
+            for g in groups:
+                first, last = g["first"], g["last"]
+                c = customers.resolve(g["customer"]) if g["customer"] else None
+                if g["rework"]:
+                    who = "SR MODULE"                       # the report's name for a string rework
+                elif c and c.get("is_stock"):
+                    who = "NORMAL"                          # ... and for unallocated stock
+                else:
+                    who = c["name"] if c else (g["customer"] or "")
+                rows.append(dict(base, start=first, end=last, qty=g["n"], customer=who,
+                                 rework=bool(g["rework"]), bom=bom_of(g["alloc_id"])))
+    data = TX.build(rows, catalog, MM.MAT_CATS, models.BY_CODE, dfrom, dto)
+    return Response(data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="%s"' % TX.filename(dfrom, dto)})
+
+
 # How far back a production entry may be filed. Generous, because catching up
 # a backlog of shift reports is ordinary; bounded, because "2025-09-25" typed
 # for 2026 would otherwise file a year-old shift that no dashboard would ever

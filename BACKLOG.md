@@ -5903,6 +5903,30 @@ Fix: of a group, show the member(s) that have a recorded row; the default only w
 none does. Tests: `test_bom_match_ui.py` (+2: synthetic and the real file's serial,
 through search and the details modal); both fail on the old logic.
 
+### Traceability report as Excel, and the frame's mounting holes (Round 38)
+
+Mukesh: export the production data in the traceability report's format - month,
+date-to-date range, one date for one day - with ONE material per column (the report
+folds both potting parts, the two ribbons, the cell make and its efficiency into
+single columns), and the frame's mounting holes (790 / 1000, 1400, 1094) as
+variants of the frame.
+- `icon_trace_export.py` (pure builder) + `/export/traceability.xlsx` (gated on
+  Production Entry's view flag; `?month=` / `?from=&to=`, from alone = one day;
+  two grouped scans of `serial` - it has no index on `prod_entry_id`, the first
+  version took 16 s for a month, now 1 s). A Month box and a download button sit on
+  the Production Entry filter bar and use its FROM / TO.
+- Frame variants: material 34 added, 8 and 34 in group FRM, the holes after the "·"
+  in the size (the matcher reads only what precedes it); the import picks by the
+  file's sizes column; existing databases get it once, look first.
+- Proof on the real September file (275 runs, 124,273 modules) through the app: the
+  export has the same runs in the same order, every make and batch matches the file
+  in every column, incharges and totals agree.
+- **Found, not changed**: "AGNI GREEN" is not an alias of Agni Green Power Limited
+  (Mz), so the importer files that run against Icon Stock and the report prints it
+  as NORMAL. Needs Mukesh: add the alias (the Customers resolve screen can too).
+- `test_trace_export.py` (7), `test_material_defaults.py` (+1), `test_bom_match.py`
+  (+1), `test_bom_match_ui.py` (+frame dropdown).
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

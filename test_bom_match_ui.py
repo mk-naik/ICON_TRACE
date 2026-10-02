@@ -73,6 +73,11 @@ def t_planning_defaults():
             const a = r && r.querySelector('.mat-alt');
             return a ? Array.from(a.options).map(o => o.text) : null; }""")
         assert edge and len(edge) == 3 and all(any(t in e for e in edge) for t in ("0.40", "0.41", "0.42")), edge
+        frame = pg.evaluate("""() => { const r = Array.from(document.querySelectorAll('#matPanel .matrow'))
+            .find(x => /Aluminium Frame/.test(x.textContent));
+            const a = r && r.querySelector('.mat-alt');
+            return a ? Array.from(a.options).map(o => o.text) : null; }""")
+        assert frame and len(frame) == 2 and any("holes 790, 1400, 1094" in t for t in frame)             and any("holes 1000, 1400, 1094" in t for t in frame), frame      # told apart by their mounting holes
         assert not pg.errors, pg.errors
 
 
