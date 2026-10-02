@@ -2028,9 +2028,12 @@ def ensure_material_additions(cur):
                         % (", ".join(_MAT_COLS), ", ".join(["%s"] * len(_MAT_COLS))),
                         [rec[c] for c in _MAT_COLS])
             added += 1
-    # the 20 mm tape joins the group only if nobody has grouped it differently
-    cur.execute("UPDATE material SET grp='LBT' WHERE n=21 AND (grp IS NULL OR grp='') "
-                "AND EXISTS (SELECT 1 FROM material WHERE n=31)")
+    # the 20 mm tape joins the group only if nobody has grouped it differently.
+    # LOOK first: this runs on every boot read, and a write statement - even one
+    # that changes no row - is a change as far as the change feed is concerned.
+    t = cur.execute("SELECT grp FROM material WHERE n=21").fetchone()
+    if t is not None and not (t["grp"] or "") and (31 in have or added):
+        cur.execute("UPDATE material SET grp='LBT' WHERE n=21")
     return added
 
 
