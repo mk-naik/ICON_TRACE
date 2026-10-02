@@ -230,6 +230,26 @@ The Drafts screen is still v4 sample data.
   packing warns "not in a production entry" for it. How its production is
   recorded - a list upload? - needs Mukesh. FQC and packing work on it.
 
+- **The traceability file's bill of materials is read against the LIVE material
+  master** (`icon_bom_match`, `icon_traceability_import.bom_materials`): each
+  make is resolved to the master's own spelling (typos too - BORORSIL, YUEJIYA),
+  the efficiency, size and batches are taken OUT of the text; several makes or
+  batches are joined with ONE separator, **","**; a "/" inside a batch number is
+  part of it. Every material the file names is read, each batch from the column
+  beside it, under the form's names (String Alignment Tape = Cell Alignment Tape,
+  Channel & JB sealant = Sealant, EPE/POE = Encapsulant; the string ribbon fills
+  Centre AND Edge, potting Part A AND B). [built]
+- Alternatives follow the size the file states: **Lead Bending Tape is 20 mm or
+  15 mm** (material 31 is new, in group LBT); Junction Box 0.4 / 0.3 mtr. [built]
+- A material the file does not mention, with **one possible make, takes it** -
+  in the import and pre-selected in Planning (EPE Strip -> RenewSys, the 625 W
+  back label -> Kvell). [built]
+- What the master disagrees with is a **note**, never a silent change: a size that
+  differs, a make the master lacks (kept as written). **A cell efficiency the
+  list lacks is ADDED to it**, in numeric order (Mukesh's call). [built]
+- **A backfill batch's BOM can be refreshed** by re-uploading the file in backfill
+  mode and ticking the range - only batches the importer made (BACKFILL/ indents)
+  that cover exactly that range; a Planning batch's BOM is never touched. [built]
 - **Production Entry takes the monthly traceability Excel** (Round 36, at
   Mukesh's request - it was on the "not built" list): upload, pick date, shift
   and range(s); CLAIM mode records ranges Planning already issued, BACKFILL

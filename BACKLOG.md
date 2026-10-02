@@ -5788,6 +5788,42 @@ copies stay on disk. Nothing imports them - `app.py` only names `check_db.py`
 in the set of files it leaves out of the restart hash, which is the same
 whether or not the file is tracked. `git ls-files` no longer lists them.
 
+### Traceability import: the BOM matched to the material master
+
+Mukesh compared a backfilled BOM (ICON625R1293030001) with one made in Planning
+(BAT-2609-00011): the make read "LIONSOLAR 25.6% (210*182.2) G12R CELL" - make,
+efficiency and size in one string, written as it stood, where the master says
+"Lion Solar" - and most materials were "not recorded".
+
+- **Cause:** the importer read 4 of the file's ~15 materials and wrote the cell
+  text raw. Nothing compared it with the master.
+- **Change:** `icon_bom_match` (pure) resolves makes against the master's own
+  makes (compact match, a known alias - GNEX -> GenX, a typo, then word-by-word;
+  never a guess between two), extracts efficiency (single and ranges), cleans
+  batches (one separator, de-duplicated; a "/" inside a number is kept) and
+  compares sizes. The parser now finds every material column by header with its
+  batch from the column BESIDE it (so the two "Ribbon Invoice/Batch no" are told
+  apart); `bom_materials(bom, catalog)` maps them to the live master by name and
+  family, picks alternatives by size, and defaults single-make materials.
+  On the real September file all 275 ranges resolve with no unknown make and no
+  missing material; the 15 mm tape, Jiangyin Yuanshuo (YS), GenX, H.B. Fuller etc.
+  come out in the master's words.
+- **Your answers:** 15 mm is the Lead Bending Tape's (new material 31, a group with
+  the 20 mm one, so Planning offers both); multiple makes/batches joined with ",";
+  efficiencies the list lacks are added (23.3% and 25.8% in this file); backfill
+  batches may be refreshed.
+- **Notes the file raises:** one frame stated as 2278x1134x30 (the master has
+  2382x1134x30) and the string ribbon's edge size 4.0x0.41 / 0.42 vs 0.40 (51
+  ranges) - recorded, size not changed, listed on screen before recording.
+- Screens: the import shows the notes and the efficiencies it will add BEFORE
+  recording; ranges already imported can be ticked (not by default) to refresh a
+  backfill batch's BOM; Planning pre-selects single-make materials and shows a
+  recorded value that is not an option (two makes joined) instead of blanking it.
+- **Existing production BOMs** (raw text, only 4 materials) are repaired by
+  re-uploading the same file in backfill mode and ticking the ranges.
+- Tests: `test_bom_match.py` (14), `test_bom_match_ui.py` (3, Chromium); a
+  mutation check caught 15 of 15.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

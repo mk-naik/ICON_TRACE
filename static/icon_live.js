@@ -5232,7 +5232,44 @@ function wireFqcAnomalies() {
           if (!MAT_SEL[m.n].eff) MAT_SEL[m.n].eff = m.eff;
         });
       }
-      return orig.apply(this, arguments);
+      /* A material with ONE possible make has nothing to choose: it is
+         pre-selected (EPE Strip -> RenewSys, a 625 W back label -> Kvell).
+         Only what applies to THIS module - not another series' or wattage's,
+         not a legacy one, and of a group of alternatives only the one shown. */
+      try {
+        var model = (document.getElementById('pvModel') || {}).textContent;
+        if (typeof materialsFor === 'function' && model && model !== '—' &&
+            typeof MAT_SEL !== 'undefined') {
+          var list = materialsFor(model);
+          list.forEach(function (m) {
+            if (m.legacy || (m.makes || []).length !== 1) return;
+            if (m.group) {
+              var c = chosenInGroup(list, m.group);
+              if (!c || c.n !== m.n) return;
+            }
+            MAT_SEL[m.n] = MAT_SEL[m.n] || {};
+            if (!MAT_SEL[m.n].vendor) MAT_SEL[m.n].vendor = m.makes[0];
+          });
+        }
+      } catch (e) {}
+      var out = orig.apply(this, arguments);
+      /* a value already recorded that is not one of the options - two makes
+         joined ("Kibing,Borosil") from an import or a copied batch, an
+         efficiency range - is SHOWN, not blanked */
+      try {
+        document.querySelectorAll('#matPanel .mat-f select').forEach(function (sel) {
+          var m = /MAT_SEL\[(\d+)\]\.(vendor|eff)/.exec(sel.getAttribute('onchange') || '');
+          if (!m) return;
+          var v = (MAT_SEL[m[1]] || {})[m[2]];
+          if (v && !Array.prototype.some.call(sel.options, function (o) {
+                return o.value === v || o.text === v; })) {
+            var o = document.createElement('option');
+            o.textContent = v; o.selected = true;
+            sel.appendChild(o);
+          }
+        });
+      } catch (e) {}
+      return out;
     };
     patched.__defaults = true;
     window.renderMatPanel = patched;
@@ -13838,6 +13875,7 @@ window.gpSetKind = function(k) {
       (flagged.length ? '<div class="note n-warn"><span>!</span><span>Customer(s) not in the ' +
         'master, imported under ICON Stock and flagged: <b>' +
         flagged.map(fqcEsc).join(', ') + '</b>. Add them as aliases to place them.</span></div>' : '') +
+      peImpBomNote(d.bom_summary) +
       '<div class="grid g3" style="margin-top:12px">' +
         '<div class="fld req"><label>Date</label><select id="peImpDate" onchange="peImpFillShift()">' +
           dateOpts + '</select></div>' +
@@ -13866,6 +13904,33 @@ window.gpSetKind = function(k) {
             '</td><td>' + fqcEsc(p.why) + '</td></tr>'; }).join('') + '</tbody></table>';
     }
     peImpFillShift();
+  }
+
+  /* What the material master does not agree with in the file's bills of
+     materials, said BEFORE anything is recorded: makes it does not have, sizes
+     that differ, cell efficiencies it will add to its list. Makes are otherwise
+     matched to the master's own spelling (Lion Solar, not LIONSOLAR ...). */
+  function peImpBomNote(b) {
+    if (!b) return '';
+    var out = '';
+    if ((b.new_efficiencies || []).length) {
+      out += '<div class="note n-info"><span>\u2139</span><span>Cell efficiencies the master\u2019s list ' +
+        'does not have yet - <b>they will be added to it</b> when you record: <b>' +
+        b.new_efficiencies.map(fqcEsc).join(', ') + '</b>.</span></div>';
+    }
+    if ((b.notes || []).length) {
+      var rows = b.notes.slice(0, 12).map(function (n) {
+        return '<li><b>' + fqcEsc(n.material) + '</b> \u00b7 <span class="mono">' + fqcEsc(n.text || '') +
+          '</span> \u2014 ' + fqcEsc(n.detail) + ' <span class="hint">(' + n.ranges + ' range' +
+          (n.ranges === 1 ? '' : 's') + ')</span></li>';
+      }).join('');
+      out += '<div class="note n-warn"><span>!</span><span><b>Bill of materials</b> - the master does not ' +
+        'agree with ' + b.notes_total + ' thing' + (b.notes_total === 1 ? '' : 's') + ' in the file. ' +
+        'Each is still recorded as described; nothing is silently changed.' +
+        '<ul style="margin:6px 0 0 18px">' + rows + '</ul>' +
+        (b.notes_total > 12 ? '<div>\u2026and ' + (b.notes_total - 12) + ' more</div>' : '') + '</span></div>';
+    }
+    return out;
   }
 
   window.peImpToggleProblems = function () {
@@ -13907,11 +13972,16 @@ window.gpSetKind = function(k) {
       // backfill (it fills the other 101) but not in claim
       var remaining = r.qty - r.in_system;
       var ready = backfill ? (remaining > 0) : r.all_present;
+      /* in backfill a range already in the system can still be ticked: it
+         refreshes the bill of materials of a batch this importer made (and
+         says why when it cannot) - not ticked by default */
+      var tickable = ready || (backfill && r.all_present);
       var status;
       if (r.in_system === 0) {
         status = '<span class="tag t-mute">not in system</span>';
       } else if (r.all_present) {
-        status = '<span class="tag t-pass">in system</span>';
+        status = '<span class="tag t-pass">in system</span>' +
+          (backfill ? ' <span class="hint">tick to refresh its BOM</span>' : '');
       } else {
         status = '<span class="tag t-rev">' + r.in_system + '/' + r.qty +
           (backfill ? ' — ' + remaining + ' to create' : ' planned') + '</span>';
@@ -13920,7 +13990,7 @@ window.gpSetKind = function(k) {
         ' <span class="tag t-rev">flagged</span>');
       return '<tr>' +
         '<td><input type="checkbox" class="peImpChk" data-i="' + i + '"' +
-          (ready ? ' checked' : '') + (ready ? '' : ' disabled') + '></td>' +
+          (ready ? ' checked' : '') + (tickable ? '' : ' disabled') + '></td>' +
         '<td class="mono">' + fqcEsc(r.model) + '</td>' +
         '<td class="num">' + r.wattage + 'W</td>' +
         '<td class="mono">' + fqcEsc(r.start) + ' → ' + fqcEsc(r.end) + '</td>' +
@@ -13958,15 +14028,20 @@ window.gpSetKind = function(k) {
         btn.disabled = false; btn.textContent = 'Record selected';
         if (!d.ok) { res.innerHTML = '<div class="note n-warn"><span>!</span><span>' + fqcEsc(d.why) + '</span></div>'; return; }
         var lines = (d.results || []).map(function (x) {
-          var ok = x.action === 'claimed' || x.action === 'backfilled';
+          var ok = x.action === 'claimed' || x.action === 'backfilled' || x.action === 'bom_refreshed';
           return '<tr><td class="mono">' + fqcEsc(x.start || '') + '</td><td>' +
-            '<span class="tag ' + (ok ? 't-pass' : 't-rev') + '">' + x.action + '</span></td>' +
+            '<span class="tag ' + (ok ? 't-pass' : 't-rev') + '">' +
+            (x.action === 'bom_refreshed' ? 'BOM refreshed' : x.action) + '</span></td>' +
             '<td>' + fqcEsc(x.why || (x.qty + ' modules')) + '</td></tr>';
         }).join('');
         res.innerHTML = '<div class="note ' + (d.recorded ? 'n-ok' : 'n-warn') + '"><span>✓</span><span>' +
           'Recorded ' + d.recorded + ' of ' + d.total + ' range(s), ' +
           Number(d.modules || 0).toLocaleString() + ' modules' +
-          (d.backfill ? ' (backfill)' : '') + '.</span></div>' +
+          (d.backfill ? ' (backfill)' : '') + '.' +
+          (d.bom_refreshed ? ' Bill of materials refreshed on <b>' + d.bom_refreshed + '</b> batch(es).' : '') +
+          (d.efficiencies_added && d.efficiencies_added.length ? ' Added to the master\u2019s efficiency list: <b>' +
+            d.efficiencies_added.map(fqcEsc).join(', ') + '</b>.' : '') +
+          '</span></div>' +
           '<table style="width:100%;font-size:11px;margin-top:8px"><tbody>' + lines + '</tbody></table>';
         toast('Recorded ' + d.recorded + ' range(s), ' + d.modules + ' modules.');
         // the ones that landed are now in the system - mark them so the row

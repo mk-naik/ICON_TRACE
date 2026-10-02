@@ -1997,6 +1997,7 @@ def seed_materials(cur):
     once it exists, and re-seeding would undo every correction made since."""
     import icon_materials as MM
     if cur.execute("SELECT COUNT(*) AS n FROM material").fetchone()["n"]:
+        ensure_material_additions(cur)
         return 0
     for m in MM.MATERIALS:
         rec = _mat_in(m)
@@ -2008,6 +2009,50 @@ def seed_materials(cur):
         cur.execute("INSERT INTO cell_efficiency (value, seq) VALUES (%s,%s) "
                     "ON CONFLICT(value) DO NOTHING", (v, i))
     return len(MM.MATERIALS)
+
+
+# materials added to the catalog after databases were already seeded: a database
+# is its own master, so these are inserted - once, if absent - rather than
+# re-seeding. Round 37: the 15 mm Lead Bending Tape (alternative to the 20 mm).
+_ADDED_MATERIALS = (31,)
+
+
+def ensure_material_additions(cur):
+    import icon_materials as MM
+    have = {r["n"] for r in cur.execute("SELECT n FROM material").fetchall()}
+    added = 0
+    for m in MM.MATERIALS:
+        if m["n"] in _ADDED_MATERIALS and m["n"] not in have:
+            rec = _mat_in(m)
+            cur.execute("INSERT INTO material (%s) VALUES (%s)"
+                        % (", ".join(_MAT_COLS), ", ".join(["%s"] * len(_MAT_COLS))),
+                        [rec[c] for c in _MAT_COLS])
+            added += 1
+    # the 20 mm tape joins the group only if nobody has grouped it differently
+    cur.execute("UPDATE material SET grp='LBT' WHERE n=21 AND (grp IS NULL OR grp='') "
+                "AND EXISTS (SELECT 1 FROM material WHERE n=31)")
+    return added
+
+
+def add_cell_efficiencies(cur, values):
+    """Add efficiency values to the master list that it does not have yet, keeping
+    the list in numeric order (23.3% before 25%). The traceability import uses
+    this: a cell efficiency the file states and the list lacks is added, not
+    dropped. Returns the values actually added."""
+    have = cell_efficiencies(cur)
+    new = [v for v in values if v not in have]
+    if not new:
+        return []
+    def key(v):
+        try:
+            return float(str(v).rstrip("%"))
+        except ValueError:
+            return 1e9
+    allv = sorted(set(have) | set(new), key=key)
+    for i, v in enumerate(allv):
+        cur.execute("INSERT INTO cell_efficiency (value, seq) VALUES (%s,%s) "
+                    "ON CONFLICT(value) DO UPDATE SET seq=excluded.seq", (v, i))
+    return new
 
 
 def materials(cur):

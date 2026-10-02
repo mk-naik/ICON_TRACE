@@ -24,6 +24,7 @@ project's MySQL customer_mapping table.
 import datetime
 import re
 
+import icon_bom_match as BM
 import icon_challan_import as chimport
 import icon_customers as customers
 import icon_serial as gen
@@ -45,6 +46,46 @@ def _txt(v):
     return "" if v is None else str(v).strip()
 
 
+# The materials a traceability file names, by header -> the BOM item key that
+# bom_materials() understands. The file and the form name some differently:
+# "String Alignment Tape" is the form's Cell Alignment Tape, "Channel & JB
+# sealant" its Sealant, "EPE/POE" its Encapsulant, and the cell / string
+# ribbons are two separate columns.
+def _bom_key(h):
+    """Which BOM item a (lower-case) header names, or None."""
+    if "alignment" in h and "tape" in h:
+        return "align_tape"
+    if "lead" in h and "bending" in h:
+        return "lead_tape"
+    if "edge" in h and "seal" in h:
+        return "edge_tape"
+    if "string" in h and ("inter" in h or "connector" in h):
+        return "string_ic"
+    if ("cell" in h and ("inter" in h or "connector" in h)) or "ribbon" in h:
+        return "cell_ic"
+    if "cell" in h and "make" in h:
+        return "cell"
+    if "glass" in h and "front" in h:
+        return "glass_front"
+    if "glass" in h and ("back" in h or "rear" in h):
+        return "glass_back"
+    if "frame" in h:
+        return "frame"
+    if "epe" in h or "poe" in h or "encapsulant" in h:
+        return "epe"
+    if h.startswith("flux"):
+        return "flux"
+    if "junction" in h:
+        return "jb"
+    if "sealant" in h:
+        return "sealant"
+    if "potting" in h:
+        return "potting"
+    if "rfid" in h:
+        return "rfid"
+    return None
+
+
 def _find_header(rows):
     """(header_index, colmap) or (None, None). colmap maps canonical keys to
     absolute column indices. Core keys (date/shift/wattage/serial/ending/
@@ -62,31 +103,26 @@ def _find_header(rows):
                 if key not in cm:
                     cm[key] = c
 
-            # BOM - specific (invoice/batch) variants first
-            is_batch = ("invoice" in h or "batch" in h)
-            if "cell" in h and "invoice" in h:
-                put("cell_batch")
-            elif "cell make" in h or ("cell" in h and "make" in h):
-                put("cell_make")
-            elif "cell type" in h:
+            # A batch / invoice column is never matched by its own header: it is
+            # read by POSITION, as the column immediately right of its material
+            # (both ribbons head theirs "Ribbon Invoice/Batch no").
+            if "invoice" in h or "batch" in h:
+                continue
+            if "cell type" in h:
                 put("cell_type")
             elif "bus bar" in h or "busbar" in h:
                 put("bus_bar")
-            elif "glass" in h and "front" in h and is_batch:
-                put("glass_front_batch")
-            elif "glass" in h and "front" in h:
-                put("glass_front")
-            elif "glass" in h and ("back" in h or "rear" in h) and is_batch:
-                put("glass_back_batch")
-            elif "glass" in h and ("back" in h or "rear" in h):
-                put("glass_back")
-            elif ("inter connector" in h or "interconnector" in h
-                  or "ribbon" in h) and is_batch:
-                put("ribbon_batch")
-            elif "inter connector" in h or "interconnector" in h or "ribbon" in h:
-                put("ribbon")
             elif "size" in h:
                 put("sizes")
+            elif "incharge" in h or "in-charge" in h or "in charge" in h:
+                put("incharge")
+            elif _bom_key(h):
+                key = "mat:" + _bom_key(h)
+                if key not in cm:
+                    cm[key] = c
+                    nxt = _txt(row[c + 1]).lower() if c + 1 < len(row) else ""
+                    if "invoice" in nxt or "batch" in nxt:
+                        cm[key + ":batch"] = c + 1
             # core columns
             elif "ending" in h:
                 put("ending")
@@ -197,6 +233,24 @@ def _seq_len(d):
 # main parse
 # --------------------------------------------------------------------------
 
+def _extract_bom(r, cell):
+    """One row's raw BOM: the descriptive columns and, per material the file
+    names, its make text and the batch text from the column beside it. Nothing
+    is interpreted here - bom_materials() matches it against the master."""
+    items = {}
+    for key in ("cell", "glass_front", "glass_back", "cell_ic", "string_ic",
+                "flux", "epe", "align_tape", "lead_tape", "edge_tape", "jb",
+                "sealant", "potting", "frame", "rfid"):
+        make = _txt(cell(r, "mat:" + key)) or None
+        batch = _txt(cell(r, "mat:" + key + ":batch")) or None
+        if make or batch:
+            items[key] = {"make": make, "batch": batch}
+    return {"cell_type": _txt(cell(r, "cell_type")) or None,
+            "bus_bar": _txt(cell(r, "bus_bar")) or None,
+            "sizes": _txt(cell(r, "sizes")) or None,
+            "items": items}
+
+
 def parse(source):
     """Parse a traceability workbook (a path, or a file-like/bytes) into
     validated ranges grouped by date and shift. Never raises on bad data - a
@@ -237,10 +291,8 @@ def parse(source):
     # forward-fill the CONTEXT columns only (merged cells read as None in the
     # continuation rows); serial/ending/quantity are always per-row.
     fill_keys = [k for k in ("date", "shift", "wattage", "customer", "remark",
-                             "cell_make", "cell_batch", "cell_type", "bus_bar",
-                             "sizes", "glass_front", "glass_front_batch",
-                             "glass_back", "glass_back_batch", "ribbon",
-                             "ribbon_batch") if k in cm]
+                             "cell_type", "bus_bar", "sizes", "incharge")
+                 if k in cm] + [k for k in cm if k.startswith("mat:")]
     carried = {}
     norm = []
     for r in data:
@@ -340,19 +392,8 @@ def parse(source):
             "customer_resolved": resolved,
             "rework": rework,
             "remark": _clean_remark(cell(r, "remark")),
-            "bom": {
-                "cell_make": _txt(cell(r, "cell_make")) or None,
-                "cell_batch": _txt(cell(r, "cell_batch")) or None,
-                "cell_type": _txt(cell(r, "cell_type")) or None,
-                "bus_bar": _txt(cell(r, "bus_bar")) or None,
-                "sizes": _txt(cell(r, "sizes")) or None,
-                "glass_front": _txt(cell(r, "glass_front")) or None,
-                "glass_front_batch": _txt(cell(r, "glass_front_batch")) or None,
-                "glass_back": _txt(cell(r, "glass_back")) or None,
-                "glass_back_batch": _txt(cell(r, "glass_back_batch")) or None,
-                "ribbon": _txt(cell(r, "ribbon")) or None,
-                "ribbon_batch": _txt(cell(r, "ribbon_batch")) or None,
-            },
+            "incharge_raw": _txt(cell(r, "incharge")) or None,
+            "bom": _extract_bom(r, cell),
         })
 
     # date -> shifts present, both sorted; and a stable order for the ranges
@@ -388,38 +429,135 @@ def parse(source):
 # BOM -> allocation_material rows (the file's BOM as the final material set)
 # --------------------------------------------------------------------------
 #
-# material_no comes in a G2X/G12R pair for the physical items; the traceability
-# "Cell Type" (G12R / G2X) chooses which. Numbers are icon_materials' own:
-#   cell 1(G2X)/5(G12R), glass front 2/6, glass rear 3/7, cell interconnector 12.
-_MAT = {
-    "G2X": {"cell": 1, "glass_front": 2, "glass_back": 3, "ribbon": 12},
-    "G12R": {"cell": 5, "glass_front": 6, "glass_back": 7, "ribbon": 12},
+# Matched against the LIVE material master (db.materials): each material by its
+# name and the module's family (G12R / G2X), each make to the master's own
+# spelling, every size compared with the master's. A material the file does
+# not mention and that has a single possible make is recorded with it (the
+# "single make selects by default" rule) - the file is silent, the master is not
+# ambiguous.
+
+_D = "\u2014"
+# bom item key -> the master materials it fills, in order
+_TARGETS = {
+    "cell": ["Solar Cell"],
+    "glass_front": ["Solar Glass " + _D + " Front"],
+    "glass_back": ["Solar Glass " + _D + " Rear"],
+    "frame": ["Aluminium Frame"],
+    "epe": ["Encapsulant"],
+    "cell_ic": ["Cell Inter Connector"],
+    "string_ic": ["String Inter Connector " + _D + " Centre",
+                  "String Inter Connector " + _D + " Edge"],
+    "flux": ["Flux"],
+    "align_tape": ["Cell Alignment Tape"],
+    "lead_tape": ["Lead Bending Tape"],
+    "edge_tape": ["Edge Sealing Tape"],
+    "jb": ["Junction Box 30 A"],
+    "sealant": ["Sealant (Frame + JB)"],
+    "potting": ["Potting Material " + _D + " Part A",
+                "Potting Material " + _D + " Part B"],
+    "rfid": ["RFID Sticker"],
 }
-_EFF = re.compile(r"(\d{2}(?:\.\d+)?)\s*%")
+_AND = re.compile(r"\bAND\b", re.I)
 
 
-def bom_materials(bom):
-    """Turn one range's parsed BOM into allocation_material rows:
-    [{material_no, vendor, efficiency, batch}]. Cell efficiency is pulled out
-    of the cell-make text ('LIONSOLAR 25.7% ...' -> '25.7%'). A material with
-    nothing recorded for it is left out rather than written blank."""
+def _note(kind, material, text, detail):
+    return {"kind": kind, "material": material, "text": text, "detail": detail}
+
+
+def _pick(members, text):
+    """One master material out of several that are alternatives (Junction Box
+    0.4 / 0.3 mtr, Lead Bending Tape 20 / 15 mm): the one whose size the file's
+    text states. (member, matched?) - matched is None when the text states no
+    size to go by."""
+    if len(members) == 1:
+        return members[0], None
+    for m in members:
+        if BM.same_dims(text, m.get("size")):
+            return m, True
+    live = [m for m in members if not m.get("legacy")] or members
+    return live[0], (None if not BM.dims(text) else False)
+
+
+def bom_materials(bom, catalog, wattage=None, known_efficiencies=()):
+    """One range's raw BOM -> {"rows": [{material_no, vendor, efficiency,
+    batch}], "notes": [...], "new_efficiencies": [...]}.
+
+    `catalog` is the live material master (db.materials). Makes are resolved to
+    its spelling and several are joined with one separator; batches likewise;
+    cell efficiencies are read out of the cell text. A material the file leaves
+    empty is not written. Whatever the master does not agree with is a NOTE -
+    an unmatched make, a size that differs, an efficiency not yet on the list -
+    never silently dropped or changed."""
     fam = (bom.get("cell_type") or "").strip().upper()
-    fam = "G2X" if fam.startswith("G2") else "G12R"    # default to G12R
-    nums = _MAT[fam]
-    out = []
+    fam = "G2X" if fam.startswith("G2") else "G12R"
+    items = bom.get("items") or {}
+    rows, notes, used, filled_groups, new_eff = [], [], set(), set(), []
+    known = set(known_efficiencies)
 
-    def add(material_no, vendor, batch, efficiency=None):
-        vendor = (vendor or "").strip() or None
-        batch = (batch or "").strip() or None
-        if vendor or batch or efficiency:
-            out.append({"material_no": material_no, "vendor": vendor,
-                        "efficiency": efficiency, "batch": batch})
+    def members(name):
+        return [m for m in catalog
+                if m["name"] == name and (m.get("series") or "") in ("", fam)]
 
-    cell_make = bom.get("cell_make") or ""
-    eff = _EFF.search(cell_make)
-    add(nums["cell"], cell_make, bom.get("cell_batch"),
-        eff.group(1) + "%" if eff else None)
-    add(nums["glass_front"], bom.get("glass_front"), bom.get("glass_front_batch"))
-    add(nums["glass_back"], bom.get("glass_back"), bom.get("glass_back_batch"))
-    add(nums["ribbon"], bom.get("ribbon"), bom.get("ribbon_batch"))
-    return out
+    for key, names in _TARGETS.items():
+        it = items.get(key)
+        if not it:
+            continue
+        make_txt, batch_txt = it.get("make"), it.get("batch")
+        texts = [make_txt] * len(names)
+        if key == "string_ic" and make_txt and len(_AND.split(make_txt)) == 2:
+            texts = [t.strip() for t in _AND.split(make_txt)]       # centre AND edge
+        for name, text in zip(names, texts):
+            mem = members(name)
+            if not mem:
+                notes.append(_note("missing", name, text,
+                                   "%s is not in the material master" % name))
+                continue
+            m, matched = _pick(mem, text or "")
+            if matched is False:
+                notes.append(_note("size", name, text,
+                    "no %s in the master has the size the file states; recorded "
+                    "against %s (%s)" % (name, m.get("size"), m["n"])))
+            vendor = None
+            if text:
+                got, left = BM.match_makes(text, m.get("makes") or [])
+                vendor = BM.join(got + left) or None
+                if left:
+                    notes.append(_note("make", name, text,
+                        "make not in the master: %s - kept as written; add it to "
+                        "the master's makes, or correct the file" % ", ".join(left)))
+                if got and matched is None and BM.same_dims(text, m.get("size")) is False:
+                    notes.append(_note("size", name, text,
+                        "the size in the file differs from the master's (%s) - make "
+                        "recorded, size not changed" % m.get("size")))
+            eff = None
+            if key == "cell":
+                vals = BM.efficiencies(text or "")
+                eff = BM.join(vals) or None
+                for v in vals:
+                    if v not in known and v not in new_eff:
+                        new_eff.append(v)
+            batch = BM.clean_batch(batch_txt)
+            if vendor or batch or eff:
+                rows.append({"material_no": m["n"], "vendor": vendor,
+                             "efficiency": eff, "batch": batch})
+                used.add(m["n"])
+                if m.get("group"):
+                    filled_groups.add(m["group"])
+
+    # the file is silent about these, and the master has only one answer
+    in_file = {n for key in items for n in _TARGETS.get(key, [])}
+    for m in catalog:
+        series = m.get("series") or ""
+        applies = (series in ("", fam)
+                   or (series == "LABEL" and wattage is not None
+                       and str(m.get("watt")) == str(wattage)))
+        if (not applies or m["n"] in used or m.get("legacy") or m["name"] in in_file
+                or (m.get("group") and m["group"] in filled_groups)
+                or len(m.get("makes") or []) != 1):
+            continue
+        rows.append({"material_no": m["n"], "vendor": m["makes"][0],
+                     "efficiency": None, "batch": None})
+        notes.append(_note("default", m["name"], None,
+                           "not in the file; the master has one make, %s" % m["makes"][0]))
+    rows.sort(key=lambda r: r["material_no"])
+    return {"rows": rows, "notes": notes, "new_efficiencies": new_eff}

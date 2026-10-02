@@ -4519,7 +4519,32 @@ def api_prodentry_import_parse():
             have, want = _range_in_system(cur, r)
             r["in_system"] = have
             r["all_present"] = (have == want and want > 0)
+        result["bom_summary"] = _bom_summary(cur, result["ranges"])
     return jsonify(result)
+
+
+def _bom_summary(cur, ranges):
+    """What the master does not agree with in the file's bills of materials,
+    counted over every range, so it is on screen BEFORE anything is recorded:
+    makes not in the master, sizes that differ, cell efficiencies not on the
+    list yet. Defaults are counted, not listed."""
+    db.seed_materials(cur)
+    catalog, known = db.materials(cur), db.cell_efficiencies(cur)
+    agg, new_eff = {}, set()
+    for r in ranges:
+        res = trace_import.bom_materials(r.get("bom") or {}, catalog,
+                                         wattage=r.get("wattage"),
+                                         known_efficiencies=known)
+        new_eff.update(res["new_efficiencies"])
+        for n in res["notes"]:
+            if n["kind"] == "default":
+                continue
+            k = (n["kind"], n["material"], n["text"], n["detail"])
+            agg[k] = agg.get(k, 0) + 1
+    notes = [{"kind": k[0], "material": k[1], "text": k[2], "detail": k[3], "ranges": c}
+             for k, c in sorted(agg.items(), key=lambda kv: (kv[0][0], kv[0][1], str(kv[0][2])))]
+    return {"notes": notes[:60], "notes_total": len(notes),
+            "new_efficiencies": sorted(new_eff)}
 
 
 def _import_claim_range(cur, rng, incharge, stamp):
@@ -4588,8 +4613,7 @@ def _import_backfill_range(cur, rng, dcr, incharge, stamp):
         present.add(s["sequence"])
     missing = [q for q in range(rng["seq_from"], rng["seq_to"] + 1) if q not in present]
     if not missing:
-        return {"action": "skipped", "why":
-                "all %d serials are already in the system." % rng["qty"]}
+        return _refresh_backfill_bom(cur, rng, prefix, model, watt)
 
     line_id = db.ensure_backfill_indent_line(cur, code, name, model, watt, dcr,
                                              rng["date"], actor())
@@ -4601,10 +4625,7 @@ def _import_backfill_range(cur, rng, dcr, incharge, stamp):
         "created_by": actor()})
     cur.execute("UPDATE indent_line SET qty = qty + %s WHERE indent_line_id=%s",
                 (len(missing), line_id))
-    for m in trace_import.bom_materials(rng.get("bom") or {}):
-        store.insert(cur, "allocation_material", {
-            "alloc_id": aid, "material_no": m["material_no"],
-            "vendor": m["vendor"], "efficiency": m["efficiency"], "batch": m["batch"]})
+    bom = _write_import_bom(cur, aid, rng, watt)
 
     rework = 1 if rng.get("rework") else 0
 
@@ -4639,12 +4660,69 @@ def _import_backfill_range(cur, rng, dcr, incharge, stamp):
     fqc_applied, _closed = _planned_serials(
         cur, [ser(q) for q in missing], "backfilled from the traceability import")
     return {"action": "backfilled", "qty": len(missing),
+            "bom_notes": bom["notes"], "efficiencies_added": bom["efficiencies_added"],
             "fqc_applied": sum(fqc_applied.values()),
             "skipped_present": len(present), "alloc_id": aid, "eid": eids[0],
             "entries": len(eids), "customer": name, "customer_flagged": flagged,
             "rework": bool(rework),
             "why": ("created %d, %d already present" % (len(missing), len(present))
                     if present else None)}
+
+
+def _write_import_bom(cur, alloc_id, rng, watt):
+    """Replace an allocation's bill of materials with the file's, matched to the
+    LIVE material master (icon_bom_match): makes in the master's own spelling,
+    efficiency and batches pulled out of the text, one separator. A cell
+    efficiency the master's list lacks is ADDED to it (Mukesh's call), and
+    reported. Returns {"notes": [...], "efficiencies_added": [...], "n": rows}."""
+    db.seed_materials(cur)          # a database that has never served the boot payload
+    res = trace_import.bom_materials(
+        rng.get("bom") or {}, db.materials(cur), wattage=watt,
+        known_efficiencies=db.cell_efficiencies(cur))
+    added = db.add_cell_efficiencies(cur, res["new_efficiencies"])
+    cur.execute("DELETE FROM allocation_material WHERE alloc_id=%s", (alloc_id,))
+    for m in res["rows"]:
+        store.insert(cur, "allocation_material", {
+            "alloc_id": alloc_id, "material_no": m["material_no"],
+            "vendor": m["vendor"], "efficiency": m["efficiency"], "batch": m["batch"]})
+    return {"notes": res["notes"], "efficiencies_added": added, "n": len(res["rows"])}
+
+
+def _refresh_backfill_bom(cur, rng, prefix, model, watt):
+    """A range whose serials are ALL in the system already. If it is exactly one
+    batch the importer itself made (a BACKFILL/ indent) with the same coverage as
+    this range, its bill of materials is rewritten from the file - the repair for
+    BOMs recorded as the file's raw text. A batch made in Planning is never
+    touched, and neither is one that covers a different set of serials (its
+    materials may belong to other ranges of the file)."""
+    n = rng["qty"]
+    rows = store.rows(cur,
+        "SELECT DISTINCT alloc_id FROM serial WHERE build_instance=1 AND sequence>=%s "
+        "AND sequence<=%s AND length(serial)=%s AND substr(serial,1,%s)=%s",
+        (rng["seq_from"], rng["seq_to"], len(rng["start"]), len(prefix), prefix))
+    ids = [r["alloc_id"] for r in rows]
+    why_not = None
+    if len(ids) != 1 or ids[0] is None:
+        why_not = "its serials belong to %d different batches" % len(ids)
+    else:
+        a = store.one(cur,
+            "SELECT i.indent_no, (SELECT COUNT(*) FROM serial s WHERE s.alloc_id=a.alloc_id) AS n "
+            "FROM allocation a JOIN indent_line l ON l.indent_line_id=a.indent_line_id "
+            "JOIN indent i ON i.indent_id=l.indent_id WHERE a.alloc_id=%s", (ids[0],))
+        if not a or not str(a["indent_no"]).startswith("BACKFILL/"):
+            why_not = "its batch was made in Planning, whose materials are not touched"
+        elif a["n"] != n:
+            why_not = ("its batch covers %d serials and this range %d - the file's "
+                       "materials for it may belong to a different range" % (a["n"], n))
+    if why_not:
+        return {"action": "skipped", "why":
+                "all %d serials are already in the system; BOM not refreshed - %s." % (n, why_not)}
+    bom = _write_import_bom(cur, ids[0], rng, watt)
+    return {"action": "bom_refreshed", "qty": n, "alloc_id": ids[0],
+            "materials": bom["n"], "bom_notes": bom["notes"],
+            "efficiencies_added": bom["efficiencies_added"],
+            "why": "serials already in the system; bill of materials rewritten "
+                   "from the file (%d materials)" % bom["n"]}
 
 
 def _contiguous_runs(seqs):
@@ -4700,12 +4778,18 @@ def api_prodentry_import_apply():
                         "shift": rng.get("shift")})
             results.append(res)
         done = [r for r in results if r["action"] in ("claimed", "backfilled")]
+        refreshed = [r for r in results if r["action"] == "bom_refreshed"]
         if done:
             db.audit(cur, actor(), "production.import", "production_entry", None,
                      {"backfill": backfill, "selected": len(ranges),
                       "recorded": len(done),
                       "modules": sum(r.get("qty", 0) for r in done)})
+        if refreshed:
+            db.audit(cur, actor(), "production.import.bom", "allocation", None,
+                     {"batches": [r["alloc_id"] for r in refreshed]})
+        eff_added = sorted({v for r in results for v in (r.get("efficiencies_added") or [])})
     return jsonify({"ok": True, "results": results, "backfill": backfill,
+                    "bom_refreshed": len(refreshed), "efficiencies_added": eff_added,
                     "recorded": len(done),
                     "modules": sum(r.get("qty", 0) for r in done),
                     "total": len(results)})

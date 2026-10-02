@@ -256,12 +256,17 @@ def t_parse_bom():
     data = wb_bytes([{"date": D1, "shift": "A", "watt": "625W", "start": S(1),
                       "end": S(7), "qty": 7, "customer": "BOROSIL", "bom": True}])
     r = T.parse(data)
-    mats = T.bom_materials(r["ranges"][0]["bom"])
+    import db
+    with store.conn() as (cx, cur):
+        db.seed_materials(cur)
+        cat = db.materials(cur)
+    mats = T.bom_materials(r["ranges"][0]["bom"], cat, wattage=625)["rows"]
     by_no = {m["material_no"]: m for m in mats}
+    # matched to the MASTER's spelling - the text is not written as it stands
     assert 5 in by_no and by_no[5]["efficiency"] == "25.7%", by_no          # G12R cell
-    assert by_no[5]["batch"] == "ID20260701", by_no
-    assert 6 in by_no and by_no[6]["vendor"].startswith("KIBING"), by_no    # glass front
-    assert 12 in by_no and by_no[12]["batch"] == "113166", by_no            # ribbon
+    assert by_no[5]["vendor"] == "Lion Solar" and by_no[5]["batch"] == "ID20260701", by_no
+    assert 6 in by_no and by_no[6]["vendor"] == "Kibing", by_no             # glass front
+    assert 12 in by_no and by_no[12]["vendor"] == "Geba Copper"         and by_no[12]["batch"] == "113166", by_no                           # ribbon
 
 
 # --------------------------------------------------------------------------
@@ -330,6 +335,7 @@ def t_apply_backfill():
                                "FROM allocation_material WHERE alloc_id=%s", (aid,))
         by_no = {m["material_no"]: m for m in mats}
         assert 5 in by_no and by_no[5]["efficiency"] == "25.7%", by_no
+        assert by_no[5]["vendor"] == "Lion Solar", by_no
         assert 12 in by_no and by_no[12]["batch"] == "113166", by_no
         # the backfill indent chain exists and is reusable
         ind = store.one(cur, "SELECT indent_no, customer FROM indent WHERE indent_no=%s",

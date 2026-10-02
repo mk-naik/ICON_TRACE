@@ -222,8 +222,12 @@ def choose(pg, indent_no, start=None):
 
 
 def alt_value(pg):
-    return pg.evaluate("() => { const s = document.querySelector('#matPanel .mat-alt'); "
-                       "return s ? Number(s.value) : null; }")
+    """The selected junction-box alternative (10 = 0.4 mtr, 11 = 0.3 mtr). It has
+    to be found in its own row: the lead bending tape is a second group of
+    alternatives on the same panel."""
+    return pg.evaluate("""() => { const r = Array.from(document.querySelectorAll('#matPanel .matrow'))
+        .find(x => /Junction Box/.test(x.textContent));
+        const s = r && r.querySelector('.mat-alt'); return s ? Number(s.value) : null; }""")
 
 
 def make_selects(pg):
