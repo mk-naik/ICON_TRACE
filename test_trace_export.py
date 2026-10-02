@@ -174,6 +174,22 @@ def t_words_and_formulas():
     assert ws.freeze_panes == "C13"
 
 
+@test("AGNI GREEN is an alias of Agni Green Power Limited (Mz): the import files the run against "
+      "that customer - not Icon Stock - and the report prints its master name")
+def t_agni_green():
+    c = BM.client()
+    p = BM.parse_up(c, BM.workbook(rows=[dict(date=D(1), shift="A", start=S(1, 1), end=S(1, 5), qty=5,
+                                              cust="AGNI GREEN")])).get_json()
+    assert p["ranges"][0]["customer_resolved"] and p["unresolved_customers"] == [], p["unresolved_customers"]
+    r = c.post("/api/prodentry/import/apply", json={"ranges": p["ranges"], "incharge": "NIGHT INCHARGE",
+                                                    "backfill": True, "dcr": "NDCR"}).get_json()
+    assert r["recorded"] == 1, r
+    ws, _ = sheet(c, "?from=2026-09-01")
+    assert table(ws)[1][0]["Special Customer"] == "Agni Green Power Limited (Mz)", table(ws)[1][0]
+    with store.conn() as (cx, cur):
+        assert store.one(cur, "SELECT customer FROM serial WHERE serial=%s", (S(1, 1),))["customer"]             .upper().startswith("AGNI GREEN POWER"), "filed against Icon Stock"
+
+
 @test("the summary lists the wattages built, most first, and folds the rest into 'other'; "
       "a legacy-only material has a column only when something was recorded against it")
 def t_summary_and_legacy():

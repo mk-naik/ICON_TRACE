@@ -532,9 +532,11 @@ def t_real_file():
     bad = " ".join(p["why"] for p in r["problems"])
     assert "ICON625R12912400050" in bad, bad
     # SR MODULE (rework) and NORMAL (stock) are categories, not unknown
-    # customers - only a real near-miss alias is left flagged
+    # customers; "AGNI GREEN" is an alias of Agni Green Power Limited (Mz)
+    # (Mukesh, 2026-10-03) - it was the one name left flagged
     assert "SR MODULE" not in r["unresolved_customers"], r["unresolved_customers"]
-    assert "AGNI GREEN" in r["unresolved_customers"], r["unresolved_customers"]
+    assert "AGNI GREEN" not in r["unresolved_customers"], r["unresolved_customers"]
+    assert T.resolve_customer("AGNI GREEN")[:3] == ("C0001", "Agni Green Power Limited (Mz)", True)
     assert any(x["rework"] for x in r["ranges"]), "the file's SR MODULE ranges are marked rework"
 
 

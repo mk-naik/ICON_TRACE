@@ -53,7 +53,7 @@ _SEED = [
     ]),
 
     ("C0001", "Agni Green Power Limited (Mz)", "15AACCA2122Q1ZT", "Mizoram", [
-        "AGNI GREEN POWER LIMITED", "AGNI GREEN POWER", "AGNI"
+        "AGNI GREEN POWER LIMITED", "AGNI GREEN POWER", "AGNI", "AGNI GREEN"
         ]),
 
     ("C0002", "Borosil Renewables Limited", None, "Maharashtra", [

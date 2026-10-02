@@ -5927,6 +5927,14 @@ variants of the frame.
 - `test_trace_export.py` (7), `test_material_defaults.py` (+1), `test_bom_match.py`
   (+1), `test_bom_match_ui.py` (+frame dropdown).
 
+### AGNI GREEN is an alias of Agni Green Power Limited (Mz)
+
+Mukesh's call (2026-10-03). The traceability import filed that run against Icon Stock
+(unresolved customer) and the Excel report printed it as NORMAL. `icon_customers.py`
+C0001 gains the alias "AGNI GREEN". Existing rows already filed as Icon Stock are NOT
+rewritten - re-import in backfill mode only adds missing serials; correct them by hand
+if they matter. `test_trace_export.py` (+1), `test_traceability_import.py`.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on
