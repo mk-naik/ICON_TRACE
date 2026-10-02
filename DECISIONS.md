@@ -256,6 +256,11 @@ The Drafts screen is still v4 sample data.
   they read "not recorded". Existing databases are brought to this once, only
   while the row is still the seeded one - a person's edit is never put back.
   [built]
+- **A bill of materials on screen shows the variant that was RECORDED.** Of a group
+  of alternatives (Lead Bending Tape 20/15 mm, Edge ribbon 0.40/0.41/0.42, Junction
+  Box) Search & Trace > View full details lists the member(s) with a recorded row;
+  v4's default member (20 mm, 0.40) is shown only when none was recorded, as the gap
+  it is. [built]
 - A material the file does not mention, with **one possible make, takes it** -
   in the import and pre-selected in Planning (EPE Strip -> RenewSys, the 625 W
   back label -> Kvell). [built]

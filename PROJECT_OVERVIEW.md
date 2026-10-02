@@ -270,7 +270,7 @@ python test_custom_serials.py     12 tests · custom serial upload, allocation, 
 python test_custom_serials_ui.py  5 tests · Planning screen for custom serials, in Chromium
 python test_batch_copy.py          8 tests · Planning: copy a batch's bill of materials (last / by number)
 python test_bom_match.py          15 tests · traceability BOM read against the material master
-python test_bom_match_ui.py        3 tests · BOM defaults in Planning, notes + refresh in the import (Chromium)
+python test_bom_match_ui.py        5 tests · BOM defaults in Planning, notes + refresh in the import, Trace > View full details (Chromium)
 python test_material_defaults.py   4 tests · a material's default make; Barcode Label / Pallet Packing
 python test_incharge_master.py     9 tests · shift incharge master: individuals, several per entry joined with ',' (Chromium)
 python test_challan_cancel_ui.py   2 tests · Cancel button: Admin only, asks reason + authenticator code

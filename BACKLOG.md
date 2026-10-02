@@ -5890,6 +5890,19 @@ a batch; every make resolves to the master; the only note is the one 2278 frame.
   BOM lines, none without a make (`test_bom_match.py`, 15 tests;
   `test_material_defaults.py`, 4).
 
+### Trace screen said "not recorded" for a variant that WAS recorded
+
+ICON625R1293022642 (imported with the current code - Barcode Label showed Kvell,
+Pallet Manmohan) still showed String Inter Connector - Edge "4.0 x 0.40" and Lead
+Bending Tape "20 mm" as "not recorded". Cause: `iconMaterialDetail` (Search &
+Trace > View full details) showed, for a group of alternatives, v4's
+`chosenInGroup` default (first member) and looked up ITS recorded row; the
+recorded rows were the 15 mm tape (31) and the 0.42 ribbon (33). The import and the
+stored data were right (my earlier test read allocation_material, not the screen).
+Fix: of a group, show the member(s) that have a recorded row; the default only when
+none does. Tests: `test_bom_match_ui.py` (+2: synthetic and the real file's serial,
+through search and the details modal); both fail on the old logic.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

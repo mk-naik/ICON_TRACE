@@ -126,6 +126,54 @@ def t_import_notes_and_refresh():
         assert not pg.errors, pg.errors
 
 
+def full_details(serial):
+    """Search the serial in the UI, open "View full details": {material: (size, make)}."""
+    with H.browser() as b:
+        pg = H.open_page(b, "search")
+        pg.fill("#qBox", serial)
+        pg.click("#v-search .sp button")
+        pg.wait_for_selector("#searchOut button:has-text('View full details')", timeout=8000)
+        pg.click("#searchOut button:has-text('View full details')")
+        pg.wait_for_selector("#mdlGeneric tr", timeout=5000)
+        rows = pg.evaluate("""() => Array.from(document.querySelectorAll('#mdlGeneric tr')).map(
+            r => Array.from(r.children).map(c => c.innerText.replace(/\\s+/g, ' ').trim()))""")
+        assert not pg.errors, pg.errors
+    return {r[0]: r for r in rows if len(r) >= 5}
+
+
+@test("Search & Trace > View full details shows the variant that was RECORDED: the 15 mm "
+      "tape and the 0.42 ribbon, not the 20 mm / 0.40 default with 'not recorded'")
+def t_trace_shows_recorded_variant():
+    c = BM.client()
+    p = BM.parse_up(c, BM.workbook()).get_json()
+    assert BM.apply(c, p["ranges"][0])["results"][0]["action"] == "backfilled"
+    rows = full_details(BM.S(1))
+    lt = [r for k, r in rows.items() if k.startswith("Lead Bending Tape")]
+    assert len(lt) == 1 and "15 mm" in lt[0][1] and "H.B. Fuller" in lt[0][4], lt
+    edge = [r for k, r in rows.items() if k.startswith("String Inter Connector") and "Edge" in k]
+    assert len(edge) == 1 and "0.42" in edge[0][1] and "Dhash" in edge[0][4], edge
+    assert not any("not recorded" in " ".join(r) for k, r in rows.items()
+                   if k.startswith(("Lead Bending", "String Inter Connector"))), rows
+    assert rows["Barcode Label"][4] == "Kvell" and rows["Pallet Packing"][4] == "Manmohan", rows
+
+
+@test("the same on the real file: ICON625R1293022642's every line shows its make")
+def t_trace_real_serial():
+    if not os.path.exists(BM.REAL):
+        print("      (real file not on this machine - skipped)")
+        return
+    c = BM.client()
+    p = BM.parse_up(c, open(BM.REAL, "rb").read()).get_json()
+    rg = [x for x in p["ranges"] if x["start"] <= "ICON625R1293022642" <= x["end"]
+          and x["date"] == "2026-09-30"][0]
+    assert BM.apply(c, rg)["results"][0]["action"] == "backfilled"
+    rows = full_details("ICON625R1293022642")
+    blank = [k for k, r in rows.items() if "not recorded" in " ".join(r)]
+    assert not blank, blank
+    assert "0.42" in [r for k, r in rows.items() if "Edge" in k and k.startswith("String")][0][1]
+    assert "15 mm" in [r for k, r in rows.items() if k.startswith("Lead Bending")][0][1]
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

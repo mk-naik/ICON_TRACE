@@ -6074,13 +6074,25 @@ function wireFqcAnomalies() {
     }
 
     var seen = {}, out = '', shown = 0;
+    /* Of a group of alternatives (20 / 15 mm tape, the 0.40 / 0.41 / 0.42
+       ribbon) the row is the member that was RECORDED - not v4's default
+       choice, which would call a 15 mm tape "not recorded" because the 20 mm
+       one has no make. Only when none was recorded is the default shown, as
+       the gap it is. */
     function rowFor(m) {
-      if (m.group) {
-        if (seen[m.group]) return '';
-        seen[m.group] = 1;
+      if (!m.group) return rowOf(m);
+      if (seen[m.group]) return '';
+      seen[m.group] = 1;
+      var made = list.filter(function (x) {
+        return x.group === m.group && recorded[x.n];
+      });
+      if (!made.length) {
+        return rowOf(typeof chosenInGroup === 'function'
+                     ? chosenInGroup(list, m.group) : m);
       }
-      var mm = (m.group && typeof chosenInGroup === 'function')
-             ? chosenInGroup(list, m.group) : m;
+      return made.map(rowOf).join('');
+    }
+    function rowOf(mm) {
       var am = recorded[mm.n];
       var miss = '<span style="color:var(--review)">not recorded</span>';
       var per = (typeof qpmLabel === 'function' ? qpmLabel(mm, d.model) : mm.qpm);
