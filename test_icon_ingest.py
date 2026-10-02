@@ -123,6 +123,13 @@ def setup(xml_root=True):
     return c
 
 
+def _two_hours_ago():
+    """Past the 30-minute 'mid-decision' window and inside the 3-day look-back -
+    a fixed date here expired on its own (it did, on 2026-10-03)."""
+    import datetime, icon_clock
+    return (icon_clock.now() - datetime.timedelta(hours=2)).isoformat(timespec="seconds")
+
+
 def run_ingest(cur):
     cfg = db.get_config(cur)
     return icon_ingest.run(cfg, cur, db, store)
@@ -296,8 +303,8 @@ def t_looked_up_no_decision():
     assert r.status_code == 200, r.get_json()
     with store.conn() as (cx, cur):
         # backdate the lookup past the window - a fresh one must not fire
-        cur.execute("UPDATE fqc_lookup_log SET at='2026-09-29T00:00:00' "
-                   "WHERE serial=%s", (IN_MASTER,))
+        cur.execute("UPDATE fqc_lookup_log SET at=%s "
+                   "WHERE serial=%s", (_two_hours_ago(), IN_MASTER))
         counts = run_ingest(cur)
     assert counts.get("looked_up_no_decision") == 1, counts
 
@@ -307,8 +314,8 @@ def t_looked_up_then_decided():
     c = setup()
     c.get("/api/fqc/lookup?serial=" + IN_MASTER)
     with store.conn() as (cx, cur):
-        cur.execute("UPDATE fqc_lookup_log SET at='2026-09-29T00:00:00' "
-                   "WHERE serial=%s", (IN_MASTER,))
+        cur.execute("UPDATE fqc_lookup_log SET at=%s "
+                   "WHERE serial=%s", (_two_hours_ago(), IN_MASTER))
     r = c.post("/api/fqc", json={"serial": IN_MASTER, "outcome": "pass"})
     assert r.status_code == 200, r.get_json()
     with store.conn() as (cx, cur):

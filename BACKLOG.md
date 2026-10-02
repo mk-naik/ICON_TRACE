@@ -5972,6 +5972,18 @@ Planning's barcodes.xlsx. Both now write such cells as text (`data_type = "s"`);
 report's own formulas are untouched. The CSV exports already neutralised theirs
 (`_csv_cell`). `test_trace_export.py` (+2).
 
+### Full-suite sweep (2026-10-03, overnight)
+
+All 81 test files run on a clean copy of the tree. Real failures: ONE - `test_icon_ingest`
+"a lookup with no decision" backdated the lookup to a fixed date (2026-09-29) that
+fell outside the code's 3-day look-back window as time passed: a test that expires,
+not a code fault; now relative (two hours ago). Everything else is environment: the
+pytest-style files (`test_icon_auth`, `test_security_4a/4c/4e`, `test_repo_hygiene`:
+27 tests) run nothing as plain scripts - run them with `python -m pytest` (all pass);
+the `*_ui.py` smoke scripts and `test_auth_lab_*` need a running server;
+`test_build_banner_live` needs port 8090, which is the user's own `serve.py`;
+`test_build_banner` checks `git check-ignore`, which needs a real `.git`.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on
