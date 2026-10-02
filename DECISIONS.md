@@ -177,10 +177,12 @@ no one signs twice. [enforcement unverified]
   are role-gated, never per-user; master-data changes are Super Admin only.
 - Per-screen flags cannot express a per-action rule, so action limits use an
   inline role check (`_require_role`). "Cancel a challan" is one of them.
-- Every `/api/*` route must be gated except `/api/session`, `/healthz` and
-  `/api/boot` (which gates itself). A new ungated route is a bug.
-  **[NOT ENFORCED]** `/api/customers` and `/api/customers/resolve` answer
-  anonymous callers.
+- Every `/api/*` route must be gated except `/api/session` (it says who the
+  cookie belongs to, and nothing else when nobody is signed in). `/api/boot`
+  gates itself. A new ungated route fails `test_anonymous_routes.py`, which
+  walks Flask's url_map. `/api/customers`, `/api/customers/resolve` and
+  `/api/sync/status` are on `require_role(*_R_EVERY)`: every signed-in role,
+  never an anonymous caller. [built]
 
 ## 10. Deliberately not built — do not build unless asked
 

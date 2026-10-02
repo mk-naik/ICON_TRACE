@@ -5736,6 +5736,22 @@ barcode etc.).
   selectors and audit, operator keeps Edit and draft discard, number not
   reused); `test_challan_cancel_ui.py` (2, Chromium). A mutation check caught 8/8.
 
+### Three /api routes answered anonymous callers (Fix B)
+
+- **Wrong:** with no session, `GET /api/customers` returned every customer's
+  name, GSTIN, state and ERP code; `/api/customers/resolve` let anyone test
+  whether a GSTIN is a customer; `/api/sync/status` gave the build id and a
+  replay count. None had a gate or a note saying it was public on purpose.
+  Nothing in the pages or scripts calls any of them (customers reach the page
+  through the boot payload), and `enrol.html` does not.
+- **Change:** all three on `require_role(*_R_EVERY)` (every signed-in role - many
+  screens need customer lookup, so not a per-screen gate).
+- **So it cannot recur:** `test_anonymous_routes.py` walks `url_map`, calls every
+  /api rule anonymously by every method it allows (path params 1) and requires
+  401, except `ALLOW` = `/api/session`, each entry with its reason. It found
+  exactly these three; a mutation check proves a brand-new ungated route, a
+  removed gate, and a role locked out are each caught. 112 route/method pairs.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

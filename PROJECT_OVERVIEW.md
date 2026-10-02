@@ -270,6 +270,7 @@ python test_custom_serials.py     12 tests · custom serial upload, allocation, 
 python test_custom_serials_ui.py  5 tests · Planning screen for custom serials, in Chromium
 python test_batch_copy.py          8 tests · Planning: copy a batch's bill of materials (last / by number)
 python test_challan_cancel_ui.py   2 tests · Cancel button: Admin only, asks reason + authenticator code
+python test_anonymous_routes.py   3 tests · every /api route answers 401 with no session (allow-list: /api/session)
 ```
 
 The JS tests read their functions out of `icon_live.js`, so they test what

@@ -1406,6 +1406,7 @@ def _open_boxes():
 
 
 @app.route("/api/customers")
+@require_role(*_R_EVERY)      # every signed-in role; never anonymous (DECISIONS 9)
 def api_customers():
     return jsonify([{"code": c["customer_code"], "name": c["name"],
                      "gstin": c["gstin"], "state": c["state"],
@@ -1415,6 +1416,7 @@ def api_customers():
 
 
 @app.route("/api/customers/resolve")
+@require_role(*_R_EVERY)      # it would let anyone test whether a GSTIN is a customer
 def api_customer_resolve():
     """Any spelling, or a GSTIN, to one code. Unknown returns null rather
     than a near-match - a wrong merge is far harder to undo than a missing
@@ -4121,6 +4123,7 @@ def api_ftr():
 
 
 @app.route("/api/sync/status")
+@require_role(*_R_EVERY)      # nothing calls it; build id + replay count are not for strangers
 def api_sync_status():
     with store.conn() as (cx, cur):
         n = store.one(cur, "SELECT COUNT(*) AS n FROM dispatch_audit "
