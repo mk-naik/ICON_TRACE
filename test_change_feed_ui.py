@@ -50,6 +50,8 @@ WAIT_MS = 14000
 def fresh():
     store.wipe()
     AUTH.ensure_auth_schema()
+    with store.conn() as (cx, cur):          # the incharge master (Round 37)
+        __import__("db").incharge_add(cur, ["RAJESH KUMAR"])
 
 
 def seed_serials(n=8):

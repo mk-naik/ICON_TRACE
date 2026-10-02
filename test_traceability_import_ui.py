@@ -72,6 +72,8 @@ DATA = [
 @test("Upload Excel -> pick date/shift -> tick a range -> backfill records it: "
       "the cascade drives the real import end to end in the browser")
 def t_import_cascade():
+    with store.conn() as (cx, cur):          # the file names no incharge: one is chosen
+        __import__("db").incharge_add(cur, ["X"])
     path = make_file(DATA)
     with H.browser() as b:
         pg = H.open_page(b, "prodentry")
@@ -96,6 +98,7 @@ def t_import_cascade():
 
         # turn on backfill (so the disabled/enabled state flips to ready) and record
         pg.check("#peImpBackfill")
+        pg.evaluate("window.__peImpPicker.set('X')")
         pg.wait_for_timeout(200)
         pg.click("#peImpApply")
         pg.wait_for_selector("#peImpResult .note", timeout=8000)

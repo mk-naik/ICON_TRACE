@@ -2243,6 +2243,98 @@ def fold_customer_rows(rows, cust_field, group_fields, sum_fields, blank="STOCK"
     return [out[k] for k in order]
 
 
+# --------------------------------------------------------------------------
+# Shift incharges - the master (Round 37). A production entry names INDIVIDUAL
+# incharges, one or several, joined with the one standard separator. The file's
+# "YAMAN & RAJKUMAR" is two people; the form's old "RAJESH KUMAR" was a v4 demo
+# name. One resolver serves the manual entry and the import alike.
+# --------------------------------------------------------------------------
+
+import re as _re
+import icon_bom_match as _bm
+
+INCHARGE_JOINER = _bm.JOINER
+_NAME_SPLIT = _re.compile(r"\s*(?:,|&|/|;|\n|\band\b)\s*", _re.I)
+
+
+def incharge_key(name):
+    return _re.sub(r"[^A-Z0-9]", "", str(name or "").upper())
+
+
+def incharge_display(name):
+    """The name as the master keeps it: spaces collapsed; ALL-CAPS or all-lower
+    typing (the way the file and a hurried hand write it) title-cased."""
+    n = " ".join(str(name or "").split())
+    return n.title() if n and (n.isupper() or n.islower()) else n
+
+
+def incharge_split(text):
+    """'YAMAN & RAJKUMAR', 'Yaman,Rajkumar', 'A/B and C' -> individual names."""
+    return [p.strip() for p in _NAME_SPLIT.split(str(text or "")) if p and p.strip()]
+
+
+_NAME_OK = _re.compile(r"^\w[\w .'’-]*$", _re.UNICODE)
+
+
+def incharge_invalid(names):
+    """Names that cannot be a person's: markup, brackets, symbols. A name goes
+    into the master, onto pick-lists and into every shift record, so it is a
+    person's name or nothing - not free text a page might one day run."""
+    return [n for n in names if not _NAME_OK.match(n)]
+
+
+def incharge_list(cur, active_only=True):
+    if cur is None:
+        return []
+    sql = "SELECT incharge_id, name, active FROM incharge"
+    if active_only:
+        sql += " WHERE active=1"
+    return [dict(r) for r in _store.rows(cur, sql + " ORDER BY name COLLATE NOCASE")]
+
+
+def incharge_add(cur, names, actor=None):
+    """Add individual incharges to the master. Returns the display names that
+    were NEW; one already there (any case or spacing) is not added again, and one
+    that was deactivated is brought back."""
+    added = []
+    parts = incharge_split(" , ".join(names) if isinstance(names, (list, tuple)) else names)
+    bad = incharge_invalid(parts)
+    if bad:
+        raise ValueError("%s %s not look like a person's name - letters, digits, "
+                         "spaces, dots, hyphens and apostrophes only."
+                         % (", ".join(bad), "does" if len(bad) == 1 else "do"))
+    for n in parts:
+        key = incharge_key(n)
+        if not key:
+            continue
+        row = _store.one(cur, "SELECT incharge_id, active FROM incharge WHERE name_key=%s", (key,))
+        if row:
+            if not row["active"]:
+                cur.execute("UPDATE incharge SET active=1 WHERE incharge_id=%s", (row["incharge_id"],))
+                added.append(incharge_display(n))
+            continue
+        _store.insert(cur, "incharge", {"name": incharge_display(n), "name_key": key,
+                                        "created_by": actor})
+        added.append(incharge_display(n))
+    return added
+
+
+def incharge_resolve(cur, text):
+    """(canonical names joined with ",", [unknown names]) for free text naming
+    one or several incharges. Matched without case or spacing against the ACTIVE
+    master; a name it does not have is returned, never guessed."""
+    known = {incharge_key(r["name"]): r["name"] for r in incharge_list(cur)}
+    out, unknown = [], []
+    for n in incharge_split(text):
+        k = incharge_key(n)
+        if k in known:
+            if known[k] not in out:
+                out.append(known[k])
+        elif incharge_display(n) not in unknown:
+            unknown.append(incharge_display(n))
+    return INCHARGE_JOINER.join(out), unknown
+
+
 def known_customers(cur):
     """Everyone we have ever shipped to or been ordered by. Feeds the
     type-to-suggest box so the same customer is not spelled three ways."""

@@ -966,6 +966,21 @@ CREATE TABLE IF NOT EXISTS production_entry (
 ) ;
 
 -- ==========================================================================
+-- Shift incharges - the master. Round 37: Production Entry's incharge was a
+-- v4 demo list (RAJESH KUMAR, SURESH PATEL, ...) and a free-typed field; every
+-- entry now names INDIVIDUAL people from here, one or several, joined with ",".
+-- name_key makes "Raj Kumar", "RAJKUMAR" and "raj  kumar" one person.
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS incharge (
+  incharge_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL,
+  name_key    TEXT NOT NULL UNIQUE,
+  active      INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_by  TEXT NULL
+) ;
+
+-- ==========================================================================
 -- Loss of Production
 -- Downtime is opened and closed as an EVENT, never typed as a shift total -
 -- the moment a summary replaces the events behind it, per-shift OEE and

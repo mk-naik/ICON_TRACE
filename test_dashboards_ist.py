@@ -54,6 +54,8 @@ MODEL, WATT = "ISEN625-G12R", 625
 
 def setup():
     store.wipe()
+    with store.conn() as (cx, cur):          # the incharge master (Round 37)
+        __import__("db").incharge_add(cur, ["X", "TEST INCHARGE", "NIGHT INCHARGE", "RAJESH KUMAR"])
     c = APP.app.test_client()
     AUTH.test_login(c)          # a real Super Admin session (Round 23)
     return c

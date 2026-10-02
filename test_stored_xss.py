@@ -8,7 +8,9 @@ free-text field an operator or a PDF can put into the record - indent
 notes, a material's name, an invoice's buyer, a challan's transporter,
 driver and consignee, a gate pass's party and description, an FQC reason,
 a Quality resolution, an abandoned pallet's reason, a loss event's
-machine, a production entry's incharge, a new user's display name. Then
+machine, a new user's display name - and, since Round 37, the incharge MASTER
+(a production entry's incharge is now a person from it, not free text: a name
+with markup is refused outright). Then
 every screen, the challan detail and Search & Trace are opened as a Super
 Admin, and nothing may have run.
 
@@ -56,6 +58,8 @@ def serial(i):
 
 def seed():
     store.wipe()
+    with store.conn() as (cx, cur):          # the incharge master (Round 37)
+        __import__("db").incharge_add(cur, ["X", "TEST INCHARGE", "NIGHT INCHARGE", "RAJESH KUMAR"])
     AUTH.ensure_auth_schema()
     ss = os.path.join(TMP, "ss.csv")
     el = os.path.join(TMP, "el", "OK")
@@ -123,9 +127,12 @@ def seed():
        "date": today, "shift": "A"}), "loss")
     # the shift RUNNING now, on the factory day (06:00-06:00): a shift that has
     # not started is refused, and "A of today" is exactly that between 00:00 and 06:00
+    # the incharge is picked from the master, which refuses a name with markup
+    bad = c.post("/api/incharges", json={"names": [X("prod.incharge")]})
+    assert bad.status_code == 400, "a markup name was added to the incharge master"
     ok(c.post("/api/prodentry", json={"date": clock.shift_day().isoformat(),
        "shift": clock.SHIFT_LETTER[clock.shift_of(clock.now().hour)],
-       "incharge": X("prod.incharge"), "start_serial": serial(2),
+       "incharge": "X", "start_serial": serial(2),
        "end_serial": serial(3)}), "prodentry")
     ok(c.post("/api/users", json={"login_id": "xss.user", "display_name": X("user.name"),
        "role": "FQC Operator", "station": "FQC-01", "temp_password": "CorrectHorse99"}), "user")

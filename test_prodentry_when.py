@@ -44,6 +44,8 @@ SHIFT_SEL = '#peManual .grid.g3 select'
 
 def seed(qty=6):
     store.wipe()
+    with store.conn() as (cx, cur):          # the incharge master (Round 37)
+        __import__("db").incharge_add(cur, ["X", "TEST INCHARGE", "NIGHT INCHARGE", "RAJESH KUMAR"])
     AUTH.ensure_auth_schema()
     serials = []
     with store.conn() as (cx, cur):
@@ -117,7 +119,7 @@ def t_files_yesterdays_c_shift():
         pg = open_form(b)
         pg.eval_on_selector(DATE_SEL, "(e, v) => { e.value = v; }", yesterday)
         pg.select_option(SHIFT_SEL, "C")
-        pg.select_option(SHIFT_SEL + " >> nth=1", index=1)      # shift incharge
+        pg.evaluate("window.__peManualPicker.set('X')")         # shift incharge (the master's picker)
         pg.fill("#peFrom", serials[0])
         pg.fill("#peTo", serials[3])
         pg.wait_for_timeout(600)

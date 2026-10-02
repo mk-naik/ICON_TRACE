@@ -111,8 +111,10 @@ EXPECTED = {
     "indent":    {"api_indent_create", "api_indent_update", "indent_new"},
     "loss":      {"api_loss_event_open", "api_loss_event_close"},
     # the two traceability-import routes: Round 36, the monthly Excel
+    # api_incharges_add: Round 37, the incharge master (anyone who can record
+    # production can add a person; taking one off is Admin-only, a role gate)
     "prodentry": {"api_prodentry", "api_prodentry_import_apply",
-                  "api_prodentry_import_parse"},
+                  "api_prodentry_import_parse", "api_incharges_add"},
 }
 
 _GATE_403 = "Not permitted for your role."
@@ -164,7 +166,7 @@ def fresh():
 # The map itself
 # --------------------------------------------------------------------------
 
-@test("the map read out of app.py is exactly the reviewed map - 40 view "
+@test("the map read out of app.py is exactly the reviewed map - 41 view "
      "functions on 13 screens, every one a real, non-excluded screen")
 def t_map_is_the_reviewed_map():
     got = {}
@@ -173,7 +175,7 @@ def t_map_is_the_reviewed_map():
     assert got == EXPECTED, "map drifted:\n  got      %s\n  expected %s" % (
         sorted((k, sorted(v)) for k, v in got.items()),
         sorted((k, sorted(v)) for k, v in EXPECTED.items()))
-    assert sum(len(v) for v in got.values()) == 40
+    assert sum(len(v) for v in got.values()) == 41
     for s in got:
         assert s in icon_auth.SCREEN_IDS and s not in icon_auth.EXCLUDED_SCREENS, s
     print("      %d route lines, %d functions" % (

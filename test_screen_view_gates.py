@@ -93,6 +93,8 @@ EXPECTED = {
     "api_allocations": {("plan",)}, "api_allocation_get": {("plan",)},
     # Round 37: the copy-from-batch lookup (read-only, Planning's own)
     "api_allocation_copy_source": {("plan",)},
+    # Round 37: the incharge master's pick-list
+    "api_incharges": {("prodentry",)},
     "allocation_barcodes": {("plan",)}, "allocation_barcodes_print": {("plan",)},
     "api_indent_line": {("plan",)},
     "api_prodentries": {("prodentry",)}, "api_loss_events": {("loss",)},

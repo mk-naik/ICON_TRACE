@@ -13771,6 +13771,10 @@ window.gpSetKind = function(k) {
       material_note: (matChgFld && matChgFld.checked) ? JSON.stringify(window.MATCHG || {}) : null
     };
     
+    if (!d.incharge) {
+      if (typeof toast === 'function') toast('Choose the shift incharge.');
+      return;
+    }
     if (!d.date || !d.start_serial || !d.end_serial) return;
     
     btn.disabled = true;
@@ -13807,10 +13811,197 @@ window.gpSetKind = function(k) {
    * system was never running (creates the serials + allocation + BOM behind
    * the range). The v4 markup (#peFile, #peFileIn) is reused, its inline
    * toast handler replaced. */
-  var PE_INCHARGES = ['RAJESH KUMAR', 'SURESH PATEL', 'AMIT SHARMA',
-                      'VIKRAM SINGH', 'DEEPAK YADAV'];
+  /* == SHIFT INCHARGES: the master, and a picker for one or several ==
+   *
+   * Production Entry's incharge was v4's demo list (RAJESH KUMAR, SURESH PATEL,
+   * ...) and offered ONE name. It now comes from the incharge master
+   * (/api/incharges): a person is picked - or several, a shift often has two -
+   * and several are joined with the one standard separator, ",". New people are
+   * added to the master from the picker itself ("Yaman & Rajkumar" is two). The
+   * server resolves every name against the master again and refuses one it does
+   * not have - what is on screen is a convenience, not the check. */
+  var INC_LIST = [];
+  var INC_JOIN = ',';
+
+  function incCss() {
+    if (document.getElementById('iconIncCss')) return;
+    var c = document.createElement('style');
+    c.id = 'iconIncCss';
+    c.textContent =
+      '.inc-pick{position:relative}' +
+      '.inc-btn{width:100%;text-align:left;padding:9px 11px;border:1px solid var(--line);' +
+        'border-radius:var(--r);background:var(--panel);font:inherit;cursor:pointer;' +
+        'min-height:38px;display:flex;justify-content:space-between;gap:8px;align-items:center}' +
+      '.inc-btn .ph{color:var(--ink3)}' +
+      /* inline, not floating: the form's card clips anything that overflows it */
+      '.inc-pop{margin-top:4px;background:var(--panel);border:1px solid var(--line);' +
+        'border-radius:var(--r);padding:8px}' +
+      '.inc-list{max-height:210px;overflow:auto;display:flex;flex-direction:column}' +
+      '.inc-opt{display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;font-size:13px;' +
+        'text-transform:none;letter-spacing:0;font-weight:400;color:var(--ink)}' +
+      '.inc-opt input{width:auto;margin:0}' +
+      '.inc-opt:hover{background:var(--brand-lt)}' +
+      '.inc-opt .x{margin-left:auto;border:0;background:none;color:var(--ink3);cursor:pointer;font-size:14px}' +
+      '.inc-opt .x:hover{color:var(--fail)}' +
+      '.inc-add{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line2)}' +
+      '.inc-add input{flex:1;min-width:0;padding:6px 8px;border:1px solid var(--line);border-radius:var(--r);font:inherit}' +
+      '.inc-empty{padding:6px 4px;color:var(--ink3);font-size:12px}';
+    document.head.appendChild(c);
+  }
+
+  function incKey(n) { return String(n || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+
+  function incSplit(text) {
+    return String(text || '').split(/\s*(?:,|&|\/|;|\n|\band\b)\s*/i)
+      .map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+
+  /* the same rule the server applies: without case or spacing, against the
+     ACTIVE master; a name it does not have is returned, never guessed */
+  function incResolve(raw) {
+    var known = {};
+    INC_LIST.forEach(function (r) { known[incKey(r.name)] = r.name; });
+    var out = [], unknown = [];
+    incSplit(raw).forEach(function (n) {
+      var k = incKey(n);
+      if (known[k]) { if (out.indexOf(known[k]) < 0) out.push(known[k]); }
+      else {
+        var d = (n === n.toUpperCase() || n === n.toLowerCase())
+          ? n.toLowerCase().replace(/(^|\s)\S/g, function (m) { return m.toUpperCase(); }) : n;
+        if (unknown.indexOf(d) < 0) unknown.push(d);
+      }
+    });
+    return { joined: out.join(INC_JOIN), unknown: unknown };
+  }
+
+  function incLoad() {
+    return fetch('/api/incharges', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.ok) { INC_LIST = d.incharges || []; INC_JOIN = d.joiner || ','; }
+        return INC_LIST;
+      })
+      ['catch'](function () { return INC_LIST; });
+  }
+
+  function incPost(url, body) {
+    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body) }).then(function (r) { return r.json(); });
+  }
+
+  /* picker(host, {onChange}) -> {get(), set(csv), refresh()}. get() is the
+     joined value ("Yaman,Rajkumar"); the button shows it with spaces. */
+  window.iconInchargePicker = function (host, opts) {
+    incCss();
+    opts = opts || {};
+    var selected = [];
+    var admin = (typeof USER !== 'undefined') && (USER.role === 'Admin' || USER.role === 'Super Admin');
+    host.innerHTML =
+      '<div class="inc-pick"><button type="button" class="inc-btn"></button>' +
+      '<div class="inc-pop" hidden><div class="inc-list"></div>' +
+      '<div class="inc-add"><input placeholder="New name(s) \u2014 e.g. Yaman & Rajkumar">' +
+      '<button type="button" class="btn btn-ghost btn-sm">Add</button></div></div></div>';
+    var btn = host.querySelector('.inc-btn'), pop = host.querySelector('.inc-pop'),
+        list = host.querySelector('.inc-list'), inp = host.querySelector('.inc-add input'),
+        add = host.querySelector('.inc-add button');
+
+    function value() { return selected.join(INC_JOIN); }
+    function paint() {
+      btn.innerHTML = (selected.length ? fqcEsc(selected.join(', ')) :
+        '<span class="ph">Choose the shift incharge(s)</span>') + '<span>\u25be</span>';
+      list.innerHTML = INC_LIST.length ? INC_LIST.map(function (r) {
+        return '<div class="inc-opt"><input type="checkbox" value="' + fqcEsc(r.name) + '"' +
+          (selected.indexOf(r.name) >= 0 ? ' checked' : '') + '><span>' + fqcEsc(r.name) + '</span>' +
+          (admin ? '<button type="button" class="x" data-off="' + r.incharge_id +
+            '" title="Take off the list">\u00d7</button>' : '') + '</div>';
+      }).join('') : '<div class="inc-empty">No incharges in the master yet \u2014 add them below.</div>';
+    }
+    function changed() { paint(); if (opts.onChange) opts.onChange(value()); }
+
+    btn.addEventListener('click', function () { pop.hidden = !pop.hidden; });
+    document.addEventListener('click', function (e) { if (!host.contains(e.target)) pop.hidden = true; });
+    list.addEventListener('change', function (e) {
+      if (e.target.type !== 'checkbox') return;
+      var n = e.target.value, i = selected.indexOf(n);
+      if (e.target.checked && i < 0) selected.push(n);
+      if (!e.target.checked && i >= 0) selected.splice(i, 1);
+      selected.sort(function (a, b) { return a.localeCompare(b); });
+      changed();
+    });
+    list.addEventListener('click', function (e) {
+      var row = e.target.closest && e.target.closest('.inc-opt');
+      if (row && !e.target.getAttribute('data-off') && e.target.type !== 'checkbox') {
+        var cb = row.querySelector('input');          // a click anywhere on the row toggles it
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+        return;
+      }
+      var off = e.target.getAttribute && e.target.getAttribute('data-off');
+      if (!off) return;
+      e.preventDefault();
+      incPost('/api/incharges/' + off + '/active', { active: false }).then(function (d) {
+        if (d && d.ok) { INC_LIST = d.incharges; selected = selected.filter(function (n) {
+          return INC_LIST.some(function (r) { return r.name === n; }); }); changed(); }
+      });
+    });
+    function addNames() {
+      var v = inp.value.trim();
+      if (!v) return;
+      incPost('/api/incharges', { names: [v] }).then(function (d) {
+        if (!d || !d.ok) { if (typeof toast === 'function') toast((d && d.why) || 'Not added.'); return; }
+        INC_LIST = d.incharges;
+        var r = incResolve(v);
+        incSplit(r.joined).forEach(function (n) { if (selected.indexOf(n) < 0) selected.push(n); });
+        selected.sort(function (a, b) { return a.localeCompare(b); });
+        inp.value = '';
+        changed();
+        if (typeof toast === 'function')
+          toast(d.added.length ? 'Added to the incharge master: ' + d.added.join(', ') : 'Already in the master.');
+      });
+    }
+    add.addEventListener('click', addNames);
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addNames(); } });
+
+    var api = {
+      get: value,
+      set: function (csv) {
+        selected = incResolve(csv).joined ? incResolve(csv).joined.split(INC_JOIN) : [];
+        paint();
+        if (opts.onChange) opts.onChange(value());
+      },
+      refresh: function () { return incLoad().then(function () {
+        selected = selected.filter(function (n) { return INC_LIST.some(function (r) { return r.name === n; }); });
+        paint(); }); }
+    };
+    paint();
+    incLoad().then(function () { paint(); });
+    return api;
+  };
+
+  /* the manual entry form: v4's <select> (a demo list, one name) stays in the
+     DOM, hidden, as the carrier of the chosen value - the submit code reads it
+     by position and keeps working - and the picker drives it */
+  function incWireManual() {
+    var sels = document.querySelectorAll('#peManual .grid.g3 select');
+    var sel = sels[1];
+    if (!sel || sel.__incWired) return;
+    sel.__incWired = true;
+    var fld = sel.closest('.fld');
+    var host = document.createElement('div');
+    host.id = 'peInchargePick';
+    fld.insertBefore(host, sel);
+    sel.style.display = 'none';
+    sel.innerHTML = '<option value=""></option>';
+    window.__peManualPicker = window.iconInchargePicker(host, {
+      onChange: function (csv) {
+        sel.innerHTML = '<option value="' + fqcEsc(csv) + '">' + fqcEsc(csv) + '</option>';
+      }
+    });
+  }
+
 
   window.peWireImport = function () {
+    try { incWireManual(); } catch (e) {}
     var pane = document.getElementById('peFile');
     if (!pane || pane.getAttribute('data-import-wired')) return;
     pane.setAttribute('data-import-wired', '1');
@@ -13856,8 +14047,6 @@ window.gpSetKind = function(k) {
 
   function peImpRenderShell(d) {
     var s = d.summary || {};
-    var incOpts = PE_INCHARGES.map(function (n) {
-      return '<option>' + fqcEsc(n) + '</option>'; }).join('');
     var dateOpts = (d.dates || []).map(function (iso) {
       return '<option value="' + iso + '">' + peFmtD(iso) + '</option>'; }).join('');
     var probs = (d.problems || []);
@@ -13880,7 +14069,8 @@ window.gpSetKind = function(k) {
         '<div class="fld req"><label>Date</label><select id="peImpDate" onchange="peImpFillShift()">' +
           dateOpts + '</select></div>' +
         '<div class="fld req"><label>Shift</label><select id="peImpShift" onchange="peImpRenderRanges()"></select></div>' +
-        '<div class="fld req"><label>Shift incharge</label><select id="peImpIncharge">' + incOpts + '</select></div>' +
+        '<div class="fld req"><label>Shift incharge</label><div id="peImpIncharge"></div>' +
+          '<div id="peImpIncNote"></div></div>' +
       '</div>' +
       '<div style="border-top:1px solid var(--line2);margin-top:12px;padding-top:12px">' +
         '<label class="chk"><input type="checkbox" id="peImpBackfill" onchange="peImpBackfillToggle()">' +
@@ -13895,6 +14085,7 @@ window.gpSetKind = function(k) {
       '<div id="peImpRanges" style="margin-top:12px"></div>' +
       '<div id="peImpResult"></div>';
     document.getElementById('peImpBody').innerHTML = html;
+    window.__peImpPicker = window.iconInchargePicker(document.getElementById('peImpIncharge'), {});
     if (probs.length) {
       document.getElementById('peImpProblems').innerHTML =
         '<table style="width:100%;font-size:11px"><thead><tr><th style="text-align:left">Row</th>' +
@@ -13933,6 +14124,55 @@ window.gpSetKind = function(k) {
     return out;
   }
 
+  /* The file's own "Shift Incharge" column fills the picker for the chosen
+     shift - when every range in it names the same people and the master knows
+     them all. Otherwise each range is recorded under its own (the picker left
+     empty), and the screen says who the master lacks, with one click to add them. */
+  function peImpIncharges(rs, date, shift) {
+    var pk = window.__peImpPicker, note = document.getElementById('peImpIncNote');
+    if (!pk || !note) return;
+    var raws = [], unknown = [];
+    rs.forEach(function (r) {
+      var raw = r.incharge_raw || '';
+      if (raws.indexOf(raw) < 0) raws.push(raw);
+      (r.incharge_unknown || []).forEach(function (n) { if (unknown.indexOf(n) < 0) unknown.push(n); });
+    });
+    var key = date + '|' + shift + '|' + unknown.length;
+    if (pk.__key !== key) {
+      pk.__key = key;
+      pk.set(raws.length === 1 && raws[0] && !unknown.length ? rs[0].incharge : '');
+    }
+    var html = '';
+    if (raws.length === 1 && raws[0] && !unknown.length) {
+      html += '<div class="hint">From the file: ' + fqcEsc(raws[0]) + '</div>';
+    } else if (raws.filter(Boolean).length > 1) {
+      html += '<div class="hint">The ranges in this shift name different incharges - each is recorded under ' +
+        'its own. Choosing here applies one choice to every ticked range.</div>';
+    } else if (!raws.filter(Boolean).length) {
+      html += '<div class="hint">The file names no incharge for this shift - choose one.</div>';
+    }
+    if (unknown.length) {
+      html += '<div class="note n-warn" style="margin:6px 0 0"><span>!</span><span>Not in the incharge master: <b>' +
+        unknown.map(fqcEsc).join(', ') + '</b>. <button class="lnk" id="peImpIncAdd">Add ' +
+        (unknown.length === 1 ? 'it' : 'them') + ' to the master</button></span></div>';
+    }
+    note.innerHTML = html;
+    var addBtn = document.getElementById('peImpIncAdd');
+    if (addBtn) addBtn.onclick = function () {
+      incPost('/api/incharges', { names: unknown }).then(function (d) {
+        if (!d || !d.ok) { if (typeof toast === 'function') toast((d && d.why) || 'Not added.'); return; }
+        INC_LIST = d.incharges;
+        ((window.__peImport || {}).ranges || []).forEach(function (r) {
+          var x = incResolve(r.incharge_raw || '');
+          r.incharge = x.joined; r.incharge_unknown = x.unknown;
+        });
+        pk.refresh();
+        if (typeof toast === 'function') toast('Added to the incharge master: ' + d.added.join(', '));
+        peImpRenderRanges();
+      });
+    };
+  }
+
   window.peImpToggleProblems = function () {
     var el = document.getElementById('peImpProblems');
     if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
@@ -13965,6 +14205,7 @@ window.gpSetKind = function(k) {
     var shift = document.getElementById('peImpShift').value;
     var backfill = document.getElementById('peImpBackfill').checked;
     var rs = peImpRangesFor(date, shift);
+    peImpIncharges(rs, date, shift);
     if (!rs.length) { wrap.innerHTML = '<div class="empty-state">No ranges for that shift.</div>'; return; }
     var rows = rs.map(function (r, i) {
       // claim needs the range already planned in full; backfill creates
@@ -14011,7 +14252,7 @@ window.gpSetKind = function(k) {
 
   window.peImpApply = function () {
     var backfill = document.getElementById('peImpBackfill').checked;
-    var incharge = document.getElementById('peImpIncharge').value;
+    var incharge = window.__peImpPicker ? window.__peImpPicker.get() : '';
     var dcr = (document.getElementById('peImpDcr') || {}).value || 'NDCR';
     var rs = window.__peImpCurrent || [];
     var chosen = [];

@@ -110,6 +110,8 @@ def S(seq, watt=625, batch="ICON%dR129014" % 625):
 
 def client():
     store.wipe()
+    with store.conn() as (cx, cur):          # the incharge master (Round 37)
+        __import__("db").incharge_add(cur, ["X", "TEST INCHARGE", "NIGHT INCHARGE", "RAJESH KUMAR"])
     AUTH.ensure_auth_schema()
     c = APP.app.test_client()
     AUTH.test_login(c)

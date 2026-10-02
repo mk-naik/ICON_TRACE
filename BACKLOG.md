@@ -5824,6 +5824,36 @@ efficiency and size in one string, written as it stood, where the master says
 - Tests: `test_bom_match.py` (14), `test_bom_match_ui.py` (3, Chromium); a
   mutation check caught 15 of 15.
 
+### Shift incharge: a master, several people, one separator
+
+Mukesh: the incharge names in the UI are v4's demo list, and there is no way to
+pick several - make a master from all the individual incharges, let the form
+select several, and join them with ",".
+
+- **Wrong:** Production Entry offered v4's five demo names (RAJESH KUMAR, SURESH
+  PATEL, AMIT SHARMA, VIKRAM SINGH, DEEPAK YADAV) - 57 real entries on production
+  carry "RAJESH KUMAR", the first option - and exactly one name; the import took a
+  single typed value for the whole file though the file has a "Shift Incharge"
+  column of up to three people ("UMENDRA & YUKESH & RAJKUMAR": 24 combinations, 8
+  individuals - Yaman, Rajkumar, Kamta, Deepak, Akshay, Umendra, Devendra, Yukesh).
+- **Change:** table `incharge` (name + a key that makes "Raj Kumar" and "RAJKUMAR"
+  one person); `db.incharge_resolve` is the one resolver; `/api/incharges` (list
+  / add / Admin deactivate). The manual entry and the import both resolve every
+  name against the master and refuse an unknown one; stored joined with ",".
+  The picker (several ticks, add in place, an Admin's x) replaces the demo select
+  - which stays in the DOM, hidden, as the carrier the submit code already reads.
+  The import prefills the picker from the file when a shift's ranges agree, lists
+  names the master lacks with one click to add them, and otherwise records each
+  range under its own people.
+- **Decision for Mukesh:** who may add / remove. I made adding open to anyone who
+  can record production (a new person must not stall a shift) and removing
+  Admin-only. Tell me if adding should be restricted too.
+- **After deploying:** add the real incharges first - the import's "Add them to the
+  master" does the file's eight in one click.
+- Tests: `test_incharge_master.py` (9, two in Chromium); a mutation check caught
+  10 of 10. Older tests that drove the demo dropdown now use the picker; the
+  stored-XSS test asserts a markup name is refused.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

@@ -4303,6 +4303,67 @@ def _prod_when(date_raw, shift_raw, now=None):
     return day, letter, None
 
 
+def _incharge_refusal(cur, text):
+    """(canonical joined names, None) or (None, why): every name must be in the
+    incharge master. Nothing is guessed and nothing is added behind the
+    operator's back - a new person is added on purpose, from the screen."""
+    joined, unknown = db.incharge_resolve(cur, text)
+    if unknown:
+        return None, ("%s %s not in the incharge master. Add %s first (Production "
+                      "Entry -> Shift incharges), then record again."
+                      % (", ".join(unknown), "is" if len(unknown) == 1 else "are",
+                         "them" if len(unknown) > 1 else "it"))
+    if not joined:
+        return None, "Choose the shift incharge."
+    return joined, None
+
+
+@app.route("/api/incharges")
+@require_screen_view("prodentry")
+def api_incharges():
+    with store.conn() as (cx, cur):
+        return jsonify({"ok": True, "incharges": db.incharge_list(cur),
+                        "joiner": db.INCHARGE_JOINER})
+
+
+@app.route("/api/incharges", methods=["POST"])
+@require_screen_write("prodentry")
+def api_incharges_add():
+    """Add one or several people to the incharge master: {"name": "..."} or
+    {"names": [...]} - 'Yaman & Rajkumar' is two people."""
+    d = request.get_json(force=True) or {}
+    names = d.get("names") if d.get("names") is not None else d.get("name")
+    if isinstance(names, str):
+        names = [names]
+    if not names or not any(str(n).strip() for n in names):
+        return jsonify({"ok": False, "why": "Give a name."}), 400
+    with store.conn() as (cx, cur):
+        try:
+            added = db.incharge_add(cur, [str(n) for n in names], actor())
+        except ValueError as e:
+            return jsonify({"ok": False, "why": str(e)}), 400
+        if added:
+            db.audit(cur, actor(), "incharge.add", "incharge", None, {"names": added})
+        return jsonify({"ok": True, "added": added, "incharges": db.incharge_list(cur)})
+
+
+@app.route("/api/incharges/<int:incharge_id>/active", methods=["POST"])
+@require_role(*_R_ADMIN)
+def api_incharges_active(incharge_id):
+    """Take a person off the pick-list (or bring them back). Admin only; the
+    entries already filed under their name keep it."""
+    d = request.get_json(force=True) or {}
+    on = 1 if d.get("active") else 0
+    with store.conn() as (cx, cur):
+        row = store.one(cur, "SELECT name FROM incharge WHERE incharge_id=%s", (incharge_id,))
+        if not row:
+            return jsonify({"ok": False, "why": "No such incharge."}), 404
+        cur.execute("UPDATE incharge SET active=%s WHERE incharge_id=%s", (on, incharge_id))
+        db.audit(cur, actor(), "incharge.activate" if on else "incharge.deactivate",
+                 "incharge", incharge_id, {"name": row["name"]})
+        return jsonify({"ok": True, "incharges": db.incharge_list(cur)})
+
+
 @app.route("/api/prodentry", methods=["POST"])
 @require_screen_write("prodentry")
 @_sync_guard
@@ -4366,6 +4427,10 @@ def api_prodentry():
                 "AND length(serial) = %s AND substr(serial, 1, %s) = %s")
 
     with store.conn() as (cx, cur):
+        # the incharge(s) must be people in the master, joined with ","
+        incharge, why_inc = _incharge_refusal(cur, incharge)
+        if why_inc:
+            return jsonify({"ok": False, "why": why_inc}), 400
         start_row = store.one(cur, "SELECT sequence, wattage, model FROM serial WHERE serial=%s AND build_instance=1", (start_serial,))
         if not start_row:
             return jsonify({"ok": False, "why": f"Start serial {start_serial} not found in planning."}), 400
@@ -4520,6 +4585,13 @@ def api_prodentry_import_parse():
             r["in_system"] = have
             r["all_present"] = (have == want and want > 0)
         result["bom_summary"] = _bom_summary(cur, result["ranges"])
+        unknown = set()
+        for r in result["ranges"]:
+            joined, unk = db.incharge_resolve(cur, r.get("incharge_raw") or "")
+            r["incharge"] = joined
+            r["incharge_unknown"] = unk
+            unknown.update(unk)
+        result["incharge_unknown"] = sorted(unknown)
     return jsonify(result)
 
 
@@ -4748,12 +4820,13 @@ def api_prodentry_import_apply():
     d = request.get_json(force=True) or {}
     ranges = d.get("ranges") or []
     backfill = bool(d.get("backfill"))
-    incharge = (d.get("incharge") or "").strip()
+    incharge = (d.get("incharge") or "").strip()      # the fallback / override
     dcr = (d.get("dcr") or "NDCR").strip().upper()
     if not ranges:
         return jsonify({"ok": False, "why": "No ranges selected."}), 400
-    if not incharge:
-        return jsonify({"ok": False, "why": "Enter the shift in-charge."}), 400
+    if not incharge and any(not (r.get("incharge_raw") or "").strip() for r in ranges):
+        return jsonify({"ok": False, "why":
+            "Choose the shift incharge - the file names none for some of these ranges."}), 400
     if dcr not in ("DCR", "NDCR"):
         return jsonify({"ok": False, "why": "DCR must be DCR or NDCR."}), 400
 
@@ -4764,9 +4837,16 @@ def api_prodentry_import_apply():
             sp = "imp_%d" % i
             cx.execute("SAVEPOINT %s" % sp)
             try:
-                res = (_import_backfill_range(cur, rng, dcr, incharge, stamp)
-                       if backfill else
-                       _import_claim_range(cur, rng, incharge, stamp))
+                # each range's incharge(s): the chosen override, else the file's
+                # own "Shift Incharge" - always resolved against the master HERE
+                inc, why_inc = _incharge_refusal(
+                    cur, incharge or (rng.get("incharge_raw") or ""))
+                if why_inc:
+                    res = {"action": "error", "why": why_inc}
+                else:
+                    res = (_import_backfill_range(cur, rng, dcr, inc, stamp)
+                           if backfill else
+                           _import_claim_range(cur, rng, inc, stamp))
                 if res.get("action") in ("error", "skipped"):
                     cx.execute("ROLLBACK TO %s" % sp)   # undo any partial writes
             except Exception as e:

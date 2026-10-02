@@ -83,6 +83,8 @@ def t_joined_value_shown():
       "can be ticked to refresh its BOM")
 def t_import_notes_and_refresh():
     store.wipe()
+    with store.conn() as (cx, cur):          # the file's incharges are in the master
+        __import__("db").incharge_add(cur, ["Yaman", "Rajkumar"])
     path = os.path.join(TMP, "t.xlsx")
     open(path, "wb").write(BM.workbook(cell="LIONSOLAR 25.8% (210*182.2) G12R CELL",
                                         fr="ALUVOLTECH (2278*1134*30 MM)"))

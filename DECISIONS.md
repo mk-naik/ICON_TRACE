@@ -250,6 +250,20 @@ The Drafts screen is still v4 sample data.
 - **A backfill batch's BOM can be refreshed** by re-uploading the file in backfill
   mode and ticking the range - only batches the importer made (BACKFILL/ indents)
   that cover exactly that range; a Planning batch's BOM is never touched. [built]
+- **The shift incharge is a person (or several) from a master.** `incharge`
+  holds INDIVIDUALS - "Yaman & Rajkumar" is two. A production entry (manual or
+  import) names one or several from it, **joined with ","**; the server resolves
+  every name against the master (any case or spacing) and refuses one it does not
+  have, saying which - nothing is added behind anyone's back. A name is a
+  person's name: letters, digits, spaces, dots, hyphens, apostrophes - markup is
+  refused. Anyone who can record production can add a person (from the picker, or
+  with one click for the names a file lists); **only an Admin takes one off the
+  list**, and entries already filed keep the name. The import takes each range's
+  incharges from the file's "Shift Incharge" column unless one choice is made for
+  all. v4's demo list (RAJESH KUMAR, SURESH PATEL, ...) is gone. [built]
+- **[open]** The master starts EMPTY on an existing database, so nothing can be
+  recorded until the real incharges are added. The 57 production entries filed
+  before this carry the v4 demo name "RAJESH KUMAR" - history, left as it is.
 - **Production Entry takes the monthly traceability Excel** (Round 36, at
   Mukesh's request - it was on the "not built" list): upload, pick date, shift
   and range(s); CLAIM mode records ranges Planning already issued, BACKFILL
