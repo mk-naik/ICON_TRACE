@@ -8377,6 +8377,10 @@ function wireFqcAnomalies() {
             'title="Plan it in Planning. This item closes itself once the ' +
             'serial is in the master.">Plan it</button>'
           : '<span class="hint">Incharge plans it</span>';
+        /* ... or it is not a module anyone will plan (a typo, a test ID) */
+        action += ' <button class="btn btn-ghost btn-sm" onclick="reviewOpenIngest(' +
+          r.id + ',\'discard\')" title="Not a module that will be planned - ' +
+          'take it off this list, with a reason.">Discard</button>';
       } else {
         // Stage 5: the ingest-found types (icon_ingest.py) - not_in_master,
         // ss_skip, looked_up_no_decision, ftr_junk/ftr_failed. One shape,
@@ -8384,6 +8388,14 @@ function wireFqcAnomalies() {
         // 'planned' vs 'acknowledged' from the type itself.
         action = '<button class="btn btn-ghost btn-sm" onclick="reviewOpenIngest(' +
           r.id + ')">Resolve</button>';
+        /* a scan that is not a serial at all is also something to throw away:
+           a stray "-" or quote after the serial - nothing to plan, nothing to
+           chase */
+        if (r.type === 'not_in_master_malformed' || r.type === 'ftr_junk') {
+          action += ' <button class="btn btn-ghost btn-sm" onclick="reviewOpenIngest(' +
+            r.id + ',\'discard\')" title="A misfire, not a module - take it off ' +
+            'this list, with a reason.">Discard</button>';
+        }
       }
       return '<tr><td class="mono" style="font-size:11px">' + esc(when) + '</td>' +
         '<td class="mono">' + esc(r.serial) + '</td>' +
@@ -8394,7 +8406,81 @@ function wireFqcAnomalies() {
         '<td style="white-space:nowrap">' + action + '</td></tr>';
     }).join('');
     if (window.iconTable) window.iconTable.wireAll();
+    reviewBulkBar(shown);
   }
+
+  /* The junk IDs a scanner misfire leaves arrive in dozens: one bar to discard
+     the ones on screen together, with one reason (every one is checked on the
+     server exactly as a single discard is). */
+  function reviewBulkBar(shown) {
+    var body = document.getElementById('rvRows');
+    var tbl = body && body.closest('table');
+    if (!tbl) return;
+    var bar = document.getElementById('rvBulk');
+    var junk = shown.filter(function (r) {
+      return r.type === 'not_in_master_malformed' || r.type === 'ftr_junk'; });
+    if (!junk.length) { if (bar) bar.remove(); return; }
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'rvBulk';
+      bar.className = 'note n-info';
+      bar.style.cssText = 'display:flex;align-items:center;gap:12px;margin:0 0 10px';
+      var anchor = tbl.closest('.scroll') || tbl;
+      anchor.parentNode.insertBefore(bar, anchor);
+    }
+    window.__reviewJunkIds = junk.map(function (r) { return r.id; });
+    bar.innerHTML = '<span>ⓘ</span><span style="flex:1"><b>' + junk.length +
+      '</b> scan(s) on this list are not a serial at all (a scanner misfire - ' +
+      'a stray "-" or quote).</span>' +
+      '<button class="btn btn-ghost btn-sm" id="rvBulkBtn">Discard these ' +
+      junk.length + '…</button>';
+    document.getElementById('rvBulkBtn').onclick = function () { window.reviewOpenBulkDiscard(); };
+  }
+
+  window.reviewOpenBulkDiscard = function () {
+    var ids = window.__reviewJunkIds || [];
+    var host = document.getElementById('mdlGeneric');
+    var mdl = document.getElementById('mdl');
+    if (!ids.length || !host || !mdl) return;
+    var title = document.getElementById('mdlTitle');
+    var sub = document.getElementById('mdlSub');
+    if (title) title.textContent = 'Discard ' + ids.length + ' junk scan(s)';
+    if (sub) sub.textContent = 'Not serials - nothing to plan';
+    if (typeof modalMode === 'function') modalMode(true);
+    host.innerHTML =
+      '<div class="note n-info"><span>ⓘ</span><span>These scans are not a serial ' +
+        '(a misfire). Discarding takes them off Needs Review; the tester\'s own ' +
+        'file is not touched. A scan raised twice - as "Not in master" and as ' +
+        '"FTR anomaly" - closes together.</span></div>' +
+      '<div class="fld"><label>Why? (required)</label>' +
+      '<textarea id="revWhy" rows="3" placeholder="e.g. scanner misfires - stray ' +
+        'characters after the serial"></textarea></div>' +
+      '<div class="card-f"><button class="btn btn-primary" onclick="reviewSubmitBulkDiscard()">' +
+        'Discard ' + ids.length + '</button>' +
+      '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>';
+    mdl.classList.add('on');
+    var box = document.getElementById('revWhy');
+    if (box) box.focus();
+  };
+
+  window.reviewSubmitBulkDiscard = function () {
+    var box = document.getElementById('revWhy');
+    var why = box ? box.value.trim() : '';
+    if (!why) {
+      if (typeof toast === 'function') toast('Say why before discarding these.');
+      if (box) box.focus();
+      return;
+    }
+    api('review/discard-many', { method: 'POST', body: JSON.stringify(
+      { ids: window.__reviewJunkIds || [], reason: why }) }).then(function (d) {
+        if (!d.ok) { if (typeof toast === 'function') toast(d.why); return; }
+        if (typeof closeModal === 'function') closeModal();
+        if (typeof toast === 'function')
+          toast('Discarded ' + d.discarded + ' scan(s)' +
+                (d.skipped ? ' (' + d.skipped + ' already closed with their twin)' : '') + '.');
+        window.iconReviewRefresh();
+      });
+  };
 
   window.iconReviewRefresh = function () {
     if (!can('review')) return;   /* Round 28: the server would refuse it */
@@ -8605,7 +8691,7 @@ function wireFqcAnomalies() {
      shape for all of them: say why, resolve. not_in_master_unplanned is the
      one the server itself checks - it refuses until the serial is actually
      in the master, so a wrong "yes I planned it" cannot close the item. */
-  window.reviewOpenIngest = function (reviewId) {
+  window.reviewOpenIngest = function (reviewId, mode) {
     var item = (window.__reviewItems || []).filter(function (r) {
       return String(r.id) === String(reviewId) && r.type !== 'quality_grade' &&
              r.type !== 'duplicate_scan' && r.type !== 'provisional_mismatch'; })[0];
@@ -8620,25 +8706,33 @@ function wireFqcAnomalies() {
     if (sub) sub.textContent = esc(item.detail || '');
     if (typeof modalMode === 'function') modalMode(true);
     var isUnplanned = item.type === 'not_in_master_unplanned';
+    var discard = mode === 'discard';
+    if (discard && title) title.textContent = 'Discard · ' + esc(item.serial);
     host.innerHTML =
       '<div class="note n-info"><span>ⓘ</span><span>' + esc(item.detail || '') +
-        (isUnplanned ? ' — plan it with an indent first; this only ' +
+        (discard ? ' — discarding says this is not a module that will be planned ' +
+          '(a misfire, a typo, a test ID). It leaves this list; the tester\'s file ' +
+          'is not touched' + (isUnplanned ? ', and it comes back only if the module ' +
+          'is scanned again later.' : '.')
+         : isUnplanned ? ' — plan it with an indent first; this only ' +
           'resolves once the serial is actually in the master.' : '') +
         '</span></div>' +
       '<div class="fld"><label>Why? (required)</label>' +
       '<textarea id="revWhy" rows="3" placeholder="' +
-        (isUnplanned ? 'e.g. planned with indent IND-...' :
+        (discard ? 'e.g. scanner misfire - stray character after the serial' :
+         isUnplanned ? 'e.g. planned with indent IND-...' :
          'what was done about it') + '"></textarea></div>' +
       '<div class="card-f"><button class="btn btn-primary" ' +
-        'onclick="reviewSubmitIngest(' + reviewId + ',\'' + item.type + '\')">' +
-        'Resolve</button>' +
+        'onclick="reviewSubmitIngest(' + reviewId + ',\'' + item.type + '\'' +
+        (discard ? ',\'discard\'' : '') + ')">' +
+        (discard ? 'Discard' : 'Resolve') + '</button>' +
       '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>';
     mdl.classList.add('on');
     var box = document.getElementById('revWhy');
     if (box) box.focus();
   };
 
-  window.reviewSubmitIngest = function (reviewId, itemType) {
+  window.reviewSubmitIngest = function (reviewId, itemType, resolution) {
     var box = document.getElementById('revWhy');
     var why = box ? box.value.trim() : '';
     if (!why) {
@@ -8647,12 +8741,13 @@ function wireFqcAnomalies() {
       return;
     }
     api('review/resolve', { method: 'POST', body: JSON.stringify(
-      { type: itemType, id: reviewId, reason: why }) })
+      { type: itemType, id: reviewId, reason: why, resolution: resolution || '' }) })
       .then(function (d) {
         if (!d.ok) { if (typeof toast === 'function') toast(d.why); return; }
         if (typeof closeModal === 'function') closeModal();
         if (typeof toast === 'function')
-          toast('Review #' + reviewId + ' resolved: ' + d.resolution + '.');
+          toast('Review #' + reviewId + ' ' + d.resolution + '.' +
+                (d.twins_closed ? ' Its twin closed too.' : ''));
         window.iconReviewRefresh();
       });
   };

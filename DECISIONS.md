@@ -136,6 +136,19 @@ no one signs twice. [enforcement unverified]
   cancelled, not deleted. Already dispatched: Admin only, acknowledge only.
   [built]
 - Replacement-serial workflow for a dispatched conflict. [decided]
+- **Scan items on Needs Review (Stage 5) can be DISCARDED** (Round 38, Mukesh: "no
+  way to discard them"): a scan that is not a serial at all (a stray "-" or quote
+  after one - "Not in master - malformed" / "FTR anomaly - junk ID") and a
+  serial-shaped one nobody will plan. Reason mandatory, Incharge or above, audited,
+  one list at a time or all junk IDs together. A failed reading, a skipped tester
+  and an undecided lookup are about a REAL module and are only acknowledged. One
+  tester row raised twice (malformed + junk ID) is one decision: closing either
+  closes its twin. A discard sticks for the scan that was looked at; a LATER scan of
+  the same unplanned serial brings it back. [built]
+- **A bad Sun Simulator reading (probe / jig / polarity) is an anomaly planned or
+  not.** The Tester Anomalies list and Scan events ("FTR anomaly - failed reading")
+  hold it either way; an unplanned module is ALSO under Not in master and its row
+  says the reading failed. Planning closes only the Not in master twin. [built]
 
 ## 7. Packing and repack
 

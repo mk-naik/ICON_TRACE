@@ -8645,6 +8645,13 @@ def _resolve_provisional_mismatch(cur, review_id, resolution, reason):
 # (not_in_master_malformed is the point of that one).
 _INGEST_TYPES = ("not_in_master_malformed", "not_in_master_unplanned",
                  "ss_skip", "looked_up_no_decision", "ftr_junk", "ftr_failed")
+# What can be DISCARDED (Round 38, Mukesh: "no way to discard them"): a scan that
+# is not a module the plant will plan - ICON625R1293022642- , "ICON625R1293022642 -
+# or a serial that looks right but is a typo. The rest (a failed reading, a skipped
+# tester, a lookup nobody decided) is about a REAL module and is acknowledged.
+_DISCARDABLE = ("not_in_master_malformed", "ftr_junk", "not_in_master_unplanned")
+# the same tester row raised under both names
+_INGEST_TWIN = {"not_in_master_malformed": "ftr_junk", "ftr_junk": "not_in_master_malformed"}
 
 
 def _resolve_ingest_item(cur, review_id, resolution, reason):
@@ -8661,10 +8668,23 @@ def _resolve_ingest_item(cur, review_id, resolution, reason):
     _require_role(*_INCHARGE_ROLES, why="Only a Production Shift Incharge "
                   "or above can resolve an ingest-found item.")
 
-    if item["type"] == "not_in_master_unplanned":
+    discard = (resolution or "").strip().lower() == "discard"
+    if discard and item["type"] not in _DISCARDABLE:
+        raise _Refuse("A %s cannot be discarded - acknowledge it once someone has "
+                      "looked at it." % item["type"].replace("_", " "))
+    if discard:
+        # "this is not a module we will ever plan": a scanner misfire, a typo, a
+        # test ID. For a serial that DOES look right it is the Incharge's call -
+        # but not for one that is already in the master, which closes itself.
+        if item["type"] == "not_in_master_unplanned" and                 db.find_serial(cur, item["serial"]) is not None:
+            raise _Refuse("%s is in the serial master now - this item closes "
+                          "itself, there is nothing to discard." % item["serial"])
+        resolution = "discarded"
+    elif item["type"] == "not_in_master_unplanned":
         if db.find_serial(cur, item["serial"]) is None:
             raise _Refuse("%s is still not in the serial master - plan it "
-                          "with an indent before resolving this."
+                          "with an indent before resolving this, or discard it "
+                          "if it is not a module that will be planned."
                           % item["serial"])
         resolution = "planned"
     else:
@@ -8674,10 +8694,22 @@ def _resolve_ingest_item(cur, review_id, resolution, reason):
     cur.execute("UPDATE review_item SET status='resolved', resolved_by=%s, "
                 "resolved_at=%s, resolution=%s, reason=%s WHERE review_id=%s",
                 (actor(), at, resolution, reason, review_id))
+    # One tester row can be raised twice - "Not in master - malformed" AND
+    # "FTR anomaly - junk ID" - and is one thing to decide, not two.
+    twins = 0
+    twin = _INGEST_TWIN.get(item["type"])
+    if twin:
+        twins = cur.execute(
+            "UPDATE review_item SET status='resolved', resolved_by=%s, resolved_at=%s, "
+            "resolution=%s, reason=%s WHERE type=%s AND serial=%s AND status='open' "
+            "AND COALESCE(event_at,'')=COALESCE(%s,'') AND COALESCE(line,'')=COALESCE(%s,'')",
+            (actor(), at, resolution, reason, twin, item["serial"],
+             item.get("event_at"), item.get("line"))).rowcount or 0
     db.audit(cur, actor(), "review.resolve", "serial", item["serial"],
              {"review_id": review_id, "type": item["type"],
-              "resolution": resolution, "reason": reason})
-    return {"ok": True, "review_id": review_id, "resolution": resolution}
+              "resolution": resolution, "reason": reason, "twins_closed": twins})
+    return {"ok": True, "review_id": review_id, "resolution": resolution,
+            "twins_closed": twins}
 
 
 def _waiting_for(f):
@@ -9134,11 +9166,14 @@ def api_review_list():
             "ftr_failed": ("FTR anomaly · failed reading",
                 "tested, and every reading came back invalid"),
         }
-        for r in db.review_items_unmatched(cur, list(_INGEST_LABELS)):
-            r = dict(r)
+        unmatched = [dict(r) for r in db.review_items_unmatched(cur, list(_INGEST_LABELS))]
+        # a module whose every reading came back invalid (probe, jig, polarity) is
+        # ALSO in "FTR anomaly - failed reading"; say so on its Not in master row
+        failed_reading = {r["serial"] for r in unmatched if r["type"] == "ftr_failed"}
+        for r in unmatched:
             flag, detail = _INGEST_LABELS[r["type"]]
             if r["type"] == "not_in_master_unplanned":
-                detail = _unplanned_detail(r, detail)
+                detail = _unplanned_detail(r, detail, r["serial"] in failed_reading)
             items.append({
                 "type": r["type"], "id": r["review_id"], "serial": r["serial"],
                 "model": None, "customer": None,
@@ -9164,7 +9199,7 @@ def _iso_ts(ts):
     return ts
 
 
-def _unplanned_detail(r, base):
+def _unplanned_detail(r, base, reading_failed=False):
     """What an Incharge needs to see on a not-in-master row without opening
     anything: the reading the tester gave it (saved), and whether FQC has
     already decided - because the decision stands once it is planned."""
@@ -9176,7 +9211,9 @@ def _unplanned_detail(r, base):
         pmax = None
     tested = (r.get("ftr_tested_at") or r.get("event_at") or "")[11:16]
     bits.append("SS %.1f W%s" % (pmax, " at " + tested if tested else "")
-                if pmax is not None else "no SS reading saved yet")
+                if pmax is not None else
+                "SS reading FAILED (probe / jig / polarity) - also under Scan events"
+                if reading_failed else "no SS reading saved yet")
     if r.get("fqc_outcome"):
         # held = a pass with no grade (the provisional route); a pass made
         # while the EL was unfiled is 'provisional' in mode but graded A
@@ -9336,6 +9373,40 @@ def api_review_resolve():
         return jsonify(out)
 
     return jsonify({"ok": False, "why": "Unknown review item type."}), 400
+
+
+@app.route("/api/review/discard-many", methods=["POST"])
+@require_screen_write("review")
+@_sync_guard
+def api_review_discard_many():
+    """Discard a list of scan items at once - the junk IDs a scanner misfire
+    leaves, a night's worth of them. ONE reason, every item checked exactly as a
+    single discard is (role, type, still open); an item that was closed in the
+    meantime - the twin of one just discarded - is skipped, not an error."""
+    d = request.get_json(force=True) or {}
+    reason = (d.get("reason") or "").strip()
+    if not reason:
+        return jsonify({"ok": False, "why":
+            "Say why — every resolution needs a reason, no exceptions."}), 400
+    try:
+        ids = [int(x) for x in (d.get("ids") or [])]
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "why": "No such review item."}), 404
+    if not ids or len(ids) > 5000:
+        return jsonify({"ok": False, "why": "Pick between 1 and 5000 items."}), 400
+    done = skipped = 0
+    try:
+        with store.conn() as (cx, cur):
+            for rid in ids:
+                it = db.review_item_get(cur, rid)
+                if it and it.get("status") != "open":
+                    skipped += 1
+                    continue
+                _resolve_ingest_item(cur, rid, "discard", reason)
+                done += 1
+    except _Refuse as e:
+        return jsonify({"ok": False, "why": e.why}), e.code
+    return jsonify({"ok": True, "discarded": done, "skipped": skipped})
 
 
 @app.route("/api/el/image")

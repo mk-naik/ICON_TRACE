@@ -1030,7 +1030,7 @@ def upsert_unplanned_item(cur, serial, source, line=None, event_at=None,
     this does not look."""
     if cur is None:
         return None
-    row = _store.one(cur, "SELECT review_id, status, event_at FROM review_item "
+    row = _store.one(cur, "SELECT review_id, status, event_at, resolution FROM review_item "
                           "WHERE type='not_in_master_unplanned' AND raw_id=%s",
                      (serial,))
     at = clock.now().isoformat(timespec="seconds")
@@ -1043,6 +1043,12 @@ def upsert_unplanned_item(cur, serial, source, line=None, event_at=None,
             (serial, at, created_by, serial, source, line, at, event_at))
         return "created"
     if row["status"] != "open":
+        if row.get("resolution") == "discarded" and not (
+                event_at and (row.get("event_at") or "") < event_at):
+            # someone said "not a module we will plan", and the scan that is
+            # still in the tester's file is the one they were looking at - it
+            # comes back only if the module is scanned AGAIN, later
+            return None
         cur.execute(
             "UPDATE review_item SET status='open', resolved_by=NULL, "
             "resolved_at=NULL, resolution=NULL, reason=NULL, detected_at=%s, "

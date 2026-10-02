@@ -5935,6 +5935,27 @@ C0001 gains the alias "AGNI GREEN". Existing rows already filed as Icon Stock ar
 rewritten - re-import in backfill mode only adds missing serials; correct them by hand
 if they matter. `test_trace_export.py` (+1), `test_traceability_import.py`.
 
+### Needs Review: scan items can be discarded; a failed reading is an anomaly planned or not
+
+Mukesh: (1) a probe/zig/test error used to go to the anomaly list and now "goes to not
+in master - after planning do they go to the anomaly section?"; (2) junk scans like
+ICON625R1293022642- and "ICON625R1293022642 cannot be resolved by planning and cannot
+be discarded.
+- Measured on a scratch tester CSV: a bad reading was ALWAYS in the anomaly list (the
+  Tester Anomalies panel reads the tester file; Scan events keeps an `ftr_failed`
+  item) - planned or not. An unplanned one is additionally Not in master; planning
+  closes only that. What was missing was any sign of that on the Not in master row.
+  Its detail said "no SS reading saved yet" (only valid readings are saved); it now
+  says "SS reading FAILED (probe / jig / polarity) - also under Scan events".
+- Every junk scan appeared TWICE (`not_in_master_malformed` and `ftr_junk`) with only
+  "Resolve" (acknowledge). Now: Discard (reason mandatory) on those and on unplanned
+  rows; closing one closes its twin; "Discard these N" for the whole list
+  (`/api/review/discard-many`, one reason, each checked as a single discard); a
+  discard sticks for the scan looked at (`db.upsert_unplanned_item` no longer reopens
+  a discarded item for the same row still in the tester's file) and a later scan
+  brings it back. A failed reading / skipped tester / lookup stay acknowledge-only.
+- `test_review_discard.py` (7); mutation check caught 5 of 5.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on
