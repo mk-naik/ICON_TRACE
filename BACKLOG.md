@@ -5779,6 +5779,15 @@ barcode etc.).
   pool (`_get_pool`, `CFG`); `app.py` sets an unused `db_mode` template variable
   that reads "MySQL".
 
+### Junk still tracked in git (Fix D)
+
+`check_db.py` (a one-off database peek script), `recent_html.txt`, and
+`manifest.csv` / `rename_log.txt` (an unrelated image-renaming tool's output)
+were tracked. `git rm --cached` on all four and added to `.gitignore`; the local
+copies stay on disk. Nothing imports them - `app.py` only names `check_db.py`
+in the set of files it leaves out of the restart hash, which is the same
+whether or not the file is tracked. `git ls-files` no longer lists them.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

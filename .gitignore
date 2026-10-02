@@ -46,5 +46,12 @@ print_test.py
 split_test.py
 ui_test_patch.py
 
+# Local leftovers, not part of the app: a one-off database peek script, a
+# scraped page, and the output of an unrelated image-renaming tool
+check_db.py
+manifest.csv
+recent_html.txt
+rename_log.txt
+
 # Editor
 .vscode/
