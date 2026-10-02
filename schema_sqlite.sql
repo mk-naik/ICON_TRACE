@@ -928,6 +928,7 @@ CREATE TABLE IF NOT EXISTS material (
   offbom      INTEGER NOT NULL DEFAULT 0,
   added       INTEGER NOT NULL DEFAULT 0,
   pot         TEXT NULL,              -- 'A' | 'B' of the potting mix
+  default_make TEXT NULL,             -- one of makes: pre-selected, and recorded when a file is silent
   updated_at  TEXT NULL,
   updated_by  TEXT NULL
 ) ;

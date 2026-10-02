@@ -478,6 +478,16 @@ def _pick(members, text):
     return live[0], (None if not BM.dims(text) else False)
 
 
+def _default_make(m):
+    """The make a material takes when nobody chose: its only make, or the
+    default the master names (one of its makes)."""
+    makes = m.get("makes") or []
+    if len(makes) == 1:
+        return makes[0]
+    d = m.get("default_make")
+    return d if d in makes else None
+
+
 def bom_materials(bom, catalog, wattage=None, known_efficiencies=()):
     """One range's raw BOM -> {"rows": [{material_no, vendor, efficiency,
     batch}], "notes": [...], "new_efficiencies": [...]}.
@@ -566,11 +576,13 @@ def bom_materials(bom, catalog, wattage=None, known_efficiencies=()):
                        and str(m.get("watt")) == str(wattage)))
         if (not applies or m["n"] in used or m.get("legacy") or m["name"] in in_file
                 or (m.get("group") and m["group"] in filled_groups)
-                or len(m.get("makes") or []) != 1):
+                or not _default_make(m)):
             continue
-        rows.append({"material_no": m["n"], "vendor": m["makes"][0],
+        make = _default_make(m)
+        rows.append({"material_no": m["n"], "vendor": make,
                      "efficiency": None, "batch": None})
         notes.append(_note("default", m["name"], None,
-                           "not in the file; the master has one make, %s" % m["makes"][0]))
+                           "not in the file; the master's %s is %s"
+                           % ("only make" if len(m["makes"]) == 1 else "default make", make)))
     rows.sort(key=lambda r: r["material_no"])
     return {"rows": rows, "notes": notes, "new_efficiencies": new_eff}

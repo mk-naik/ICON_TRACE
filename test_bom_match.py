@@ -266,15 +266,30 @@ def t_alternatives():
 
 
 @test("a material the file is silent about takes its single make (EPE Strip, the "
-      "625 W back label) - and one with several makes is left unrecorded")
+      "625 W back label) or the default the master names (Barcode Label -> Kvell, "
+      "Pallet Packing -> Manmohan) - one with several makes and no default is left unrecorded")
 def t_single_make_default():
     store.wipe()
-    out, cat, _ = bom_of(workbook())
+    out, cat, r0 = bom_of(workbook())
+    BM_BOM = r0["ranges"][0]["bom"]
     b = by_no(out)
     assert b[23]["vendor"] == "RenewSys" and b[28]["vendor"] == "Kvell", sorted(b)
     assert 24 not in b and 27 not in b, "another wattage's back label was recorded"
-    for n in (29, 30):          # barcode label, pallet packing: several makes
-        assert n not in b, n
+    # barcode label and pallet packing are in no column of the file: the master's default
+    assert b[29]["vendor"] == "Kvell" and b[30]["vendor"] == "Manmohan", (b.get(29), b.get(30))
+    assert 15 in b, "RFID Sticker is in the file"
+    # a material with several makes and NO default stays unrecorded (the master's own list)
+    pool = [dict(m) for m in cat]
+    for m in pool:
+        if m["n"] == 29:
+            m["default_make"] = None
+    out2 = T.bom_materials(BM_BOM, pool, 625, [])
+    assert 29 not in {r["material_no"] for r in out2["rows"]}
+    # a default that is not one of the makes is ignored, not recorded
+    for m in pool:
+        if m["n"] == 29:
+            m["default_make"] = "Nobody"
+    assert 29 not in {r["material_no"] for r in T.bom_materials(BM_BOM, pool, 625, [])["rows"]}
     assert any(x["kind"] == "default" and x["material"] == "EPE Strip (Output Patti)" for x in out["notes"])
 
 
@@ -430,6 +445,8 @@ def t_real_file():
             kinds[n["kind"]] = kinds.get(n["kind"], 0) + 1
             assert n["kind"] in ("default", "file_error"), n   # no unknown makes, no missing materials, no stray size
         assert len(out["rows"]) >= 18, (rg["start"], len(out["rows"]))
+        got = by_no(out)           # in no column of the file: the master's default makes
+        assert got[29]["vendor"] == "Kvell" and got[30]["vendor"] == "Manmohan", rg["start"]
     assert neweff == {"23.3%", "25.8%"}, neweff
     assert kinds.get("file_error") == 1, kinds        # the one 2278-wide frame on a G12R module
     rg = [x for x in r["ranges"] if x["start"] == "ICON625R1293030001"][0]
@@ -437,6 +454,35 @@ def t_real_file():
     assert (b[5]["vendor"], b[5]["efficiency"]) == ("Lion Solar", "25.6%"), b[5]
     assert b[6]["vendor"] == "Borosil" and b[8]["vendor"] == "Jiangyin Yuanshuo (YS)"
     assert 31 in b and 21 not in b, "the 15 mm lead bending tape was not chosen"
+
+
+@test("ICON625R1293022642 end to end on the real file: imported through the app, "
+      "every line of its BOM has a make - the file's, or the master's default")
+def t_real_serial_end_to_end():
+    if not os.path.exists(REAL):
+        print("      (real file not on this machine - skipped)")
+        return
+    c = client()
+    p = parse_up(c, open(REAL, "rb").read()).get_json()
+    rg = [x for x in p["ranges"] if x["start"] <= "ICON625R1293022642" <= x["end"]
+          and x["date"] == "2026-09-30"][0]
+    res = apply(c, rg)["results"][0]
+    assert res["action"] == "backfilled", res
+    rows = rows_of(res["alloc_id"])
+    with store.conn() as (cx, cur):
+        names = {m["n"]: m["name"] for m in db.materials(cur)}
+    blank = [names[n] for n, r in rows.items() if not r["vendor"]]
+    assert not blank, blank
+    want = {"Lead Bending Tape": "H.B. Fuller", "String Inter Connector — Edge": "Dhash",
+            "String Inter Connector — Centre": "Dhash", "Barcode Label": "Kvell",
+            "Pallet Packing": "Manmohan", "RFID Sticker": "Finotech", "Back Label 625WP": "Kvell",
+            "EPE Strip (Output Patti)": "RenewSys", "Junction Box 30 A": "GenX"}
+    got = {names[n]: r["vendor"] for n, r in rows.items()}
+    for k, v in want.items():
+        assert got.get(k) == v, (k, got.get(k))
+    assert len(rows) == 21, (len(rows), sorted(got))          # the 21 lines of the BOM screen
+    t = c.get("/api/trace/serial/ICON625R1293022642").get_json()
+    assert "Manmohan" in str(t) and "Kvell" in str(t), "the trace screen does not carry the makes"
 
 
 if __name__ == "__main__":

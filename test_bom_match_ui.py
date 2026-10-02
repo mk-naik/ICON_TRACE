@@ -55,7 +55,13 @@ def t_planning_defaults():
         got = make_selects(pg)
         assert got["EPE Strip (Output Patti)"] == "RenewSys", got
         assert got["Back Label 625WP"] == "Kvell", got
-        assert got["Barcode Label"] == "", got
+        assert got["Barcode Label"] == "Kvell", got          # the master's default make
+        assert got["Pallet Packing"] == "Manmohan", got
+        opts = pg.evaluate("""() => { const r = Array.from(document.querySelectorAll('#matPanel .matrow'))
+            .find(x => /Pallet Packing/.test(x.textContent));
+            const f = Array.from(r.querySelectorAll('.mat-f')).find(f => /Make/.test(f.textContent));
+            return Array.from(f.querySelectorAll('option')).map(o => o.value).filter(Boolean); }""")
+        assert opts == ["Manmohan", "Balaji"], opts
         assert not any("590WP" in k or "620WP" in k for k in got), "another wattage's label is offered"
         alt = pg.evaluate("""() => { const rows = Array.from(document.querySelectorAll('#matPanel .matrow'));
             const r = rows.find(x => /Lead Bending Tape/.test(x.textContent));

@@ -240,6 +240,10 @@ def _migrate(cx, text):
     if cols("change_log") and "by_client" not in cols("change_log"):
         cx.execute("ALTER TABLE change_log ADD COLUMN by_client TEXT")
 
+    # a material's default make (Barcode Label -> Kvell, Pallet Packing -> Manmohan)
+    if cols("material") and "default_make" not in cols("material"):
+        cx.execute("ALTER TABLE material ADD COLUMN default_make TEXT")
+
     # pre-shared or post-shared, recorded at allocation
     if cols("allocation") and "alloc_type" not in cols("allocation"):
         cx.execute("ALTER TABLE allocation ADD COLUMN alloc_type TEXT")

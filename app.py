@@ -5521,6 +5521,15 @@ def api_material_save(n=None):
             "the label matches no model and the row reads 'Label undefinedW'."
             }), 400
 
+    # the default make is one of the material's makes - otherwise Planning
+    # would pre-select something its own dropdown cannot show
+    dm = (m.get("default_make") or "").strip()
+    if dm and dm not in (m.get("makes") or []):
+        return jsonify({"ok": False, "why":
+            "The default make must be one of the material's makes (%s)."
+            % (", ".join(m.get("makes") or []) or "none listed")}), 400
+    m["default_make"] = dm or None
+
     with store.conn() as (cx, cur):
         db.seed_materials(cur)
         if n is None:

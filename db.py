@@ -1940,7 +1940,7 @@ def set_config(cur, data):
 # and `cell` reads better as is_cell in a table.
 _MAT_COLS = ("n", "name", "size", "uom", "cat", "series", "watt", "qpm",
              "eff", "makes", "is_cell", "grp", "note", "legacy", "offbom",
-             "added", "pot")
+             "added", "pot", "default_make")
 
 
 def _mat_out(r):
@@ -1963,6 +1963,8 @@ def _mat_out(r):
     for key in ("note", "pot"):
         if r[key]:
             m[key] = r[key]
+    if r["default_make"]:
+        m["default_make"] = r["default_make"]
     return m
 
 
@@ -1988,6 +1990,7 @@ def _mat_in(m):
         "offbom": 1 if m.get("offbom") else 0,
         "added": 1 if m.get("added") else 0,
         "pot": m.get("pot") or None,
+        "default_make": m.get("default_make") or None,
     }
 
 
@@ -1998,6 +2001,7 @@ def seed_materials(cur):
     import icon_materials as MM
     if cur.execute("SELECT COUNT(*) AS n FROM material").fetchone()["n"]:
         ensure_material_additions(cur)
+        ensure_material_defaults(cur)
         return 0
     for m in MM.MATERIALS:
         rec = _mat_in(m)
@@ -2037,6 +2041,33 @@ def ensure_material_additions(cur):
         if t is not None and not (t["grp"] or "") and (partner in have or added):
             cur.execute("UPDATE material SET grp=%s WHERE n=%s", (grp, n))
     return added
+
+
+# What the plant said about two packing materials: the Barcode Label is Kvell's,
+# and the Pallet Packing comes from Manmohan or Balaji, Manmohan by default.
+# (n, the seeded makes it replaces, the makes it gets, its default). Applied to
+# a database only while the row is still the seeded one - nobody has edited it -
+# so a person's later correction is never put back.
+_MAKE_DEFAULTS = ((29, None, None, "Kvell"),
+                  (30, ["Kvell", "Sunsol"], ["Manmohan", "Balaji"], "Manmohan"))
+
+
+def ensure_material_defaults(cur):
+    """LOOK first - this runs on every boot read, and a write that changes no
+    row is still a change as far as the change feed is concerned."""
+    done = 0
+    for n, old, new, default in _MAKE_DEFAULTS:
+        t = cur.execute("SELECT makes, default_make, updated_by FROM material "
+                        "WHERE n=%s", (n,)).fetchone()
+        if t is None or t["default_make"] or t["updated_by"]:
+            continue
+        have = json.loads(t["makes"] or "[]")
+        if old is not None and have != old:
+            continue
+        cur.execute("UPDATE material SET makes=%s, default_make=%s WHERE n=%s",
+                    (json.dumps(new if new is not None else have), default, n))
+        done += 1
+    return done
 
 
 def add_cell_efficiencies(cur, values):

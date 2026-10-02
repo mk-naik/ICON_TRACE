@@ -5871,6 +5871,25 @@ thicknesses - make them variants of the material the user selects.
   On the real file that is the single 2278-wide frame; the 51 ribbon "differences"
   are gone - they were real variants.
 
+### BOM: "not recorded" lines on ICON625R1293022642, and a default make
+
+Mukesh's screenshot showed Edge string ribbon, Lead Bending Tape, Barcode Label and
+Pallet Packing as "not recorded". Ran the importer over the real September file for
+all 30 dates (275 ranges): every range has all 15 material columns with a make and
+a batch; every make resolves to the master; the only note is the one 2278 frame.
+- Edge ribbon and Lead Bending Tape: the file does state them (Dhash 4.0x0.42,
+  H.B. Fuller 15 mm). The screenshot is a batch written by the importer BEFORE the
+  variants/15 mm tape existed; the current importer records both. Repair = upload
+  the same file in backfill mode and tick the range (refreshes importer-made
+  batches only).
+- Barcode Label and Pallet Packing are in NO column of the file. New master field
+  `material.default_make`: Barcode Label -> Kvell, Pallet Packing makes ->
+  Manmohan, Balaji (default Manmohan). `db.ensure_material_defaults` (look first,
+  only untouched seeded rows); Planning pre-selects it; the import records it.
+- Proof: the real range of ICON625R1293022642 imported through the app gives 21
+  BOM lines, none without a make (`test_bom_match.py`, 15 tests;
+  `test_material_defaults.py`, 4).
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

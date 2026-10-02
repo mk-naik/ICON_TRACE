@@ -269,8 +269,9 @@ python test_pack_build_kind.py     5 tests · make-to-order modules pack only wi
 python test_custom_serials.py     12 tests · custom serial upload, allocation, 'a serial in the master is never issued again'
 python test_custom_serials_ui.py  5 tests · Planning screen for custom serials, in Chromium
 python test_batch_copy.py          8 tests · Planning: copy a batch's bill of materials (last / by number)
-python test_bom_match.py          14 tests · traceability BOM read against the material master
+python test_bom_match.py          15 tests · traceability BOM read against the material master
 python test_bom_match_ui.py        3 tests · BOM defaults in Planning, notes + refresh in the import (Chromium)
+python test_material_defaults.py   4 tests · a material's default make; Barcode Label / Pallet Packing
 python test_incharge_master.py     9 tests · shift incharge master: individuals, several per entry joined with ',' (Chromium)
 python test_challan_cancel_ui.py   2 tests · Cancel button: Admin only, asks reason + authenticator code
 python test_anonymous_routes.py   3 tests · every /api route answers 401 with no session (allow-list: /api/session)

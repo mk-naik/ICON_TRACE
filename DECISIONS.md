@@ -247,6 +247,15 @@ The Drafts screen is still v4 sample data.
   error**: the G2X (M10R) frame 2278x1134x30 cannot exist on a G12R module, so the
   master (2382x1134x30) stands, the range is recorded with it, and the screen says
   "the file looks wrong" in red. [built]
+- **A material may name a default make** (one of its makes; the master form's
+  "Default make", refused if it is not one of them). Planning pre-selects it and
+  the import records it where the file is silent. Barcode Label -> Kvell (its
+  other makes stay choosable); **Pallet Packing makes are Manmohan and Balaji,
+  default Manmohan** (Kvell/Sunsol removed - past batches keep what they
+  recorded). Neither is in any column of the traceability file, which is why
+  they read "not recorded". Existing databases are brought to this once, only
+  while the row is still the seeded one - a person's edit is never put back.
+  [built]
 - A material the file does not mention, with **one possible make, takes it** -
   in the import and pre-selected in Planning (EPE Strip -> RenewSys, the 625 W
   back label -> Kvell). [built]

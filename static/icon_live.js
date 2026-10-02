@@ -5095,6 +5095,12 @@ function wireFqcAnomalies() {
         hint: 'Only for “Label — by wattage”. Exactly as the model carries ' +
               'it — 635, not 635.0 — the label is matched on the string.' });
     }
+    if (!has('default_make')) {
+      sp.fields.push({ k: 'default_make', l: 'Default make', t: 'text',
+        hint: 'One of the makes above, exactly as spelt. Pre-selected in ' +
+              'Planning, and recorded by the traceability import when the ' +
+              'file does not name this material. Blank = no default.' });
+    }
     if (!has('eff')) {
       sp.fields.push({ k: 'eff', l: 'Cell efficiency', t: 'select',
         opts: function () {
@@ -5242,13 +5248,17 @@ function wireFqcAnomalies() {
             typeof MAT_SEL !== 'undefined') {
           var list = materialsFor(model);
           list.forEach(function (m) {
-            if (m.legacy || (m.makes || []).length !== 1) return;
+            var mk = m.makes || [];
+            /* its only make, or the default the master names */
+            var dflt = mk.length === 1 ? mk[0]
+              : (m.default_make && mk.indexOf(m.default_make) >= 0 ? m.default_make : null);
+            if (m.legacy || !dflt) return;
             if (m.group) {
               var c = chosenInGroup(list, m.group);
               if (!c || c.n !== m.n) return;
             }
             MAT_SEL[m.n] = MAT_SEL[m.n] || {};
-            if (!MAT_SEL[m.n].vendor) MAT_SEL[m.n].vendor = m.makes[0];
+            if (!MAT_SEL[m.n].vendor) MAT_SEL[m.n].vendor = dflt;
           });
         }
       } catch (e) {}
