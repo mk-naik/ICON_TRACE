@@ -2014,7 +2014,7 @@ def seed_materials(cur):
 # materials added to the catalog after databases were already seeded: a database
 # is its own master, so these are inserted - once, if absent - rather than
 # re-seeding. Round 37: the 15 mm Lead Bending Tape (alternative to the 20 mm).
-_ADDED_MATERIALS = (31,)
+_ADDED_MATERIALS = (31, 32, 33)
 
 
 def ensure_material_additions(cur):
@@ -2031,9 +2031,11 @@ def ensure_material_additions(cur):
     # the 20 mm tape joins the group only if nobody has grouped it differently.
     # LOOK first: this runs on every boot read, and a write statement - even one
     # that changes no row - is a change as far as the change feed is concerned.
-    t = cur.execute("SELECT grp FROM material WHERE n=21").fetchone()
-    if t is not None and not (t["grp"] or "") and (31 in have or added):
-        cur.execute("UPDATE material SET grp='LBT' WHERE n=21")
+    # (n, the group its existing member joins, the added member it needs)
+    for n, grp, partner in ((21, "LBT", 31), (14, "SICE", 32)):
+        t = cur.execute("SELECT grp FROM material WHERE n=%s", (n,)).fetchone()
+        if t is not None and not (t["grp"] or "") and (partner in have or added):
+            cur.execute("UPDATE material SET grp=%s WHERE n=%s", (grp, n))
     return added
 
 

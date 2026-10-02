@@ -239,8 +239,14 @@ The Drafts screen is still v4 sample data.
   beside it, under the form's names (String Alignment Tape = Cell Alignment Tape,
   Channel & JB sealant = Sealant, EPE/POE = Encapsulant; the string ribbon fills
   Centre AND Edge, potting Part A AND B). [built]
-- Alternatives follow the size the file states: **Lead Bending Tape is 20 mm or
-  15 mm** (material 31 is new, in group LBT); Junction Box 0.4 / 0.3 mtr. [built]
+- Alternatives follow the size the file states. **Variants of a material live in
+  the master as a group of alternatives** the planner chooses from: Lead Bending
+  Tape 20 / 15 mm (group LBT), Junction Box 0.4 / 0.3 mtr (JB), and the **Edge
+  string ribbon 4.0 x 0.40 / 0.41 / 0.42 mm** (SICE; materials 14, 32, 33). [built]
+- **A size that belongs to another module type is a FILE error, never a master
+  error**: the G2X (M10R) frame 2278x1134x30 cannot exist on a G12R module, so the
+  master (2382x1134x30) stands, the range is recorded with it, and the screen says
+  "the file looks wrong" in red. [built]
 - A material the file does not mention, with **one possible make, takes it** -
   in the import and pre-selected in Planning (EPE Strip -> RenewSys, the 625 W
   back label -> Kvell). [built]

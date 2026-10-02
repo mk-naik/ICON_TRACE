@@ -5854,6 +5854,23 @@ select several, and join them with ",".
   10 of 10. Older tests that drove the demo dropdown now use the picker; the
   stored-XSS test asserts a markup name is refused.
 
+### BOM follow-up: variants in the master, and an impossible size is the file's fault
+
+Mukesh: the 2278x1134x30 frame is the G2X (M10R) frame - physically impossible on
+a G12R module, so the Excel is wrong, not the master; 4.0x0.41 / 0.42 are real
+thicknesses - make them variants of the material the user selects.
+
+- The Edge string ribbon is now three materials in one group (SICE): 4.0x0.40 (14,
+  existing), 0.41 (32), 0.42 (33), added to existing databases by
+  `ensure_material_additions` (look first - it runs on every boot). The importer
+  picks the variant by the size the file states; Planning shows the choice like
+  the junction box and the lead bending tape.
+- A size that exactly matches the same material of ANOTHER series is reported as
+  `file_error` ("the file's size is the G2X module's ... the FILE is wrong, not the
+  master"), shown in red before recording; the G12R material is what is recorded.
+  On the real file that is the single 2278-wide frame; the 51 ribbon "differences"
+  are gone - they were real variants.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

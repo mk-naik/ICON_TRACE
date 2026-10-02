@@ -14109,6 +14109,17 @@ window.gpSetKind = function(k) {
         'does not have yet - <b>they will be added to it</b> when you record: <b>' +
         b.new_efficiencies.map(fqcEsc).join(', ') + '</b>.</span></div>';
     }
+    var errs = (b.notes || []).filter(function (n) { return n.kind === 'file_error'; });
+    if (errs.length) {
+      out += '<div class="note n-bad"><span>⚑</span><span><b>The file looks wrong</b> - a size that ' +
+        'cannot exist on that module. The master is right and is what gets recorded; correct the file.' +
+        '<ul style="margin:6px 0 0 18px">' + errs.map(function (n) {
+          return '<li><b>' + fqcEsc(n.material) + '</b> · <span class="mono">' + fqcEsc(n.text || '') +
+            '</span> — ' + fqcEsc(n.detail) + ' <span class="hint">(' + n.ranges + ' range' +
+            (n.ranges === 1 ? '' : 's') + ')</span></li>'; }).join('') + '</ul></span></div>';
+    }
+    b = { notes: (b.notes || []).filter(function (n) { return n.kind !== 'file_error'; }),
+          notes_total: (b.notes_total || 0) - errs.length, new_efficiencies: [] };
     if ((b.notes || []).length) {
       var rows = b.notes.slice(0, 12).map(function (n) {
         return '<li><b>' + fqcEsc(n.material) + '</b> \u00b7 <span class="mono">' + fqcEsc(n.text || '') +

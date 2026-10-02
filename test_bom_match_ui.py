@@ -62,6 +62,11 @@ def t_planning_defaults():
             const a = r && r.querySelector('.mat-alt');
             return a ? Array.from(a.options).map(o => o.text) : null; }""")
         assert alt and len(alt) == 2 and any("20 mm" in t for t in alt) and any("15 mm" in t for t in alt), alt
+        edge = pg.evaluate("""() => { const r = Array.from(document.querySelectorAll('#matPanel .matrow'))
+            .find(x => /Edge/.test(x.textContent) && /String Inter Connector/.test(x.textContent));
+            const a = r && r.querySelector('.mat-alt');
+            return a ? Array.from(a.options).map(o => o.text) : null; }""")
+        assert edge and len(edge) == 3 and all(any(t in e for e in edge) for t in ("0.40", "0.41", "0.42")), edge
         assert not pg.errors, pg.errors
 
 
@@ -96,7 +101,7 @@ def t_import_notes_and_refresh():
         pg.wait_for_selector("#peImpDate", timeout=8000)
         body = pg.inner_text("#peImpBody")
         assert "will be added" in body and "25.8%" in body, body[:500]
-        assert "Aluminium Frame" in body and "differs from the master" in body, body[:900]
+        assert "file looks wrong" in body.lower() and "Aluminium Frame" in body and "G2X" in body, body[:900]
         pg.check("#peImpBackfill")
         pg.wait_for_timeout(300)
         pg.click("#peImpApply")

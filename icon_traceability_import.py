@@ -526,9 +526,22 @@ def bom_materials(bom, catalog, wattage=None, known_efficiencies=()):
                         "make not in the master: %s - kept as written; add it to "
                         "the master's makes, or correct the file" % ", ".join(left)))
                 if got and matched is None and BM.same_dims(text, m.get("size")) is False:
-                    notes.append(_note("size", name, text,
-                        "the size in the file differs from the master's (%s) - make "
-                        "recorded, size not changed" % m.get("size")))
+                    # A size that is exactly another module type's (the G2X / M10R
+                    # frame on a G12R module) is physically impossible - the FILE
+                    # is wrong, never the master (Mukesh).
+                    other = [x for x in catalog if x["name"] == name
+                             and (x.get("series") or "") not in ("", fam)
+                             and BM.same_dims(text, x.get("size"))]
+                    if other:
+                        notes.append(_note("file_error", name, text,
+                            "the file's size is the %s module's (%s); a %s module "
+                            "cannot take it, so the FILE is wrong, not the master - "
+                            "recorded as the %s one (%s), please correct the file"
+                            % (other[0]["series"], other[0]["size"], fam, fam, m.get("size"))))
+                    else:
+                        notes.append(_note("size", name, text,
+                            "the size in the file differs from the master's (%s) - make "
+                            "recorded, size not changed" % m.get("size")))
             eff = None
             if key == "cell":
                 vals = BM.efficiencies(text or "")
