@@ -12,16 +12,14 @@ the bottleneck.
     python serve.py
 
 Environment:
-    ICON_DB         demo (default) or mysql
-    ICON_DB_HOST    127.0.0.1
-    ICON_DB_PORT    3306
-    ICON_DB_USER    icontrace
-    ICON_DB_PASS
-    ICON_DB_NAME    traceability_db
+    ICON_DB_FILE    the database file (default: icontrace.db next to this file)
     ICON_SECRET     session key - set a fixed value in production
     ICON_HOST       0.0.0.0
     ICON_PORT       8080
     ICON_THREADS    12
+
+The data lives in ONE SQLite file (see store.py) - there is no demo mode and no
+MySQL mode. Everything saved is saved in that file: back it up.
 """
 
 import os, sys, logging
@@ -46,19 +44,16 @@ logging.basicConfig(
 log = logging.getLogger("icontrace")
 
 if __name__ == "__main__":
-    if db.MODE != "mysql":
-        log.warning("ICON_DB is not set to mysql - running in DEMO mode. "
-                    "Everything works; nothing is saved.")
-    else:
-        try:
-            with db.conn() as (cx, cur):
-                cur.execute("SELECT 1")
-                cur.fetchall()
-            log.info("MySQL reachable at %s:%s/%s",
-                     db.CFG["host"], db.CFG["port"], db.CFG["database"])
-        except Exception as e:
-            log.error("MySQL unreachable: %s", e)
-            sys.exit(1)
+    # Where the data is, said plainly: this is what an operator needs to know
+    # to back it up. (This line used to claim "DEMO mode - nothing is saved",
+    # printed on every start, from the MySQL era.)
+    import store
+    size = os.path.getsize(store.DB_PATH) if os.path.exists(store.DB_PATH) else 0
+    log.info("Database: SQLite file %s (%.1f MB). Everything is saved in this "
+             "file - back it up (stop the server first, or copy the .db with "
+             "its -wal and -shm files), together with .icon_totp_key and "
+             ".icon_secret beside it.", os.path.abspath(store.DB_PATH),
+             size / 1048576.0)
 
     from app import SECRET_SOURCE, BOOT_CODE_BUILD  # noqa: F401 (imported for side-effects too)
     if SECRET_SOURCE == "random":

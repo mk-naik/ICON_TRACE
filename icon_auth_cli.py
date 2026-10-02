@@ -18,27 +18,30 @@ def usage():
     sys.exit(1)
 
 def _enrol_note(login_id, token, base_url, db_path):
-    # auth_lab/lab_app.py is the only thing that serves /enrol - app.py does
-    # not have that route yet (Round 24). Left to its own default, the lab
-    # opens auth_lab/lab.db, a SEPARATE file from the one this command just
-    # wrote to, and the token below would be "invalid" there through no
-    # fault of the token: enrolling is impossible until something serves
-    # /enrol against THIS SAME database.
+    # The running ICON TRACE app serves /enrol itself (Round 25), against the
+    # database file it is started with. The token below was written to
+    # db_path, so the app must be started on THAT SAME file - an app on another
+    # file will call the token invalid through no fault of the token.
     print(f"Enrolment Token: {token}")
     print(f"Enrol URL: {base_url}/enrol?login_id={login_id}&token={token}")
     print()
     print(f"This wrote to: {db_path}")
-    print("The lab must be pointed at that SAME file to serve this token -")
-    print("left to its own default it opens auth_lab/lab.db instead, a")
-    print("different, normally-empty database, and the token above will look")
-    print("expired or invalid there through no fault of its own. Start it with:")
+    print("Open the Enrol URL in a browser on the machine running ICON TRACE,")
+    print("with the app started on THAT SAME file. If it is not running yet:")
+    # the port is only named when this command was given one - the app's own
+    # default (8080) is what the URL above assumes otherwise
+    port = os.environ.get("ICON_PORT")
     if os.name == "nt":
-        print(f'  $env:ICON_DB_FILE = "{db_path}"; python auth_lab\\lab_app.py')
+        print('  $env:ICON_DB_FILE = "%s";%s python serve.py'
+              % (db_path, (' $env:ICON_PORT = "%s";' % port) if port else ""))
     else:
-        print(f'  ICON_DB_FILE="{db_path}" python auth_lab/lab_app.py')
-    print("then open the Enrol URL above. Once TOTP is set up there, the")
-    print(f"account signs in normally at the real app - this database is the")
-    print("one it reads too.")
+        print('  ICON_DB_FILE="%s"%s python serve.py'
+              % (db_path, (' ICON_PORT=%s' % port) if port else ""))
+    print("(No ICON_DB_FILE at all means icontrace.db next to serve.py - the")
+    print("same default this command used.) The URL above assumes the app is on")
+    print(f"{base_url}; set ICON_HOST / ICON_PORT here to match if it is not.")
+    print("Scan the QR code with an authenticator app, type the 6-digit code")
+    print("it shows, and the account can then sign in at the same address.")
 
 def main():
     if len(sys.argv) < 2:
@@ -46,7 +49,7 @@ def main():
 
     cmd = sys.argv[1]
     host = os.environ.get("ICON_HOST", "127.0.0.1")
-    port = os.environ.get("ICON_PORT", "8091")
+    port = os.environ.get("ICON_PORT", "8080")   # serve.py's own default
     base_url = f"http://{host}:{port}"
 
     with store.conn() as (cx, cur):

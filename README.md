@@ -35,7 +35,7 @@ The application is built as a Flask web application backed by a single data laye
 | `app.py` | Flask routes, JSON APIs, document rendering, and workflow rules |
 | `db.py` | Domain helpers, counters, audit records, and database operations |
 | `store.py` | Database connection and shared persistence helpers |
-| `schema.sql` | MySQL schema |
+| `schema.sql` | Legacy MySQL schema - the running app does not use it |
 | `schema_sqlite.sql` | SQLite schema |
 | `icon_*.py` | Serial, invoice, challan, barcode, evidence, model, and customer helpers |
 | `templates/` | HTML pages and printable documents |
@@ -52,19 +52,12 @@ The serial record is the central link between planning, production, FQC, packing
 - openpyxl
 - Pillow
 - qrcode
-- MySQL Connector/Python when using MySQL
 - Optional: `pyzbar` and the native ZBar library for QR decoding
 
 Install the main dependencies with:
 
 ```bash
 pip install flask waitress pymupdf openpyxl pillow qrcode
-```
-
-For MySQL deployments, also install:
-
-```bash
-pip install mysql-connector-python
 ```
 
 ## Run locally
@@ -83,59 +76,126 @@ http://localhost:8080/
 
 Do not run `app.py` directly. `serve.py` configures Waitress, startup checks, logging, and the application environment.
 
-## Database modes
+On a new database, follow **First run** below before anyone can sign in.
 
-The application supports demo mode by default and MySQL for live operation.
+## First run
 
-### Demo mode
+A new database has no accounts, so nobody can sign in until a Super Admin is
+created from the command line, on the machine that runs the server. Every
+command below was run on an empty database; the output is what it printed
+(the folder in the paths is shortened to `...`).
 
-If `ICON_DB` is not set to `mysql`, the application runs in demo mode. The UI and parsing workflows are available, but the server logs that it is not configured for live persistence.
+**1. Make the encryption key** (once, before the first account). It protects the
+authenticator secrets stored in the database; it is created beside the
+database file as `.icon_totp_key`.
 
-### MySQL mode
-
-Set the database configuration before starting the server.
-
-Windows Command Prompt:
-
-```bat
-set ICON_DB=mysql
-set ICON_DB_HOST=127.0.0.1
-set ICON_DB_PORT=3306
-set ICON_DB_USER=icontrace
-set ICON_DB_PASS=your-password
-set ICON_DB_NAME=traceability_db
-set ICON_SECRET=replace-with-a-fixed-random-secret
-python serve.py
+```text
+> python icon_auth_cli.py init-key
+Key initialized.
 ```
 
-PowerShell:
+**2. Create the Super Admin.** This writes the account and prints a one-time
+enrolment link (it expires, and works once):
 
-```powershell
-$env:ICON_DB = "mysql"
-$env:ICON_DB_HOST = "127.0.0.1"
-$env:ICON_DB_PORT = "3306"
-$env:ICON_DB_USER = "icontrace"
-$env:ICON_DB_PASS = "your-password"
-$env:ICON_DB_NAME = "traceability_db"
-$env:ICON_SECRET = "replace-with-a-fixed-random-secret"
-python serve.py
+```text
+> python icon_auth_cli.py create-superadmin mukesh "Mukesh Naik"
+Created Super Admin: mukesh
+Enrolment Token: ff6d1b16a2fb8cdb0c52087d15244936
+Enrol URL: http://127.0.0.1:8080/enrol?login_id=mukesh&token=ff6d1b16a2fb8cdb0c52087d15244936
+
+This wrote to: .../icontrace.db
+Open the Enrol URL in a browser on the machine running ICON TRACE,
+with the app started on THAT SAME file. If it is not running yet:
+  $env:ICON_DB_FILE = ".../icontrace.db"; python serve.py
+(No ICON_DB_FILE at all means icontrace.db next to serve.py - the
+same default this command used.) The URL above assumes the app is on
+http://127.0.0.1:8080; set ICON_HOST / ICON_PORT here to match if it is not.
+Scan the QR code with an authenticator app, type the 6-digit code
+it shows, and the account can then sign in at the same address.
 ```
 
-`ICON_SECRET` should remain fixed in production; changing it logs users out after every restart.
+The command and the server must use the **same database file** - the token is
+in it. Both default to `icontrace.db` beside `serve.py`; set `ICON_DB_FILE` the
+same way for both if you use another. (The token printed above is an example;
+yours differs.)
+
+**3. Start the app, then enrol.** Start `python serve.py`, open the Enrol URL,
+scan the QR code (or type the secret shown under it into the authenticator app),
+type the six digits it shows, and press **Confirm**. The page then says
+*"Your authenticator is set up. Sign in with your ID and the six-digit code it
+shows."* and shows **ten recovery codes, once and never again** - save them: each
+works a single time if the authenticator is lost. Opening the Enrol URL a second
+time starts a new secret, so finish in one visit. If a code is refused, wait for
+the next one (they change every thirty seconds).
+
+**4. Sign in** at `http://localhost:8080/` with your login ID and the current
+six-digit code in the second box (*"Password or authenticator code"*). A code
+that was just used to enrol cannot be used again - wait for the next one.
+
+**5. Create the other accounts.** As an Admin or Super Admin open **Admin ->
+Users**, give a login ID, full name, role and (optionally) a station, and press
+**Create account**.
+
+- An **operator** (Production Incharge, FQC, Packing, Dispatch, Quality) needs
+  **only an ID and a password** - no authenticator. You type a *temporary
+  password* (at least 8 characters, not six digits, not shaped like a recovery
+  code such as `ABCD-1234`). On the first sign-in the operator is told *"You
+  signed in with a temporary password ... it has to be replaced before you can
+  save anything"* and chooses their own.
+- An **Admin** is created by a Super Admin the same way, but instead of a password
+  the screen gives an enrolment link (as in step 3).
+- A **Super Admin** can only be created with `icon_auth_cli.py create-superadmin`,
+  on the server itself.
+
+Other `icon_auth_cli.py` commands: `reset-totp <id>` (a lost authenticator - prints
+a new enrolment link), `unlock <id>`, `list`. Run `python icon_auth_cli.py` with no
+arguments for the full list.
+
+## Database
+
+There are no database modes. All data lives in **one SQLite file** (`store.py`):
+`icontrace.db` beside `serve.py`, or the file named by `ICON_DB_FILE`. Everything
+that is saved is saved there. The server says so when it starts:
+
+```text
+Database: SQLite file .../icontrace.db (0.3 MB). Everything is saved in this file - back it up (...)
+```
 
 Optional server settings:
 
 ```text
+ICON_DB_FILE  default: icontrace.db beside serve.py
+ICON_SECRET   session key; keep it fixed in production
 ICON_HOST     default: 0.0.0.0
 ICON_PORT     default: 8080
 ICON_THREADS  default: 12
 ```
 
-Initialize MySQL with the appropriate schema before the first live run:
+`ICON_SECRET`, if unset, is generated into `.icon_secret` beside the database on
+first run and reused; with neither, sessions drop on every restart.
 
-```sql
-SOURCE schema.sql;
+### Back it up
+
+The file is the whole record of the plant. The database runs in WAL mode, so
+recent saves can sit in `icontrace.db-wal`, and copying `icontrace.db` alone while
+the server runs can miss them. Either stop the server and copy the file together
+with `icontrace.db-wal` and `icontrace.db-shm`, or take a consistent copy of the
+running database:
+
+```bash
+python -c "import sqlite3; s = sqlite3.connect('file:icontrace.db?mode=ro', uri=True); d = sqlite3.connect('backup.db'); s.backup(d)"
 ```
+
+Also keep, because the database is not enough without them:
+
+- `.icon_totp_key` (beside the database) - without it no Admin can sign in with an
+  authenticator code and every Admin has to be re-enrolled.
+- `.icon_secret` (beside the database) - losing it only signs everyone out.
+- `storage/` (beside `serve.py`) - the invoice and indent PDFs, which are kept as
+  files, not in the database.
+
+MySQL is not supported by the running application. `schema.sql` and the
+connection settings in `db.py` are leftovers from an earlier design.
 
 ## Reset test data
 
@@ -151,7 +211,8 @@ On Windows:
 del icontrace.db
 ```
 
-The database is recreated on the next request. The application also exposes a database reset endpoint for controlled test use:
+The database is recreated on the next request - empty, with **no accounts**, so
+repeat **First run** (the key file, `.icon_totp_key`, can stay). The application also exposes a database reset endpoint for controlled test use:
 
 ```text
 POST /api/db/reset
@@ -203,7 +264,7 @@ playwright install chromium
 
 - [`PROJECT_OVERVIEW.md`](PROJECT_OVERVIEW.md) — architecture, project rules, vocabulary, and development guidance.
 - [`DATA_LAYER.md`](DATA_LAYER.md) — persistence model, FQC contract, lifecycle states, and audit rules.
-- [`README_DEPLOY.md`](README_DEPLOY.md) — deployment, MySQL configuration, Windows services, reverse proxies, and offline operation.
+- [`README_DEPLOY.md`](README_DEPLOY.md) — deployment, Windows services, reverse proxies, and offline operation. (Its MySQL and demo-mode sections predate the SQLite store and no longer apply.)
 
 ## Health check
 

@@ -5752,6 +5752,33 @@ barcode etc.).
   exactly these three; a mutation check proves a brand-new ungated route, a
   removed gate, and a role locked out are each caught. 112 route/method pairs.
 
+### Stale text that sent people to the wrong place (Fix C)
+
+- **CLI note.** `icon_auth_cli.py` said app.py "does not have that route yet
+  (Round 24)" and sent you to `auth_lab/lab_app.py`; Round 25 made the real app
+  serve `/enrol`. It now says to start `serve.py` on the SAME database file
+  (command printed with the real path, and the port when one is set), and its
+  default Enrol URL is the app's own port 8080 (it printed the lab's 8091).
+  **Proved** on a fresh DB, following only what was printed: init-key,
+  create-superadmin, `serve.py`, the printed Enrol URL, the on-screen secret,
+  Confirm (recovery codes shown), sign-in with ID + code, then an operator made
+  from the Users screen who is told to choose their own password.
+  `conftest.py` now pins ICON_PORT=8091 for the lab tests - they opened the
+  printed URL, which would now point at whatever is on 8080.
+- **README.** New "First run" section (output from that run); "Database modes"
+  replaced by "Database" - one SQLite file, what to back up (db + -wal/-shm,
+  `.icon_totp_key`, `.icon_secret`, `storage/`) and a tested online-backup
+  one-liner; MySQL requirements removed.
+- **serve.py** printed "DEMO mode ... nothing is saved" on EVERY start:
+  `db.MODE` is a constant "sqlite", so that branch always ran and the MySQL
+  branch below it could never. It now logs the database file, its size and what
+  to back up; the docstring lists the settings that exist.
+- **Found, not changed (outside this brief):** `README_DEPLOY.md` (demo mode,
+  amber DEMO pill, "Switch to MySQL") and `PROJECT_OVERVIEW.md` (lines on
+  auth_lab serving /enrol) make the same stale claims; `db.py` keeps a dead MySQL
+  pool (`_get_pool`, `CFG`); `app.py` sets an unused `db_mode` template variable
+  that reads "MySQL".
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

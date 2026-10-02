@@ -18,6 +18,10 @@ def lab_env():
     env["ICON_DB_FILE"] = db_path
     env["ICON_AUTH_MAX_FAILS"] = "3"
     env["ICON_AUTH_LOCK_SECONDS"] = "15"
+    # The CLI prints an Enrol URL for the port the app is on: the real app's
+    # own default is 8080, but this lab runs on 8091 - say so, or the tests
+    # (which open the printed URL) would knock on whatever is on 8080.
+    env["ICON_PORT"] = "8091"
     
     cli_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon_auth_cli.py")
     # Remove stale key from a previous aborted run before creating a new one
