@@ -155,7 +155,13 @@ def t_form_in_browser():
                                  "document.getElementById('indForm').style.display === 'none' || "
                                  "!document.getElementById('i_no') || !document.getElementById('i_no').value",
                                  timeout=8000)
-            pg.wait_for_timeout(400)
+            # wait for the page to SAY it saved AND to have closed the form: indNew() is a
+            # TOGGLE - called while the form is still open it closes it instead, and the
+            # next iteration then filled the old form and never saved
+            pg.wait_for_function("(n) => document.body.innerText.includes('Indent ' + n + ' saved')",
+                                 arg=no, timeout=8000)
+            pg.wait_for_function("() => document.getElementById('indForm').style.display === 'none'",
+                                 timeout=8000)
         assert row("OCT-11/2026")[0]["custom_serial"] == 1
         assert row("OCT-12/2026")[0]["custom_serial"] == 0
         assert row("OCT-11/2026")[1]["arc"] == "NARC"

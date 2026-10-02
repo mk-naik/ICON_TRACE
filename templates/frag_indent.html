@@ -150,6 +150,10 @@
     }
     box.style.display = '';
     if (button) { button.textContent = 'Close indent'; button.className = 'btn btn-ghost'; }
+    /* the previous form's HTML (and what was typed in it) stays in the panel until
+       the fresh one arrives; anything typed into that stale copy was wiped by the
+       swap. Empty it the moment the panel opens. */
+    box.innerHTML = '';
     fetch('/view/indent-form', {cache:'no-store'})
       .then(function(r){return r.text();}).then(function (h) {
         box.innerHTML = h;

@@ -5984,6 +5984,16 @@ the `*_ui.py` smoke scripts and `test_auth_lab_*` need a running server;
 `test_build_banner_live` needs port 8090, which is the user's own `serve.py`;
 `test_build_banner` checks `git check-ignore`, which needs a real `.git`.
 
+### New indent form showed the previous form's stale copy until the fresh one arrived
+
+`test_indent_properties` failed 1 run in 3. `indNew()` reopens the panel with the LAST
+form's HTML (and what was typed in it) still in it, then fetches the empty form and
+swaps it in - anything typed into the stale copy was wiped. A person rarely types
+inside those few milliseconds; a script does. The panel is now emptied when it opens.
+The test also waits for the "saved" toast and for the form to close (`indNew()` is a
+toggle: called while the form is still closing it closes it instead). 10 of 10 runs
+clean, was 5 of 8.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on
