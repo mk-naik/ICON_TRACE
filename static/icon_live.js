@@ -2677,7 +2677,7 @@ function wireFqcAnomalies() {
                    : '<span class="tag t-rev">' + fqcEsc(b.grade || '—') + '</span>';
           var actBtn = state === 'repacked' 
             ? '<button class="btn btn-ghost btn-sm" onclick="qTry(\'' + fqcEsc(b.label || b.seq) + '\')">History</button>'
-            : '<button class="btn btn-ghost btn-sm" onclick="printDoc(\'Packing list\',\'' + fqcEsc(b.label || b.seq) + '\',3)">Print</button>';
+            : '<button class="btn btn-ghost btn-sm" onclick="iconPrint(\'/box/' + Number(b.box_id) + '/sheet\')">Print</button>';
           return '<tr>' +
             '<td><button class="lnk" onclick="qTry(\'' + fqcEsc(b.label || b.seq) + '\')">' + fqcEsc(b.label || b.seq) + '</button></td>' +
             '<td class="mono">' + (b.bin_no ? 'BIN-' + b.bin_no : '—') + '</td>' +
@@ -3185,6 +3185,15 @@ function wireFqcAnomalies() {
 
   function renderLivePackLog() {
     if (!can('packdash')) return;   /* Round 28: the server would refuse it */
+    /* the statuses a pallet really has: read from its challan, see
+       /api/packing/log - v4 offered Repacked, which a pallet never is */
+    var stSel = document.getElementById('pkStatus');
+    if (stSel && !stSel.__live) {
+      stSel.__live = true;
+      stSel.innerHTML = '<option>All</option><option value="open">Open</option>' +
+        '<option value="packed">Packed</option><option value="challaned">Challaned</option>' +
+        '<option value="dispatched">Dispatched</option>';
+    }
     var g = function(id) { var e = document.getElementById(id); return e ? e.value : ''; };
     var f = {
       from: g('plFrom') || g('pkDate'), // handle whatever ID it got
@@ -3225,7 +3234,7 @@ function wireFqcAnomalies() {
                 kRepacks++;
                 kCRe++;
               }
-              if (r.state === 'packed') {
+              if (r.status === 'packed') {
                 kWaitBoxes++;
                 kWaitMods += (r.qty || 0);
               }
@@ -3234,23 +3243,27 @@ function wireFqcAnomalies() {
               if (r.grade === 'GY') gClass = 't-rev';
               if (r.grade === 'BGY') gClass = 't-fail';
               
-              var sClass = 't-info';
-              if (r.state === 'repacked') sClass = 't-mute';
+              var sClass = r.status === 'dispatched' ? 't-solar'
+                         : r.status === 'open' ? 't-rev' : 't-info';
               
               var modelW = parseInt((r.model||'').replace(/\D/g, '')) || 0;
-              if (r.state === 'packed') kWaitKw += (r.qty * modelW / 1000);
+              if (r.status === 'packed') kWaitKw += (r.qty * modelW / 1000);
               
-              return '<tr><td><button class="lnk" onclick="qTry(\'' + r.ident + '\')">' + r.ident + '</button></td>' +
-                '<td class="mono">BIN-' + (r.bin_no || '?') + '</td>' +
-                '<td>' + (r.customer || 'ICON STOCK') + '</td>' +
-                '<td class="mono">' + r.model + '</td>' +
-                '<td><span class="tag ' + gClass + '">' + r.grade + '</span></td>' +
+              /* the pallet number (ISPL...) names the row; the bare sequence
+                 repeats every day and printed the wrong pallet. Print opens
+                 the sheet by box id - no lookup that can fail or guess. */
+              var pn = fqcEsc(r.label || r.ident);
+              return '<tr><td><button class="lnk" onclick="qTry(\'' + pn + '\')">' + pn + '</button></td>' +
+                '<td class="mono">BIN-' + fqcEsc(r.bin_no || '?') + '</td>' +
+                '<td>' + fqcEsc(r.customer_name || r.customer || 'ICON STOCK') + '</td>' +
+                '<td class="mono">' + fqcEsc(r.model) + '</td>' +
+                '<td><span class="tag ' + gClass + '">' + fqcEsc(r.grade) + '</span></td>' +
                 '<td class="num">' + r.qty + ' / ' + (r.capacity || '?') + '</td>' +
-                '<td class="mono">' + (r.pack_date || '').slice(0, 10) + '</td>' +
-                '<td class="s' + (r.pack_shift || '') + '">' + (r.pack_shift || '') + '</td>' +
-                '<td><span class="tag ' + sClass + '">' + r.state + '</span></td>' +
-                '<td class="mono" style="font-size:10.5px;color:var(--ink3)">' + (r.packed_by || '') + '</td>' +
-                '<td><button class="btn btn-ghost btn-sm" onclick="printDoc(\'Packing list\',\'' + r.ident + '\',3)">Print</button></td></tr>';
+                '<td class="mono">' + fqcEsc((r.pack_date || '').slice(0, 10)) + '</td>' +
+                '<td class="s' + fqcEsc(r.pack_shift || '') + '">' + fqcEsc(r.pack_shift || '') + '</td>' +
+                '<td><span class="tag ' + sClass + '">' + fqcEsc(r.status || r.state) + '</span></td>' +
+                '<td class="mono" style="font-size:10.5px;color:var(--ink3)">' + fqcEsc(r.packed_by || '') + '</td>' +
+                '<td><button class="btn btn-ghost btn-sm" onclick="iconPrint(\'/box/' + Number(r.box_id) + '/sheet\')">Print</button></td></tr>';
             }).join('');
           }
         }
@@ -3277,17 +3290,17 @@ function wireFqcAnomalies() {
               var pMap = { 'packed': 0, 'repacked': 0, 'challaned': 0, 'dispatched': 0, 'open': 0 };
               var gMap = { 'A': 0, 'GY': 0, 'BGY': 0 };
               rows.forEach(function(r) {
-                var s = r.state || 'open';
+                var s = r.status || 'open';
                 pMap[s] = (pMap[s] || 0) + 1;
                 var g = r.grade || '—';
                 gMap[g] = (gMap[g] || 0) + (r.qty || 0);
               });
               
               drawDonut('pkDonut', 'pkLegend', [
+                {n:'Open', v:pMap.open, c:C.mute},
                 {n:'Packed', v:pMap.packed, c:C.amber},
                 {n:'Challaned', v:pMap.challaned, c:C.amber},
-                {n:'Dispatched', v:pMap.dispatched, c:C.green},
-                {n:'Repacked', v:pMap.repacked, c:C.mute}
+                {n:'Dispatched', v:pMap.dispatched, c:C.green}
               ], kLists.toString(), 'boxes total');
               
               drawDonut('pkGDonut', 'pkGLegend', [
@@ -3300,6 +3313,10 @@ function wireFqcAnomalies() {
       });
   }
   window.packApply = renderLivePackLog;
+  /* One renderer. Landing on the screen used to run an older one that
+     filtered by the date in the pallet number and a status the pallet never
+     has, while Apply ran this one - the same filters gave two answers. */
+  window.renderPackLog = renderLivePackLog;
 
   function renderLiveFqcDash() {
     if (!can('dash')) return;   /* Round 28: the server would refuse it */
@@ -6327,9 +6344,9 @@ function wireFqcAnomalies() {
         { get: function (r) { return fqcEsc(r.approved); } }
       ], 'No assignment recorded.', 5) + '</tbody></table></div>' +
       '<div class="card-f"><span style="font-size:11.5px;color:var(--ink3)">' +
-      'Reassignment before dispatch is not built yet, so this shows the ' +
-      'original allocation only. Once a serial is dispatched its customer ' +
-      'can never change.</span></div></div>' +
+      'A module allocated to Icon Stock takes a customer’s name when its ' +
+      'pallet is put on that customer’s challan; the row says which ' +
+      'challan and who did it. Other reassignment is not built.</span></div></div>' +
 
     /* The rail is a grid child of .work spanning 50 rows, so it stands
        beside the three cards above rather than leaving the width empty
@@ -8071,6 +8088,55 @@ function wireFqcAnomalies() {
     }
   }
 
+  /* The QR card. v4 only ever filled it from its invSim() sample, so a real
+     parse always left it saying "Nothing decoded yet" even when both QR codes
+     had been read and checked. Identity fields only: the amounts in the QR are
+     not shown, ICON TRACE stays out of the financial figures. `checks` are the
+     parser's own findings about the QR (seller is Unit-2, number agrees). */
+  window.iconShowInvoiceQr = function (qr, checks) {
+    var host = document.getElementById('invQr');
+    if (!host) return;
+    var mute = 'font-size:11.5px;color:var(--ink3)';
+    qr = qr || {};
+    var ei = qr.einvoice && typeof qr.einvoice === 'object' ? qr.einvoice : null;
+    if (!ei && !qr.ewaybill) {
+      host.innerHTML = '<div style="' + mute + '">' + (qr.einvoice === true
+        ? 'The e-invoice QR was read when this invoice was filed.'
+        : fqcEsc(qr.note || 'No QR could be read from this PDF. Parsing used ' +
+                 'the printed text only.')) + '</div>';
+      return;
+    }
+    var h = '';
+    if (ei) {
+      var rows = [['Seller GSTIN', ei.SellerGstin], ['Buyer GSTIN', ei.BuyerGstin],
+                  ['Invoice no.', ei.DocNo], ['Invoice date', ei.DocDt],
+                  ['HSN', ei.MainHsnCode], ['Items', ei.ItemCnt],
+                  ['IRN date', ei.IrnDt]];
+      h += '<div style="font-size:11.5px;line-height:1.8"><b>e-invoice QR</b> · ' +
+           'signed, read' + '<table style="width:100%;margin-top:4px">';
+      rows.forEach(function (r) {
+        if (r[1] === undefined || r[1] === null || r[1] === '') return;
+        h += '<tr><td style="color:var(--ink3);padding-right:8px">' + fqcEsc(r[0]) +
+             '</td><td class="mono" style="font-size:10.5px">' + fqcEsc(r[1]) +
+             '</td></tr>';
+      });
+      h += '</table></div>';
+    }
+    if (qr.ewaybill) {
+      h += '<div style="font-size:11.5px;line-height:1.8;margin-top:8px"><b>e-Way Bill QR</b>' +
+           ' · plain text<br><span class="mono" style="font-size:10.5px;color:var(--ink3)">' +
+           fqcEsc(qr.ewaybill) + '</span></div>';
+    }
+    (checks || []).forEach(function (c) {
+      if (c.id !== 'seller' && c.id !== 'qr_docno' && c.id !== 'qr_irn') return;
+      var ok = c.level === 'ok';
+      h += '<div class="note ' + (ok ? 'n-ok' : 'n-fail') + '" style="font-size:11px;margin:8px 0 0">' +
+           '<span>' + (ok ? '&#10003;' : '&#10007;') + '</span><span>' + fqcEsc(c.msg) +
+           '</span></div>';
+    });
+    host.innerHTML = h;
+  };
+
   /* Push a real parse into v4's own INV_STATE and let its renderer draw it,
      so the screen looks exactly as designed - copy / compare / never-parsed
      grouping, blanks flagged, reconciliation panel. */
@@ -8103,6 +8169,7 @@ function wireFqcAnomalies() {
     ['renderInvFields', 'invRender', 'renderInvoice'].forEach(function (fn) {
       try { if (typeof window[fn] === 'function') window[fn](); } catch (e) {}
     });
+    try { window.iconShowInvoiceQr(d.qr, d.checks); } catch (e) {}
     var blocked = (d.checks || []).some(function (c) { return c.level === 'block'; });
     if (typeof toast === 'function') {
       toast(blocked ? 'Blocked \u2014 ' +
@@ -12799,6 +12866,7 @@ function wireFqcAnomalies() {
       }
       
       if(window.renderInvFields) window.renderInvFields();
+      try { window.iconShowInvoiceQr(window.INV_STATE.qr, []); } catch (e) {}
       if(window.go) window.go('invoice-parser');
     }).catch(function(e){
       toast('Failed to load invoice for editing.');

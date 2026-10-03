@@ -388,7 +388,7 @@ def serial_last_challan(cur, serial, exclude_challan_id=None):
     return cur.fetchone()
 
 
-def assign_customer_on_challan(cur, box_id, customer_code, actor):
+def assign_customer_on_challan(cur, box_id, customer_code, actor, reason=None):
     """A box packed to General Stock (customer NULL) becomes real the moment
     it is put on a challan - Challan is the first point the buyer is certain,
     not Packing, where a run may still be destined for stock or for whoever
@@ -414,11 +414,20 @@ def assign_customer_on_challan(cur, box_id, customer_code, actor):
                                                            "ICON STOCK"):
                 b["customer"] = customer_code
         return
-    cur.execute("UPDATE box SET customer=%s WHERE box_id=%s AND "
-                "(customer IS NULL OR UPPER(customer) IN ('STOCK', "
-                "'ICON STOCK'))", (customer_code, box_id))
+    prev = _store.one(cur,"SELECT customer FROM box WHERE box_id=%s", (box_id,))
+    if prev is None or (prev["customer"] or "").upper() not in ("", "STOCK",
+                                                               "ICON STOCK"):
+        return                      # already somebody's: nothing changes
+    cur.execute("UPDATE box SET customer=%s WHERE box_id=%s", (customer_code,
+                                                                box_id))
+    # The history on a module (Search & Trace > Customer assignment history)
+    # is read from this row: who it was, who it is now, why, by whom, when.
+    # It is written only when the owner really changed, and it is written
+    # with the reason - an Icon Stock pallet is delivered to a customer
+    # because of a challan, and the row says which.
     audit(cur, actor, "box.customer_assigned", "box", box_id,
-          {"customer": customer_code})
+          {"from": "ICON STOCK", "customer": customer_code,
+           "reason": reason or "Put on a challan"})
 
 
 def load_challan(cur, r, actor):

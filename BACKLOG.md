@@ -6085,3 +6085,67 @@ Known cosmetic: the "updated" toast lists unchanged blank fields (null vs '') as
   net, had been dead since Round 35 (it planted into the removed `reason` field,
   and filed a production entry for "shift A of today", refused between 00:00 and
   06:00): repaired, and it passes - 25 screens, 0 payloads ran.
+
+## 3 Oct 2026 - invoice parser, QR card, pallet Print, favicon, assignment history
+
+Found with three real invoices (SADBHAV 911, KANAK 899, SRVS 822) and the
+testing server on :8090. Each line: what was wrong, cause, change, test.
+
+- **Pallet Print on the Packing Log said "No packing list found".** The screen
+  has two renderers. The one that runs on landing passed the pallet NUMBER
+  (ISPL261001/K001) to `/api/print/resolve`, which knew only a legacy number or
+  the bare sequence. The one behind Apply passed the bare sequence, which repeats
+  every day and so named the wrong pallet once a second day had a pallet 1 (and
+  showed "1" / "2" in the Box no. column, and the customer CODE, not the name).
+  Change: `/api/packing/log` returns `label`, `customer_name`, the shift on the
+  clock when the pallet was opened, and a `status`; Print opens
+  `/box/<box_id>/sheet` directly; the resolver now also takes a pallet number and
+  refuses an ambiguous bare sequence. One renderer (`renderPackLog` = the
+  server-filtered one). Test: `test_print_and_favicon.py`, and in a browser on a
+  copy of the live database.
+- **Packing Log Status filter never matched.** A box row is only open / closed.
+  v4's dropdown offered Packed / Repacked / Challaned / Dispatched, so Packed
+  returned nothing and "Awaiting challan" was always 0. Status is now derived
+  from the challan the pallet sits on: open, packed (closed, on no live challan),
+  challaned (on a live draft or issued challan), dispatched (that challan has a
+  live gate pass). **[open]** Mukesh: is "gate pass exists" the right line for
+  "dispatched"? (The serial itself turns `dispatched` at challan issue.)
+- **Invoice QR card always said "Nothing decoded yet".** `iconShowInvoice` never
+  filled `#invQr`; only v4's demo `invSim()` did. The parser had decoded both QR
+  codes all along. Now shows the e-invoice identity fields (never the amounts),
+  the e-Way Bill text and the parser's QR checks (seller is Unit-2, number
+  agrees); an invoice opened for editing says whether its QR was read.
+- **Invoice parser.** (1) References carried dates ("ISEN/PV/26-27/143 dt.
+  28-Jul-26", LR "18695 dt. 11-Sep-26", LR "dt. 3-Oct-26" with no number): now the
+  number only, blank when there is none; NIL / NA read as blank; an order date
+  with no order number is blank; `po_no` is optional. (2) **Vehicle number was
+  blank on KANAK 899**: a rule that closes the Consignee box sat at the same
+  height inside the Motor Vehicle cell, so the cell was cut off above its value.
+  Rules are now only used where they span the label's column. (3) Contact: "Contact
+  number +918818877788" was not read (a +91 prefix defeated the pattern, and the
+  word "number" looked like a name); now ten digits, label stripped. (4) A leading
+  "Delivery Address -" is dropped from the ship-to address. Test:
+  `python icon_invoice_parser.py --selftest` (new cases) and the three PDFs.
+- **No icon on print tabs.** Gate pass, challan, FTR, pallet sheet, labels,
+  barcode sheet and the authenticator page had no `<link rel="icon">` (24 Sep's
+  favicon covered only `base.html` and v4). Added to all seven, plus a
+  `/favicon.ico` route (no session needed) for pages that cannot name one. Test:
+  `test_print_and_favicon.py` scans every full-page template.
+- **Customer assignment history.** An Icon Stock pallet put on a customer's
+  challan took the customer's name (`assign_customer_on_challan`) but left only a
+  bare audit row, and the module's history still read "Original allocation"
+  only. Now one row per real change: who it was (Icon Stock), who it is, the
+  reason ("Delivered on challan IS-... against invoice ..."), who and when, shown
+  in Search & Trace. Written only when the owner actually changed (it used to log
+  even when nothing did), once (submitting a draft does not log it again). Rows
+  written before this say the reason was not recorded. Test: two in
+  `test_challan.py`. The reason is built from the challan, not typed: **[open]**
+  Mukesh, if a person should type one, say so.
+- **Observed, not changed.** (a) Cancelling a challan returns the serials to
+  `packed` but leaves the pallet owned by the customer it was given, so it stays
+  out of other customers' selectors. DECISIONS is silent; needs Mukesh.
+  (b) v4's invoice field form puts values in `value="..."` without escaping, so a
+  quote in a parsed value breaks the input. (c) `test_pack_ui.py` is a dead smoke
+  script (it calls v4's removed `signIn()` against :8090 anonymously).
+- Not on this machine: `node` is not on PATH. `node --check` was run with
+  Playwright's bundled node (`...\site-packages\playwright\driver\node.exe`).

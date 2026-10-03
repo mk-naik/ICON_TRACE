@@ -27,7 +27,8 @@ Run:  python serve.py
 
 import os, io, re, json, time, hashlib, datetime, secrets, traceback, functools, glob, threading
 from flask import (Flask, render_template, request, redirect, url_for,
-                   session, flash, jsonify, send_file, abort, g, make_response)
+                   session, flash, jsonify, send_file, abort, g, make_response,
+                   send_from_directory)
 
 import db
 import store
@@ -280,7 +281,7 @@ with store.conn() as (_cx, _cur):
 
 SESSION_COOKIE = "icon_sid"
 _SESSION_EXEMPT_PREFIXES = ("/static/",)
-_SESSION_EXEMPT_PATHS = {"/healthz"}
+_SESSION_EXEMPT_PATHS = {"/healthz", "/favicon.ico"}
 
 
 @app.before_request
@@ -2814,8 +2815,6 @@ def _write_challan(cur, d, status, exclude_challan_id=None, fy=None, seq=None,
         raise _ChallanRefused(chk["blocking"][0]["detail"], chk["blocking"])
 
     invoice = chk["invoice"]
-    for bid in chk["general_stock"]:
-        db.assign_customer_on_challan(cur, bid, chk["buyer_code"], actor())
 
     if fy is None:
         fy = db.fin_year()
@@ -2862,6 +2861,17 @@ def _write_challan(cur, d, status, exclude_challan_id=None, fy=None, seq=None,
         # when its modules left - dispatch is counted by this, not by the
         # date printed on the challan
         "issued_at": clock.stamp() if status == "issued" else None})
+
+    # Icon Stock pallets take the buyer's name here, with the reason on record
+    # (the challan is the reason - and the number exists only now)
+    no = db.render_challan_no(datetime.date.fromisoformat(challan_date), seq,
+                              suffix)
+    for bid in chk["general_stock"]:
+        db.assign_customer_on_challan(
+            cur, bid, chk["buyer_code"], actor(),
+            reason="Delivered on challan %s%s" % (
+                no, " against invoice %s" % invoice["invoice_no"]
+                if invoice and invoice.get("invoice_no") else ""))
 
     for i, b in enumerate(chk["boxes"]):
         cb_id = store.insert(cur, "challan_box", {
@@ -2957,8 +2967,15 @@ def api_challan_submit(challan_id):
         if not chk["ok"]:
             return jsonify({"ok": False, "why": chk["blocking"][0]["detail"],
                             "blocking": chk["blocking"]}), 400
+        no_ = db.render_challan_no(
+            datetime.date.fromisoformat(ch["challan_date"]), ch["seq"],
+            ch["suffix"])
         for bid in chk["general_stock"]:
-            db.assign_customer_on_challan(cur, bid, chk["buyer_code"], actor())
+            db.assign_customer_on_challan(
+                cur, bid, chk["buyer_code"], actor(),
+                reason="Delivered on challan %s%s" % (
+                    no_, " against invoice %s" % ch["invoice_no"]
+                    if ch.get("invoice_no") else ""))
         cur.execute("UPDATE challan SET status='issued', issued_at=%s "
                     "WHERE challan_id=%s", (clock.stamp(), challan_id))
         for s in store.rows(cur, "SELECT serial FROM challan_serial "
@@ -4093,9 +4110,26 @@ def api_print_resolve():
             if gp:
                 return jsonify({"url": "/gatepass/%s/print" % gp["gp_no"]})
         if kind.startswith("packing"):
-            b = store.one(cur, "SELECT box_id FROM box WHERE legacy_box_no=%s "
-                               "OR CAST(seq AS TEXT)=%s ORDER BY box_id DESC",
-                          (ref, ref))
+            b = None
+            # a pallet is named by its number (ISPL261001/K001); the bare
+            # sequence repeats every day and is only taken when it is
+            # unambiguous
+            try:
+                pn = boxno.parse(ref)
+                b = store.one(cur, "SELECT box_id FROM box WHERE pack_date=%s "
+                                   "AND seq=%s ORDER BY (state='retired'), "
+                                   "box_id DESC",
+                              (pn["pack_date"].isoformat(), pn["seq"]))
+            except boxno.BoxNumberError:
+                pass
+            if not b:
+                b = store.one(cur, "SELECT box_id FROM box WHERE "
+                                   "legacy_box_no=%s ORDER BY box_id DESC",
+                              (ref,))
+            if not b and ref.isdigit():
+                hits = store.rows(cur, "SELECT box_id FROM box WHERE seq=%s "
+                                       "LIMIT 2", (int(ref),))
+                b = hits[0] if len(hits) == 1 else None
             if b:
                 return jsonify({"url": "/box/%d/sheet" % b["box_id"]})
         if kind.startswith("challan") or kind.startswith("flash"):
@@ -5438,22 +5472,52 @@ def api_packing_log():
     if grade and grade.lower() != "all":
         where.append("b.grade = ?")
         args.append(grade)
-    if status and status.lower() != "all":
-        where.append("b.state = ?")
-        args.append(status.lower())
-
     clause = " AND ".join(where)
 
     with store.conn() as (cx, cur):
         rows = store.rows(cur, f"""
             SELECT b.box_id, b.pack_date, b.pack_shift, b.model, b.grade,
                    b.qty, b.capacity, b.customer, b.bin_no, b.state,
+                   b.seq, b.code_map_version, b.created_at,
                    b.created_by AS packed_by,
                    COALESCE(b.legacy_box_no, b.seq) AS ident
             FROM box b
             WHERE {clause}
             ORDER BY b.pack_date DESC, b.box_id DESC
         """, args)
+        # how far each closed pallet has got: on a live (draft or issued)
+        # challan, and whether that challan has a live gate pass (loaded)
+        reach = {r["box_id"]: r["lvl"] for r in store.rows(
+            cur, "SELECT bs.box_id AS box_id, MAX(CASE WHEN EXISTS ("
+                 "SELECT 1 FROM gatepass g WHERE g.challan_id=c.challan_id "
+                 "AND g.status<>'cancelled') THEN 2 ELSE 1 END) AS lvl "
+                 "FROM box_serial bs "
+                 "JOIN challan_serial cs ON cs.serial=bs.serial "
+                 "JOIN challan c ON c.challan_id=cs.challan_id "
+                 "WHERE c.status NOT IN ('cancelled','superseded') "
+                 "GROUP BY bs.box_id")}
+
+    # The box row only ever says open / closed (/ retired). What the log's
+    # Status column and filter mean is the pallet's progress, which the row
+    # does not store - it is read from the challan the pallet sits on.
+    for r in rows:
+        if r["state"] == "open":
+            r["status"] = "open"
+        else:
+            r["status"] = {1: "challaned", 2: "dispatched"}.get(
+                reach.get(r["box_id"]), "packed")
+        # the number printed on the pallet, never the bare sequence: the
+        # sequence repeats every day and names nothing on its own
+        r["label"] = _box_label(r) or "BOX-%04d" % (r["seq"] or 0)
+        # the shift on the clock when the pallet was opened, as the filter
+        # counts it - the column the opening screen stored is often empty
+        if r.get("created_at"):
+            r["pack_shift"] = "ABC"[clock.shift_of(
+                int(str(r["created_at"])[11:13] or 0)) - 1]
+        cr = customers.get(r["customer"]) if r["customer"] else None
+        r["customer_name"] = cr["name"] if cr else r["customer"]
+    if status and status.lower() != "all":
+        rows = [r for r in rows if r["status"] == status.lower()]
 
     return jsonify({"rows": rows})
 
@@ -7087,6 +7151,14 @@ def api_trace_serial(serial):
                                  "(entity='serial' AND entity_id=%s) OR "
                                  "(entity='allocation' AND entity_id=%s) "
                                  "ORDER BY at", (s, str(first["alloc_id"])))
+        # a pallet of Icon Stock that was delivered to a customer: one audit
+        # row per change, written with its reason (db.assign_customer_on_challan)
+        assigned = store.rows(
+            cur, "SELECT at, actor, detail FROM dispatch_audit WHERE "
+                 "action='box.customer_assigned' AND entity='box' AND "
+                 "entity_id IN (%s) ORDER BY at, audit_id"
+                 % ",".join("%s" for _ in boxes),
+            tuple(str(b["box_id"]) for b in boxes)) if boxes else []
         cfg = db.get_config(cur)
 
     bno = batch_no(alloc) if alloc else "—"
@@ -7128,8 +7200,10 @@ def api_trace_serial(serial):
         })
 
     # ---- customer assignment -------------------------------------------
-    # One row, because reassignment is not built yet. An empty table would
-    # read as "never assigned", which is not what the record says.
+    # The first row is the allocation. A module allocated to nobody (Icon
+    # Stock) and later delivered to a customer gets a row for that change -
+    # who it was, who it is now, the reason, by whom, when. An earlier row
+    # written before reasons were recorded says so instead of inventing one.
     assignment = [{
         "from": _when_shift(alloc["created_at"]) if alloc and alloc.get("created_at") else "—",
         "customer": cust_name,
@@ -7137,6 +7211,21 @@ def api_trace_serial(serial):
         "by": (alloc or {}).get("created_by") or "—",
         "approved": "—",
     }]
+    for a in assigned:
+        try:
+            det = json.loads(a.get("detail") or "{}")
+        except ValueError:
+            det = {}
+        to = customers.get(det.get("customer"))
+        assignment.append({
+            "from": _when_shift(a["at"]) if a.get("at") else "—",
+            "customer": to["name"] if to else (det.get("customer") or "—"),
+            "reason": "Was Icon Stock. %s" % (
+                det.get("reason") or "Put on a challan (the reason was not "
+                                      "recorded at the time)"),
+            "by": a.get("actor") or "—",
+            "approved": "—",
+        })
 
     # ---- the journey ----------------------------------------------------
     alloc_label = ALLOC_TYPES.get((alloc or {}).get("alloc_type") or "")
@@ -10070,6 +10159,15 @@ def export_csv(what):
         headers={"Content-Disposition":
                  "attachment; filename=icontrace_%s_%s.csv"
                  % (what, clock.today().isoformat())})
+
+
+@app.route("/favicon.ico")
+def favicon():
+    """A browser asks for this by itself on any page that does not name an
+    icon (a PDF, an error page, a print tab). Every page names the real one;
+    this answers the ones that cannot."""
+    return send_from_directory(os.path.join(app.root_path, "static"),
+                               "favicon.svg", mimetype="image/svg+xml")
 
 
 @app.route("/healthz")

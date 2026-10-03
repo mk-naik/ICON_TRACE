@@ -9,7 +9,7 @@ a demo pass.
 Status tags: **[built]** verified in code · **[decided]** agreed, not built ·
 **[NOT ENFORCED]** agreed, code does not do it yet · **[open]** needs Mukesh.
 
-Last checked against code: 2026-10-02, after commit `849ce6b`. When you change a rule
+Last checked against code: 2026-10-03, after commit `b740dc8` plus the 3 Oct fixes. When you change a rule
 or finish a `[decided]` item, update this file in the same commit.
 
 ---
@@ -62,6 +62,13 @@ no one signs twice. [enforcement unverified]
 - Ticking a General Stock pallet gives it the invoice's customer. A challan may
   mix models. kW is always derived (Σ qty × wattage / 1000), never typed.
   [built]
+- **That change is on the module's record.** Search & Trace > Customer assignment
+  history gets a row: it was Icon Stock, it is now the customer, the reason
+  ("Delivered on challan ... against invoice ...", built from the challan, not
+  typed), who, when. One row per real change - none when the pallet already had
+  that owner, none again when the draft is submitted. Cancelling the challan does
+  not give the pallet back to Icon Stock. [built] **[open]** whether it should,
+  and whether a person should type the reason.
 - **Edit is not cancel.** Editing an issued challan creates a new row at the
   same fy/seq with suffix `MA`, then `MB`, and so on. The original becomes
   `superseded` (a status distinct from `cancelled`). Only the live version can
@@ -160,6 +167,11 @@ no one signs twice. [enforcement unverified]
   Unit-2's 30 mm frame). The indent's pallet instruction is **not** a cap.
   [built]
 - Unallocated stock is General Stock, never blank. [built]
+- **Packing Log status is read from the challan**, not stored on the pallet: open,
+  packed (closed, on no live challan), challaned (on a live draft or issued
+  challan), dispatched (that challan has a live gate pass). A pallet is named by
+  its pallet number everywhere, never by the bare sequence. [built] **[open]**
+  whether "gate pass exists" is the right line for dispatched.
 - **Make-to-order modules pack only with their own kind.** A pallet holding
   modules from a make-to-order indent refuses make-to-stock and Icon Stock
   modules, and the other way round. The kind is read from the module's indent

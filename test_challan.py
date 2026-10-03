@@ -1431,6 +1431,53 @@ def t_cancelled_number_not_reused():
         (seq1, challan_row(second)["seq"])
 
 
+def _assign_rows(box_id):
+    with store.conn() as (cx, cur):
+        return store.rows(cur, "SELECT * FROM dispatch_audit WHERE "
+                               "action='box.customer_assigned' AND entity_id=%s",
+                          (str(box_id),))
+
+
+@test("Icon Stock delivered to a customer: the module's Customer assignment "
+      "history gets a row with who it was, who it is, the reason and who did it")
+def t_assignment_history_row():
+    c = setup()
+    b = packed_box(c, [0, 1], customer="ICON STOCK")
+    inv = make_invoice(qty=2, invoice_no="ICON/26-27/911")
+    r = c.post("/api/challan", json={"action": "create", "boxes": [b],
+                                     "invoice_id": inv}).get_json()
+    assert r["ok"], r
+    rows = c.get("/api/trace/serial/" + serial(0)).get_json()["assignment"]
+    assert len(rows) == 2, rows
+    assert rows[0]["reason"] == "Original allocation", rows[0]
+    new = rows[1]
+    assert new["customer"] == AGNI_NAME or "AGNI" in new["customer"].upper(), new
+    assert "Icon Stock" in new["reason"], new
+    assert r["no"] in new["reason"] and "ICON/26-27/911" in new["reason"], \
+        "the reason must name the challan and the invoice: %r" % new["reason"]
+    assert new["by"] and new["by"] != "—", new
+    assert len(_assign_rows(b)) == 1
+
+
+@test("a pallet that already has a customer writes no assignment row, and a "
+      "second challan step (submit) writes none either")
+def t_assignment_history_only_on_change():
+    c = setup()
+    b = packed_box(c, [0, 1], customer=BOROSIL_CODE)
+    with store.conn() as (cx, cur):
+        db.assign_customer_on_challan(cur, b, "C0001", "tester")
+    assert not _assign_rows(b), "an unchanged owner was logged as a change"
+    g = packed_box(c, [10, 11], customer=None)
+    inv = make_invoice(qty=2, invoice_no="INV-HIST2")
+    r = c.post("/api/challan", json={"action": "draft", "boxes": [g],
+                                     "invoice_id": inv}).get_json()
+    assert r["ok"], r
+    assert len(_assign_rows(g)) == 1
+    r2 = c.post("/api/challan/%d/submit" % r["challan_id"], json={}).get_json()
+    assert r2["ok"], r2
+    assert len(_assign_rows(g)) == 1, "submit logged the same change again"
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0
