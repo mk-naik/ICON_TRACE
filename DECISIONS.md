@@ -46,7 +46,17 @@ no one signs twice. [enforcement unverified]
   level. [built]
 - v1 and v2 refuse to print until every pallet is `loaded`. Enforced on the
   server, not only in the UI. [built]
-- QR on challan v1/v2: `ICONTRACE|CHALLAN|<challan_no>`. [decided]
+- QR on challan v1/v2: `ICONTRACE|CHALLAN|<challan_no>`. [built on v1; v2 (Excel)
+  has none yet]
+- **Challan v1 follows the plant's own form IS-MP-STR-FM-09** (Revision 0, date
+  01.03.2026): header = EN-ICON logo, company name, QR, nothing else; the document
+  block (Doc No, revision, challan no, dates, invoice, LR copy) sits below it; then
+  vehicle / mobile / transporter and the hand-filled freight boxes (left),
+  consignee and buyer (right), the goods line, and the signature boxes. One A4 page
+  filled. Freight amounts are left blank on purpose - ICON TRACE holds no
+  financial figures. The Supplier contacts are the three names printed on the
+  form (`icon_challan_form.SUPPLIER_CONTACTS`). The gate pass print has the same
+  header. [built]
 
 ## 3. Challan
 

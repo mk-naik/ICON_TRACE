@@ -139,3 +139,10 @@ def gp_qr_payload(gp_no):
     resolves back to the full record by lookup; nothing that could go
     stale (party, vehicle, challan) is worth encoding twice."""
     return "ICONTRACE|GATEPASS|%s" % gp_no
+
+
+def challan_qr_payload(challan_no):
+    """Identity only (DECISIONS 2): the challan number looks the record up on
+    the server. No party, vehicle or quantity - those can be edited (MA, MB)
+    and a printed QR cannot follow them."""
+    return "ICONTRACE|CHALLAN|%s" % challan_no

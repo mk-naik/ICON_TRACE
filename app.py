@@ -43,6 +43,7 @@ import icon_models as models
 import icon_customers as customers
 import icon_barcode as bc
 import icon_box_number as boxno
+import icon_challan_form as cform
 import icon_ftr as ftr
 import icon_clock as clock
 
@@ -3932,12 +3933,35 @@ def challan_print(fy, seq):
                 return why, 400
     ch = b["challan"]
     d = datetime.date.fromisoformat(ch["challan_date"])
-    return render_template("challan_print.html", ch=ch, boxes=b["boxes"],
-                           qty=len(b["serials"]),
-                           kw=round((ch["wattage"] or 0) * len(b["serials"]) / 1000.0, 2),
-                           no=db.render_challan_no(d, ch["seq"], ch["suffix"]),
-                           form=db.__dict__.get("CHALLAN_FORM",
-                                                "IS-MP-STR-FM-09 Rev 1"))
+    no = db.render_challan_no(d, ch["seq"], ch["suffix"])
+    with store.conn() as (cx, cur):
+        inv = store.one(cur, "SELECT * FROM invoice WHERE invoice_id=%s",
+                        (ch["invoice_id"],)) if ch.get("invoice_id") else None
+    inv = inv or {}
+    # The ship-to is the challan's own when it was typed there, else the
+    # invoice's; "same as buyer" has no ship-to of its own to show.
+    buyer = cform.party(ch["buyer_name"] or inv.get("buyer_name"),
+                        inv.get("buyer_address"),
+                        ch["buyer_gstin"] or inv.get("buyer_gstin"),
+                        inv.get("buyer_contact_phone"))
+    if (ch.get("consignee_name") or ch.get("consignee_address")
+            or inv.get("consignee_name") or inv.get("consignee_address")):
+        cons = cform.party(ch.get("consignee_name") or inv.get("consignee_name")
+                           or buyer["name"],
+                           ch.get("consignee_address") or inv.get("consignee_address"),
+                           inv.get("consignee_gstin") or buyer["gstin"],
+                           inv.get("consignee_contact_phone"))
+    else:
+        cons = dict(buyer)
+    return render_template(
+        "challan_print.html", ch=ch, boxes=b["boxes"], qty=len(b["serials"]),
+        kw=round((ch["wattage"] or 0) * len(b["serials"]) / 1000.0, 2),
+        no=no, cons=cons, buyer=buyer, form=cform,
+        challan_date=cform.dmy(ch["challan_date"]),
+        invoice_date=cform.dmy(inv.get("invoice_date")),
+        lr_copy=cform.lr_number(ch.get("lr_no")),
+        driver_mobile=cform.phone10(ch.get("driver_mobile")),
+        qr=bc.qr_svg(bc.challan_qr_payload(no), module=5))
 
 
 @app.route("/challan/<int:fy>/<int:seq>/excel")

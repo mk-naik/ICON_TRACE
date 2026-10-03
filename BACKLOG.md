@@ -6149,3 +6149,27 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
   script (it calls v4's removed `signIn()` against :8090 anonymously).
 - Not on this machine: `node` is not on PATH. `node --check` was run with
   Playwright's bundled node (`...\site-packages\playwright\driver\node.exe`).
+
+## 3 Oct 2026 (evening) - Challan V1 and gate pass print in the plant's layout
+
+- **What was wrong:** the V1 print was a plain table with no logo and no QR; the
+  gate pass header had a text "EN-ICON" placeholder with the document block
+  beside the logo. Mukesh sent the plant's own V1 (IS-MP-STR-FM-09) and the
+  EN-ICON logo SVG.
+- **Change:** `templates/challan_print.html` rebuilt on the plant's form, filling
+  one A4 page: logo + company name + QR (`ICONTRACE|CHALLAN|<no>`, decodes) on
+  top, document block below, consignee and buyer with address / contact / GSTIN /
+  state taken from the invoice, pallet numbers listed in the goods area. Fixed
+  text and contacts in `icon_challan_form.py`; the route cleans what an older
+  parser stored (the "Delivery Address -" label, a dangling "Contact number", a
+  date in the LR slot) at print time, the challan row is untouched. Gate pass:
+  same header (real logo, QR, document block under it). Logo in
+  `static/enicon-logo.svg`. Test: `test_print_and_favicon.py` (V1 content and
+  order) and the page rendered to PDF in Chromium: one page, QR decodes.
+- **Decided on instinct, change if wrong:** "LR.NO." on the plant's form holds
+  the vehicle number, so V1 labels it VEHICLE NO. and keeps LR COPY NO. for the
+  real LR number; Revision shows the form's own 0 / 01.03.2026 (the Excel V2 header
+  still says "Rev 1" - not changed); freight boxes blank; Mob. is the driver mobile
+  and is empty when none was entered on the challan.
+- **Not done:** V2 (the Excel) is unchanged - it is still the plain sheet, not the
+  plant's CHN-910 layout.

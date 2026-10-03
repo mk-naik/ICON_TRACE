@@ -95,6 +95,45 @@ def t_packing_log_columns_and_status():
         "AGNI" in rows[a]["customer_name"].upper(), rows[a]
 
 
+@test("Challan V1: logo, company, QR on top; document block below; every "
+      "field the plant's form carries; old-parser leftovers cleaned on print")
+def t_challan_v1_form():
+    c = setup()
+    b = packed_box(c, [0, 1], customer=None)
+    inv = make_invoice(qty=2, invoice_no="ICON/26-27/911")
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE invoice SET consignee_name='SADBHAV LTD', "
+                    "consignee_address='DELIVERY ADDRESS - At MMI Narayana "
+                    "Hospital, Raipur 492015 Contact number', "
+                    "consignee_gstin='22ABKCS5083K1Z0', "
+                    "consignee_contact_phone='+918818877788', "
+                    "buyer_address='House 84, Raipur', invoice_date='2026-10-03' "
+                    "WHERE invoice_id=%s", (inv,))
+    r = c.post("/api/challan", json={
+        "action": "create", "boxes": [b], "invoice_id": inv,
+        "vehicle_no": "CG04LR6784", "transporter": "KHYATI TRANSPORT",
+        "lr_no": "dt. 3-Oct-26", "driver_mobile": "7000139295"}).get_json()
+    assert r["ok"], r
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE challan_box SET loading_status='loaded'")
+    page = c.get("/challan/%d/%d/print" % (r["fy"], r["seq"]))
+    assert page.status_code == 200, page.data[:200]
+    h = page.get_data(as_text=True)
+    assert 'src="/static/enicon-logo.svg"' in h and "<svg" in h      # logo + QR
+    assert h.index("enicon-logo.svg") < h.index("Dispatch Challan Cum Gate Pass")         < h.index("Doc No -"), "the document block must sit BELOW the header"
+    for want in (r["no"], "ICON/26-27/911", "03.10.2026", "CG04LR6784",
+                 "KHYATI TRANSPORT", "7000139295", "IS-MP-STR-FM-09",
+                 "01.03.2026", "Rohan Tiwari", "Contact number 8818877788",
+                 "22ABKCS5083K1Z0", "SOLAR PV MODULE-", "Pallets (1)"):
+        assert want in h, "missing on the challan: %r" % want
+    assert "Delivery Address - At MMI" in h and         "DELIVERY ADDRESS - At MMI" not in h, "the stored label was not cleaned"
+    assert "dt. 3-Oct-26" not in h, "a date was printed as the LR number"
+    assert "Contact number</div>" not in h, "a dangling label was printed"
+    assert "ICONTRACE|CHALLAN" not in h      # the QR is a picture, not text
+    import icon_barcode as bc
+    assert bc.challan_qr_payload(r["no"]) == "ICONTRACE|CHALLAN|" + r["no"]
+
+
 @test("every full page names the icon, and /favicon.ico answers anyone")
 def t_favicon():
     here = os.path.dirname(os.path.abspath(__file__))

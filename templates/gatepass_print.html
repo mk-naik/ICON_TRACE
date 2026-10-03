@@ -4,16 +4,19 @@
  body{font-family:Arial,Helvetica,sans-serif;font-size:10pt;margin:0;color:#000}
  .sheet{border:1.5px solid #000;margin-bottom:8mm;page-break-inside:avoid}
  .hd{display:flex;border-bottom:1.5px solid #000}
- .hd .lg{width:26mm;padding:3mm;border-right:1px solid #000;text-align:center}
- .hd .lg b{font-size:12pt}
+ .hd .lg{width:44mm;padding:2.5mm;border-right:1px solid #000;display:flex;align-items:center}
+ .hd .lg img{width:100%;height:auto;display:block}
  .hd .ti{flex:1;padding:3mm;text-align:center}
  .hd .ti h1{font-size:11.5pt;margin:0}
  .hd .ti .s{font-size:7.5pt;margin-top:1mm}
- .hd .doc{width:52mm;border-left:1px solid #000;font-size:8.5pt}
- .hd .doc div{padding:1.5mm 2.5mm;border-bottom:1px solid #000}
- .hd .doc div:last-child{border-bottom:none}
- .hd .qr{width:22mm;padding:2mm;border-left:1px solid #000;text-align:center}
- .hd .qr svg{width:18mm;height:18mm}
+ .hd .ti{display:flex;flex-direction:column;justify-content:center}
+ .hd .qr{width:30mm;padding:2mm;border-left:1px solid #000;text-align:center;
+   display:flex;align-items:center;justify-content:center}
+ .hd .qr svg{width:24mm;height:24mm}
+ /* the document block sits under the header, not beside the logo */
+ .doc{display:grid;grid-template-columns:1.1fr 1.3fr .8fr .8fr;border-bottom:1.5px solid #000;font-size:8.5pt}
+ .doc div{padding:1.5mm 2.5mm;border-right:1px solid #000}
+ .doc div:last-child{border-right:none}
  .kind{text-align:center;font-weight:700;padding:2mm;border-bottom:1.5px solid #000;
    font-size:10.5pt;letter-spacing:.3px}
  table{width:100%;border-collapse:collapse}
@@ -38,18 +41,18 @@
 {% for label in copies %}
 <div class="sheet">
   <div class="hd">
-    <div class="lg"><b>EN-ICON</b><div style="font-size:6.5pt">Harvesting the Sun</div></div>
+    <div class="lg"><img src="/static/enicon-logo.svg" alt="EN-ICON"></div>
     <div class="ti"><h1>ICON SOLAR-EN POWER TECHNOLOGIES PRIVATE LIMITED</h1>
       <div class="s">Khasra No 1553/1, 1564, 1566, 1568/1, 1568/2 &middot; Mandir
         Hasaud, Arang, Tekari, Raipur, Chhattisgarh 493225<br>
         GSTIN 22AADCI5761L3ZE &middot; UNIT-2</div></div>
-    <div class="doc">
-      <div><b>DOC NO.</b> IS-MP-STR-FM-04</div>
-      <div><b>GATE PASS NO.</b> {{ gp.gp_no }}</div>
-      <div><b>DATE</b> {{ gp.gp_date }}</div>
-      <div><b>GATE ENTRY NO.</b></div>
-    </div>
     {% if qr %}<div class="qr">{{ qr | safe }}</div>{% endif %}
+  </div>
+  <div class="doc">
+    <div><b>DOC NO.</b> IS-MP-STR-FM-04</div>
+    <div><b>GATE PASS NO.</b> {{ gp.gp_no }}</div>
+    <div><b>DATE</b> {{ gp.gp_date }}</div>
+    <div><b>GATE ENTRY NO.</b></div>
   </div>
 
   <div class="kind">GATE PASS &mdash; {{ 'NON RETURNABLE (NRGP)' if gp.kind=='NRGP' else 'RETURNABLE (RGP)' }}</div>
