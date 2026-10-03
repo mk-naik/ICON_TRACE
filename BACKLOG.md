@@ -6039,6 +6039,16 @@ Commit `d352910` -> `C:/Users/X/Videos/ICON_TRACE` (production, port 8080, all i
 - Still to do by hand: upload the September / October traceability files in backfill mode and
   tick the already-imported ranges - 45 batches hold only 4 raw-text materials each.
 
+### Master data: does an edit persist? (asked 2026-10-03)
+
+Yes for materials and their vendors (makes): Save -> PUT /api/material/<n> -> the `material`
+table; proved in Chromium (DB row, F5, a second session). The Models, Stations, Reason
+codes and Users lists are page-only and refuse edits with a reason. What made it look
+unsaved: v4's dialog subtitle "Changes apply immediately on screen. In the built system
+this is a single save." Now, for saved kinds, it says "Save writes this to the database -
+it stays after a refresh and applies to everyone." `test_master_data_ui.py` (+1).
+Known cosmetic: the "updated" toast lists unchanged blank fields (null vs '') as changed.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on

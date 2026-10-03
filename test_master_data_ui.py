@@ -86,6 +86,43 @@ def t_super_admin_edits_master():
         print("      material form opened; toasts: %s" % pg.toasts)
 
 
+@test("a Super Admin's edit of a material's vendors (makes) is WRITTEN to the database: it is in the "
+      "table at once, survives F5, shows in a brand-new session - and the dialog says so")
+def t_edit_persists():
+    import json
+    world()
+
+    def db_makes(n):
+        with store.conn() as (cx, cur):
+            return json.loads(store.one(cur, "SELECT makes FROM material WHERE n=%s", (n,))["makes"])
+
+    with H.browser() as b:
+        pg = admin_page(b, "Super Admin", "sa1")
+        tab(pg, "materials")
+        was = db_makes(30)
+        pg.evaluate("editRecord('material', 30)")
+        pg.wait_for_selector("#mdl.on #ed_0", timeout=5000)
+        assert "Save writes this to the database" in pg.inner_text("#mdlSub"), pg.inner_text("#mdlSub")
+        assert "built system" not in pg.inner_text("#mdlSub")
+        idx = pg.evaluate("EDIT_SPECS.material.fields.findIndex(f => f.k === 'makes')")
+        pg.fill("#ed_%d" % idx, pg.input_value("#ed_%d" % idx) + "\nNew Test Vendor")
+        pg.click("#mdlGeneric >> text=Save")
+        pg.wait_for_function("() => window.__lastToast !== undefined || true")
+        pg.wait_for_timeout(1000)
+        assert db_makes(30) == was + ["New Test Vendor"], db_makes(30)          # in the DATABASE
+        pg.reload()
+        pg.wait_for_timeout(2500)
+        assert pg.evaluate("(MATERIALS.filter(m => m.n === 30)[0] || {}).makes") == was + ["New Test Vendor"]
+        pg2 = admin_page(b, "Super Admin", "sa1")                                # another session
+        assert pg2.evaluate("(MATERIALS.filter(m => m.n === 30)[0] || {}).makes") == was + ["New Test Vendor"]
+        # the lists that are NOT saved say so instead of pretending
+        pg2.evaluate("editRecord('model', 'ISEN625-G12R')")
+        pg2.wait_for_timeout(300)
+        assert not pg2.evaluate("document.getElementById('mdl').classList.contains('on')")
+        assert pg2.toasts[-1] == PAGE_ONLY, pg2.toasts
+        assert pg.errors == [] and pg2.errors == [], (pg.errors, pg2.errors)
+
+
 @test("an Admin sees master data read-only: every material, cell-efficiency "
      "and evidence-source control disabled with the reason, a note on both "
      "tabs - and a save forced anyway is reported as refused, not 'saved'")

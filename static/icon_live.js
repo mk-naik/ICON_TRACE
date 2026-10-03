@@ -964,7 +964,17 @@
     var w = function (kind) {
       var why = masterRefusal(kind);
       if (why) { if (typeof toast === 'function') toast(why); return; }
-      return _asV4Admin(v4, this, arguments);
+      var out = _asV4Admin(v4, this, arguments);
+      /* v4's dialog says "Changes apply immediately on screen. In the built system
+         this is a single save." - true of its prototype, false here: for the kinds
+         that are saved, Save writes to the database and it is there after a refresh
+         and for everyone. Say so. */
+      var sub = document.getElementById('mdlSub');
+      if (sub && MASTER_KINDS[kind] === 'saved' && /built system/.test(sub.textContent)) {
+        sub.textContent = 'Save writes this to the database - it stays after a refresh ' +
+          'and applies to everyone.';
+      }
+      return out;
     };
     w.__master = true;
     window[name] = w;
