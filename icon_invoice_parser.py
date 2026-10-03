@@ -42,7 +42,7 @@ import icon_clock as clock
 # Bump on every change to extraction behaviour. `--selftest` proves which
 # build is actually running, so "it does not detect X" can be answered in
 # one command instead of by guesswork.
-__version__ = "2026.09.09"
+__version__ = "2026.10.03"
 
 
 try:
@@ -86,6 +86,7 @@ OPTIONAL_FIELDS = {
     "transporter_id", "ewb_distance_km", "ewb_valid_upto",
     "payment_terms", "ho_reference", "po_date", "ack_no", "ack_date",
     "destination", "lr_no",                    # LR is blank on some challans
+    "po_no",                                   # "NIL" on advance-payment invoices
 }
 
 # GSTIN: 2-digit state + 10-char PAN + entity code + 'Z' + checksum.
@@ -100,10 +101,26 @@ GSTIN_RE = re.compile(r"\b(\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z][A-Z][0-9A-Z])\b")
 #     MOB NO- 8420115051                       number alone
 #     Contact Person- 76971 62443 Horilal ji   label, number, then name
 #     Mr Kumbhare 88886 39498                  name, then number
-PHONE_RE = re.compile(r"\b([6-9]\d{4})[\s.-]?(\d{5})\b")
+#     Contact number +918818877788             country code, no space
+# An optional +91 / 91 / 0 in front is part of the number's writing, not of
+# the number; the ten digits are what is kept.
+PHONE_RE = re.compile(
+    r"(?<!\d)(?:\+?91[\s.-]?|0)?([6-9]\d{4})[\s.-]?(\d{5})(?!\d)")
 CONTACT_LABEL_RE = re.compile(
-    r"\b(MOB(?:ILE)?\.?\s*(?:NO\.?)?|CONTACT\s*PERSON|CONTACT|PH(?:ONE)?\.?|TEL\.?)"
-    r"\s*[-:.]?\s*", re.I)
+    r"\b(MOB(?:ILE)?\.?\s*(?:NO\.?|NUMBER)?|CONTACT\s*(?:PERSON|NO\.?|NUMBER)?|"
+    r"PH(?:ONE)?\.?\s*(?:NO\.?|NUMBER)?|TEL\.?)"
+    r"\s*[-:.]*\s*", re.I)
+# "Delivery Address -" in front of the ship-to address is Tally's label, not
+# part of the address
+ADDR_LABEL_RE = re.compile(
+    r"^\s*(?:DELIVERY\s+ADDRESS|SHIP(?:PING)?\s*TO|SHIPPING\s+ADDRESS|ADDRESS)"
+    r"\s*[-:.]+\s*", re.I)
+# "dt. 28-Jul-26", "dated 28-Jul-26" or a bare date, wherever it sits in a
+# reference. A reference field carries the NUMBER; the date is a different fact
+REF_DATE_RE = re.compile(
+    r"(?:\b(?:dt|dated|date)\b\.?\s*:?\s*)?\b\d{1,2}[-/.][A-Za-z]{3}[-/.]\d{2,4}\b",
+    re.I)
+BLANK_WORDS = {"NIL", "NA", "N/A", "N.A.", "NONE", "-", "--", "."}
 PIN_RE = re.compile(r"\b\d{6}\b")
 DATE_RE  = re.compile(r"\b(\d{1,2}-[A-Za-z]{3}-\d{2,4})\b")
 IRN_RE   = re.compile(r"\b([0-9a-f]{64})\b")
@@ -125,6 +142,7 @@ class Page:
         ]
         self.words.sort(key=lambda w: (round(w["y0"], 1), w["x0"]))
         self.hlines = self._rules(horizontal=True)
+        self.hsegs = self._segments()
         self.text = page.get_text()
 
     def _rules(self, horizontal=True):
@@ -144,6 +162,25 @@ class Page:
                     elif not horizontal and r.width < 0.8:
                         vals.add(round(r.x0, 1))
         return sorted(vals)
+
+    def _segments(self):
+        """Horizontal rules WITH their left and right ends. Tally draws the
+        left-hand party boxes and the right-hand reference grid as separate
+        stacks, so a rule that closes the Consignee box at one height sits
+        in the middle of the Motor Vehicle cell at the same height. A rule
+        only closes a cell it actually spans."""
+        segs = []
+        for d in self.page.get_drawings():
+            for it in d["items"]:
+                if it[0] == "l":
+                    a, b = it[1], it[2]
+                    if abs(a.y - b.y) < 0.8:
+                        segs.append((round(a.y, 1), min(a.x, b.x), max(a.x, b.x)))
+                elif it[0] == "re":
+                    r = it[1]
+                    if r.height < 0.8:
+                        segs.append((round(r.y0, 1), r.x0, r.x1))
+        return sorted(segs)
 
     def find_label(self, label, occurrence=0):
         """Locate a label by matching its words in sequence. Returns the box
@@ -204,7 +241,14 @@ class Page:
                     line, key=lambda w: w["x0"]))
         return val.strip(), lab
 
-    def next_rule_below(self, y, default=None):
+    def next_rule_below(self, y, default=None, x=None):
+        """The next rule under y. With x, only a rule that spans that
+        horizontal position counts."""
+        if x is not None:
+            for hy, xa, xb in self.hsegs:
+                if hy > y + 1.0 and xa - 1.0 <= x <= xb + 1.0:
+                    return hy
+            return default
         for h in self.hlines:
             if h > y + 1.0:
                 return h
@@ -216,7 +260,8 @@ class Page:
         lab = self.find_label(label, occurrence)
         if not lab:
             return None, None
-        bottom = self.next_rule_below(lab["y1"], lab["y1"] + 30)
+        bottom = self.next_rule_below(lab["y1"], lab["y1"] + 30,
+                                      x=lab["x0"] + 3)
 
         # A label further right on the same row closes this column. Compare
         # against the label's START, and skip the label's own words - matching
@@ -393,7 +438,7 @@ def split_contact(lines):
         m = PHONE_RE.search(ln)
         if not m:
             continue
-        phone = "".join(c for c in m.group(0) if c.isdigit())
+        phone = m.group(1) + m.group(2)       # ten digits, no +91, no gap
         residue = (ln[:m.start()] + " " + ln[m.end():])
         residue = CONTACT_LABEL_RE.sub(" ", residue)
         residue = " ".join(residue.split()).strip(" -:,.")
@@ -406,6 +451,20 @@ def split_contact(lines):
             return (residue or None), phone, lines[:i] + lines[i + 1:]
         return None, phone, lines          # keep the line, take the number
     return None, None, lines
+
+
+def ref_number(val):
+    """A reference field carries the NUMBER only. Tally prints the date in the
+    same cell ("ISEN/PV/26-27/143 dt. 28-Jul-26", "18695 dt. 11-Sep-26"), and
+    for an LR slot with no number at all just "dt. 3-Oct-26". The date is
+    dropped; nothing left means the field is blank, and so is NIL / NA."""
+    if not val:
+        return None
+    out = REF_DATE_RE.sub(" ", val)
+    out = " ".join(out.split()).strip(" -:,.")
+    if not out or out.upper() in BLANK_WORDS:
+        return None
+    return out
 
 
 def clean_party(lines):
@@ -510,15 +569,15 @@ def _parse(doc, path, expect_qty=None):
     put("invoice_date", "Dated", occ=0, pad=80, post=norm_date)
 
     # ---- commercial references -----------------------------------------
-    put("ho_reference", "Reference No. & Date.", pad=180)
-    put("po_no",        "Buyer's Order No.",     pad=160)
+    put("ho_reference", "Reference No. & Date.", pad=180, post=ref_number)
+    put("po_no",        "Buyer's Order No.",     pad=160, post=ref_number)
     put("po_date",      "Dated", occ=1, pad=80, post=norm_date)
-    put("delivery_note",    "Delivery Note",   pad=120)
-    put("dispatch_doc_no",  "Dispatch Doc No.", pad=120)
+    put("delivery_note",    "Delivery Note",   pad=120, post=ref_number)
+    put("dispatch_doc_no",  "Dispatch Doc No.", pad=120, post=ref_number)
 
     # ---- transport ------------------------------------------------------
     put("transporter", "Dispatched through",       pad=120)
-    put("lr_no",       "Bill of Lading/LR-RR No.", pad=120)
+    put("lr_no",       "Bill of Lading/LR-RR No.", pad=120, post=ref_number)
     put("vehicle_no",  "Motor Vehicle No.",        pad=130)
     put("destination", "Destination",              pad=130)
     put("payment_terms", "Mode/Terms of Payment",  pad=120, lines=2)
@@ -537,6 +596,9 @@ def _parse(doc, path, expect_qty=None):
 
     cname, caddr = clean_party(cons)
     bname, baddr = clean_party(buyr)
+    for ad in (caddr, baddr):
+        if ad:
+            ad[0] = ADDR_LABEL_RE.sub("", ad[0]) or ad[0]
 
     for key, nm, ad, blk in (("consignee", cname, caddr, cons),
                              ("buyer", bname, baddr, buyr)):
@@ -554,6 +616,10 @@ def _parse(doc, path, expect_qty=None):
         r["fields"][key + "_contact_phone"] = {
             "value": contact_phone, "found": bool(contact_phone),
             "label": key + " contact", "class": "copy", "edited": False}
+
+    # a date with no order number is not an order date ("NIL" dated 1-Oct-26)
+    if not r["fields"]["po_no"]["found"]:
+        r["fields"]["po_date"].update(value=None, found=False)
 
     # ---- goods line: COMPARE ONLY ---------------------------------------
     desc = re.search(r"SOLAR PV MODULE-([A-Z0-9\-]+)", p0.text)
@@ -734,6 +800,23 @@ def selftest():
     check("PIN is not a phone", (n, p), (None, None))
     n, p, rest = split_contact(["Nagpur 440001 Mob 9876543210"])
     check("address line kept", (n, p, len(rest)), (None, "9876543210", 1))
+
+    n, p, rest = split_contact(["Hospital Road, Lalpur, Raipur 492015",
+                                "Contact number +918818877788"])
+    check("+91, 'Contact number' label", (n, p, len(rest)),
+          (None, "8818877788", 1))
+    n, p, rest = split_contact(["Mob +91 98765 43210 Ramesh"])
+    check("+91 with a gap, then name", (n, p), ("Ramesh", "9876543210"))
+    n, p, rest = split_contact(["Pin 492015 Raipur"])
+    check("a 6-digit PIN is not a phone", (n, p), (None, None))
+
+    print("\nreferences carry the number, never the date")
+    for raw, want in (("ISEN/PV/26-27/143 dt. 28-Jul-26", "ISEN/PV/26-27/143"),
+                      ("18695 dt. 11-Sep-26", "18695"),
+                      ("dt. 3-Oct-26", None), ("NIL", None),
+                      ("SRL/2026-27/0318(R)", "SRL/2026-27/0318(R)"),
+                      ("P00393", "P00393")):
+        check(raw, ref_number(raw), want)
 
     print("\nGSTIN")
     for g in ("22AADCI5761L3ZE", "27ABNFR6585K1Z9", "15AACCA2122Q1ZT",
