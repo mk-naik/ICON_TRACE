@@ -6017,6 +6017,28 @@ input with no drop target.
   file inputs. Needs Mukesh: should the live indent form attach the PDF?
 - `test_upload_drop.py` (6); mutation check caught 5 of 5.
 
+### Deployed to production (2026-10-03, 10:58 IST)
+
+Commit `d352910` -> `C:/Users/X/Videos/ICON_TRACE` (production, port 8080, all interfaces).
+- The production server was `serve.py` run from IDLE (cwd the Videos folder). The server on
+  8090 is the TESTING one, run from `D:/GITHub/ICON_TRACE` (localhost only).
+- Order: online snapshot + code zip -> dry run of the final code on a copy (migrations 0.4 s,
+  no rows lost) -> stop -> final snapshot -> 55 files copied (36 changed + 19 new; the 92
+  line-ending-only differences were left alone) and byte-checked -> 8 incharges seeded
+  (Yaman, Rajkumar, Kamta, Deepak, Akshay, Umendra, Devendra, Yukesh) -> start -> checked.
+  Down for about 25 seconds. Row counts identical before and after; integrity_check ok.
+- Now a detached process (logs `server_stdout_r38.log` / `server_stderr_r38.log` in the
+  folder), not under IDLE. Same defaults as before (no ICON_* variables).
+- Rollback: `C:/Users/X/Videos/ICON_TRACE_backups/2026-10-03_pre_round38/` holds
+  `code_before.zip` (extract over the folder) and the database as it was
+  (`icontrace_final_pre_swap.db`). The migration only ADDS columns and rows, so the old code
+  runs on the new database.
+- A snapshot of the production database (integrity-checked) was copied into
+  `D:/GITHub/ICON_TRACE/icontrace.db`; the previous test database is kept beside it as
+  `icontrace_before_production_copy_20261003_1058.db`. Production keeps its own.
+- Still to do by hand: upload the September / October traceability files in backfill mode and
+  tick the already-imported ranges - 45 batches hold only 4 raw-text materials each.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on
