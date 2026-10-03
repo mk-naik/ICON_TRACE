@@ -7592,11 +7592,13 @@ function wireFqcAnomalies() {
       '<div class="grid g4"><div class="fld req" style="grid-column:1/3">' +
       '<label>Serial numbers (.xlsx)</label>' +
       '<input type="file" id="pCustomFile" accept=".xlsx,.xlsm">' +
-      '<div class="hint">Format the BARCODE column as Text, so a leading zero ' +
-      'is not lost.</div></div></div>' +
+      '<div class="hint">Or drop the file here. Format the BARCODE column as Text, ' +
+      'so a leading zero is not lost.</div></div></div>' +
       '<div id="pCustomResult"></div>';
     host.parentNode.insertBefore(panel, host.nextSibling);
     panel.querySelector('#pCustomFile').addEventListener('change', planCustomUpload);
+    iconDropZone(panel, panel.querySelector('#pCustomFile'), /\.(xlsx|xlsm)$/i,
+                 'an Excel file (.xlsx)');
     return panel;
   }
 
@@ -8042,14 +8044,10 @@ function wireFqcAnomalies() {
       });
     }
 
-    zone.addEventListener('dragover', function (e) {
-      e.preventDefault(); zone.classList.add('over'); });
-    zone.addEventListener('dragleave', function () { zone.classList.remove('over'); });
-    zone.addEventListener('drop', function (e) {
-      e.preventDefault(); zone.classList.remove('over');
-      if (e.dataTransfer.files[0]) send(e.dataTransfer.files[0]);
-    });
     inp.onchange = function () { if (inp.files[0]) send(inp.files[0]); };
+    /* the shared drop handling: a dropped invoice goes through the input's own
+       change, and the zone is registered so the page-wide guard leaves it alone */
+    iconDropZone(zone, inp, /\.pdf$/i, 'a PDF invoice');
 
     function send(file) {
       var fd = new FormData(); fd.append('pdf', file);
@@ -8262,6 +8260,83 @@ function wireFqcAnomalies() {
    * (/api/review/resolve) regardless of item type - so there is exactly
    * one submit code path behind every resolution, not one per screen.
    */
+  /* ---- drag and drop of a file onto an upload control ----------------------
+     v4 draws "Drop the production sheet here" and wires nothing to it, so a
+     dropped file did nothing - and the BROWSER's own answer to a file dropped
+     on a page is to open it, in place of the app and whatever was on screen.
+     iconDropZone() makes a zone take the file: it is put into the real file
+     input and the input's own `change` runs, so a dropped file goes down exactly
+     the path a chosen one does (same validation, same server checks).
+       zone     the element that receives the drop
+       input    the <input type=file> that owns the file
+       pattern  a RegExp the file NAME must match (the input's `accept` is not
+                applied to a drop by the browser)
+       what     what to ask for when it does not, e.g. 'an Excel file (.xlsx)' */
+  function iconDropZone(zone, input, pattern, what) {
+    if (!zone || !input || zone.__dropWired) return;
+    zone.__dropWired = true;
+    zone.setAttribute('data-dropzone', '1');
+    function carries(e) {
+      var t = e.dataTransfer && e.dataTransfer.types;
+      return !!t && Array.prototype.indexOf.call(t, 'Files') >= 0;
+    }
+    ['dragenter', 'dragover'].forEach(function (ev) {
+      zone.addEventListener(ev, function (e) {
+        if (!carries(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        zone.classList.add('dz-over');
+      });
+    });
+    zone.addEventListener('dragleave', function (e) {
+      if (!e.relatedTarget || !zone.contains(e.relatedTarget)) zone.classList.remove('dz-over');
+    });
+    zone.addEventListener('drop', function (e) {
+      if (!carries(e)) return;
+      e.preventDefault();
+      zone.classList.remove('dz-over');
+      var files = e.dataTransfer.files;
+      if (!files || !files.length) return;
+      var f = files[0];
+      if (pattern && !pattern.test(f.name)) {
+        if (typeof toast === 'function') toast('That is not ' + (what || 'the right kind of file') + ': ' + f.name);
+        return;
+      }
+      try {
+        var dt = new DataTransfer();
+        dt.items.add(f);
+        input.files = dt.files;
+      } catch (err) {
+        if (typeof toast === 'function') toast('This browser cannot take a dropped file - use Choose file.');
+        return;
+      }
+      if (files.length > 1 && typeof toast === 'function') toast('One file at a time - using ' + f.name + '.');
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+  window.iconDropZone = iconDropZone;
+
+  /* A file dropped OUTSIDE a zone is refused, not opened: without this the
+     browser replaces the whole app with the file. */
+  (function () {
+    var st = document.createElement('style');
+    st.textContent = '.dz-over{outline:2px dashed var(--brand,#1F4E79);outline-offset:-3px;' +
+      'background:var(--pass-lt,#EAF4EE) !important}';
+    document.head.appendChild(st);
+    function hasFiles(e) {
+      var t = e.dataTransfer && e.dataTransfer.types;
+      return !!t && Array.prototype.indexOf.call(t, 'Files') >= 0;
+    }
+    window.addEventListener('dragover', function (e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      if (!(e.target.closest && e.target.closest('[data-dropzone]'))) e.dataTransfer.dropEffect = 'none';
+    });
+    window.addEventListener('drop', function (e) {
+      if (hasFiles(e)) e.preventDefault();
+    });
+  })();
+
   function reviewEsc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
@@ -14206,6 +14281,9 @@ window.gpSetKind = function(k) {
       inp.onchange = function () {         // replaces the inline toast handler
         if (inp.files && inp.files[0]) peImpParse(inp.files[0]);
       };
+      /* v4's drop zone had nothing wired to it */
+      iconDropZone(document.querySelector('#peFile .dz'), inp, /\.(xlsx|xlsm)$/i,
+                   'an Excel file (.xlsx)');
     }
   };
 

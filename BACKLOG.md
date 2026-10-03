@@ -5994,6 +5994,29 @@ The test also waits for the "saved" toast and for the form to close (`indNew()` 
 toggle: called while the form is still closing it closes it instead). 10 of 10 runs
 clean, was 5 of 8.
 
+### Drag and drop onto an upload control
+
+Reported: "drag and drop in upload option is not working". Confirmed in Chromium with a
+real File in a real DragEvent: Production Entry's "Drop the production sheet here"
+(v4) had nothing wired to it - a drop did nothing, and the browser's own answer to a
+file dropped on a page is to open it in place of the app. The invoice screen's zone
+already worked (its own handlers); Planning's custom-serial upload was a bare file
+input with no drop target.
+- `iconDropZone(zone, input, pattern, what)` in `icon_live.js`: a dropped file is put
+  into the real input and the input's own `change` runs, so it takes exactly the path a
+  chosen file takes. The file NAME is checked against a pattern (the input's `accept` is
+  not applied to a drop), several files use the first and say so, the zone highlights.
+  Wired to Production Entry, Planning's custom serials and the invoice parser.
+- A page-wide guard: a file dropped OUTSIDE a registered zone is not opened by the
+  browser. A zone must be REGISTERED (`data-dropzone`) or the guard's "not allowed"
+  cursor would block a real drop - which a synthetic event cannot show, so the test
+  asserts registration for every zone.
+- Not fixed, found: the live Indent form's "Indent PDF" input is not read by its save
+  code at all (only the legacy server-rendered indent page stores a PDF), so there is
+  nothing to attach a drop to; and the legacy `challan_import.html` page has plain
+  file inputs. Needs Mukesh: should the live indent form attach the PDF?
+- `test_upload_drop.py` (6); mutation check caught 5 of 5.
+
 ### Open, needs a decision, or not touched
 
 - **Restart needed** for any of this to be live; the store migration then runs on
