@@ -153,6 +153,7 @@ no one signs twice. [enforcement unverified]
   cancelled, not deleted. Already dispatched: Admin only, acknowledge only.
   [built]
 - Replacement-serial workflow for a dispatched conflict. [decided]
+- **Cancelling an FQC grade closes the open Needs Review items raised against it** (duplicate scan, provisional mismatch) - Mukesh, 4 Oct: a stale item inflates the open count. The item is resolved as `record_cancelled`, by the person who cancelled, with the cancel's own mandatory reason; audited as `review.record_cancelled`. Items about other serials are untouched. [built]
 - **Scan items on Needs Review (Stage 5) can be DISCARDED** (Round 38, Mukesh: "no
   way to discard them"): a scan that is not a serial at all (a stray "-" or quote
   after one - "Not in master - malformed" / "FTR anomaly - junk ID") and a

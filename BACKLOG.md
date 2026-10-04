@@ -6173,3 +6173,18 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
   and is empty when none was entered on the challan.
 - **Not done:** V2 (the Excel) is unchanged - it is still the plain sheet, not the
   plant's CHN-910 layout.
+
+## 4 Oct 2026 - Cancelled FQC grade no longer leaves a stale Needs Review item
+
+- **What was wrong:** cancelling an FQC grade (`/api/fqc/cancel`) reset the serial
+  to `produced` but left an open `duplicate_scan` / `provisional_mismatch` row
+  that named the cancelled record, so Needs Review kept counting a decision that
+  no longer stood (listed as "found, not fixed" at the end of Round 34).
+- **Decision (Mukesh):** auto-close, not a lingering "was cancelled" state.
+- **Change:** in the cancel loop, open items whose `fqc_id` or `new_fqc_id` is the
+  cancelled record are resolved as `record_cancelled`, by the canceller, with the
+  cancel's own reason; audited `review.record_cancelled`. The Quality-pending item
+  is derived and already drops out (it needs `serial.state='rejected'`).
+- **Test:** `test_cancel_documents.py` (new case; fails without the fix, another
+  serial's item stays open). Edge noted, not changed: FQC cancel is refused once a
+  serial is packed, so a `duplicate_scan` rarely meets it.

@@ -3549,6 +3549,23 @@ def api_fqc_cancel():
             # the grade is void, so the module is no longer judged
             if r["state"] in ("graded", "rejected", "hold"):
                 db.set_serial(cur, r["serial"], state="produced")
+            # An open Needs Review item raised against this record asks
+            # Quality to act on a decision that no longer stands. Close it
+            # with the cancel's own reason - a person's, mandatory - so the
+            # open count is what is genuinely waiting (Mukesh, 4 Oct).
+            now_iso = clock.now().isoformat(timespec="seconds")
+            for it in store.rows(cur,
+                    "SELECT review_id, type FROM review_item WHERE status='open' "
+                    "AND (fqc_id=%s OR new_fqc_id=%s)", (fq["fqc_id"], fq["fqc_id"])):
+                cur.execute(
+                    "UPDATE review_item SET status='resolved', resolved_by=%s, "
+                    "resolved_at=%s, resolution='record_cancelled', reason=%s "
+                    "WHERE review_id=%s",
+                    (actor(), now_iso, reason, it["review_id"]))
+                db.audit(cur, actor(), "review.record_cancelled", "serial",
+                         r["serial"], {"review_id": it["review_id"],
+                                       "type": it["type"],
+                                       "fqc_id": fq["fqc_id"], "reason": reason})
             done += 1
         if not done:
             return jsonify({"ok": False, "why":

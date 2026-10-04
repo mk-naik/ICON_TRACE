@@ -661,6 +661,61 @@ def t_cancelled_fqc_leaves_lists():
           "the dashboard total (inspected %s -> %s)" % (before, after))
 
 
+@test("cancelling an FQC grade closes the open Needs Review items raised "
+     "against it (duplicate scan, provisional mismatch) with the cancel's own "
+     "reason, and leaves other serials' items alone - the open count is what "
+     "is really waiting")
+def t_cancelled_fqc_closes_its_review_items():
+    admin, secret, op = accounts()
+    sn, other = "ICON630G1202129911", "ICON630G1202129912"
+    ids = {}
+    with store.conn() as (cx, cur):
+        for s, st in ((sn, "hold"), (other, "hold")):
+            store.insert(cur, "serial", {"serial": s, "build_instance": 1,
+                "model": MODEL, "wattage": WATT, "format_version": 2,
+                "date_produced": "2026-09-09", "shift": 1, "sequence": nxt(),
+                "state": st})
+            ids[s] = store.insert(cur, "fqc_record", {"serial": s,
+                "outcome": "pass", "grade": "A", "decided_by": "x",
+                "at": "2026-09-25T10:00:00", "mode": "manual"})
+        newer = store.insert(cur, "fqc_record", {"serial": sn,
+            "outcome": "reject", "decided_by": "x",
+            "at": "2026-09-25T11:00:00", "mode": "manual"})
+        dup = db.create_review_item(cur, "duplicate_scan", sn,
+                                    fqc_id=ids[sn], new_fqc_id=newer,
+                                    created_by="system")
+        prov = db.create_review_item(cur, "provisional_mismatch", sn,
+                                     fqc_id=ids[sn], new_fqc_id=newer,
+                                     created_by="system")
+        keep = db.create_review_item(cur, "duplicate_scan", other,
+                                     fqc_id=ids[other], new_fqc_id=ids[other],
+                                     created_by="system")
+
+    def open_ids():
+        with store.conn() as (cx, cur):
+            return {r["review_id"] for r in store.rows(cur,
+                "SELECT review_id FROM review_item WHERE status='open'")}
+
+    assert {dup, prov, keep} <= open_ids(), "setup: the three items should be open"
+    admin.post("/api/fqc/cancel", json={"serial": sn,
+              "reason": "scanned the wrong module", "totp_code": code(secret)})
+
+    still = open_ids()
+    assert dup not in still and prov not in still, \
+        "an open Needs Review item still points at a cancelled FQC record"
+    assert keep in still, "another serial's open item was closed by this cancel"
+    with store.conn() as (cx, cur):
+        row = store.one(cur, "SELECT * FROM review_item WHERE review_id=%s", (dup,))
+    assert row["status"] == "resolved" and row["resolution"] == "record_cancelled", row
+    assert row["reason"] == "scanned the wrong module" and row["resolved_by"], \
+        "the closing reason must be the cancel's own, with who closed it: %r" % row
+    feed = admin.get("/api/review").get_json()
+    assert not any(i.get("serial") == sn for i in feed), \
+        "the Needs Review feed still lists the cancelled grade's serial"
+    print("      duplicate_scan + provisional_mismatch closed (reason %r by %s); "
+          "the other serial's item stays open" % (row["reason"], row["resolved_by"]))
+
+
 @test("the Cancel screen's lookup resolves the SAME display numbers the rest "
      "of the app shows for allocation (BAT-...) and loss event (DT-...), not "
      "only a bare row id")
