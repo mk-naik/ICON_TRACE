@@ -6270,3 +6270,4 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
 - **Not changed:** `/api/box/<id>/abandon` still fills "Abandoned - opened, nothing was
   ever scanned into it." when none is sent. It states a fact rather than inventing a
   motive, but it is the same pattern - Mukesh to say.
+- **Fix after the full run (same day):** the provisional refusal must keep the words "on hold" - `test_fqc.py` (held pass is not packable) asserts it, and I had run that file before the pack change, not after. Reworded; test_fqc 54/54, test_pack_readiness 10/10.

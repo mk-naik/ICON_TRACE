@@ -1592,16 +1592,16 @@ def _pack_block(cur, serial):
             "AND type='provisional_mismatch' LIMIT 1", (serial,))
         if mism:
             return ("Provisional - disagrees",
-                    "Provisional, and the evidence disagrees - %s was passed "
-                    "at FQC without the tester's reading; the reading arrived "
+                    "Provisional, on hold, and the evidence disagrees - %s was "
+                    "passed at FQC without the tester's reading; the reading arrived "
                     "and does not support that decision. A person has to "
                     "decide it in Needs Review before it can be packed."
                     % serial)
         why_nc = (" (the Sun Simulator could not be reached)"
                   if f.get("ss_state") == "NC" else "")
         return ("Provisional",
-                "Provisional - %s was passed at FQC without the tester's "
-                "reading%s and is waiting for it (Hold & Deviation). It can "
+                "Provisional - %s is on hold: it was passed at FQC without the "
+                "tester's reading%s and is waiting for it (Hold & Deviation). It can "
                 "be packed once the reading arrives and agrees."
                 % (serial, why_nc))
     if state != "graded":
