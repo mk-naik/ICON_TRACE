@@ -152,6 +152,7 @@ no one signs twice. [enforcement unverified]
   through **Repack**, never a parallel removal path. The original FQC record is
   cancelled, not deleted. Already dispatched: Admin only, acknowledge only.
   [built]
+- **Module journey shows the band.** The FQC step reads "Pass · A" for a confirmed pass (the band stored on the record) and just "Reject" for a reject - FQC assigns no band to a reject. The Quality Decision step carries Quality's final band, including an A it returned. No separate `t_grade` column: FQC's call (`outcome`) and Quality's (`quality_grade`) are already two columns (Mukesh, 4 Oct). [built]
 - Replacement-serial workflow for a dispatched conflict. [decided]
 - **Cancelling an FQC grade closes the open Needs Review items raised against it** (duplicate scan, provisional mismatch) - Mukesh, 4 Oct: a stale item inflates the open count. The item is resolved as `record_cancelled`, by the person who cancelled, with the cancel's own mandatory reason; audited as `review.record_cancelled`. Items about other serials are untouched. [built]
 - **Scan items on Needs Review (Stage 5) can be DISCARDED** (Round 38, Mukesh: "no

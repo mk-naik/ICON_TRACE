@@ -6188,3 +6188,14 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
 - **Test:** `test_cancel_documents.py` (new case; fails without the fix, another
   serial's item stays open). Edge noted, not changed: FQC cancel is refused once a
   serial is packed, so a `duplicate_scan` rarely meets it.
+
+## 4 Oct 2026 - Grade band back on the module journey
+
+- **What was wrong:** the Round 35 redesign made the FQC step read "Pass", where it
+  used to read "A" (the open "Decide" in the 13 Sep test note).
+- **Decision (Mukesh):** show the band on the pass; none on a reject.
+- **Change:** `app.py` journey - FQC step value is "Pass · A" when the record carries
+  a grade. Quality Decision already showed the final band. Tests
+  `test_fqc.py`, `test_defect_readers.py` updated to the new wording; checked in
+  Chromium (Search & Trace, no page errors).
+- **Not done:** no `t_grade` column - not needed, see DECISIONS section 6.

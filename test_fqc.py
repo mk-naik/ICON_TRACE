@@ -583,7 +583,8 @@ def t_journey_reads():
         return hits[0] if hits else None
 
     c.post("/api/fqc", json={"serial": FULL, "outcome": "pass"})
-    assert stage(FULL, "FQC")["value"] == "Pass", stage(FULL, "FQC")
+    # Mukesh, 4 Oct: a confirmed pass shows its band, a reject shows none
+    assert stage(FULL, "FQC")["value"] == "Pass · A", stage(FULL, "FQC")
     assert stage(FULL, "Quality Decision") is None, "a pass has no quality step"
 
     c.post("/api/fqc", json={"serial": SHORT, "outcome": "reject",

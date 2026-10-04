@@ -193,7 +193,7 @@ def t_journey_shows_defect():
     assert fqc["value"] == "Reject" and "Burning, Frame Dent" in fqc["detail"], fqc
     j = c.get("/api/trace/serial/" + PASS_BOTH).get_json()
     fqc = [s for s in j["journey"] if s["stage"] == "FQC"][0]
-    assert fqc["value"] == "Pass" and "Burning, Backsheet Scratch" in fqc["detail"], fqc
+    assert fqc["value"] == "Pass · A" and "Burning, Backsheet Scratch" in fqc["detail"], fqc
 
 
 if __name__ == "__main__":

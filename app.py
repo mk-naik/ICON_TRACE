@@ -7302,7 +7302,10 @@ def api_trace_serial(serial):
         f = live[0]
         # FQC records pass or reject
         if f["outcome"] == "pass":
-            value, tone = "Pass", "t-pass"
+            # A confirmed pass is grade A (DECISIONS §5). The band is shown
+            # only when the record carries one - a reject never gets one
+            # from FQC, and a blank is honest (Mukesh, 4 Oct).
+            value, tone = "Pass" + (" · " + f["grade"] if f.get("grade") else ""), "t-pass"
             detail = [f["decided_by"] or "—", f["mode"] or ""]
             if fqc_defects.get(f["fqc_id"]):
                 detail.append(fqc_defects[f["fqc_id"]])   # e.g. passed despite Burning
