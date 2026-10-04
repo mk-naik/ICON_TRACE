@@ -1,108 +1,280 @@
-<!doctype html><html><head><meta charset="utf-8"><link rel="icon" type="image/svg+xml" href="/static/favicon.svg"><title>{{ gp.gp_no }}</title>
-{#- TEMPORARY STAND-IN for the premium format (a copy of the classic) until the redesign is in. CLASSIC FORMAT. The plant's own gate pass form IS-MP-STR-FM-04 as it was, with
-    the EN-ICON logo and a QR. Kept as the fallback in case management prefers it
-    over the redesign (?style=classic, or Settings > Printed documents format). #}
+{#- PREMIUM FORMAT - Gate Pass (IS-MP-STR-FM-04). Three copies, each its own A4 page.
+    The sibling of the redesigned Dispatch Challan: the same letterhead (logo and company block top-left, a large
+    light title top-right with the number beneath, the QR), plain unboxed blocks, ONE emphasised box (the vehicle),
+    a right-aligned meta list, a charcoal item-table header with a light grey total band, "x" signature rules and a
+    small form-control footer. One family: Poppins (bundled in /static/fonts/). Prints no empty padding rows; a
+    Delivery address and an Against-challan line appear only when there is something to say; Gate Entry No. and
+    Returned on are WRITE-IN lines (security writes them by hand). No JavaScript but the Print button.
+    Only the variables of icon_gatepass_form.print_context; autoescape stays on; only `qr` is |safe. -#}
+{%- macro dash(x) -%}{%- if x -%}{{ x }}{%- else -%}<span class="nil">&ndash;</span>{%- endif -%}{%- endmacro -%}
+{#- ---- the gate pass number, split for typography: ISGP261003/ 0001 ---- -#}
+{%- set no_head, no_sep, no_seq = gp_no.rpartition('/') -%}
+{%- set nol = gp_no|length -%}
+{%- set vl = [vehicle_no|length, 4]|max -%}
+{#- ---- HOW MUCH DOES THIS PASS HOLD?  Tiers run from roomy to tight (type scale k, remarks column width, a smaller
+        letterhead and QR). The first tier whose estimated height fits the sheet wins; an item list too long even for
+        the tightest tier simply flows onto a further page - nothing is ever clipped. Row model (mm): padding 4.2k +
+        lines x line-height (description 4.7k, remark 3.95k); the description column holds (120 - remarks column) mm at
+        1.95 mm per character (capitals and digits run wide in Poppins), the remarks column (its width - 6) mm at 1.45 mm per character. -#}
+{%- set mrows = 2 + (1 if challan_no else 0) + (2 if kind == 'RGP' else 0) -%}
+{%- set ens = namespace(k=0.78, tier=3, wr=52, done=false) -%}
+{%- for tk in [[0, 1.0, 40, 0], [1, 0.92, 44, 10], [2, 0.85, 48, 22], [3, 0.78, 52, 26]] -%}
+  {%- if not ens.done -%}
+    {%- set kc = tk[1] -%}{%- set wr = tk[2] -%}
+    {%- set rows = namespace(h=0) -%}
+    {%- for ln in lines -%}
+      {%- set dl = ((ln.description|length / ((120.0 - wr) / (1.95 * kc)))|round(0, 'ceil')|int) -%}
+      {%- set rl = ((ln.remark|length / ((wr - 6.0) / (1.45 * kc)))|round(0, 'ceil')|int) -%}
+      {%- set rows.h = rows.h + 4.2 * kc + 0.2 + [dl * 4.7 * kc, rl * 3.95 * kc, 4.7 * kc]|max -%}
+    {%- endfor -%}
+    {%- set al = ((delivery_address|length / (50.0 / kc))|round(0, 'ceil')|int) if delivery_address else 0 -%}
+    {%- set E = 90 + (100 + 8 * mrows - tk[3]) + rows.h + 4.4 * kc * al + 12 * kc -%}
+    {%- if E <= 296 or tk[0] == 3 -%}{%- set ens.k = kc -%}{%- set ens.tier = tk[0] -%}{%- set ens.wr = wr -%}{%- set ens.done = true -%}{%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- set k = ens.k -%}{%- set tier = ens.tier -%}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Gate Pass {{ gp_no }}</title>
 <style>
- /* The margin lives in the page content, not in @page: a non-zero @page margin
-    is where Chrome/Edge print their own header and footer (date, title, the
-    server's URL) on the sheet. Each copy is its own A4 page. */
- @page{size:A4;margin:0}
- html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
- *{box-sizing:border-box}
- body{font-family:Arial,Helvetica,sans-serif;font-size:10pt;margin:0;color:#000}
- .pg{height:296mm;padding:10mm;page-break-after:always;break-after:page}
- .pg:last-of-type{page-break-after:auto;break-after:auto}
- .sheet{border:1.5px solid #000;page-break-inside:avoid}
- .hd{display:flex;border-bottom:1.5px solid #000}
- .hd .lg{width:44mm;padding:2.5mm;border-right:1px solid #000;display:flex;align-items:center}
- .hd .lg img{width:100%;height:auto;display:block}
- .hd .ti{flex:1;padding:3mm;text-align:center}
- .hd .ti h1{font-size:11.5pt;margin:0}
- .hd .ti .s{font-size:7.5pt;margin-top:1mm}
- .hd .ti{display:flex;flex-direction:column;justify-content:center}
- .hd .qr{width:30mm;padding:2mm;border-left:1px solid #000;text-align:center;
-   display:flex;align-items:center;justify-content:center}
- .hd .qr svg{width:24mm;height:24mm}
- /* the document block sits under the header, not beside the logo */
- .doc{display:grid;grid-template-columns:1.1fr 1.3fr .8fr .8fr;border-bottom:1.5px solid #000;font-size:8.5pt}
- .doc div{padding:1.5mm 2.5mm;border-right:1px solid #000}
- .doc div:last-child{border-right:none}
- .kind{text-align:center;font-weight:700;padding:2mm;border-bottom:1.5px solid #000;
-   font-size:10.5pt;letter-spacing:.3px}
- table{width:100%;border-collapse:collapse}
- td,th{border:1px solid #000;padding:1.6mm 2.5mm;font-size:9.5pt;vertical-align:top}
- th{background:#F2F2F2;font-size:9pt}
- td.k{font-weight:700;background:#F2F2F2;width:32mm}
- .foot{display:flex;font-size:8.5pt}
- .foot div{flex:1;border:1px solid #000;padding:10mm 2mm 2mm;text-align:center}
- .copy{text-align:right;font-size:8pt;padding:1.5mm 3mm;font-style:italic}
- @media screen{body{background:#EDF1F6;padding:14px}
-   .pg{height:auto;padding:0;margin:0 0 14px}
-   .sheet{background:#fff;max-width:190mm;margin:0 auto}
-   .bar{max-width:190mm;margin:0 auto 10px;font-size:12px;color:#3D4E63}}
- @media print{.bar{display:none}}
-</style></head><body>
-<div class="bar">
-  <button onclick="print()">Open print dialog</button>
-  <span style="margin-left:10px">{{ copies|length }} copies below, one per page
-  &mdash; {{ 'NRGP: creator + 2 for the gate' if gp.kind=='NRGP' else 'RGP: creator, gate, and the recipient who returns theirs' }}.
-  Print all pages, or print this page {{ copies|length }} times.</span>
-  <a href="{{ switch_url }}" style="margin-left:12px">View the redesigned format</a>
+@font-face{font-family:"Poppins";font-weight:300;font-style:normal;font-display:block;src:url("/static/fonts/poppins-latin-300-normal.woff2") format("woff2")}
+@font-face{font-family:"Poppins";font-weight:400;font-style:normal;font-display:block;src:url("/static/fonts/poppins-latin-400-normal.woff2") format("woff2")}
+@font-face{font-family:"Poppins";font-weight:500;font-style:normal;font-display:block;src:url("/static/fonts/poppins-latin-500-normal.woff2") format("woff2")}
+@font-face{font-family:"Poppins";font-weight:600;font-style:normal;font-display:block;src:url("/static/fonts/poppins-latin-600-normal.woff2") format("woff2")}
+@font-face{font-family:"Poppins";font-weight:700;font-style:normal;font-display:block;src:url("/static/fonts/poppins-latin-700-normal.woff2") format("woff2")}
+
+:root{
+  --ink:#111;--ink2:#2e2e2e;--mute:#555;--rule:#666;--hair:#c6c6c3;
+  --char:#3b3b3a;--band:#eeeeec;--fill:#f3f3f1;
+  --blue:#317abe;--blue-d:#245f99;--lime:#b0d247;--yellow:#ffcc2a;
+  --sans:"Poppins","Segoe UI","Nirmala UI",Arial,system-ui,sans-serif;
+}
+/* the margin lives inside the page, not in @page: a non-zero @page margin is where Chrome/Edge print their own
+   header and footer (date, title, the server's URL) onto the sheet */
+@page{size:A4;margin:0}
+*{box-sizing:border-box}
+html,body,.page,.page *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{margin:0;background:#e5e5e3;color:var(--ink);font-family:var(--sans);font-weight:400;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;font-synthesis:none}
+.nil{color:var(--ink2);font-weight:600}
+
+/* ---------- screen only: toolbar, and each copy as paper on a quiet desk ---------- */
+.bar{width:210mm;max-width:100%;margin:0 auto;padding:14px 4px 12px;display:flex;align-items:center;gap:16px;
+  font:500 13px/1 var(--sans);color:#3d3d3b}
+.bar .btn{appearance:none;border:0;border-radius:8px;background:var(--char);color:#fff;font:500 13px/1 var(--sans);padding:10px 22px;cursor:pointer}
+.bar .btn:hover{background:#000}
+.bar a{color:var(--blue-d);font-weight:500;text-decoration:none}
+.bar a:hover{text-decoration:underline}
+.bar .note{margin-left:auto;color:#77776f}
+@media screen{
+  .page{margin:0 auto 32px;box-shadow:0 0 0 1px rgba(0,0,0,.05),0 16px 38px -12px rgba(0,0,0,.28)}
+}
+@media print{
+  body{background:#fff}
+  .noprint{display:none!important}
+  .page{margin:0;box-shadow:none;page-break-after:always;break-after:page}
+  .page:last-of-type{page-break-after:auto;break-after:auto}
+}
+
+/* ---------- one copy = exactly one A4 sheet (it only grows for an extreme item list) ---------- */
+.page{
+  --k:{{ '%.3f'|format(k) }};--rmw:{{ ens.wr }}mm;
+  --body:calc(9.5pt*var(--k));--name:calc(10.5pt*var(--k));--sm:max(7.2pt,calc(8pt*var(--k)));--lab:max(7.2pt,calc(8pt*var(--k)));
+  width:210mm;min-height:296mm;padding:10mm 14mm 10mm;background:#fff;
+  display:flex;flex-direction:column;position:relative;font-size:var(--body);line-height:1.5;
+}
+.sp{flex:1 1 0;min-height:5mm;max-height:12mm}
+
+/* brand stripe: blue / lime / yellow in the logo's own 62 / 26 / 12 */
+.stripe{flex:none;height:1.3mm;display:flex}
+.stripe i{display:block;height:100%}
+.stripe i:nth-child(1){flex:62;background:var(--blue)}
+.stripe i:nth-child(2){flex:26;background:var(--lime)}
+.stripe i:nth-child(3){flex:12;background:var(--yellow)}
+
+/* ---------- top zone: two columns ---------- */
+.zone{flex:none;display:grid;grid-template-columns:minmax(0,1fr) 84mm;column-gap:8mm;margin-top:6mm}
+.lc,.rc{display:flex;flex-direction:column;min-width:0}
+.rc{text-align:right}
+.brand{margin-bottom:8mm}
+.logo{display:block;width:44mm;height:auto}
+.co{margin-top:5mm;font-size:var(--sm);line-height:1.55;color:var(--ink2)}
+.co b{display:block;font-size:calc(9pt*var(--k));font-weight:600;color:var(--ink);line-height:1.4;letter-spacing:.005em}
+.co .l{color:var(--mute)}
+
+.pt{min-width:0;margin-top:auto}
+.pt h3{margin:0 0 1.4mm;font-size:calc(9.5pt*var(--k));font-weight:600;line-height:1.35;color:var(--ink)}
+.pt .pn{font-size:var(--name);font-weight:600;line-height:1.32;overflow-wrap:anywhere;color:var(--ink)}
+.pt .pa{margin-top:1mm;font-size:var(--body);line-height:1.52;color:var(--ink2);overflow-wrap:anywhere}
+.pt .pl{margin-top:2mm;font-size:var(--sm);color:var(--mute);line-height:1.3}
+
+/* title lockup */
+.tt h1{margin:0;font-size:26pt;line-height:1.02;font-weight:300;letter-spacing:-.012em;color:var(--ink);white-space:nowrap}
+.tt .sub{margin-top:.6mm;font-size:12pt;line-height:1.3;font-weight:500;letter-spacing:.015em;color:var(--blue-d)}
+.cn{margin-top:3.2mm}
+.cn .lab{font-size:var(--lab);line-height:1.2;color:var(--mute);font-weight:500}
+.cn .no{margin-top:.4mm;font-size:max(9pt,min(21pt,calc({{ (78 / (0.58 * nol))|round(3) }}mm)));line-height:1.12;font-weight:400;letter-spacing:-.01em;overflow-wrap:anywhere;color:var(--ink)}
+.cn .no b{font-weight:700}
+
+.qrw{margin:5mm 0;display:flex;flex-direction:column;align-items:flex-end}
+.qrw svg{display:block;width:27mm;height:27mm;margin:0 -2.9mm 0 0}
+.qrw .cap{margin-top:.8mm;font-size:var(--lab);line-height:1.2;color:var(--ink2);font-weight:500}
+
+.veh{background:var(--fill);border:.35mm solid var(--blue-d);padding:2.2mm 4mm 2.6mm;text-align:right}
+.veh .lab{font-size:var(--lab);line-height:1.2;color:var(--mute);font-weight:500;text-align:left}
+.veh .vn{margin-top:.6mm;font-size:max(10pt,min(22pt,calc({{ (70 / (0.72 * vl))|round(3) }}mm)));line-height:1.15;font-weight:600;letter-spacing:.01em;overflow-wrap:anywhere;color:var(--ink)}
+
+.meta{margin:6mm 0 0;padding:0}
+.mr{display:flex;justify-content:space-between;align-items:baseline;gap:4mm;padding:1.25mm 0;border-bottom:.2mm solid var(--hair);font-size:calc(9.5pt*var(--k));line-height:1.4}
+.mr:first-child{padding-top:0}
+.mr dt{margin:0;flex:none;color:var(--mute);font-weight:400;font-size:var(--sm)}
+.mr dd{margin:0;min-width:0;text-align:right;font-weight:500;color:var(--ink);overflow-wrap:anywhere}
+/* a WRITE-IN line: security writes the register number / the return date here by hand */
+.mr.wi{padding-top:3.2mm;padding-bottom:0;border-bottom:0;align-items:flex-end}
+.mr.wi dd{flex:1;height:7mm;border-bottom:.3mm solid var(--rule)}
+
+/* ---------- items ---------- */
+.gt{flex:none;width:100%;font-variant-numeric:tabular-nums}
+.gt .gh,.gt .gr,.gt .gtot{display:grid;grid-template-columns:14mm minmax(0,1fr) 20mm 22mm var(--rmw);align-items:start}
+.gt .gh > *,.gt .gr > *,.gt .gtot > *{min-width:0;padding-left:3mm;padding-right:3mm}
+.gt .gh{background:var(--char);color:#fff;font-size:var(--sm);font-weight:500;line-height:1.3}
+.gt .gh > *{padding-top:2.3mm;padding-bottom:2.3mm}
+.gt .r{text-align:right}
+.gt .gr{border-bottom:.2mm solid var(--hair);font-size:calc(9.5pt*var(--k));line-height:1.4}
+.gt .gr > *{padding-top:calc(2.1mm*var(--k));padding-bottom:calc(2.1mm*var(--k))}
+.gt .gr.last{border-bottom:.35mm solid var(--rule)}
+.gt .d{overflow-wrap:anywhere;font-weight:500;color:var(--ink)}
+.gt .n{color:var(--mute)}
+.gt .rm{color:var(--ink2);font-size:var(--sm);overflow-wrap:anywhere}
+.gt .gtot{background:var(--band);align-items:baseline;font-size:calc(17pt*var(--k));font-weight:600;color:var(--ink);line-height:1.2}
+.gt .gtot > *{padding-top:calc(3mm*var(--k));padding-bottom:calc(3mm*var(--k))}
+.gt .gtot .t{grid-column:2 / 4;font-size:calc(10.5pt*var(--k))}
+
+/* ---------- heavier passes: the same page, set closer ---------- */
+.t1 .logo{width:40mm}.t1 .brand{margin-bottom:6mm}.t1 .qrw{margin:4mm 0}.t1 .qrw svg{width:24mm;height:24mm;margin-right:-2.65mm}
+.t2 .zone,.t3 .zone{margin-top:4mm}
+.t2 .logo,.t3 .logo{width:34mm}.t2 .co,.t3 .co{margin-top:3mm}.t2 .brand,.t3 .brand{margin-bottom:4mm}
+.t2 .qrw,.t3 .qrw{margin:2.5mm 0}.t2 .qrw svg,.t3 .qrw svg{width:24mm;height:24mm;margin-right:-2.65mm}
+.t2 .tt h1,.t3 .tt h1{font-size:23pt}.t2 .cn,.t3 .cn{margin-top:2mm}
+.t2 .veh,.t3 .veh{padding:1.4mm 4mm 1.6mm}.t2 .meta,.t3 .meta{margin-top:3.5mm}
+.t2 .mr,.t3 .mr{padding:.8mm 0}.t2 .mr.wi,.t3 .mr.wi{padding-top:2mm}.t2 .mr.wi dd,.t3 .mr.wi dd{height:5.5mm}
+.t2 .gt .gr > *,.t3 .gt .gr > *{padding-top:calc(1.5mm*var(--k));padding-bottom:calc(1.5mm*var(--k))}
+.t3 .sig{min-height:20mm}
+
+/* ---------- signatures ---------- */
+.sig{flex:1 1 30mm;max-height:72mm;min-height:24mm;margin-bottom:4mm;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));column-gap:7mm;grid-template-rows:minmax(0,1fr) auto}
+.sg{border-bottom:.3mm solid var(--rule);position:relative;min-height:8mm}
+.sg i{position:absolute;left:0;bottom:1.2mm;font-style:normal;font-size:10pt;line-height:1;color:var(--mute)}
+.sl{padding-top:1.6mm;font-size:var(--sm);line-height:1.45;color:var(--ink2)}
+.sl b{display:block;font-weight:500;font-size:var(--sm);color:var(--ink)}
+
+/* ---------- footer: the copy, and the form control ---------- */
+.foot{flex:none;margin-top:auto;border-top:.25mm solid var(--rule);padding-top:2mm;font-size:7.8pt;line-height:1.4;color:var(--ink2);
+  display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;column-gap:6mm;row-gap:.4mm}
+.foot b{font-weight:600;color:var(--ink)}
+.foot .copy{font-size:9pt;font-weight:600;color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="noprint bar">
+  <button type="button" class="btn" onclick="print()">Print</button>
+  <a href="{{ switch_url }}">View original format</a>
+  <span class="note">{{ copies|length }} copies, one per page &middot; {{ 'NRGP: creator + 2 for the gate' if kind == 'NRGP' else 'RGP: creator, gate, and the recipient who returns theirs' }}</span>
 </div>
-
 {% for label in copies %}
-<div class="pg"><div class="sheet">
-  <div class="hd">
-    <div class="lg"><img src="/static/enicon-logo.svg" alt="EN-ICON"></div>
-    <div class="ti"><h1>ICON SOLAR-EN POWER TECHNOLOGIES PRIVATE LIMITED</h1>
-      <div class="s">Khasra No 1553/1, 1564, 1566, 1568/1, 1568/2 &middot; Mandir
-        Hasaud, Arang, Tekari, Raipur, Chhattisgarh 493225<br>
-        GSTIN 22AADCI5761L3ZE &middot; UNIT-2</div></div>
-    {% if qr %}<div class="qr">{{ qr | safe }}</div>{% endif %}
+<div class="page t{{ tier }}" data-copy="{{ loop.index }}">
+
+  <div class="stripe" aria-hidden="true"><i></i><i></i><i></i></div>
+
+  <div class="zone">
+
+    <div class="lc">
+      <div class="brand">
+        <img class="logo" src="{{ logo_url }}" alt="EN-ICON - Harvesting the sun">
+        <div class="co">
+          <b>{{ form.OWN_NAME }}</b>
+          {{ form.OWN_ADDRESS }}<br>
+          <span class="l">GSTIN :</span> {{ form.OWN_GSTIN }}<br>
+          {{ form.OWN_UNIT }} <span class="l">&middot;</span> {{ form.OWN_STATE }} <span class="l">(State code</span> {{ form.OWN_STATE_CODE }}<span class="l">)</span>
+        </div>
+      </div>
+
+      <section class="pt">
+        <h3>Party / destination</h3>
+        <div class="pn">{{ dash(party) }}</div>
+        {%- if delivery_address %}
+        <div class="pl">Delivery address</div>
+        <div class="pa">{{ delivery_address }}</div>
+        {%- endif %}
+      </section>
+    </div>
+
+    <div class="rc">
+      <div class="tt">
+        <h1>Gate Pass</h1>
+        <div class="sub">{{ kind_title }} ({{ kind }})</div>
+        <div class="cn">
+          <div class="lab">Gate Pass No.</div>
+          <div class="no">{% if no_sep %}{{ no_head }}/<b>{{ no_seq }}</b>{% else %}<b>{{ gp_no }}</b>{% endif %}</div>
+        </div>
+      </div>
+
+      <div class="qrw">{{ qr | safe }}<div class="cap">Scan to verify</div></div>
+
+      <div class="veh">
+        <div class="lab">Vehicle / by hand</div>
+        <div class="vn">{{ dash(vehicle_no) }}</div>
+      </div>
+
+      <dl class="meta">
+        <div class="mr"><dt>Date :</dt><dd>{{ dash(gp_date) }}</dd></div>
+        {%- if challan_no %}
+        <div class="mr"><dt>Against challan :</dt><dd>{{ challan_no }}</dd></div>
+        {%- endif %}
+        {%- if kind == 'RGP' %}
+        <div class="mr"><dt>Expected return :</dt><dd>{{ dash(expected_return) }}</dd></div>
+        <div class="mr wi"><dt>Returned on :</dt><dd>{{ return_date }}</dd></div>
+        {%- endif %}
+        <div class="mr wi"><dt>Gate Entry No. :</dt><dd></dd></div>
+      </dl>
+    </div>
+
   </div>
-  <div class="doc">
-    <div><b>DOC NO.</b> IS-MP-STR-FM-04</div>
-    <div><b>GATE PASS NO.</b> {{ gp.gp_no }}</div>
-    <div><b>DATE</b> {{ gp.gp_date }}</div>
-    <div><b>GATE ENTRY NO.</b></div>
+
+  <div class="sp"></div>
+
+  <div class="gt" role="table" aria-label="Items">
+    <div class="gh" role="row"><span>Sl</span><span>Material description</span><span>UOM</span><span class="r">Qty</span><span>Remarks</span></div>
+    {%- for ln in lines %}
+    <div class="gr{{ ' last' if loop.last }}" role="row"><span class="n">{{ ln.no }}</span>
+      <span class="d">{{ dash(ln.description) }}</span>
+      <span>{{ dash(ln.unit) }}</span><span class="r">{{ ln.qty if ln.qty is not none else '' }}</span>
+      <span class="rm">{{ ln.remark }}</span></div>
+    {%- endfor %}
+    <div class="gtot" role="row"><span class="t">Total</span><span class="r">{{ total_qty }}</span><span></span></div>
   </div>
 
-  <div class="kind">GATE PASS &mdash; {{ 'NON RETURNABLE (NRGP)' if gp.kind=='NRGP' else 'RETURNABLE (RGP)' }}</div>
+  <div class="sp"></div>
 
-  <table>
-    <tr><td class="k">Party / destination</td><td colspan="3">{{ gp.party or '—' }}</td></tr>
-    <tr><td class="k">Delivery address</td><td colspan="3">{{ gp.delivery_address or '—' }}</td></tr>
-    <tr><td class="k">Vehicle / by hand</td><td>{{ gp.vehicle_no or '—' }}</td>
-        <td class="k">Against challan</td><td>{{ gp.challan_no or '—' }}</td></tr>
-    {% if gp.kind == 'RGP' %}
-    <tr><td class="k">Expected return</td><td>{{ gp.expected_return or '—' }}</td>
-        <td class="k">Returned on</td><td>{{ gp.return_date or '' }}</td></tr>
-    {% endif %}
-  </table>
+  <section class="sig">
+    <div class="sg"><i>&times;</i></div><div class="sg"><i>&times;</i></div><div class="sg"><i>&times;</i></div><div class="sg"><i>&times;</i></div>
+    <div class="sl"><b>Authorised by</b></div>
+    <div class="sl"><b>Security (OUT)</b></div>
+    <div class="sl"><b>Security (IN)</b></div>
+    <div class="sl"><b>Store</b></div>
+  </section>
 
-  <table style="margin-top:-1px">
-    <thead><tr><th style="width:12mm">Sl</th><th>Material description</th>
-      <th style="width:18mm">UOM</th><th style="width:22mm">Qty</th>
-      <th style="width:22mm">NRGP/RGP</th><th style="width:34mm">Remarks</th></tr></thead>
-    <tbody>
-      {% for ln in lines %}
-        <tr><td style="text-align:center">{{ ln.no }}</td><td>{{ ln.description }}</td>
-          <td style="text-align:center">{{ ln.unit }}</td>
-          <td style="text-align:center">{{ ln.qty if ln.qty is not none else '' }}</td>
-          <td style="text-align:center"><b>{{ gp.kind }}</b></td>
-          <td>{{ ln.remark }}</td></tr>
-      {% endfor %}
-      {% for _ in range([5 - (lines|length), 0]|max) %}<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>{% endfor %}
-      <tr><td colspan="3" style="text-align:right"><b>Total</b></td>
-        <td style="text-align:center"><b>{{ total_qty }}</b></td><td></td><td></td></tr>
-    </tbody>
-  </table>
+  <footer class="foot">
+    <span>Doc No. <b>{{ doc_no }}</b> &nbsp;&middot;&nbsp; Gate Pass <b>{{ gp_no }}</b></span>
+    <span class="copy">{{ label }}</span>
+  </footer>
 
-  <div class="foot">
-    <div>Authorised By</div><div>Security (OUT)</div>
-    <div>Security (IN)</div><div>Store</div>
-  </div>
-  <div class="copy">{{ label }}</div>
-</div></div>
+</div>
 {% endfor %}
-</body></html>
+</body>
+</html>

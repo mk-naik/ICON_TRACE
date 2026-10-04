@@ -6274,3 +6274,50 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
 ## 4 Oct 2026 - Addendum to "Pack scan names the reason a module will not pack"
 
 - **Fix after the full run:** the provisional refusal must keep the words "on hold" - `test_fqc.py` (held pass is not packable) asserts it, and I had run that file before the pack change, not after. Reworded; test_fqc 54/54, test_pack_readiness 10/10.
+
+## 4 Oct 2026 - printed documents redesigned (premium) with the plant's original kept (classic)
+
+- **Asked:** the plant's own challan layout "does not look premium": redesign it, keep
+  only the information that is required (find which fields are permanently blank in
+  the plant's V2 Excel files), research good document design, and keep the clone
+  as a backup in case management wants the original.
+- **Evidence:** all 961 challan workbooks on the share (March-October 2026) were read
+  read-only. Never filled (0 genuine values): Pay transporting Amount (Icon /
+  Customer), Transporting amount, Advance amount, Balance Amount, Total Amount.
+  Filled almost always: vehicle 100% (stored under the label "LR.NO."), mobile 99%,
+  transporter 92%, LR copy no. 81%. Typical load 20 pallets x 36 = 720 modules (max
+  24 pallets, 864 modules); 2% of challans mix models; consignee = buyer in 5%;
+  longest consignee text ~325 chars, buyer ~355, transporter 41. Form revision:
+  900 files on Rev 1 / 10.01.2024, the 55 latest (from ~30 Sep) on Rev 0 / 01.03.2026.
+- **Change:** `templates/challan_v1_premium.html` and `gatepass_print_premium.html` (the
+  redesign, clean letterhead direction; Poppins bundled under `static/fonts/` with their OFL
+  licences) beside `challan_v1_classic.html` and `gatepass_print_classic.html` (the
+  plant's forms as they were). Both read `icon_challan_form.print_context` /
+  `icon_gatepass_form.print_context`. Setting `print_style` (Settings, Super Admin) and
+  `?style=` choose; every print page links to the other format. The redesign was
+  explored by four independent drafts (Swiss, brand band, cards, title block),
+  judged through three lenses (gate and mono-laser, premium and brand, print
+  engineering); management then supplied a reference look - a clean letterhead:
+  logo top-left, a large light title top-right with the number under it, plain
+  unboxed address blocks, a charcoal table header, a light grey total band - and
+  the final was built in that style with the judges' technical findings, QR added
+  and no money columns. Every candidate was rendered in Chromium against realistic
+  fixtures and the plant's 45 real challans; the final passes all of them (one
+  page, every printed fact present, no freight box) and the gate pass prints three
+  pages (one per copy) for 1 to 12 items.
+- **Also fixed on the way** (both formats): the classic spilled onto a SECOND page for
+  a 20-pallet truck (the plant's commonest load) and a challan with several models
+  printed one blended line ("A + B", average wattage) - goods are now one line per
+  model with exact kW; a DCR item lost its "-DCR"; the ship-to printed Tally's
+  "Delivery Address -" label and its contact twice; Chrome/Edge printed their own
+  header and footer (date, title, the server URL) onto the sheet.
+- **Tests:** `test_challan_form.py` (pure), `test_challan_print.py` and
+  `test_gatepass_print.py` (both formats, the setting, the dropped fields),
+  `test_challan_print_ui.py` (real Chromium: one printed page for 1 and 20 pallets,
+  the QR reads the challan's number, fonts and logo load, the toolbar stays off the
+  paper), `test_print_style_setting_ui.py` (the Settings control).
+- **Decided on instinct, change if wrong:** a "Security (gate)" signature box is
+  printed (the plant's form has none, but this is the gate pass); the form-control
+  line (Doc No, Revision 0, 01.03.2026) is small, at the foot; freight is not printed.
+- **Not done:** the Excel V2 is unchanged (still the plain sheet, no QR); the pallet
+  sheet / labels keep their own layouts.

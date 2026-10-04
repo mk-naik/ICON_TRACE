@@ -1,183 +1,383 @@
-<!doctype html><html><head><meta charset="utf-8"><link rel="icon" type="image/svg+xml" href="/static/favicon.svg"><title>{{ no }}</title>
-{#- TEMPORARY STAND-IN for the premium format (a copy of the classic) until the redesign is in. CLASSIC FORMAT. The plant's own form IS-MP-STR-FM-09, reproduced as it was
-    (the layout of its Excel copy) with the EN-ICON logo and a QR added. Kept as
-    the fallback in case management prefers the original over the redesign:
-    printed with ?style=classic, or by setting "Challan print format" to Original
-    in Settings. The five freight boxes are part of the original and are kept
-    here, empty, exactly as on the Excel form. #}
+{#- PREMIUM FORMAT - Dispatch Challan cum Gate Pass (Version 1), one A4 page.
+    Look: a clean "delivery challan" letterhead. Logo top-left, a large light title top-right with the
+    challan number under it, plain unboxed party blocks, a right-aligned meta list, ONE emphasised box
+    (the vehicle number - the gate's first read), a charcoal goods-table header and a light grey total band.
+    ICON TRACE adds the QR (identity only) and the gate facts, and prints no money.
+    One family: Poppins (static 300 / 400 / 500 / 600 / 700, bundled in /static/fonts/).
+    Only the variables of BRIEF section 4. Autoescape stays on; only `qr` is |safe.
+
+    DENSITY: --k is the type scale, picked here from how much the challan holds (address lengths, goods lines,
+    pallet rows, a long vehicle or transporter text). A light challan is set a little larger, a heavy truck
+    a little smaller; every gap between the sections is elastic, so the sheet always fills to the footer and
+    never runs past it. No JavaScript. -#}
+{%- macro ln(n, cpl) -%}{%- if n -%}{{ (n / cpl)|round(0, 'ceil')|int }}{%- else -%}0{%- endif -%}{%- endmacro -%}
+{%- macro dash(x) -%}{%- if x -%}{{ x }}{%- else -%}<span class="nil">&ndash;</span>{%- endif -%}{%- endmacro -%}
+{#- ---- the challan number, split for typography: IS-03.10.2026/ 0001  (MA) ---- -#}
+{%- set no_main, _sp, no_sfx = no.partition(' ') -%}
+{%- set no_head, no_sep, no_seq = no_main.rpartition('/') -%}
+{%- set nol = no_main|length + ((no_sfx|length + 1) * 0.62) -%}
+{%- set vl = [vehicle_no|length, 4]|max -%}
+{#- ---- kW: one number of decimals in every cell ---- -#}
+{%- set ns = namespace(d=0) -%}
+{%- for g in goods -%}{%- set f = g.kw.split('.')[1] if '.' in g.kw else '' -%}{%- if f|length > ns.d -%}{%- set ns.d = f|length -%}{%- endif -%}{%- endfor -%}
+{%- set ft = kw.split('.')[1] if '.' in kw else '' -%}{%- if ft|length > ns.d -%}{%- set ns.d = ft|length -%}{%- endif -%}
+{%- set kwd = ns.d -%}
+{%- macro kwf(s, d) -%}{%- set p = s.split('.') -%}{%- set f = p[1] if p|length > 1 else '' -%}{{ p[0] }}{%- if d -%}.{{ f }}{{ '0' * (d - f|length) }}{%- endif -%}{%- endmacro -%}
+{#- ---- pallets: what is said once, what is listed ---- -#}
+{%- set pq = pallets|map(attribute='qty')|list -%}
+{%- set uni = (n_unnumbered == 0 and pq|length > 0 and pq|unique|list|length == 1) -%}
+{%- set np_all = pallets|length -%}
+{#- widest pallet entry, in characters (the qty counts too when it is shown per pallet) -#}
+{%- set pm = namespace(m=0) -%}
+{%- for p in pallets[:36] -%}{%- set L = p.no|length + (0 if uni else ((p.qty|string|length + 1) * 1.1)) -%}{%- if L > pm.m -%}{%- set pm.m = L -%}{%- endif -%}{%- endfor -%}
+{#- columns: as many as the widest entry allows (5 for a long uniform list, else 4), never fewer than 1 -#}
+{%- macro pcolsf(m, kc, cmax) -%}{%- set w = (6.2 if uni else 9.6) + 0.2 * ([7.4, 8.4 * kc]|max) * m -%}{%- set r = namespace(c=1, d=false) -%}
+{%- for c in [5, 4, 3, 2] -%}{%- if not r.d and c <= cmax and w <= (182 - 5 * (c - 1)) / c -%}{%- set r.c = c -%}{%- set r.d = true -%}{%- endif -%}{%- endfor -%}{{ r.c }}{%- endmacro -%}
+{%- set same = same_party -%}
+{#- ---- HOW MUCH DOES THIS CHALLAN HOLD?  E(tier, k) is its natural height in mm.  The sheet has 276 mm between
+        its paddings.  Candidates run from roomy to tight; the first whose estimate fits wins (a k above 1 only when
+        24 mm stay spare).  Tier 0 is the normal layout; tier 1 is the compact one (details inline, no goods sub-line,
+        smaller gaps and QR); tier 2 is the same plus a shorter pallet list ("+N more"). ---- -#}
+{%- set ens = namespace(k=0.80, tier=2, done=false, E=0, zone=0, left=0, right=0, gh=0, ph=0) -%}
+{%- for tk in [[0, 1.08], [0, 1.04], [0, 1.0], [0, 0.96], [0, 0.92], [0, 0.88], [1, 0.92], [1, 0.88], [1, 0.84], [1, 0.80], [2, 0.80]] -%}
+  {%- if not ens.done -%}
+    {%- set tier = tk[0] -%}{%- set kc = tk[1] -%}{%- set c = (tier > 0) -%}
+    {%- set cpl_a = 49.0 / kc -%}{%- set cpl_n = 36.0 / kc -%}
+    {%- set cn = [1, ln(cons.name|length, cpl_n)|int]|max -%}
+    {%- set ca = ln(cons.address|length, cpl_a)|int -%}
+    {%- set dl = (1 if cons.phone_fmt else 0) + (1 if c else 2) -%}
+    {%- set hc = kc * (4.6 + 1.5 + 5.0 * cn + ((1.0 + 4.7 * ca) if ca else 0) + 1.6 + 4.6 * dl) -%}
+    {%- if same -%}{%- set hb = 0 -%}{%- else -%}
+      {%- set bn = [1, ln(buyer.name|length, cpl_n)|int]|max -%}
+      {%- set ba = ln(buyer.address|length, cpl_a)|int -%}
+      {%- set dlb = (1 if buyer.phone_fmt else 0) + (1 if c else 2) -%}
+      {%- set hb = kc * (4.6 + 1.5 + 5.0 * bn + ((1.0 + 4.7 * ba) if ba else 0) + 1.6 + 4.6 * dlb) -%}
+    {%- endif -%}
+    {%- set left = (16 + 4 if c else 20.9 + 5) + 22 * kc + (4 if c else 6) + hc + ((hb + (5 if c else 8)) if not same else 0) -%}
+    {%- set vlines = 1 if vl <= 24 else ln(vl, 27)|int -%}
+    {%- set vh = (7.5 if c else 9) + (([97.2 / vl * 1.1, 11]|min if vl <= 24 else 3.9 * vlines)) -%}
+    {%- set tl = ln(transporter|length, 33.0 / kc)|int -%}
+    {%- set il = ln(invoice_no|length, 26.0 / kc)|int -%}
+    {%- set mrow = (1.4 + 0.2 if c else 2.7) -%}
+    {%- set meta = 6 * mrow + 6 * 4.69 * kc - (0 if c else 1.25) + ((tl - 1 if tl > 1 else 0) + (il - 1 if il > 1 else 0)) * 4.69 * kc -%}
+    {%- set right = 30.7 + (28.8 if c else 31.3) + vh + meta + (7 if c else 16) -%}
+    {%- set zone = [left, right]|max -%}
+    {%- set gh = (7.6 if c else 8.3) + ((7.6 * kc + 0.3) if c else (12.2 * kc + 0.6)) * goods|length + ((9.5 if c else 12.6) * kc) -%}
+    {%- set pcap = [36, 30, 20][tier] -%}
+    {%- set nsh = [np_all, pcap]|min -%}
+    {%- set pc = pcolsf(pm.m, kc, (4 if (nsh <= 20 or not uni) else 5))|int -%}
+    {%- set prow = ((nsh / pc)|round(0, 'ceil')|int) if nsh else 0 -%}
+    {%- set pn = (np_all > nsh or n_unnumbered > 0) -%}
+    {%- set ph = (((4.5 * kc + (0.8 if c else 1.6)) + prow * (4.3 * kc + (0 if c else 0.5)) + (4.6 if pn else 0) + (4.4 if (not nsh and n_pallets) else 0)) if n_pallets else 0) -%}
+    {%- set sigx = 4.2 * ([ln(vl + 12, 26.0 / kc)|int, ln(driver_mobile|length + 8, 26.0 / kc)|int, 2]|max - 2) -%}
+    {%- set E = (5.3 if c else 7.3) + zone + gh + ph + (20.5 if c else 22) + sigx + (11 if c else 12.5) + ((3 if c else 4) * (3 if n_pallets else 2)) -%}
+    {%- if (kc > 1.0 and E + 24 <= 274) or (kc <= 1.0 and E <= 274) or tier == 2 -%}{%- set ens.k = kc -%}{%- set ens.tier = tier -%}{%- set ens.done = true -%}{%- set ens.E = E -%}{%- set ens.zone = zone -%}{%- set ens.left = left -%}{%- set ens.right = right -%}{%- set ens.gh = gh -%}{%- set ens.ph = ph -%}{%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- set k = ens.k -%}
+{%- set tier = ens.tier -%}
+{%- set shown = pallets[:([36, 30, 20][tier])] -%}
+{%- set n_more = np_all - shown|length -%}
+{%- set pcols = pcolsf(pm.m, k, (4 if (shown|length <= 20 or not uni) else 5))|int -%}
+{%- set prows = ((shown|length / pcols)|round(0, 'ceil')|int) if shown else 0 -%}
+{%- set pnote = (n_more > 0 or n_unnumbered > 0) -%}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Dispatch Challan {{ no }}</title>
 <style>
- /* The margin lives in the page content, not in @page: a non-zero @page margin
-    is where Chrome/Edge print their own header and footer (date, title, the
-    server's URL) on the sheet. With margin 0 there is nowhere for them to go. */
- @page{size:A4;margin:0}
- *{box-sizing:border-box}
- /* Chrome leaves "Background graphics" off by default, which would print the
-    grey label cells white; this makes the print match the preview */
- html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
- body{font-family:"Times New Roman",Times,serif;font-size:10pt;margin:0;padding:8mm;color:#000;font-weight:700}
- .sheet{border:1.4px solid #000;height:280mm;display:flex;flex-direction:column;background:#fff}
- /* header: logo, company name, QR - nothing else */
- .hd{display:grid;grid-template-columns:56mm 1fr 34mm;border-bottom:1.4px solid #000}
- .hd .lg{padding:2mm 3mm;border-right:1.4px solid #000;display:flex;align-items:center;justify-content:center}
- .hd .lg img{width:100%;height:auto;display:block}
- .hd .co{padding:2mm 4mm;text-align:center;display:flex;flex-direction:column;justify-content:center}
- .hd .co h1{font-size:14pt;line-height:1.25;margin:0 0 2mm}
- .hd .co p{margin:0;font-size:9.5pt;line-height:1.4}
- .hd .qr{border-left:1.4px solid #000;padding:2.5mm;text-align:center;display:flex;
-   flex-direction:column;align-items:center;justify-content:center;font-size:7.5pt}
- .hd .qr svg{width:27mm;height:27mm;display:block}
- .ti{text-align:center;font-size:13pt;padding:2.2mm;border-bottom:1.4px solid #000;letter-spacing:.2px}
- /* body: two columns that stand the same height */
- .cols{display:grid;grid-template-columns:1fr 1fr;border-bottom:1.4px solid #000}
- .col{display:flex;flex-direction:column}
- .col.l{border-right:1.4px solid #000}
- .r2{display:grid;border-bottom:1px solid #000}
- .r2 > div{padding:1.25mm 2.4mm;border-right:1px solid #000;font-size:9.5pt;display:flex;align-items:center}
- .r2 > div:last-child{border-right:none}
- .r2 .k{background:#F4F4F4}
- .l .r2{grid-template-columns:44% 1fr}
- .l .r3{grid-template-columns:44% 1fr 1fr}
- .big{font-size:12.5pt}
- .blank{min-height:7mm}
- .grow{flex:1 1 0;min-height:9mm}
- .sup{padding:1.6mm 2.4mm;border-top:1px solid #000;font-size:9.5pt;line-height:1.45}
- .sup h4{margin:0 0 .8mm;font-size:11.5pt}
- .r .r2{grid-template-columns:52% 1fr}
- .party{padding:2mm 3mm;text-align:center;border-bottom:1px solid #000;font-size:9.5pt;line-height:1.42;
-   flex:1;display:flex;flex-direction:column;justify-content:center}
- .party:last-child{border-bottom:none}
- .party .h{font-size:10.5pt;margin-bottom:.8mm}
- .gst{display:grid;grid-template-columns:1fr 1fr;border-bottom:1.4px solid #000}
- .gst > div{display:grid;grid-template-columns:36% 1fr;font-size:10pt}
- .gst > div:first-child{border-right:1.4px solid #000}
- .gst > div > div{padding:1.6mm 2.4mm}
- .gst .k{background:#F4F4F4;border-right:1px solid #000}
- /* goods: the table owns the rest of the page */
- .goods{flex:1;display:flex;flex-direction:column;border-bottom:1.4px solid #000}
- .goods table{width:100%;border-collapse:collapse;flex:1;height:100%}
- .goods th,.goods td{border:1px solid #000;padding:1.3mm 2.2mm;font-size:10pt;text-align:center}
- .goods th{background:#F4F4F4}
- .goods td.d{text-align:left}
- .goods tr.fill td{height:100%;vertical-align:top;border-top:none;border-bottom:none}
- .goods tr.fill td.d{font-size:8.5pt;font-weight:400;padding-top:3mm;line-height:1.5}
- .goods tr.tot td{background:#F4F4F4}
- .pal{display:grid;grid-template-columns:repeat(auto-fill,minmax(40mm,1fr));gap:0 3mm}
- .pal div{white-space:nowrap}
- .foot{display:grid;grid-template-columns:1fr 1fr}
- .foot .a{padding:2mm 2.6mm;display:flex;flex-direction:column;justify-content:flex-end;min-height:24mm}
- .foot .a:first-child{border-right:1.4px solid #000}
- .foot .rc{display:grid;grid-template-columns:auto 1fr;gap:1mm 3mm;font-size:10pt}
- .foot h5{margin:0 0 1.5mm;font-size:9pt;font-weight:700}
- @media screen{body{background:#EDF1F6;padding:14px}
-   .sheet{max-width:194mm;margin:0 auto}
-   .noprint{max-width:194mm;margin:0 auto 10px;font-family:Arial,sans-serif;font-weight:400}}
- @media print{.noprint{display:none}}
-</style></head><body>
-<div class="noprint"><button onclick="print()">Print</button>
-  <span style="font-size:11px;color:#555;margin-left:8px">Original format &mdash; one page,
-  no serial list. This is the copy the driver carries.</span>
-  <a href="{{ switch_url }}" style="font-size:12px;margin-left:12px">View the redesigned format</a></div>
+@font-face{font-family:"Poppins";font-weight:300;font-style:normal;font-display:block;src:url("/static/fonts/poppins-latin-300-normal.woff2") format("woff2")}
+@font-face{font-family:"Poppins";font-weight:400;font-style:normal;font-display:block;src:url("/static/fonts/poppins-latin-400-normal.woff2") format("woff2")}
+@font-face{font-family:"Poppins";font-weight:500;font-style:normal;font-display:block;src:url("/static/fonts/poppins-latin-500-normal.woff2") format("woff2")}
+@font-face{font-family:"Poppins";font-weight:600;font-style:normal;font-display:block;src:url("/static/fonts/poppins-latin-600-normal.woff2") format("woff2")}
+@font-face{font-family:"Poppins";font-weight:700;font-style:normal;font-display:block;src:url("/static/fonts/poppins-latin-700-normal.woff2") format("woff2")}
 
-<div class="sheet">
-  <div class="hd">
-    <div class="lg"><img src="/static/enicon-logo.svg" alt="EN-ICON"></div>
-    <div class="co">
-      <h1>ICON SOLAR - EN POWER TECHNOLOGIES PVT LTD</h1>
-      <p>Khasra No 1553/1, 1564, 1566, 1568/1, 1568/2, P.H.N.-00005,
-        Mandir Hasaud, Arang, Tekari, Raipur, Chhattisgarh<br>
-        GSTIN/UN : {{ form.OWN_GSTIN }}, State Name : Chhattisgarh, Code : 22</p>
-    </div>
-    <div class="qr">{{ qr | safe }}</div>
-  </div>
-  <div class="ti">Dispatch Challan Cum Gate Pass</div>
+:root{
+  --ink:#111;--ink2:#2e2e2e;--mute:#555;--rule:#666;--hair:#c6c6c3;
+  --char:#3b3b3a;--band:#eeeeec;--fill:#f3f3f1;
+  --blue:#317abe;--blue-d:#245f99;--lime:#b0d247;--yellow:#ffcc2a;
+  --sans:"Poppins","Segoe UI","Nirmala UI",Arial,system-ui,sans-serif;
+}
+@page{size:A4;margin:0}
+*{box-sizing:border-box}
+html,body,.page,.page *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{margin:0;background:#e5e5e3;color:var(--ink);font-family:var(--sans);font-weight:400;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;font-synthesis:none}
+.nil{color:var(--ink2);font-weight:600}
 
-  <div class="cols">
-    <div class="col l">
-      <div class="r2"><div class="k">VEHICLE NO.</div><div class="big">{{ vehicle_no }}</div></div>
-      <div class="r2"><div class="k">MOB.</div><div>{{ driver_mobile }}</div></div>
-      <div class="r2"><div class="k">Transporter Name</div><div class="big">{{ transporter }}</div></div>
-      <div class="r2 r3"><div class="k">Pay transporting Amount</div><div class="k" style="justify-content:center">Icon</div><div class="k" style="justify-content:center">Customer</div></div>
-      <div class="r2 r3 blank"><div></div><div></div><div></div></div>
-      <div class="r2 grow"><div class="k">Transporting amount-</div><div></div></div>
-      <div class="r2 grow"><div class="k">Advance amount</div><div></div></div>
-      <div class="r2 grow"><div class="k">Balance Amount</div><div></div></div>
-      <div class="r2"><div class="k">Total Amount</div><div></div></div>
-      <div class="sup" style="border-bottom:none">
-        <h4>Supplier name-</h4>
-        {% for ln in form.SUPPLIER %}{{ ln }}<br>{% endfor %}
-        {% for who, ph in form.SUPPLIER_CONTACTS %}For. {{ who }} - {{ ph }}<br>{% endfor %}
-      </div>
-    </div>
+/* ---------- screen only: toolbar, and the sheet as paper on a quiet desk ---------- */
+.bar{width:210mm;max-width:100%;margin:0 auto;padding:14px 4px 12px;display:flex;align-items:center;gap:16px;
+  font:500 13px/1 var(--sans);color:#3d3d3b}
+.bar .btn{appearance:none;border:0;border-radius:8px;background:var(--char);color:#fff;font:500 13px/1 var(--sans);padding:10px 22px;cursor:pointer}
+.bar .btn:hover{background:#000}
+.bar a{color:var(--blue-d);font-weight:500;text-decoration:none}
+.bar a:hover{text-decoration:underline}
+.bar .note{margin-left:auto;color:#77776f}
+@media screen{
+  .page{margin:0 auto 32px;box-shadow:0 0 0 1px rgba(0,0,0,.05),0 16px 38px -12px rgba(0,0,0,.28)}
+}
+@media print{
+  body{background:#fff}
+  .noprint{display:none!important}
+  .page{margin:0;box-shadow:none}
+}
 
-    <div class="col r">
-      <div class="r2"><div class="k">Doc No -</div><div>{{ form.DOC_NO }}</div></div>
-      <div class="r2"><div class="k">Revision date -</div><div>{{ form.REV_DATE }}</div></div>
-      <div class="r2"><div class="k">Revision No -</div><div>{{ form.REV_NO }}</div></div>
-      <div class="r2"><div class="k">CHALLAN NO. -</div><div class="big">{{ no }}</div></div>
-      <div class="r2"><div class="k">Challan Date -</div><div>{{ challan_date }}</div></div>
-      <div class="r2"><div class="k">Invoice No -</div><div>{{ invoice_no }}</div></div>
-      <div class="r2"><div class="k">Invoice Date -</div><div>{{ invoice_date }}</div></div>
-      <div class="r2"><div class="k">LR Copy NO -</div><div>{{ lr_copy }}</div></div>
-      <div class="party" style="border-top:1px solid #000">
-        <div class="h">Consignee (Ship to)</div>
-        <div>{{ cons.name }}</div>
-        {% if cons.address %}<div>Delivery Address - {{ cons.address }}</div>{% endif %}
-        {% if cons.phone_fmt %}<div>Contact number {{ cons.phone_fmt }}</div>{% endif %}
-        {% if cons.gstin %}<div>GSTIN/UIN : {{ cons.gstin }}</div>{% endif %}
-        {% if cons.state %}<div>State Name : {{ cons.state }}, Code : {{ cons.state_code }}</div>{% endif %}
-      </div>
-      <div class="party" style="border-top:1px solid #000">
-        <div class="h">Buyer (Bill to)</div>
-        <div>{{ buyer.name }}</div>
-        {% if buyer.address %}<div>{{ buyer.address }}</div>{% endif %}
-        {% if buyer.gstin %}<div>GSTIN/UIN : {{ buyer.gstin }}</div>{% endif %}
-        {% if buyer.state %}<div>State Name : {{ buyer.state }}, Code : {{ buyer.state_code }}</div>{% endif %}
-      </div>
-    </div>
-  </div>
+/* ---------- the sheet: exactly one A4 page, the margin is padding inside it ---------- */
+.page{
+  --k:{{ '%.3f'|format(k) }};
+  --body:calc(9pt*var(--k));--name:calc(10.5pt*var(--k));--sm:max(7.2pt,calc(8pt*var(--k)));--lab:max(7.2pt,calc(8pt*var(--k)));
+  width:210mm;height:296mm;padding:10mm 14mm 10mm;background:#fff;
+  display:flex;flex-direction:column;position:relative;font-size:var(--body);line-height:1.5;
+}
+.sp{flex:1 1 0;min-height:4mm;max-height:15mm}
 
-  <div class="gst">
-    <div><div class="k">GSTIN:</div><div>{{ form.OWN_GSTIN }}</div></div>
-    <div><div class="k">GSTIN/Unique ID:</div><div>{{ buyer.gstin }}</div></div>
-  </div>
+/* brand stripe: blue / lime / yellow in the logo's own 62 / 26 / 12 */
+.stripe{flex:none;height:1.3mm;display:flex}
+.stripe i{display:block;height:100%}
+.stripe i:nth-child(1){flex:62;background:var(--blue)}
+.stripe i:nth-child(2){flex:26;background:var(--lime)}
+.stripe i:nth-child(3){flex:12;background:var(--yellow)}
 
-  <div class="goods">
-    <table>
-      <thead><tr><th style="width:16mm">S. No.</th><th>DESCRIPTION</th>
-        <th style="width:20mm">UOM</th><th style="width:26mm">WATTAGE</th>
-        <th style="width:18mm">Qty.</th><th style="width:20mm">KW</th></tr></thead>
-      <tbody>
-        {% for g in goods %}
-        <tr><td>{{ g.no }}</td><td class="d">{{ g.description }}</td><td>NOS</td>
-          <td>{{ g.wattage }}</td><td>{{ g.qty }}</td><td>{{ g.kw }}</td></tr>
-        {% endfor %}
-        {#- The plant's original form never listed pallets. A short load lists
-            its pallet numbers; a long one (20 pallets is the commonest truck)
-            would push the signatures onto a second page, so it says how many
-            and from which to which. #}
-        <tr class="fill"><td></td>
-          <td class="d">
-            {% if n_pallets and n_pallets <= 8 %}
-            Pallets ({{ n_pallets }}):
-            <div class="pal">{% for p in pallets %}<div>{{ p.no }} &times; {{ p.qty }}</div>{% endfor %}</div>
-            {% elif n_pallets %}
-            Pallets ({{ n_pallets }}): {{ pallets[0].no }} &hellip; {{ pallets[-1].no }}
-            {% endif %}
-          </td>
-          <td></td><td></td><td></td><td></td></tr>
-        <tr class="tot"><td></td><td style="text-align:center">TOTAL</td><td></td><td></td>
-          <td>{{ qty }}</td><td>{{ kw }}</td></tr>
-      </tbody>
-    </table>
-  </div>
+/* ---------- top zone: two columns ---------- */
+.zone{flex:none;display:grid;grid-template-columns:minmax(0,1fr) 84mm;column-gap:8mm;margin-top:6mm}
+.lc,.rc{display:flex;flex-direction:column;min-width:0}
+.rc{text-align:right}
+.brand{margin-bottom:6mm}
+.brand + .pt{margin-top:auto}
+.pt + .pt{margin-top:8mm}
+.qrw{margin-top:5mm;margin-bottom:5mm}
+.veh{margin-top:auto}
 
-  <div class="foot">
-    <div class="a"><h5>Prepared By</h5><div style="margin-top:9mm">AUTHORISED SIGNATURE</div></div>
-    <div class="a">
-      <h5>RECEIVED BY</h5>
-      <div class="rc"><span>TRUCK NO:</span><span>{{ vehicle_no }}</span>
-        <span>Mob. No.-</span><span>{{ driver_mobile }}</span></div>
-    </div>
-  </div>
+.logo{display:block;width:44mm;height:auto}
+.co{margin-top:5mm;font-size:var(--sm);line-height:1.55;color:var(--ink2)}
+.co b{display:block;font-size:calc(9pt*var(--k));font-weight:600;color:var(--ink);line-height:1.4;letter-spacing:.005em}
+.co .l{color:var(--mute)}
+
+.pt{min-width:0}
+.pt h3{margin:0 0 1.4mm;font-size:calc(9.5pt*var(--k));font-weight:600;line-height:1.35;color:var(--ink)}
+.pt h3 small{font-size:var(--sm);font-weight:400;color:var(--mute);margin-left:2mm}
+.pt .pn{font-size:var(--name);font-weight:600;line-height:1.32;overflow-wrap:anywhere;color:var(--ink)}
+.pt .pa{margin-top:1mm;font-size:var(--body);line-height:1.52;color:var(--ink2);overflow-wrap:anywhere}
+.pt .pd{margin-top:1.6mm;font-size:var(--sm);line-height:1.6;color:var(--ink2)}
+.pt .pd div{overflow-wrap:anywhere}
+.pt .pd .l{color:var(--mute)}
+
+/* title lockup */
+.tt h1{margin:0;font-size:26pt;line-height:1.02;font-weight:300;letter-spacing:-.012em;color:var(--ink);white-space:nowrap}
+.tt .sub{margin-top:.6mm;font-size:12pt;line-height:1.3;font-weight:500;letter-spacing:.015em;color:var(--blue-d)}
+.cn{margin-top:3.2mm}
+.cn .lab{font-size:var(--lab);line-height:1.2;color:var(--mute);font-weight:500}
+.cn .no{margin-top:.4mm;font-size:max(9pt,min(21pt,calc({{ (78 / (0.58 * nol))|round(3) }}mm)));line-height:1.12;font-weight:400;letter-spacing:-.01em;overflow-wrap:anywhere;color:var(--ink)}
+.cn .no b{font-weight:700}
+.cn .no small{font-size:max(7.2pt,.58em);font-weight:600;letter-spacing:.02em;margin-left:.4em}
+
+.qrw{display:flex;flex-direction:column;align-items:flex-end}
+.qrw svg{display:block;width:27mm;height:27mm;margin:0 -2.9mm 0 0}
+.qrw .cap{margin-top:.8mm;font-size:var(--lab);line-height:1.2;color:var(--ink2);font-weight:500}
+
+.veh{background:var(--fill);border:.35mm solid var(--blue-d);padding:2.2mm 4mm 2.6mm;text-align:right}
+.veh .lab{font-size:var(--lab);line-height:1.2;color:var(--mute);font-weight:500;text-align:left}
+.veh .vn{margin-top:.6mm;font-size:max(10pt,min(28pt,calc({{ (70 / (0.72 * vl))|round(3) }}mm)));line-height:1.15;font-weight:600;letter-spacing:.01em;overflow-wrap:anywhere;color:var(--ink)}
+
+.meta{margin:6mm 0 0;padding:0}
+.mr{display:flex;justify-content:space-between;align-items:baseline;gap:4mm;padding:1.25mm 0;border-bottom:.2mm solid var(--hair);font-size:calc(9.5pt*var(--k));line-height:1.4}
+.mr:first-child{padding-top:0}
+.mr dt{margin:0;flex:none;color:var(--mute);font-weight:400;font-size:var(--sm)}
+.mr dd{margin:0;min-width:0;text-align:right;font-weight:500;color:var(--ink);overflow-wrap:anywhere}
+
+/* ---------- goods ---------- */
+.gt{flex:none;width:100%;font-variant-numeric:tabular-nums}
+.gt .gh,.gt .gr,.gt .gtot{display:grid;grid-template-columns:14mm minmax(0,1fr) 15mm 26mm 22mm 25mm;align-items:start}
+.gt .gh > *,.gt .gr > *,.gt .gtot > *{min-width:0;padding-left:3mm;padding-right:3mm}
+.gt .gh{background:var(--char);color:#fff;font-size:var(--sm);font-weight:500;line-height:1.3}
+.gt .gh > *{padding-top:2.3mm;padding-bottom:2.3mm}
+.gt .r{text-align:right}
+.gt .gr{border-bottom:.2mm solid var(--hair);font-size:calc(9.5pt*var(--k));line-height:1.35}
+.gt .gr > *{padding-top:calc(2.1mm*var(--k));padding-bottom:calc(2.1mm*var(--k))}
+.gt .gr.last{border-bottom:.35mm solid var(--rule)}
+.gt .d{overflow-wrap:anywhere}
+.gt .d b{font-weight:500;color:var(--ink)}
+.gt .d i{display:block;margin-top:.5mm;font-style:normal;font-size:max(7.2pt,calc(7.8pt*var(--k)));color:var(--mute)}
+.gt .n{color:var(--mute)}
+.gt .gtot{background:var(--band);align-items:baseline;font-size:calc(17pt*var(--k));font-weight:600;color:var(--ink);line-height:1.2}
+.gt .gtot > *{padding-top:calc(3mm*var(--k));padding-bottom:calc(3mm*var(--k))}
+.gt .gtot .t{grid-column:2 / 5;font-size:calc(10.5pt*var(--k))}
+.gt .gtot .t span{font-weight:500;color:var(--ink2);font-size:calc(9.5pt*var(--k));margin-left:3mm}
+
+/* ---------- pallets ---------- */
+.pal{flex:none}
+.pal h3{margin:0 0 1.6mm;font-size:calc(9.5pt*var(--k));font-weight:600;line-height:1.35}
+.pal h3 span{font-weight:400;color:var(--ink2);font-size:var(--sm);margin-left:2.5mm}
+.pg{display:grid;grid-auto-flow:column;grid-template-columns:repeat(var(--pc),minmax(0,1fr));grid-template-rows:repeat(var(--pr),auto);column-gap:5mm;row-gap:.5mm;
+  font-size:max(7.4pt,calc(8.4pt*var(--k)));line-height:1.45;font-variant-numeric:tabular-nums}
+.pg > div{display:flex;align-items:baseline;gap:1.8mm;min-width:0;white-space:nowrap}
+.pg .ix{flex:none;width:4.2mm;color:var(--mute);font-size:max(7.2pt,calc(7.4pt*var(--k)))}
+.pg .id{color:var(--ink2);font-weight:400}
+.pg .id b{color:var(--ink);font-weight:600}
+.pg .q{color:var(--ink2);font-weight:500}
+.pal .note{margin-top:1.2mm;font-size:var(--sm);color:var(--ink2)}
+
+/* ---------- compact tier: the same page, set closer (heavy loads) ---------- */
+.c .zone{margin-top:4mm}
+.c .brand{margin-bottom:4mm}.c .pt + .pt{margin-top:5mm}.c .qrw{margin:3.5mm 0}.c .meta{margin-top:3.5mm}
+.c .logo{width:34mm}.c .co{margin-top:3.5mm}
+.c .pt h3{margin-bottom:.8mm}
+.c .pt .pd{display:flex;flex-wrap:wrap;column-gap:4mm;margin-top:1.2mm;line-height:1.5}
+.c .qrw svg{width:24.5mm;height:24.5mm;margin-right:-2.65mm}
+.c .veh{padding:1.6mm 4mm 1.8mm}
+.c .mr{padding:.7mm 0}
+.c .gt .gh > *{padding-top:1.8mm;padding-bottom:1.8mm}
+.c .gt .gr > *{padding-top:calc(1.4mm*var(--k));padding-bottom:calc(1.4mm*var(--k))}
+.c .gt .d i{display:none}
+.c .gt .gtot > *{padding-top:calc(2mm*var(--k));padding-bottom:calc(2mm*var(--k))}
+.c .sp{min-height:3mm}
+.c .sig{margin-bottom:3mm}
+.c .sg{min-height:6.5mm}
+.c .pg{row-gap:0}
+.c .cn{margin-top:2.4mm}
+
+/* ---------- signatures ---------- */
+.sig{flex:1 1 26mm;max-height:38mm;margin-bottom:4mm;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));column-gap:7mm;grid-template-rows:minmax(0,1fr) auto}
+.sg{border-bottom:.3mm solid var(--rule);position:relative;min-height:8mm}
+.sg i{position:absolute;left:0;bottom:1.2mm;font-style:normal;font-size:10pt;line-height:1;color:var(--mute)}
+.sl{padding-top:1.6mm;font-size:var(--sm);line-height:1.45;color:var(--ink2)}
+.sl b{display:block;font-weight:500;font-size:var(--sm);color:var(--ink)}
+.sl .pf{margin-top:.8mm;font-size:var(--sm);line-height:1.5;overflow-wrap:anywhere}
+.sl .pf span{color:var(--mute)}
+
+/* ---------- footer ---------- */
+.foot{flex:none;margin-top:auto;border-top:.25mm solid var(--rule);padding-top:2mm;font-size:7.8pt;line-height:1.4;color:var(--ink2)}
+.foot .ct{display:flex;flex-wrap:wrap;justify-content:space-between;column-gap:5mm;row-gap:.4mm;align-items:baseline}
+.foot .ct b{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;margin-left:1.2mm}
+.foot .ct .h{color:var(--mute)}
+.foot .fc{margin-top:1.2mm;display:flex;flex-wrap:wrap;justify-content:space-between;column-gap:6mm;font-size:7.2pt;line-height:1.35;color:var(--mute)}
+.foot .fc b{font-weight:600;color:var(--ink2)}
+.foot .fc .no2{overflow-wrap:anywhere}
+</style>
+</head>
+<body>
+<div class="noprint bar">
+  <button type="button" class="btn" onclick="print()">Print</button>
+  <a href="{{ switch_url }}">View original format</a>
+  <span class="note">Dispatch Challan cum Gate Pass &middot; one A4 page</span>
 </div>
-</body></html>
+
+<div class="page{{ ' c' if tier > 0 }}" data-tier="{{ tier }}">
+
+  <div class="stripe" aria-hidden="true"><i></i><i></i><i></i></div>
+
+  <div class="zone">
+
+    <div class="lc">
+      <div class="brand">
+        <img class="logo" src="{{ logo_url }}" alt="EN-ICON - Harvesting the sun">
+        <div class="co">
+          <b>{{ form.OWN_NAME }}</b>
+          {{ form.OWN_ADDRESS }}<br>
+          <span class="l">GSTIN :</span> {{ form.OWN_GSTIN }}<br>
+          {{ form.OWN_UNIT }} <span class="l">&middot;</span> {{ form.OWN_STATE }} <span class="l">(State code</span> {{ form.OWN_STATE_CODE }}<span class="l">)</span>
+        </div>
+      </div>
+
+      {%- macro party(p, head, sub) %}
+      <section class="pt">
+        <h3>{{ head }}{% if sub %}<small>{{ sub }}</small>{% endif %}</h3>
+        <div class="pn">{{ dash(p.name) }}</div>
+        {%- if p.address %}<div class="pa">{{ p.address }}</div>{% endif %}
+        <div class="pd">
+          <div><span class="l">GSTIN :</span> {{ dash(p.gstin) }}</div>
+          <div><span class="l">State :</span> {% if p.state %}{{ p.state }}{% if p.state_code %} ({{ p.state_code }}){% endif %}{% else %}{{ dash('') }}{% endif %}</div>
+          {%- if p.phone_fmt %}<div><span class="l">Phone :</span> {{ p.phone_fmt }}</div>{% endif %}
+        </div>
+      </section>
+      {%- endmacro %}
+      {%- if same_party %}
+      {{ party(cons, 'Ship to & Bill to', 'same party') }}
+      {%- else %}
+      {{ party(cons, 'Ship to', '') }}
+      {{ party(buyer, 'Bill to', '') }}
+      {%- endif %}
+    </div>
+
+    <div class="rc">
+      <div class="tt">
+        <h1>Dispatch Challan</h1>
+        <div class="sub">cum Gate Pass</div>
+        <div class="cn">
+          <div class="lab">Challan No.</div>
+          <div class="no">{% if no_sep %}{{ no_head }}/<b>{{ no_seq }}</b>{% else %}<b>{{ no_main }}</b>{% endif %}{% if no_sfx %}<small>{{ no_sfx }}</small>{% endif %}</div>
+        </div>
+      </div>
+
+      <div class="qrw">{{ qr | safe }}<div class="cap">Scan to verify</div></div>
+
+      <div class="veh">
+        <div class="lab">Vehicle No.</div>
+        <div class="vn">{{ dash(vehicle_no) }}</div>
+      </div>
+
+      <dl class="meta">
+        <div class="mr"><dt>Challan Date :</dt><dd>{{ dash(challan_date) }}</dd></div>
+        <div class="mr"><dt>Invoice No. :</dt><dd>{{ dash(invoice_no) }}</dd></div>
+        <div class="mr"><dt>Invoice Date :</dt><dd>{{ dash(invoice_date) }}</dd></div>
+        <div class="mr"><dt>Transporter :</dt><dd>{{ dash(transporter) }}</dd></div>
+        <div class="mr"><dt>LR Copy No. :</dt><dd>{{ dash(lr_copy) }}</dd></div>
+        <div class="mr"><dt>Driver Mobile :</dt><dd>{{ dash(driver_mobile) }}</dd></div>
+      </dl>
+    </div>
+
+  </div>
+
+  <div class="sp"></div>
+
+  <div class="gt" role="table" aria-label="Goods">
+    <div class="gh" role="row"><span>S.No.</span><span>Description</span><span>UOM</span><span class="r">Wattage</span><span class="r">Qty</span><span class="r">kW</span></div>
+    {%- for g in goods %}
+    <div class="gr{{ ' last' if loop.last }}" role="row"><span class="n">{{ g.no }}</span>
+      <span class="d"><b>{{ g.description }}</b><i>{{ g.wattage }} Wp &middot; NOS</i></span>
+      <span>NOS</span><span class="r">{{ g.wattage }}</span><span class="r">{{ g.qty }}</span><span class="r">{{ kwf(g.kw, kwd) }}</span></div>
+    {%- endfor %}
+    <div class="gtot" role="row"><span class="t">Total{% if n_pallets %}<span>{{ n_pallets }} pallet{{ '' if n_pallets == 1 else 's' }}</span>{% endif %}</span><span class="r">{{ qty }}</span><span class="r">{{ kwf(kw, kwd) }}</span></div>
+  </div>
+
+  {%- if n_pallets %}
+  <div class="sp"></div>
+
+  <section class="pal">
+    <h3>Pallets<span>{{ n_pallets }} in all{% if uni %} &middot; {{ pq[0] }} modules each{% endif %}</span></h3>
+    {%- if shown %}
+    <div class="pg" style="--pc:{{ pcols }};--pr:{{ prows }}">
+      {%- for p in shown %}{% set pp = p.no.rpartition('/') %}
+      <div><span class="ix">{{ '%02d'|format(loop.index) }}</span><span class="id">{% if pp[1] %}{{ pp[0] }}/<b>{{ pp[2] }}</b>{% else %}<b>{{ p.no }}</b>{% endif %}</span>{% if not uni %}<span class="q">&times;{{ p.qty }}</span>{% endif %}</div>
+      {%- endfor %}
+    </div>
+    {%- endif %}
+    {%- if pnote %}
+    <div class="note">{% if n_more > 0 %}+{{ n_more }} more{% endif %}{% if n_more > 0 and n_unnumbered > 0 %} &middot; {% endif %}{% if n_unnumbered > 0 %}+{{ n_unnumbered }} without a recorded number{% endif %}</div>
+    {%- endif %}
+  </section>
+  {%- endif %}
+
+  <div class="sp"></div>
+
+  <section class="sig">
+    <div class="sg"><i>&times;</i></div><div class="sg"><i>&times;</i></div><div class="sg"><i>&times;</i></div><div class="sg"><i>&times;</i></div>
+    <div class="sl"><b>Prepared by</b></div>
+    <div class="sl"><b>Authorised signatory</b></div>
+    <div class="sl"><b>Security (gate)</b></div>
+    <div class="sl"><b>Received by</b>
+      <div class="pf"><span>Truck No. :</span> {{ dash(vehicle_no) }}<br><span>Mob. :</span> {{ dash(driver_mobile) }}</div></div>
+  </section>
+
+  <footer class="foot">
+    <div class="ct"><span class="h">Dispatch contacts</span>{% for who, ph in form.SUPPLIER_CONTACTS %}<span>{{ who }}<b>{{ ph[:5] }} {{ ph[5:] }}</b></span>{% endfor %}</div>
+    <div class="fc"><span>Doc No. <b>{{ form.DOC_NO }}</b> &nbsp;&middot;&nbsp; Revision <b>{{ form.REV_NO }}</b> &nbsp;&middot;&nbsp; Revision date <b>{{ form.REV_DATE }}</b></span><span class="no2">Challan <b>{{ no }}</b></span></div>
+  </footer>
+
+</div>
+</body>
+</html>

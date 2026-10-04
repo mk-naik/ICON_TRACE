@@ -39,9 +39,9 @@ def test(name):
     return deco
 
 
-def make_loaded_challan(c, n_pallets, invoice_no):
+def make_loaded_challan(c, n_pallets, invoice_no, start=0):
     """An issued challan of n_pallets pallets, every one loaded."""
-    boxes = [T.packed_box(c, [2 * i, 2 * i + 1], customer=None) for i in range(n_pallets)]
+    boxes = [T.packed_box(c, [start + 2 * i, start + 2 * i + 1], customer=None) for i in range(n_pallets)]
     inv = T.make_invoice(qty=2 * n_pallets, invoice_no=invoice_no)
     with store.conn() as (cx, cur):
         cur.execute("UPDATE invoice SET consignee_name='MADHUR IRON & STEEL (INDIA) LIMITED', "
@@ -91,7 +91,7 @@ def open_print(b, path, style):
       "the QR reading the challan's own number")
 def t_one_page_and_qr():
     c = T.setup()
-    small, small_no = make_loaded_challan(c, 1, "ICON/26-27/911")
+    small, small_no = make_loaded_challan(c, 1, "ICON/26-27/911", start=90)
     truck, truck_no = make_loaded_challan(c, 20, "ICON/26-27/1003")
     with H.browser() as b:
         for style in ("premium", "classic"):
@@ -113,16 +113,47 @@ def t_fonts_and_logo_load():
         pg = open_print(b, path, "premium")
         faces = pg.evaluate("Array.from(document.fonts).map(f => f.family + ' ' + f.status)")
         assert faces, "the redesign declares no font at all"
-        assert all(f.endswith(" loaded") for f in faces), \
+        # a declared weight the page does not use stays "unloaded"; one that FAILED says "error"
+        assert not [f for f in faces if f.endswith(" error")], \
             "a font file did not load (it would print in a fallback face): %s" % faces
+        assert sum(f.endswith(" loaded") for f in faces) >= 3, \
+            "the redesign's text is not set in its bundled font: %s" % faces
         imgs = pg.evaluate("Array.from(document.images).map(i => (i.getAttribute('src')||'') "
                            "+ ' ' + (i.complete && i.naturalWidth > 0 ? 'ok' : 'BROKEN'))")
         assert imgs and all(i.endswith(" ok") for i in imgs), imgs
         assert any("enicon-logo.svg" in i for i in imgs), imgs
-        # at most two families, as designed
-        fams = {f.rsplit(" ", 1)[0].split(" 100")[0] for f in faces}
-        assert len(fams) <= 3, "more typefaces than the design allows: %s" % faces
+        fams = pg.evaluate("Array.from(new Set(Array.from(document.fonts).map(f => f.family)))")
+        assert len(fams) <= 2, "more typefaces than the design allows: %s" % fams
         pg.close()
+
+
+@test("the gate pass prints THREE pages (one per copy) in both formats, each copy labelled, "
+      "the QR reading the gate pass's own number")
+def t_gatepass_three_copies():
+    import pymupdf
+    c = T.setup()
+    items = [{"description": "Reference module ISEN625-G12R, serial CAL-%04d" % i, "unit": "Nos",
+              "qty": 1 + i, "remark": "Return after calibration" if i % 2 else ""} for i in range(7)]
+    r = c.post("/api/gatepass", json={"kind": "RGP", "party": "Jakson Calibration Services Pvt Ltd",
+                                      "delivery_address": "Plot 14, Sector 63, Noida", "vehicle_no": "By hand",
+                                      "expected_return": "2026-10-18", "items": items})
+    assert r.status_code == 200, r.get_json()
+    gp_no = r.get_json()["gp_no"]
+    from urllib.parse import quote
+    with H.browser() as b:
+        for style in ("premium", "classic"):
+            pg = open_print(b, "/gatepass/%s/print" % quote(gp_no, safe=""), style)
+            pg.emulate_media(media="print")
+            raw = pg.pdf(format="A4", prefer_css_page_size=True, print_background=True)
+            doc = pymupdf.open(stream=raw, filetype="pdf")
+            assert doc.page_count == 3, "%s: %d pages, not one per copy" % (style, doc.page_count)
+            for i, label in enumerate(("Copy 1 of 3", "Copy 2 of 3", "Copy 3 of 3")):
+                assert label in doc[i].get_text(), "%s: page %d does not carry %r" % (style, i + 1, label)
+            doc.close()
+            pages, got = pdf_pages_and_qr(pg, gp_no)
+            assert ("ICONTRACE|GATEPASS|" + gp_no) in got, "%s: the QR read %r" % (style, got)
+            assert not pg.console_errors, (style, pg.console_errors)
+            pg.close()
 
 
 @test("the toolbar shows on screen, stays off the paper, and its link switches format both ways")

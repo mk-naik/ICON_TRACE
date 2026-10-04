@@ -9,7 +9,7 @@ a demo pass.
 Status tags: **[built]** verified in code · **[decided]** agreed, not built ·
 **[NOT ENFORCED]** agreed, code does not do it yet · **[open]** needs Mukesh.
 
-Last checked against code: 2026-10-03, after commit `b740dc8` plus the 3 Oct fixes. When you change a rule
+Last checked against code: 2026-10-04, after the printed-documents redesign. When you change a rule
 or finish a `[decided]` item, update this file in the same commit.
 
 ---
@@ -49,16 +49,47 @@ no one signs twice. [enforcement unverified]
 - v1 and v2 refuse to print until every pallet is `loaded`. Enforced on the
   server, not only in the UI. [built]
 - QR on challan v1/v2: `ICONTRACE|CHALLAN|<challan_no>`. [built on v1; v2 (Excel)
-  has none yet]
-- **Challan v1 follows the plant's own form IS-MP-STR-FM-09** (Revision 0, date
-  01.03.2026): header = EN-ICON logo, company name, QR, nothing else; the document
-  block (Doc No, revision, challan no, dates, invoice, LR copy) sits below it; then
-  vehicle / mobile / transporter and the hand-filled freight boxes (left),
-  consignee and buyer (right), the goods line, and the signature boxes. One A4 page
-  filled. Freight amounts are left blank on purpose - ICON TRACE holds no
-  financial figures. The Supplier contacts are the three names printed on the
-  form (`icon_challan_form.SUPPLIER_CONTACTS`). The gate pass print has the same
-  header. [built]
+  has none yet] The gate pass carries `ICONTRACE|GATEPASS|<gp_no>`. [built]
+- **The printed documents come in two formats, from one set of facts.** The
+  Dispatch Challan cum Gate Pass (v1) and the Gate Pass print as **premium** (the
+  redesign - a clean letterhead style - the default) or **classic** (the plant's own
+  forms IS-MP-STR-FM-09 and -04 reproduced as they were, with the EN-ICON logo and a
+  QR, kept in case management prefers the original). One Settings value, "Printed
+  documents format" (Super Admin writes it, Admin reads it), sets the default for
+  both documents; `?style=classic|premium` picks it for one print, and every print
+  page carries a link to the other format. An unknown style falls back to the
+  default. Both formats read the same facts (`icon_challan_form.print_context`,
+  `icon_gatepass_form.print_context`), so they cannot disagree. [built]
+- **What the redesign leaves out, and why.** The challan's five freight boxes - Pay
+  transporting Amount (Icon / Customer), Transporting amount, Advance amount,
+  Balance Amount, Total Amount - were never filled on the plant's own Excel
+  challans (0 of 961, March-October 2026, read from the share), and ICON TRACE holds
+  no money figures. The second "GSTIN:" box and "GSTIN/Unique ID" repeat the header
+  and the buyer block, and "Supplier name" repeats the header; the three dispatch
+  contacts stay. The gate pass's NRGP/RGP column repeats its title, and an empty
+  Delivery address row (module passes never have one) is not printed. An empty
+  value that can legitimately be empty (LR copy no., mobile, transporter, invoice
+  date) prints as a quiet dash. The classic keeps all of it: it is the original.
+  [built]
+- **The goods lines are counted from the modules on the challan**: one line per
+  model with its own wattage; kW = sum of wattage x quantity / 1000, exactly,
+  never an average wattage; a DCR item says "-DCR" (HO omits the suffix for NDCR).
+  [built]
+- **A challan names its parties and its pallets honestly.** Ship to (consignee)
+  and Bill to (buyer) are both printed; when they are one party it says so once
+  ("Ship to & Bill to"). Only pallets that HAVE a number are listed - an old import
+  can carry pallets whose number was never recorded, and those are counted
+  ("+N without a recorded number"), never printed as blanks or invented; a long
+  list is capped with "+N more". The redesign adds a "Security (gate)" signature
+  box next to Prepared by / Authorised signatory / Received by (the plant's form
+  has none; this is the gate pass) - **[open]** remove it if the gate does not sign.
+  [built]
+- **Print pages carry no browser clutter**: the page margin is inside the page
+  (`@page{margin:0}`), so Chrome/Edge have nowhere to print their own date, title
+  and server URL on the sheet; tints print even with "Background graphics" off.
+  The redesign's fonts (Poppins, SIL OFL) are served from `static/fonts/` with
+  their licences - the plant is offline-first, nothing loads from the internet.
+  [built]
 
 ## 3. Challan
 

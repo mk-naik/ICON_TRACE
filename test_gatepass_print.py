@@ -91,7 +91,7 @@ def t_standalone_facts():
         assert "returnable" in h.lower(), style
         assert 'src="/static/enicon-logo.svg"' in h and "<svg" in h, style
         assert "ICONTRACE|GATEPASS" not in h      # the QR is a picture, not text
-        assert 'class="noprint"' in h or 'class="bar"' in h, "%s: no screen-only toolbar" % style
+        assert re.search(r'class="[^"]*(noprint|bar)', h), "%s: no screen-only toolbar" % style
         assert re.search(r"gate entry", h, re.I), "%s: no Gate Entry No. slot for security" % style
 
 

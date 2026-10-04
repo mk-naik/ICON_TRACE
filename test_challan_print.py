@@ -116,17 +116,20 @@ def t_same_facts_both_formats():
         h = page(c, path, style=style)
         for want in (no, "ICON/26-27/911", "03.10.2026", "CG04LR6784", "KHYATI TRANSPORT",
                      "70001 39295", "IS-MP-STR-FM-09", "01.03.2026", "Rohan Tiwari",
-                     "Prakash Kandpal", "Yasin Anshari", "7089000318", "22AADCI5761L3ZE",
+                     "Prakash Kandpal", "Yasin Anshari", "22AADCI5761L3ZE",
                      "22ABKCS5083K1Z0", "SADBHAV LTD", "88188 77788", "Chhattisgarh",
                      "House 84, Raipur"):
             assert want in h, "%s format is missing %r" % (style, want)
+        digits = re.sub(r"\D", "", re.sub(r"<[^>]+>", " ", h))        # a phone may be grouped 70890 00318 or raw
+        for ph in ("7089000318", "7089000327", "7880182400"):
+            assert ph in digits, "%s format is missing the dispatch contact %s" % (style, ph)
         assert 'src="/static/enicon-logo.svg"' in h and "<svg" in h, style      # logo + QR
         assert "At MMI Narayana Hospital, Raipur 492015" in h, style
         assert "DELIVERY ADDRESS - At MMI" not in h, "%s: the stored label was not cleaned" % style
         assert "dt. 3-Oct-26" not in h, "%s: a date was printed as the LR number" % style
         assert "492015 Contact number" not in h, "%s: a dangling label was printed" % style
         assert "ICONTRACE|CHALLAN" not in h      # the QR is a picture, not text
-        assert 'class="noprint"' in h, "%s: no screen-only toolbar" % style
+        assert re.search(r'class="[^"]*noprint', h), "%s: no screen-only toolbar" % style
 
 
 @test("a mixed load prints a line per model with its own wattage; kW is exact; DCR says DCR")
@@ -200,14 +203,14 @@ def t_font_licences():
         "static/fonts holds fonts but no licence text"
 
 
-@test("the switch link keeps the rest of the request (a challan edit's suffix)")
+@test("the switch link keeps the rest of the request")
 def t_switch_keeps_query():
     c = setup()
     path, no = loaded_challan(c, [packed_box(c, [0, 1], customer=None)], 2)
-    h = page(c, path, suffix="", style="premium")
+    h = page(c, path, copies="2", style="premium")
     m = re.search(r'href="(\?[^"]*style=classic[^"]*)"', h)
     assert m, "no link to the original format"
-    assert "suffix=" in m.group(1).replace("&amp;", "&"), m.group(1)
+    assert "copies=2" in m.group(1).replace("&amp;", "&"), m.group(1)
 
 
 if __name__ == "__main__":
