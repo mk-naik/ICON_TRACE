@@ -44,6 +44,8 @@ import icon_customers as customers
 import icon_barcode as bc
 import icon_box_number as boxno
 import icon_challan_form as cform
+import icon_gatepass_form as gpform
+from urllib.parse import urlencode
 import icon_ftr as ftr
 import icon_clock as clock
 
@@ -4058,49 +4060,48 @@ def _loading_incomplete(boxes):
 @require_screen_view("challan")
 def challan_print(fy, seq):
     """Version 1 - ONE PAGE, no serial list. This is the copy the driver
-    carries; the serial list is the soft copy."""
+    carries; the serial list is the soft copy.
+
+    Two formats, one set of facts (icon_challan_form.print_context): "premium",
+    the redesign and the default, and "classic", the plant's original layout
+    kept in case management prefers it. ?style= picks one for this print;
+    otherwise the Settings value `print_style` decides. Either way the
+    same refusals apply first - superseded, or not every pallet loaded."""
     with store.conn() as (cx, cur):
         b = _challan_bundle(cur, fy, seq, request.args.get("suffix"))
         if not b:
             abort(404)
-        why = _refuse_if_superseded(cur, b["challan"])
+        ch = b["challan"]
+        why = _refuse_if_superseded(cur, ch)
         if why:
             return why, 400
-        if b["challan"]["origin"] != "historical":
+        if ch["origin"] != "historical":
             why = _loading_incomplete(b["boxes"])
             if why:
                 return why, 400
-    ch = b["challan"]
-    d = datetime.date.fromisoformat(ch["challan_date"])
-    no = db.render_challan_no(d, ch["seq"], ch["suffix"])
-    with store.conn() as (cx, cur):
         inv = store.one(cur, "SELECT * FROM invoice WHERE invoice_id=%s",
                         (ch["invoice_id"],)) if ch.get("invoice_id") else None
-    inv = inv or {}
-    # The ship-to is the challan's own when it was typed there, else the
-    # invoice's; "same as buyer" has no ship-to of its own to show.
-    buyer = cform.party(ch["buyer_name"] or inv.get("buyer_name"),
-                        inv.get("buyer_address"),
-                        ch["buyer_gstin"] or inv.get("buyer_gstin"),
-                        inv.get("buyer_contact_phone"))
-    if (ch.get("consignee_name") or ch.get("consignee_address")
-            or inv.get("consignee_name") or inv.get("consignee_address")):
-        cons = cform.party(ch.get("consignee_name") or inv.get("consignee_name")
-                           or buyer["name"],
-                           ch.get("consignee_address") or inv.get("consignee_address"),
-                           inv.get("consignee_gstin") or buyer["gstin"],
-                           inv.get("consignee_contact_phone"))
-    else:
-        cons = dict(buyer)
-    return render_template(
-        "challan_print.html", ch=ch, boxes=b["boxes"], qty=len(b["serials"]),
-        kw=round((ch["wattage"] or 0) * len(b["serials"]) / 1000.0, 2),
-        no=no, cons=cons, buyer=buyer, form=cform,
-        challan_date=cform.dmy(ch["challan_date"]),
-        invoice_date=cform.dmy(inv.get("invoice_date")),
-        lr_copy=cform.lr_number(ch.get("lr_no")),
-        driver_mobile=cform.phone10(ch.get("driver_mobile")),
-        qr=bc.qr_svg(bc.challan_qr_payload(no), module=5))
+        # what is really on the truck, one line per model: counted from the
+        # challan's own serials against the serial master, so a mixed load
+        # prints each model with its own wattage and a DCR item says DCR
+        goods_rows = store.rows(
+            cur, "SELECT s.model AS model, s.dcr AS dcr, cs.wattage AS wattage, "
+                 "COUNT(*) AS qty FROM challan_serial cs "
+                 "LEFT JOIN serial s ON s.serial=cs.serial "
+                 "AND s.build_instance=cs.build_instance "
+                 "WHERE cs.challan_id=%s GROUP BY s.model, s.dcr, cs.wattage "
+                 "ORDER BY MIN(cs.challan_serial_id)", (ch["challan_id"],))
+        style = cform.pick_style(request.args.get("style"),
+                                 db.get_config(cur).get("print_style"))
+    d = datetime.date.fromisoformat(ch["challan_date"])
+    no = db.render_challan_no(d, ch["seq"], ch["suffix"])
+    other = dict(request.args)
+    other["style"] = "classic" if style == "premium" else "premium"
+    ctx = cform.print_context(
+        ch, b["boxes"], goods_rows, inv, no,
+        bc.qr_svg(bc.challan_qr_payload(no), module=5, quiet=4),
+        style=style, switch_url="?" + urlencode(other))
+    return render_template("challan_v1_%s.html" % style, **ctx)
 
 
 @app.route("/challan/<int:fy>/<int:seq>/excel")
@@ -4220,24 +4221,28 @@ def challan_excel(fy, seq):
 def gatepass_print(gp_no):
     """Every copy on its own page. NRGP is three (creator + two for the gate);
     RGP is three (creator, gate, and the recipient who returns theirs). The
-    print dialog opens - who prints how many is the operator's call."""
+    print dialog opens - who prints how many is the operator's call.
+
+    Two formats, like the challan: "premium" (the redesign, the default) and
+    "classic" (the plant's own form, kept in case management prefers it).
+    ?style= picks one for this print, else the Settings value `print_style`.
+    Both read the same facts from icon_gatepass_form.print_context."""
     with store.conn() as (cx, cur):
         gp = store.one(cur, "SELECT * FROM gatepass WHERE gp_no=%s", (gp_no,))
         if not gp:
             abort(404)
         # Present only on a NEW standalone gate pass - a historical or
-        # module-linked row has none, and the template falls back to
+        # module-linked row has none, and the format falls back to
         # gp.description/qty exactly as it always has for those.
         items = [dict(r) for r in db.gatepass_items(cur, gp["gp_id"])]
-    if gp["kind"] == "RGP":
-        copies = ["Copy 1 of 3 — creator", "Copy 2 of 3 — gate",
-                  "Copy 3 of 3 — recipient, returned on receipt"]
-    else:
-        copies = ["Copy 1 of 3 — creator", "Copy 2 of 3 — gate",
-                  "Copy 3 of 3 — gate"]
-    qr = bc.qr_svg(bc.gp_qr_payload(gp_no))
-    return render_template("gatepass_print.html", gp=gp, items=items,
-                           copies=copies, qr=qr)
+        style = cform.pick_style(request.args.get("style"),
+                                 db.get_config(cur).get("print_style"))
+    other = dict(request.args)
+    other["style"] = "classic" if style == "premium" else "premium"
+    ctx = gpform.print_context(
+        gp, items, bc.qr_svg(bc.gp_qr_payload(gp_no), module=5, quiet=4),
+        style=style, switch_url="?" + urlencode(other))
+    return render_template("gatepass_print_%s.html" % style, **ctx)
 
 
 @app.route("/challan/<int:fy>/<int:seq>/ftr")
@@ -5905,6 +5910,11 @@ def api_cell_efficiencies():
 @require_role(*_R_MASTER)
 def api_settings():
     d = request.get_json(force=True)
+    if "print_style" in d and str(d["print_style"]).strip().lower() not in cform.STYLES:
+        return jsonify({"ok": False, "why": "Printed documents format must be one of: %s."
+                                            % ", ".join(cform.STYLES)}), 400
+    if "print_style" in d:
+        d["print_style"] = str(d["print_style"]).strip().lower()
     with store.conn() as (cx, cur):
         db.set_config(cur, {k: str(v) for k, v in d.items()
                             if k in db.DEFAULT_CONFIG})

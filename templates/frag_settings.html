@@ -57,6 +57,14 @@
   <div class="fld"><label>Pallet ceiling</label><input id="s_cap" value="{{ cfg.pallet_ceiling }}">
     <div class="hint">30&nbsp;mm frame gives 36, 36&nbsp;mm gives 30. An indent
       may instruct fewer, never more.</div></div>
+  <div class="fld"><label>Printed documents format</label>
+    <select id="s_print_style">
+      <option value="premium"{{ ' selected' if cfg.print_style != 'classic' }}>Redesigned (premium)</option>
+      <option value="classic"{{ ' selected' if cfg.print_style == 'classic' }}>Original (the plant&rsquo;s own form)</option>
+    </select>
+    <div class="hint">The format the Dispatch Challan cum Gate Pass and the Gate Pass
+      print in. Either can still be picked for a single print from the link on
+      the print page.</div></div>
 </div></div>
 <div class="card-f"><button class="btn btn-primary" onclick="setSave()">Save</button>
   <span class="sp hint" id="s_msg"></span></div></div>
@@ -85,7 +93,8 @@
   function g(id){var el=document.getElementById(id);return el?el.value.trim():'';}
 
   window.setSave=function(){
-    var body={unit:g('s_unit'),pallet_ceiling:g('s_cap')};
+    var body={unit:g('s_unit'),pallet_ceiling:g('s_cap'),
+              print_style:g('s_print_style')};
     LINES.forEach(function(ln){
       body['ss_'+ln+'_csv_path']=g('s_'+ln+'_ss');
       body['el_'+ln+'_root']=g('s_'+ln+'_el');

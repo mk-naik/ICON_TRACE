@@ -1,0 +1,108 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="icon" type="image/svg+xml" href="/static/favicon.svg"><title>{{ gp.gp_no }}</title>
+{#- CLASSIC FORMAT. The plant's own gate pass form IS-MP-STR-FM-04 as it was, with
+    the EN-ICON logo and a QR. Kept as the fallback in case management prefers it
+    over the redesign (?style=classic, or Settings > Printed documents format). #}
+<style>
+ /* The margin lives in the page content, not in @page: a non-zero @page margin
+    is where Chrome/Edge print their own header and footer (date, title, the
+    server's URL) on the sheet. Each copy is its own A4 page. */
+ @page{size:A4;margin:0}
+ html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+ *{box-sizing:border-box}
+ body{font-family:Arial,Helvetica,sans-serif;font-size:10pt;margin:0;color:#000}
+ .pg{height:296mm;padding:10mm;page-break-after:always;break-after:page}
+ .pg:last-of-type{page-break-after:auto;break-after:auto}
+ .sheet{border:1.5px solid #000;page-break-inside:avoid}
+ .hd{display:flex;border-bottom:1.5px solid #000}
+ .hd .lg{width:44mm;padding:2.5mm;border-right:1px solid #000;display:flex;align-items:center}
+ .hd .lg img{width:100%;height:auto;display:block}
+ .hd .ti{flex:1;padding:3mm;text-align:center}
+ .hd .ti h1{font-size:11.5pt;margin:0}
+ .hd .ti .s{font-size:7.5pt;margin-top:1mm}
+ .hd .ti{display:flex;flex-direction:column;justify-content:center}
+ .hd .qr{width:30mm;padding:2mm;border-left:1px solid #000;text-align:center;
+   display:flex;align-items:center;justify-content:center}
+ .hd .qr svg{width:24mm;height:24mm}
+ /* the document block sits under the header, not beside the logo */
+ .doc{display:grid;grid-template-columns:1.1fr 1.3fr .8fr .8fr;border-bottom:1.5px solid #000;font-size:8.5pt}
+ .doc div{padding:1.5mm 2.5mm;border-right:1px solid #000}
+ .doc div:last-child{border-right:none}
+ .kind{text-align:center;font-weight:700;padding:2mm;border-bottom:1.5px solid #000;
+   font-size:10.5pt;letter-spacing:.3px}
+ table{width:100%;border-collapse:collapse}
+ td,th{border:1px solid #000;padding:1.6mm 2.5mm;font-size:9.5pt;vertical-align:top}
+ th{background:#F2F2F2;font-size:9pt}
+ td.k{font-weight:700;background:#F2F2F2;width:32mm}
+ .foot{display:flex;font-size:8.5pt}
+ .foot div{flex:1;border:1px solid #000;padding:10mm 2mm 2mm;text-align:center}
+ .copy{text-align:right;font-size:8pt;padding:1.5mm 3mm;font-style:italic}
+ @media screen{body{background:#EDF1F6;padding:14px}
+   .pg{height:auto;padding:0;margin:0 0 14px}
+   .sheet{background:#fff;max-width:190mm;margin:0 auto}
+   .bar{max-width:190mm;margin:0 auto 10px;font-size:12px;color:#3D4E63}}
+ @media print{.bar{display:none}}
+</style></head><body>
+<div class="bar">
+  <button onclick="print()">Open print dialog</button>
+  <span style="margin-left:10px">{{ copies|length }} copies below, one per page
+  &mdash; {{ 'NRGP: creator + 2 for the gate' if gp.kind=='NRGP' else 'RGP: creator, gate, and the recipient who returns theirs' }}.
+  Print all pages, or print this page {{ copies|length }} times.</span>
+  <a href="{{ switch_url }}" style="margin-left:12px">View the redesigned format</a>
+</div>
+
+{% for label in copies %}
+<div class="pg"><div class="sheet">
+  <div class="hd">
+    <div class="lg"><img src="/static/enicon-logo.svg" alt="EN-ICON"></div>
+    <div class="ti"><h1>ICON SOLAR-EN POWER TECHNOLOGIES PRIVATE LIMITED</h1>
+      <div class="s">Khasra No 1553/1, 1564, 1566, 1568/1, 1568/2 &middot; Mandir
+        Hasaud, Arang, Tekari, Raipur, Chhattisgarh 493225<br>
+        GSTIN 22AADCI5761L3ZE &middot; UNIT-2</div></div>
+    {% if qr %}<div class="qr">{{ qr | safe }}</div>{% endif %}
+  </div>
+  <div class="doc">
+    <div><b>DOC NO.</b> IS-MP-STR-FM-04</div>
+    <div><b>GATE PASS NO.</b> {{ gp.gp_no }}</div>
+    <div><b>DATE</b> {{ gp.gp_date }}</div>
+    <div><b>GATE ENTRY NO.</b></div>
+  </div>
+
+  <div class="kind">GATE PASS &mdash; {{ 'NON RETURNABLE (NRGP)' if gp.kind=='NRGP' else 'RETURNABLE (RGP)' }}</div>
+
+  <table>
+    <tr><td class="k">Party / destination</td><td colspan="3">{{ gp.party or '—' }}</td></tr>
+    <tr><td class="k">Delivery address</td><td colspan="3">{{ gp.delivery_address or '—' }}</td></tr>
+    <tr><td class="k">Vehicle / by hand</td><td>{{ gp.vehicle_no or '—' }}</td>
+        <td class="k">Against challan</td><td>{{ gp.challan_no or '—' }}</td></tr>
+    {% if gp.kind == 'RGP' %}
+    <tr><td class="k">Expected return</td><td>{{ gp.expected_return or '—' }}</td>
+        <td class="k">Returned on</td><td>{{ gp.return_date or '' }}</td></tr>
+    {% endif %}
+  </table>
+
+  <table style="margin-top:-1px">
+    <thead><tr><th style="width:12mm">Sl</th><th>Material description</th>
+      <th style="width:18mm">UOM</th><th style="width:22mm">Qty</th>
+      <th style="width:22mm">NRGP/RGP</th><th style="width:34mm">Remarks</th></tr></thead>
+    <tbody>
+      {% for ln in lines %}
+        <tr><td style="text-align:center">{{ ln.no }}</td><td>{{ ln.description }}</td>
+          <td style="text-align:center">{{ ln.unit }}</td>
+          <td style="text-align:center">{{ ln.qty if ln.qty is not none else '' }}</td>
+          <td style="text-align:center"><b>{{ gp.kind }}</b></td>
+          <td>{{ ln.remark }}</td></tr>
+      {% endfor %}
+      {% for _ in range([5 - (lines|length), 0]|max) %}<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>{% endfor %}
+      <tr><td colspan="3" style="text-align:right"><b>Total</b></td>
+        <td style="text-align:center"><b>{{ total_qty }}</b></td><td></td><td></td></tr>
+    </tbody>
+  </table>
+
+  <div class="foot">
+    <div>Authorised By</div><div>Security (OUT)</div>
+    <div>Security (IN)</div><div>Store</div>
+  </div>
+  <div class="copy">{{ label }}</div>
+</div></div>
+{% endfor %}
+</body></html>

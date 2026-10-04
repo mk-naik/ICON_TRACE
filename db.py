@@ -1906,6 +1906,10 @@ DEFAULT_CONFIG = {
     "ss_csv_path": "", "el_root": "",
     "unit": "2", "pallet_ceiling": "36",
     "grade_a_min": "0", "grade_b_min": "0",
+    # which format the printed documents (Dispatch Challan cum Gate Pass, Gate
+    # Pass) use: "premium" (the redesign) or "classic" (the plant's original
+    # layout). See icon_challan_form.pick_style.
+    "print_style": "premium",
 }
 DEFAULT_CONFIG.update({"ss_" + k: v for k, v in _SS_COLS.items()})
 
