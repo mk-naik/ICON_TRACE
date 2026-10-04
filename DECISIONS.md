@@ -350,3 +350,6 @@ The Drafts screen is still v4 sample data.
 - How the 16-item FQC Matrix relates to the 44-item defect list.
 - Whether the Rounds 23–29 access-control system is exactly as intended.
 - Cancel permission scope: Admin and Super Admin is assumed.
+- **Loss of Production (LOP) dates** - not reviewed, skipped on purpose (priority is
+  indent to dispatch). A Retro downtime has no date field and counts on the day it was
+  typed. See BACKLOG 4 Oct, "LOP dating".

@@ -6199,3 +6199,21 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
   `test_fqc.py`, `test_defect_readers.py` updated to the new wording; checked in
   Chromium (Search & Trace, no page errors).
 - **Not done:** no `t_grade` column - not needed, see DECISIONS section 6.
+
+## 4 Oct 2026 - LOP dating: NOT reviewed, skipped on purpose
+
+- [ ] **Loss of Production (LOP) dates need a proper pass before LOP is used for real.**
+  Mukesh's priority is indent to dispatch; the plant runs the same without LOP, so
+  LOP was deliberately left alone. Do not read the green tests as "dates are right".
+- **What is known** (code read, nothing changed): the Production Dashboard and
+  `/api/loss_events` count a loss event by `created_at` (IST, 06:00 day), not by
+  `event_date`. That is right for a **Live** event (opened when the machine stops).
+  A **Retro** event has no date field - the form sends today's date - so downtime
+  entered the next morning lands on the wrong day. First noted in the Round 35-era
+  "Swept, same flow, NOT changed" entry (grep "Retro event is the gap").
+- **Why it came up:** an outside review of the code guessed a date bug here from a
+  test that hard-codes 2026-09-28; the test passes (it sets `created_at` itself). The
+  review's guess was about Retro, which is real; it is not new damage.
+- **To decide before LOP goes live:** add a date field for Retro (and the start/end
+  times that belong to it), and whether `event_date` or `created_at` is the counting
+  day for a Retro event. Affects downtime and any later OEE.
