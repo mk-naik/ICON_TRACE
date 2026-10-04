@@ -6217,3 +6217,20 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
 - **To decide before LOP goes live:** add a date field for Retro (and the start/end
   times that belong to it), and whether `event_date` or `created_at` is the counting
   day for a Retro event. Affects downtime and any later OEE.
+
+## 4 Oct 2026 - Quality downgrade of an FQC pass: decided, not built
+
+- [ ] **Build the Quality downgrade of a passed module (A -> GY / BGY), before packing.**
+  Rule, roles, step-up and journey wording are in DECISIONS section 6. Waiting on a
+  separate discussion of WHICH SCREEN (a pass has no Needs Review item, and the
+  Quality screen was merged into Needs Review). Do not guess a screen.
+- **Why `t_grade` came up:** Mukesh's intent was FQC's call shown apart from the final
+  grade (A on a pass, R on a reject pending Quality), `grade` = the final value every
+  filter reads, and the journey showing Quality's upgrade/downgrade. Checked: `t_grade`
+  was never in the repo (design only); `serial.grade` already behaves as the final
+  grade (empty while a reject waits, Quality's value after); the FQC step now shows
+  the band (`aaaf386`). What is missing is only the downgrade of a pass.
+- **When built:** `record_quality` / `/api/quality` accept a `graded` serial that is
+  not packed, with a reason and `_require_stepup`; the Quality Decision step shows
+  FQC band -> final band; update `test_fqc.py` "Quality cannot grade a module FQC
+  passed" to the new rule; dashboard roll-up needs a "Passed -> GY/BGY" row.
