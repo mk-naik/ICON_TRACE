@@ -3268,7 +3268,12 @@ def api_indent_cancel(indent_id):
     left 'planned'. This mirrors allocation withdrawal's own rule exactly, one
     level up (indent -> line -> allocation -> serial)."""
     d = request.get_json(force=True) or {}
-    reason = (d.get("reason") or "").strip() or "indent cancelled"
+    reason = (d.get("reason") or "").strip()
+    # never a default string; asked before the step-up, so a blank reason
+    # does not burn the one-time code
+    if not reason:
+        return jsonify({"ok": False, "why":
+            "A reason is required to cancel an indent."}), 400
     with store.conn() as (cx, cur):
         err = _require_stepup(cur, d)
         if err:
@@ -3310,7 +3315,12 @@ def api_gatepass_cancel(gatepass_id):
     having a challan. Hence: allowed whenever not already cancelled. Flagged
     for Mukesh - if a real dispatched/left state is added later, key it here."""
     d = request.get_json(force=True) or {}
-    reason = (d.get("reason") or "").strip() or "gate pass cancelled"
+    reason = (d.get("reason") or "").strip()
+    # never a default string; asked before the step-up, so a blank reason
+    # does not burn the one-time code
+    if not reason:
+        return jsonify({"ok": False, "why":
+            "A reason is required to cancel a gate pass."}), 400
     with store.conn() as (cx, cur):
         err = _require_stepup(cur, d)
         if err:
@@ -3340,7 +3350,12 @@ def api_prodentry_cancel(entry_id):
     re-recorded correctly - the same 'revert what I did downstream' the challan
     cancel does with its serials."""
     d = request.get_json(force=True) or {}
-    reason = (d.get("reason") or "").strip() or "production entry cancelled"
+    reason = (d.get("reason") or "").strip()
+    # never a default string; asked before the step-up, so a blank reason
+    # does not burn the one-time code
+    if not reason:
+        return jsonify({"ok": False, "why":
+            "A reason is required to cancel a production entry."}), 400
     with store.conn() as (cx, cur):
         err = _require_stepup(cur, d)
         if err:
@@ -3385,7 +3400,12 @@ def api_loss_event_cancel(event_id):
     depends on it. So refuse only while an active induced event references it;
     cancel those first."""
     d = request.get_json(force=True) or {}
-    reason = (d.get("reason") or "").strip() or "loss event cancelled"
+    reason = (d.get("reason") or "").strip()
+    # never a default string; asked before the step-up, so a blank reason
+    # does not burn the one-time code
+    if not reason:
+        return jsonify({"ok": False, "why":
+            "A reason is required to cancel a loss event."}), 400
     with store.conn() as (cx, cur):
         err = _require_stepup(cur, d)
         if err:
@@ -3421,7 +3441,12 @@ def api_invoice_cancel_real(invoice_id):
     it - the same shape challan's own cancel uses to refuse while a gate pass
     references it, one FK up."""
     d = request.get_json(force=True) or {}
-    reason = (d.get("reason") or "").strip() or "invoice cancelled"
+    reason = (d.get("reason") or "").strip()
+    # never a default string; asked before the step-up, so a blank reason
+    # does not burn the one-time code
+    if not reason:
+        return jsonify({"ok": False, "why":
+            "A reason is required to cancel an invoice."}), 400
     with store.conn() as (cx, cur):
         err = _require_stepup(cur, d)
         if err:
@@ -3457,7 +3482,12 @@ def api_indent_line_cancel(line_id):
     serial in this line's allocations has left 'planned'. When the last live
     line goes, the indent is effectively cancelled (its list rows are gone)."""
     d = request.get_json(force=True) or {}
-    reason = (d.get("reason") or "").strip() or "indent line cancelled"
+    reason = (d.get("reason") or "").strip()
+    # never a default string; asked before the step-up, so a blank reason
+    # does not burn the one-time code
+    if not reason:
+        return jsonify({"ok": False, "why":
+            "A reason is required to cancel an indent line."}), 400
     with store.conn() as (cx, cur):
         err = _require_stepup(cur, d)
         if err:
@@ -3565,7 +3595,12 @@ def api_serials_cancel():
     it - use the FQC cancel, a hold, or a challan cancel as appropriate).
     Cancelling sets state='cancelled'; all-or-nothing over a range."""
     d = request.get_json(force=True) or {}
-    reason = (d.get("reason") or "").strip() or "serial cancelled"
+    reason = (d.get("reason") or "").strip()
+    # never a default string; asked before the step-up, so a blank reason
+    # does not burn the one-time code
+    if not reason:
+        return jsonify({"ok": False, "why":
+            "A reason is required to cancel a serial."}), 400
     with store.conn() as (cx, cur):
         err = _require_stepup(cur, d)
         if err:
@@ -3601,7 +3636,12 @@ def api_fqc_cancel():
     be graded again. All-or-nothing over a range; serials with no live grade
     are skipped."""
     d = request.get_json(force=True) or {}
-    reason = (d.get("reason") or "").strip() or "FQC grade cancelled"
+    reason = (d.get("reason") or "").strip()
+    # never a default string; asked before the step-up, so a blank reason
+    # does not burn the one-time code
+    if not reason:
+        return jsonify({"ok": False, "why":
+            "A reason is required to cancel an FQC grade."}), 400
     with store.conn() as (cx, cur):
         err = _require_stepup(cur, d)
         if err:

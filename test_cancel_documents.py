@@ -716,6 +716,24 @@ def t_cancelled_fqc_closes_its_review_items():
           "the other serial's item stays open" % (row["reason"], row["resolved_by"]))
 
 
+@test("every cancel route refuses a blank reason - never a default string - and "
+     "does so BEFORE the authenticator code is spent")
+def t_cancel_needs_a_real_reason():
+    admin, secret, op = accounts()
+    routes = ["/api/challan/1/cancel", "/api/indent/1/cancel",
+              "/api/gatepass/1/cancel", "/api/prodentry/1/cancel",
+              "/api/loss_event/1/cancel", "/api/invoice/1/cancel",
+              "/api/indent/line/1/cancel", "/api/serials/cancel",
+              "/api/fqc/cancel"]
+    for url in routes:
+        for body in ({}, {"reason": "   "}):
+            body = dict(body, totp_code=code(secret), serial="ICON630G1202129999")
+            r = admin.post(url, json=body)
+            why = (r.get_json() or {}).get("why", "")
+            assert r.status_code == 400 and "reason is required" in why,                 (url, body, r.status_code, why)
+    print("      %d routes refuse a missing or blank reason" % len(routes))
+
+
 @test("the Cancel screen's lookup resolves the SAME display numbers the rest "
      "of the app shows for allocation (BAT-...) and loss event (DT-...), not "
      "only a bare row id")
