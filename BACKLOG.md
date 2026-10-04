@@ -6255,3 +6255,18 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
 - **Noticed, not changed:** `/api/serials/cancel` falls back to the reason
   "serial cancelled" when none is sent, against the "never a default reason" rule
   (DECISIONS section 1). Needs Mukesh before it is touched.
+
+## 4 Oct 2026 - Cancel routes no longer invent a reason
+
+- **What was wrong:** eight cancel routes (indent, indent line, gate pass, production
+  entry, loss event, invoice, serial, FQC grade) swapped a blank reason for a canned
+  string ("serial cancelled" ...), against DECISIONS section 1. The challan cancel
+  already refused. The Cancel screen always asks for a reason, so only a direct call
+  or a stale client could reach it.
+- **Change:** a missing or blank reason is now a 400, "A reason is required to cancel
+  <thing>.", checked before the authenticator step (same order as the challan cancel).
+- **Test:** `test_cancel_documents.py` (all nine routes, missing and blank). Every test
+  that touches cancel or discard still passes.
+- **Not changed:** `/api/box/<id>/abandon` still fills "Abandoned - opened, nothing was
+  ever scanned into it." when none is sent. It states a fact rather than inventing a
+  motive, but it is the same pattern - Mukesh to say.
