@@ -6234,3 +6234,24 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
   not packed, with a reason and `_require_stepup`; the Quality Decision step shows
   FQC band -> final band; update `test_fqc.py` "Quality cannot grade a module FQC
   passed" to the new rule; dashboard roll-up needs a "Passed -> GY/BGY" row.
+
+## 4 Oct 2026 - Pack scan names the reason a module will not pack
+
+- **What was wrong:** the pack scan refused with a few generic sentences. A serial
+  that is not in the master read the same whether the tester had seen it or not; a
+  provisional hold said "can be packed once the evidence agrees" even when the
+  evidence had already disagreed; a module whose FQC grade was cancelled, or a
+  cancelled serial, read "Not FQC'd" / "passed FQC ... record reads cancelled"; and
+  the preview's FQC cell said "Passed" beside a provisional hold and "Not FQC'd"
+  beside a serial not in the master.
+- **Change:** `app.py` `_pack_block(cur, serial)` returns (category, sentence) from the
+  records (review_item, ftr_reading, fqc_record incl. a cancelled one, serial state);
+  `_pack_refusal` uses it, so the pallet scan, `/api/box/check` and Repack all say the
+  same. `/api/box/check` returns `category`; `icon_live.js` shows it in the FQC cell.
+  Eight reasons named; "Not FQC'd" wording kept for the plain case.
+- **Test:** `test_pack_readiness.py` (eight reasons, eight different sentences,
+  preview and scan identical; fails on the old code). Checked in Chromium for a
+  provisional hold and a serial not in the master. `node --check` clean.
+- **Noticed, not changed:** `/api/serials/cancel` falls back to the reason
+  "serial cancelled" when none is sent, against the "never a default reason" rule
+  (DECISIONS section 1). Needs Mukesh before it is touched.

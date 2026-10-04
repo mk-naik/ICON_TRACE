@@ -137,6 +137,55 @@ def t_settle_ignores_cancelled():
 # 2-4  what the preview and the scan say
 # --------------------------------------------------------------------------
 
+@test("every reason a serial will not pack is NAMED - not in master (seen by "
+      "the tester or not), Quality pending, provisional, provisional that "
+      "disagrees, FQC cancelled, serial cancelled - on the preview, with the "
+      "same words on the scan")
+def t_each_reason_named():
+    c = seed({1: dict(state="rejected", fqc="reject"),
+              2: dict(state="hold", fqc="pass"),
+              3: dict(state="hold", fqc="pass"),
+              4: dict(state="cancelled"),
+              5: dict(state="produced", fqc="pass")})
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE fqc_record SET ss_state='NC', ss_pmax=NULL WHERE serial=%s",
+                    (S(2),))
+        db.create_review_item(cur, "provisional_mismatch", S(3),
+                              fqc_id=1, new_fqc_id=1, created_by="system")
+        cur.execute("UPDATE fqc_record SET status='cancelled', cancelled_by='Test Admin', "
+                    "cancelled_at='2026-10-01T09:30:00', cancelled_reason='wrong module' "
+                    "WHERE serial=%s", (S(5),))
+        cur.execute("UPDATE serial SET state='produced', grade=NULL WHERE serial=%s",
+                    (S(5),))
+        # seen by the tester, never planned / seen by the tester, not a serial
+        for typ, sn in (("not_in_master_unplanned", S(50)),
+                        ("not_in_master_malformed", "ICON625R1292910051-")):
+            cur.execute("INSERT INTO review_item (type, serial, status, created_at, "
+                        "created_by, raw_id, source) VALUES (%s,%s,'open',"
+                        "'2026-10-01T09:00:00','system',%s,'ss_ingest')",
+                        (typ, sn, sn))
+    want = [
+        (S(1), "Quality pending", "Quality pending - "),
+        (S(2), "Provisional", "could not be reached"),
+        (S(3), "Provisional - disagrees", "the evidence disagrees"),
+        (S(4), "Serial cancelled", "Cancelled - "),
+        (S(5), "FQC cancelled", "Test Admin cancelled it on 2026-10-01 09:30 (wrong module)"),
+        (S(50), "Not in master", "nobody has planned it yet"),
+        ("ICON625R1292910051-", "Not in master", "does not look like a serial"),
+        (S(77), "Not in master", "the tester has not read it either"),
+    ]
+    bid = open_box(c)
+    seen = set()
+    for sn, cat, words in want:
+        d = c.get("/api/box/check?serial=%s&grade=A" % sn).get_json()
+        assert d["ok"] is False and d["category"] == cat and words in d["why"], (sn, d)
+        r = c.post("/api/box/%d/scan" % bid, json={"serial": sn})
+        assert r.status_code == 400 and r.get_json()["why"] == d["why"], (sn, r.get_json())
+        seen.add(d["why"])
+    assert len(seen) == len(want), "two reasons read the same: %s" % seen
+    print("      %d different reasons, %d different sentences" % (len(want), len(seen)))
+
+
 @test("NOT FQC'D is a refusal, in those words - even when the module is in a "
       "production entry, and the scan refuses it too")
 def t_not_fqcd_refused():

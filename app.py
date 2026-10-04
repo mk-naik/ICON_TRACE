@@ -1534,41 +1534,76 @@ def api_box_scan(box_id):
     return jsonify({"ok": True, "qty": b["qty"], "capacity": b["capacity"]})
 
 
-def _pack_refusal(cur, b, serial):
-    """Why this serial may not go in this box, or None if it may.
+def _pack_block(cur, serial):
+    """(category, why) when the MODULE itself may not be packed, else None.
 
-    The screen previews with this and the scan enforces with it, so what the
-    operator is shown before pressing Add is the same rule that decides -
-    v4 guessed the FQC category from the last digit of the serial.
-    """
+    The category names which of the separate reasons it is - the screen shows
+    it beside the sentence, so an operator can tell "Quality has not called
+    it" from "the tester never read it" from "nobody has planned it" without
+    reading prose. One query per fact; each is the record that says so, not
+    an inference from `state` (which used to make "produced, not ready to
+    pack" stand for several different problems)."""
     s = db.find_serial(cur, serial)
     if not s:
-        return "%s is not in the serial master." % serial
+        return _not_in_master(cur, serial)
 
     # Asked first, because "already in box ISPL260909/K001" tells the
     # operator where it is; "already packed" only tells them it is not here.
     dup = store.serial_in_live_box(cur, serial)
     if dup:
-        return "%s is already in box %s." % (serial, _box_label(dup))
+        return ("Already packed",
+                "%s is already in box %s." % (serial, _box_label(dup)))
 
     state = s.get("state")
     if state in ("packed", "dispatched"):
-        return "%s is already %s." % (serial, state)
-    # FQC is read from FQC's own record, not inferred from the state: "is
-    # produced, not ready to pack" was said both of a module nobody had
-    # inspected and of one FQC had passed - two different problems, one
-    # sentence, and the operator could not tell which.
+        return ("Already " + state, "%s is already %s." % (serial, state))
+    if state == "cancelled":
+        return ("Serial cancelled",
+                "Cancelled - %s was cancelled by an Admin and is no longer a "
+                "real module. It cannot be packed." % serial)
     f = db.latest_fqc(cur, serial, s.get("build_instance"))
     if not f:
-        return ("Not FQC'd - %s has not been through FQC yet. Packing an "
-                "unjudged module is how a reject reaches a customer." % serial)
+        gone = store.one(cur,
+            "SELECT cancelled_by, cancelled_at, cancelled_reason FROM fqc_record "
+            "WHERE serial=%s AND superseded_by IS NULL AND status='cancelled' "
+            "ORDER BY fqc_id DESC LIMIT 1", (serial,))
+        if gone:
+            return ("FQC cancelled",
+                    "FQC grade cancelled - %s had an FQC decision, but %s "
+                    "cancelled it on %s (%s). It has to go through FQC again "
+                    "before it can be packed."
+                    % (serial, gone.get("cancelled_by") or "someone",
+                       (gone.get("cancelled_at") or "")[:16].replace("T", " "),
+                       gone.get("cancelled_reason") or "no reason on record"))
+        return ("Not FQC'd",
+                "Not FQC'd - %s has not been through FQC yet (it is %s). "
+                "Packing an unjudged module is how a reject reaches a "
+                "customer." % (serial, state or "planned"))
     if state == "rejected" or (state != "graded" and f.get("outcome") == "reject"):
-        return ("%s was rejected at FQC and is waiting on a quality decision. "
-                "It has no grade yet, so it cannot be packed." % serial)
+        dtxt = db.defect_labels(cur, f.get("fqc_id"), f.get("defect"))
+        return ("Quality pending",
+                "Quality pending - %s was rejected at FQC%s and is waiting on "
+                "a quality decision (Needs Review). It has no grade yet, so "
+                "it cannot be packed."
+                % (serial, " (" + dtxt + ")" if dtxt else ""))
     if state == "hold":
-        return ("%s is on hold - its FQC decision was made without the "
-                "tester's reading and is waiting for it (Hold & Deviation). "
-                "It can be packed once the evidence agrees." % serial)
+        mism = store.one(cur,
+            "SELECT review_id FROM review_item WHERE serial=%s AND status='open' "
+            "AND type='provisional_mismatch' LIMIT 1", (serial,))
+        if mism:
+            return ("Provisional - disagrees",
+                    "Provisional, and the evidence disagrees - %s was passed "
+                    "at FQC without the tester's reading; the reading arrived "
+                    "and does not support that decision. A person has to "
+                    "decide it in Needs Review before it can be packed."
+                    % serial)
+        why_nc = (" (the Sun Simulator could not be reached)"
+                  if f.get("ss_state") == "NC" else "")
+        return ("Provisional",
+                "Provisional - %s was passed at FQC without the tester's "
+                "reading%s and is waiting for it (Hold & Deviation). It can "
+                "be packed once the reading arrives and agrees."
+                % (serial, why_nc))
     if state != "graded":
         # a pass FQC made that did not reach the module's record
         try:
@@ -1577,13 +1612,56 @@ def _pack_refusal(cur, b, serial):
         except (TypeError, ValueError):
             short = False
         if short:
-            return ("%s passed FQC at %.1f W, below its %s W nameplate - it "
+            return ("Below nameplate",
+                    "%s passed FQC at %.1f W, below its %s W nameplate - it "
                     "has to be retested at FQC before it can be packed."
                     % (serial, float(f["ss_pmax"]), s["wattage"]))
-        return ("%s passed FQC on %s, but its record still reads '%s' and "
+        return ("Pass not carried on",
+                "%s passed FQC on %s, but its record still reads '%s' and "
                 "has no grade to pack under. Look it up at FQC once more to "
                 "carry the decision on." % (serial,
                 (f.get("at") or "")[:16].replace("T", " "), state))
+    return None
+
+
+def _not_in_master(cur, serial):
+    """Which kind of 'not in the master' - the tester has seen it (and Needs
+    Review holds it) or nothing has."""
+    seen = store.one(cur,
+        "SELECT type, status FROM review_item WHERE serial=%s AND type IN "
+        "('not_in_master_unplanned','not_in_master_malformed') "
+        "ORDER BY review_id DESC LIMIT 1", (serial,))
+    reading = store.one(cur, "SELECT 1 AS x FROM ftr_reading WHERE serial=%s",
+                        (serial,))
+    if seen and seen["type"] == "not_in_master_malformed":
+        return ("Not in master",
+                "Not in master - %s is not in the serial master. The Sun "
+                "Simulator scanned it and it does not look like a serial "
+                "(Needs Review > Not in master). Check the barcode."
+                % serial)
+    if seen or reading:
+        return ("Not in master",
+                "Not in master - %s is not in the serial master. The Sun "
+                "Simulator has read it, but nobody has planned it yet "
+                "(Needs Review > Not in master). An Incharge has to plan it "
+                "before it can go through FQC and be packed." % serial)
+    return ("Not in master",
+            "Not in master - %s is not in the serial master, and the tester "
+            "has not read it either. Check the barcode, or ask Planning "
+            "whether it was ever issued." % serial)
+
+
+def _pack_refusal(cur, b, serial):
+    """Why this serial may not go in this box, or None if it may.
+
+    The screen previews with this and the scan enforces with it, so what the
+    operator is shown before pressing Add is the same rule that decides -
+    v4 guessed the FQC category from the last digit of the serial.
+    """
+    blocked = _pack_block(cur, serial)
+    if blocked:
+        return blocked[1]
+    s = db.find_serial(cur, serial)
     if b is not None:
         if s.get("grade") != b["grade"]:
             return ("Box is grade %s, %s is %s. The label claims every module "
@@ -1704,6 +1782,7 @@ def api_box_check():
             b = {"grade": request.args.get("grade").strip().upper(),
                  "model": None, "capacity": None, "qty": 0}
         why = _pack_refusal(cur, b, serial)
+        blocked = _pack_block(cur, serial)
         s = db.find_serial(cur, serial) or {}
         # this module's own standing decision - not a search of the newest
         # 1,000 of everyone's, which showed FQC "-" for an older one
@@ -1726,6 +1805,9 @@ def api_box_check():
             "String Rework module - tracked apart from the regular modules."})
     return jsonify({
         "ok": why is None, "why": why, "serial": serial,
+        # which separate reason the module itself is blocked for (None when
+        # it is the box that refuses, or nothing does)
+        "category": blocked[0] if blocked else None,
         "model": s.get("model"), "wattage": s.get("wattage"),
         "grade": s.get("grade"), "state": s.get("state"),
         "customer": db.customer_display(s.get("customer")) or None,

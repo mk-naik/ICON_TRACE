@@ -5711,7 +5711,14 @@ function wireFqcAnomalies() {
                  cell - "is produced, not ready to pack" used to stand for
                  both "never inspected" and "passed but not carried on" */
               '<div><label>FQC</label><div class="lv">' +
-                (d.outcome === 'pass' || d.outcome === 'reject'
+                /* the server names WHY the module is blocked (Not in master,
+                   Quality pending, Provisional, FQC cancelled ...) - "Passed"
+                   beside a provisional hold, or "Not FQC'd" beside a serial
+                   that is not even in the master, would say the wrong thing */
+                (d.category && d.category.indexOf('Already') !== 0
+                  ? '<span style="color:var(--fail);font-weight:600">' +
+                    fqcEsc(d.category) + '</span>'
+                  : d.outcome === 'pass' || d.outcome === 'reject'
                   ? fqcEsc(d.outcome === 'pass' ? 'Passed' : 'Rejected') +
                     (d.graded_at ? ' <span class="mono" style="font-size:11px;' +
                       'color:var(--ink3)">' + fqcEsc(packWhen(d.graded_at)) +
