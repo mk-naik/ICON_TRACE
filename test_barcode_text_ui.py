@@ -66,19 +66,44 @@ def ink_offsets(pg, scale):
     return out
 
 
+def box_offsets(pg):
+    """For each barcode: centre of the text's advance box - centre of the bars,
+    in CSS px. The browser adds letter-spacing after the last letter too, so the
+    box it reports is one spacing wider than the visible text; that is taken
+    off, as it is in icon_barcode.text_style."""
+    return pg.eval_on_selector_all(".bcw", """ws => ws.map(w => {
+        const s = w.querySelector('svg').getBoundingClientRect();
+        const t = w.querySelector('.bct'), r = t.getBoundingClientRect();
+        const sp = parseFloat(getComputedStyle(t).letterSpacing) || 0;
+        return r.left + (r.width - sp) / 2 - (s.left + s.width / 2); })""")
+
+
 @test("the text is centred on the bars of every barcode - Jan-Sep and Oct-Dec "
-      "widths alike - at the defaults and with letter spacing (within 0.5 px)")
+      "widths alike - at the defaults and with letter spacing: its box within 0.5 px, "
+      "and its painted ink within 0.5 px of where the same text sits unspaced")
 def t_centred():
+    # Two measures, because ink alone cannot tell the page from the typeface.
+    # Centring is a property of the text's box (that is what Bartender and
+    # Zebra Designer centre). The ink of "ICON...1" in Arial Bold sits 1.2 px
+    # left of its box - the "1" has a wide right bearing - on any layout, so
+    # the ink is compared with the SAME text and font at no letter spacing,
+    # which cancels the bearings and leaves exactly what the setting moved.
     _, box = T.packed_box()
     with H.browser() as b:
         for kw in ({}, {"font": "consolas", "spacing": 4, "bold": 0},
                    {"font": "arial_black", "spacing": 2, "size": 12}):
             set_text(**kw)
             pg = sheet(b, box, scale=3)
-            offs = ink_offsets(pg, 3)
-            assert len(offs) == len(T.SERIALS), offs
-            assert all(abs(o) <= 0.5 for o in offs), (kw, ["%.2f" % o for o in offs])
+            lay, ink = box_offsets(pg), ink_offsets(pg, 3)
             pg.close()
+            set_text(**dict(kw, spacing=0))
+            pg = sheet(b, box, scale=3)
+            own = ink_offsets(pg, 3)
+            pg.close()
+            assert len(lay) == len(ink) == len(own) == len(T.SERIALS), (lay, ink, own)
+            assert all(abs(o) <= 0.5 for o in lay), (kw, ["%.2f" % o for o in lay])
+            assert all(abs(i - o) <= 0.5 for i, o in zip(ink, own)), \
+                (kw, ["%.2f" % i for i in ink], ["%.2f" % o for o in own])
     set_text()
 
 

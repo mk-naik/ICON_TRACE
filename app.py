@@ -5763,12 +5763,7 @@ def view_fragment(name):
     if name == "settings":
         with store.conn() as (cx, cur):
             cfg = db.get_config(cur)
-        return render_template(allowed[name], cfg=cfg, probe=_evidence_probe(cfg),
-                               bc_fonts=bc.TEXT_FONTS,
-                               bc_text=bc.text_settings(cfg),
-                               bc_sample=BC_SAMPLE_SERIAL,
-                               bc_sample_svg=bc.code128_bars_svg(BC_SAMPLE_SERIAL),
-                               bc_cell_mm=PACKING_LIST_BARCODE_CELL_MM)
+        return render_template(allowed[name], **_settings_context(cfg))
     if name == "indent-form":
         with store.conn() as (cx, cur):
             known = db.known_customers(cur)
@@ -5777,6 +5772,19 @@ def view_fragment(name):
                                customers=known + [c["name"] for c in
                                                   customers.all_customers()])
     return render_template(allowed[name])
+
+
+def _settings_context(cfg):
+    """Every variable frag_settings.html reads. Two routes render that fragment
+    - /view/settings (inside v4) and the standalone /settings page, which
+    includes it - so the context is built here, once. A variable added to one
+    render and not the other turned /settings into a 500."""
+    return dict(cfg=cfg, probe=_evidence_probe(cfg),
+                bc_fonts=bc.TEXT_FONTS,
+                bc_text=bc.text_settings(cfg),
+                bc_sample=BC_SAMPLE_SERIAL,
+                bc_sample_svg=bc.code128_bars_svg(BC_SAMPLE_SERIAL),
+                bc_cell_mm=PACKING_LIST_BARCODE_CELL_MM)
 
 
 def _evidence_probe(cfg):
@@ -10257,9 +10265,8 @@ def settings():
         cfg = db.get_config(cur)
     if refused:
         flash(refused, "fail")
-        return render_template("settings.html", cfg=cfg,
-                               probe=_evidence_probe(cfg)), 403
-    return render_template("settings.html", cfg=cfg, probe=_evidence_probe(cfg))
+        return render_template("settings.html", **_settings_context(cfg)), 403
+    return render_template("settings.html", **_settings_context(cfg))
 
 
 @app.route("/dashboard")

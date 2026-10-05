@@ -166,6 +166,21 @@ def t_settings_fragment():
     assert APP.BC_SAMPLE_SERIAL in html and "width:%dmm" % APP.PACKING_LIST_BARCODE_CELL_MM in html
 
 
+@test("the standalone /settings page carries the same card - two routes render one "
+      "fragment, so both must supply its context (a refused Admin form post too)")
+def t_settings_page_same_card():
+    c, _ = packed_box()
+    html = c.get("/settings").get_data(as_text=True)
+    assert 'id="bcTextCard"' in html and 'id="bt_font"' in html
+    a = client(role="Admin", login_id="admin1")
+    r = a.get("/settings")
+    assert r.status_code == 200 and 'id="bcTextCard"' in r.get_data(as_text=True)
+    r = a.post("/settings", data={"ss_csv_path": "x"})
+    assert r.status_code == 403, r.status_code
+    assert 'id="bcTextCard"' in r.get_data(as_text=True)
+    assert stored() == bc.TEXT_DEFAULTS, stored()
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0

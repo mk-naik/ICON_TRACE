@@ -6369,3 +6369,28 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
 - **Not done:** the rest of the packing list's look waits for the challan V1
   design system to be signed off. Not yet scanned with the plant's handheld.
 
+## 5 Oct 2026 - Packing list barcodes: two defects found when the patch went in
+
+- **Wrong 1:** `GET /settings` (the standalone Settings page) answered 500,
+  `'bc_fonts' is undefined`; so did an Admin's refused form post (403 path).
+  Found by `test_role_gates.py`, which the patch's own tests do not run.
+- **Cause:** `frag_settings.html` is rendered by two routes - `/view/settings`
+  and the page `/settings`, which includes it. The patch gave the new "Barcode
+  text" card its variables in the first and not the second.
+- **Change:** `_settings_context(cfg)` builds every variable the fragment reads,
+  once; the fragment, the page and the page's 403 re-render all use it.
+- **Wrong 2:** `test_barcode_text_ui.py` "text centred on the bars" failed on
+  this machine (real Arial on Windows): ink 1.17 px off, limit 0.5.
+- **Cause:** it compared the painted INK of the text with the ink of the bars,
+  and ink is not the box. The "1" that ends a serial has a wide right bearing, so
+  Arial Bold's ink sits about 1 px left of its box on any layout (canvas
+  `measureText` predicts the same sign and size). The box itself was centred to
+  0.01 px, letter spacing included - the CSS was right, the measure was not.
+- **Change:** the test checks the text's box against the bars (0.5 px) and its
+  painted ink against the SAME text unspaced (0.5 px), which cancels the font's
+  bearings and leaves what the setting moved. Mutation check: without the
+  negative right margin it fails (-2.66 px at 4 pt spacing).
+- **Tests:** `test_barcode_text.py` +1 (the `/settings` page and an Admin's
+  refused post carry the card); `test_barcode_text_ui.py` centring as above;
+  `test_role_gates.py` back to 11/11.
+
