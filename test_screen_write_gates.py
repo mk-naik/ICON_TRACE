@@ -202,7 +202,9 @@ def t_critical_surface_keeps_role_gates():
     want = {
         "/api/material": "_R_MASTER", "/api/material/<int:n>": "_R_MASTER",
         "/api/cell-efficiencies": "_R_MASTER", "/api/db/reset": "_R_MASTER",
-        "/api/settings": "_R_MASTER", "/settings": "_R_ADMIN",
+        # (the form's POST; GET /settings is only a redirect into the app and
+        # carries no gate - the fragment it lands on does)
+        "/api/settings": "_R_MASTER", ("/settings", "POST"): "_R_ADMIN",
         "/admin/challan-import": "_R_ADMIN", "/api/users": "_R_ADMIN",
         "/api/users/<login_id>/reset-password": "_R_ADMIN",
         "/api/users/<login_id>/reset-totp": "_R_ADMIN",
@@ -221,8 +223,10 @@ def t_critical_surface_keeps_role_gates():
         "/api/invoice/<int:invoice_id>/cancel": "_R_ADMIN",
     }
     for path, const in want.items():
+        path, method = path if isinstance(path, tuple) else (path, None)
         i = next(n for n, l in enumerate(_SRC)
-                 if l.startswith('@app.route("%s"' % path))
+                 if l.startswith('@app.route("%s"' % path) and
+                 (method is None or 'methods=["%s"]' % method in l))
         window = "\n".join(_SRC[i:i + 10])
         assert "@require_role(*%s)" % const in window, (path, window)
         assert "@require_screen_write" not in window.split("def ")[0], path

@@ -247,6 +247,102 @@ def t_back_does_not_walk_screens():
             ctx.close()
 
 
+# --------------------------------------------------------------------------
+# 6. Admin has tabs, and the hash can name one: #admin/stations
+# --------------------------------------------------------------------------
+
+def admin_tab(pg):
+    """(active tab's text, the one visible pane's id) on the Admin screen."""
+    return (pg.evaluate("(document.querySelector('#adTabs button.on')||{}).textContent") or "").strip(), \
+        pg.evaluate("[...document.querySelectorAll('.adpane.on')].map(p => p.id).join(',')")
+
+
+@test("#admin/stations lands on Admin > Stations & sources (the evidence paths and "
+      "the barcode card are there), a tab click writes its own hash, and a refresh "
+      "returns to the tab; the first tab stays plain #admin")
+def t_admin_tab_in_the_hash():
+    fresh()
+    with H.browser() as b:
+        ctx, pg = signed_in_page(b, login_id="sa.tab", hashfrag="#admin/stations")
+        try:
+            assert shown(pg) == "admin", shown(pg)
+            assert admin_tab(pg) == ("Stations & sources", "ad-stations"), admin_tab(pg)
+            assert pg.evaluate("location.hash") == "#admin/stations", pg.evaluate("location.hash")
+            assert pg.locator("#ad-stations #bcTextCard").count() == 1, "the barcode card is not in the tab"
+            # another tab, and back to the first one
+            pg.click('#adTabs button[onclick*="\'models\'"]')
+            assert pg.evaluate("location.hash") == "#admin/models", pg.evaluate("location.hash")
+            pg.reload()
+            pg.wait_for_selector("#app.on", timeout=20000)
+            pg.wait_for_timeout(1200)
+            assert admin_tab(pg) == ("Models", "ad-models"), admin_tab(pg)
+            pg.click('#adTabs button[onclick*="\'users\'"]')
+            assert pg.evaluate("location.hash") == "#admin", pg.evaluate("location.hash")
+            # leaving Admin and coming back keeps the hash honest
+            pg.evaluate("go('mgmt')"); pg.wait_for_timeout(300)
+            assert pg.evaluate("location.hash") == "#mgmt"
+            assert pg.errors == [], pg.errors
+        finally:
+            ctx.close()
+
+
+@test("a tab the Admin screen does not have (#admin/nonsense, #admin/x'y, #admin/) "
+      "does nothing: Admin opens on its first tab, no error - and the same hash for "
+      "an account that cannot view Admin lands on its home")
+def t_admin_unknown_tab_is_ignored():
+    fresh()
+    with H.browser() as b:
+        for frag in ("#admin/nonsense", "#admin/x'y", "#admin/", "#admin/stations/extra"):
+            ctx, pg = signed_in_page(b, login_id="sa.bad2", hashfrag=frag)
+            try:
+                assert shown(pg) == "admin", (frag, shown(pg))
+                tab = admin_tab(pg)
+                want = ("Stations & sources", "ad-stations") if frag.endswith("extra") \
+                    else ("Users", "ad-users")
+                assert tab == want, (frag, tab)
+                assert pg.errors == [], (frag, pg.errors)
+            finally:
+                ctx.close()
+    AUTH.make_user(role="FQC Operator", login_id="fqc.only")
+    with store.conn() as (cx, cur):
+        perms = {sid: {"view": False, "write": False} for sid in icon_auth.SCREEN_IDS}
+        perms["fqc"] = {"view": True, "write": True}
+        icon_auth.set_screen_perms(cur, "cli", "fqc.only", perms)
+    with H.browser() as b:
+        ctx, pg = signed_in_page(b, role="FQC Operator", login_id="fqc.only",
+                                 hashfrag="#admin/stations")
+        try:
+            assert shown(pg) != "admin", "a hash forced an account onto Admin"
+            assert pg.errors == [], pg.errors
+        finally:
+            ctx.close()
+
+
+@test("/settings, followed in a real browser by a Super Admin, ends on Admin > "
+      "Stations & sources with the barcode card on screen - not on a second app")
+def t_settings_url_lands_in_admin():
+    fresh()
+    with H.browser() as b:
+        ctx = b.new_context(viewport={"width": 1400, "height": 900})
+        ctx.add_cookies([{"name": "icon_sid", "value": AUTH.make_session_id(role="Super Admin", login_id="sa.set"),
+                          "domain": "127.0.0.1", "path": "/"}])
+        pg = ctx.new_page()
+        pg.errors = []
+        pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+        try:
+            pg.goto(H.base_url() + "/settings")
+            pg.wait_for_selector("#app.on", timeout=20000)
+            pg.wait_for_selector("#ad-stations #bt_font", timeout=15000)
+            assert pg.url.endswith("/#admin/stations"), pg.url
+            assert shown(pg) == "admin" and admin_tab(pg) == ("Stations & sources", "ad-stations"), \
+                (shown(pg), admin_tab(pg))
+            assert pg.locator("#v-settings #bcTextCard").is_visible()
+            assert pg.locator("text=Back to the main app").count() == 0, "this is the second app"
+            assert pg.errors == [], pg.errors
+        finally:
+            ctx.close()
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

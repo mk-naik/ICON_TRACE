@@ -2259,7 +2259,14 @@ def api_box(box_id):
 # width of the packing list's barcode cell, so overflow shows before printing.
 # test_barcode_text_ui.py measures the real cell and fails if this drifts.
 BC_SAMPLE_SERIAL = "ICON520R12A2134347"
-PACKING_LIST_BARCODE_CELL_MM = 80
+PACKING_LIST_BARCODE_CELL_MM = 80      # the cell's print area (A4, 8 mm margins)
+PACKING_LIST_BARCODE_PAD_MM = 2        # white padding each side of it, before the border
+# What a barcode may take, quiet zones included: the quiet zone is blank, so it
+# may use the padding - it must not reach the cell's border line, which a
+# scanner would read as a bar. The sheet centres a wider one, so it spills
+# evenly into both paddings.
+PACKING_LIST_BARCODE_ROOM_MM = (PACKING_LIST_BARCODE_CELL_MM +
+                                2 * PACKING_LIST_BARCODE_PAD_MM)
 
 
 @app.route("/box/<int:box_id>/sheet")
@@ -5860,7 +5867,9 @@ def _settings_context(cfg):
                 bc_sample=BC_SAMPLE_SERIAL,
                 bc_sample_svg=bc.code128_bars_svg(BC_SAMPLE_SERIAL,
                                                   **bc.bar_params(cfg)),
-                bc_cell_mm=PACKING_LIST_BARCODE_CELL_MM)
+                bc_cell_mm=PACKING_LIST_BARCODE_CELL_MM,
+                bc_pad_mm=PACKING_LIST_BARCODE_PAD_MM,
+                bc_room_mm=PACKING_LIST_BARCODE_ROOM_MM)
 
 
 def _evidence_probe(cfg):
@@ -6008,16 +6017,18 @@ def api_cell_efficiencies():
 
 def _bars_overflow(cfg):
     """Why these bar settings cannot print, or None: the widest serial's barcode
-    (quiet zones included) must fit the packing list's barcode cell. Custom
+    (quiet zones included - blank, but they may not reach the cell's border)
+    must fit the room the packing list's barcode cell gives it. Custom
     (non-ICON) serials can be longer than that sample and wider still."""
     p = bc.bar_params(cfg)
     w = bc.bars_width_mm(BC_SAMPLE_SERIAL, p["module_mm"], p["quiet"])
-    if w <= PACKING_LIST_BARCODE_CELL_MM:
+    if w <= PACKING_LIST_BARCODE_ROOM_MM:
         return None
     return ("Not saved - at this module width and quiet zone the widest serial's "
-            "barcode is %.1f mm wide, and the packing list's barcode cell is %d mm. "
-            "Make the bars narrower or the quiet zone smaller."
-            % (w, PACKING_LIST_BARCODE_CELL_MM))
+            "barcode, quiet zones included, is %.1f mm wide, and the packing "
+            "list's barcode cell has %d mm up to its border. Make the bars "
+            "narrower or the quiet zone smaller."
+            % (w, PACKING_LIST_BARCODE_ROOM_MM))
 
 
 @app.route("/api/settings", methods=["POST"])
@@ -10327,7 +10338,17 @@ def gatepass():
 # Settings  -  where SS and EL actually live
 # --------------------------------------------------------------------------
 
-@app.route("/settings", methods=["GET", "POST"])
+@app.route("/settings", methods=["GET"])
+def settings_landing():
+    """Evidence Sources is a tab of the Admin screen now (Stations & sources).
+    This URL used to be a second, cut-down app of its own - another sidebar,
+    another page - so it lands in the real one instead. It reveals nothing to
+    a stranger: the app asks them to sign in first, and Admin is role-gated
+    there as everywhere (the fragment it loads is gated by _FRAGMENT_GATE)."""
+    return redirect("/#admin/stations")
+
+
+@app.route("/settings", methods=["POST"])
 @require_role(*_R_ADMIN)
 def settings():
     refused = None

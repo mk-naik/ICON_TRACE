@@ -192,18 +192,22 @@ def t_bar_settings_saved_and_printed():
       "refused save stores nothing")
 def t_bar_settings_overflow_refused():
     c, _ = packed_box()
-    cell = APP.PACKING_LIST_BARCODE_CELL_MM
+    # the room a barcode has, quiet zones included: the print area and the
+    # padding either side of it, up to the cell's border
+    room = APP.PACKING_LIST_BARCODE_ROOM_MM
+    assert room == APP.PACKING_LIST_BARCODE_CELL_MM + 2 * APP.PACKING_LIST_BARCODE_PAD_MM
     widest = bc.code128_modules(APP.BC_SAMPLE_SERIAL)            # 211 modules
     # the largest width that fits with the default quiet zone, and the next step up
-    fits = round(cell / (widest + 20) - 0.0005, 3)
+    fits = round(room / (widest + 20) - 0.0005, 3)
     r = c.post("/api/settings", json={"bc_bar_width": str(fits)})
     assert r.status_code == 200, (fits, r.get_json())
     before = stored()
-    over = round(cell / (widest + 20) + 0.01, 3)
+    over = round(room / (widest + 20) + 0.01, 3)
     r = c.post("/api/settings", json={"bc_bar_width": str(over)})
     assert r.status_code == 400, (over, r.status_code)
     why = r.get_json()["why"]
-    assert "%.1f mm" % ((widest + 20) * over) in why and "%d mm" % cell in why, why
+    assert "%.1f mm" % ((widest + 20) * over) in why and "%d mm" % room in why, why
+    assert "quiet zones included" in why, why
     assert stored() == before, "a refused save stored something"
     # the quiet zone alone: fine at the default width, too wide beside the stored one
     r = c.post("/api/settings", json={"bc_bar_quiet": "25"})
@@ -225,7 +229,7 @@ def t_settings_fragment():
     html = c.get("/view/settings").get_data(as_text=True)
     assert '<option value="verdana" data-css="Verdana, Arial, sans-serif" selected>' in html
     assert 'id="bt_size" type="number" min="6" max="20" step="0.5" value="11"' in html
-    assert APP.BC_SAMPLE_SERIAL in html and "width:%dmm" % APP.PACKING_LIST_BARCODE_CELL_MM in html
+    assert APP.BC_SAMPLE_SERIAL in html and "width:%dmm" % APP.PACKING_LIST_BARCODE_ROOM_MM in html
     for want in ('id="bt_barw" type="number" min="0.15" max="0.4" step="0.001" value="0.3"',
                  'id="bt_barh" type="number" min="6" max="20" step="0.5" value="13"',
                  'id="bt_quiet" type="number" min="10" max="25" step="1" value="14"'):
@@ -235,15 +239,24 @@ def t_settings_fragment():
     assert '"bc_bar_width": "0.254"' in html, "the defaults for Reset are not in the page"
 
 
-@test("the standalone /settings page carries the same card - two routes render one "
-      "fragment, so both must supply its context (a refused Admin form post too)")
-def t_settings_page_same_card():
+@test("/settings is not an app of its own: it sends everyone, signed in or not, to "
+      "Admin > Stations & sources; the card is the fragment both Admin and Super "
+      "Admin load there, and a refused Admin form post still renders it")
+def t_settings_lands_in_the_app():
     c, _ = packed_box()
-    html = c.get("/settings").get_data(as_text=True)
-    assert 'id="bcTextCard"' in html and 'id="bt_font"' in html
+    for who in (c, client(role="Admin", login_id="admin1"), APP.app.test_client()):
+        r = who.get("/settings")
+        assert r.status_code == 302 and r.headers["Location"].endswith("/#admin/stations"), \
+            (r.status_code, r.headers.get("Location"))
+        assert b"bcTextCard" not in r.get_data(), "the redirect carried the page"
+    # the card itself: what Admin > Stations & sources loads
+    for who in (c, client(role="Admin", login_id="admin1")):
+        html = who.get("/view/settings").get_data(as_text=True)
+        assert 'id="bcTextCard"' in html and 'id="bt_font"' in html
+    # a stranger gets nothing from the fragment
+    assert APP.app.test_client().get("/view/settings").status_code in (401, 403)
+    # the legacy form post keeps its gate, and its refusal page still has the context
     a = client(role="Admin", login_id="admin1")
-    r = a.get("/settings")
-    assert r.status_code == 200 and 'id="bcTextCard"' in r.get_data(as_text=True)
     r = a.post("/settings", data={"ss_csv_path": "x"})
     assert r.status_code == 403, r.status_code
     assert 'id="bcTextCard"' in r.get_data(as_text=True)

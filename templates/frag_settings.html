@@ -88,7 +88,7 @@
       <div class="hint">White each side. Code128 asks for at least {{ bc_ranges.bc_bar_quiet[0] }}.</div></div>
     <div class="fld"><label>Widest barcode</label>
       <div class="mono" id="bt_barwide" style="padding:7px 0">&mdash;</div>
-      <div class="hint">of {{ bc_cell_mm }}&nbsp;mm in the cell</div></div>
+      <div class="hint">quiet zones included; the cell has {{ bc_room_mm }}&nbsp;mm</div></div>
   </div>
   <div class="hint" style="margin-top:6px">Module width is the narrowest bar. A width that is a
     whole number of printer dots prints every bar the same: 0.254&nbsp;mm is 3 dots
@@ -113,12 +113,15 @@
     <label><input type="checkbox" id="bt_italic"{{ ' checked' if bc_text.bc_text_italic == '1' }}> Italic</label>
     <label><input type="checkbox" id="bt_underline"{{ ' checked' if bc_text.bc_text_underline == '1' }}> Underline</label>
   </div>
-  <div class="hint" style="margin-top:14px">Preview at print size, inside the width of the
-    packing list&rsquo;s barcode cell ({{ bc_cell_mm }}&nbsp;mm), with the widest serial
-    there is.</div>
+  <div class="hint" style="margin-top:14px">Preview at print size, in the packing list&rsquo;s
+    barcode cell, with the widest serial there is. The dashed line is the cell&rsquo;s
+    border: {{ bc_room_mm }}&nbsp;mm across ({{ bc_cell_mm }}&nbsp;mm print area and
+    {{ bc_pad_mm }}&nbsp;mm of padding each side). The <span style="background:#DCE9F5;padding:0 4px">shaded</span>
+    ends are the barcode&rsquo;s quiet zone: blank when printed, but it has to stay
+    inside the cell, or the border would be read as a bar.</div>
   <style>#bt_wrap svg{display:block}
     .bt-sec{margin:16px 0 6px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--ink3)}</style>
-  <div id="bt_cell" style="width:{{ bc_cell_mm }}mm;box-sizing:content-box;border:1px dashed #9AA8B8;background:#fff;padding:3mm 0;margin-top:6px;text-align:center;overflow:visible">
+  <div id="bt_cell" style="width:{{ bc_room_mm }}mm;box-sizing:content-box;border:1px dashed #9AA8B8;background:#fff;padding:3mm 0;margin-top:6px;text-align:center;overflow:visible">
     <span id="bt_wrap" style="display:inline-flex;flex-direction:column;align-items:center;vertical-align:middle">{{ bc_sample_svg | safe }}<span id="bt_text" style="display:block;white-space:nowrap;line-height:1.05;color:#000">{{ bc_sample }}</span></span>
   </div>
   <div class="hint" id="bt_warn" style="color:var(--review);margin-top:6px"></div>
@@ -171,15 +174,33 @@
       document.getElementById('bt_barwide').textContent=((inner+2*bq)*bw).toFixed(1)+' mm';
       document.getElementById('bt_dots').textContent='= '+(bw/25.4*300).toFixed(2)+' dots at 300 dpi, '+
         (bw/25.4*600).toFixed(2)+' at 600';
+      /* the quiet zones, shaded: blank when printed, but they take room - they
+         are what made a barcode that looks short of the cell "too wide" */
+      [['bt_q1',0],['bt_q2',inner+bq]].forEach(function(q){
+        var r=svg.querySelector('#'+q[0]);
+        if(!r){
+          r=document.createElementNS('http://www.w3.org/2000/svg','rect');
+          r.setAttribute('id',q[0]); r.setAttribute('y','0'); r.setAttribute('height','1');
+          r.setAttribute('fill','#DCE9F5');
+          svg.insertBefore(r,svg.firstChild);
+        }
+        r.setAttribute('x',q[1]); r.setAttribute('width',bq);
+      });
     }
     var cell=document.getElementById('bt_cell'), wrap=document.getElementById('bt_wrap');
     var r=wrap.getBoundingClientRect();
     /* a row is the barcode and its text plus the cell's 1 mm padding and 1 px border each side */
     document.getElementById('bt_row').textContent=(r.height*25.4/96+2.3).toFixed(1);
-    var over=r.width > cell.clientWidth+0.5;
+    /* the cell's exact width: clientWidth is rounded to whole pixels, which would
+       refuse a barcode the server accepts */
+    var room=parseFloat(getComputedStyle(cell).width);
+    var over=r.width > room+0.5;
     btPreview.over=over;
+    var mmOf=function(px){return (px*25.4/96).toFixed(1);};
     document.getElementById('bt_warn').textContent = over
-      ? 'Wider than the packing list cell - it will run over the cell border when printed. Make the bars narrower, the quiet zone smaller, or the text smaller or tighter.'
+      ? 'Wider than the packing list cell - the barcode with its quiet zones (shaded) and its text takes '+
+        mmOf(r.width)+' mm and the cell has '+mmOf(room)+' mm up to its border, so it would run '+
+        'over the border when printed. Make the bars narrower, the quiet zone smaller, or the text smaller or tighter.'
       : '';
   };
   ['bt_barw','bt_barh','bt_quiet','bt_font','bt_size','bt_spacing','bt_gap','bt_bold','bt_italic','bt_underline'].forEach(function(id){

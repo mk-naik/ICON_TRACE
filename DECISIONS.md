@@ -256,13 +256,18 @@ no one signs twice. [enforcement unverified]
   side. [built]
 - **The bars of a packing-list barcode are a Settings choice** (Mukesh, 5 Oct):
   module width 0.15-0.40 mm, height 6-20 mm, quiet zone 10-25 modules (Code128
-  asks for ten; less is not a layout choice). The server refuses a width at
-  which the widest ICON serial (211 modules) plus its quiet zones is wider than the
-  80 mm barcode cell, judged on the stored values with the save laid over them -
-  it knows the bars' exact width. **[open]** a custom (non-ICON) serial can be
-  longer than that and wider still; the check does not cover it. A full 36-module
-  pallet is two pages at the defaults (as before) and three at 20 mm bars.
-  [built]
+  asks for ten; less is not a layout choice). The barcode, quiet zones included,
+  has the cell's **room**: the 80 mm print area plus the 2 mm of white padding each
+  side, 84 mm up to the cell's border line. The quiet zone is blank, so it may use
+  the padding; it may not reach the border, which a scanner would read as a bar.
+  The sheet centres a barcode wider than the print area so it spills evenly into
+  both paddings. The server refuses a width at which the widest ICON serial (211
+  modules) plus its quiet zones exceeds the room, judged on the stored values with
+  the save laid over them - it knows the bars' exact width. The Settings preview
+  draws the cell up to its border and shades the quiet zones, and its warning
+  gives the numbers. **[open]** a custom (non-ICON) serial can be longer than that
+  and wider still; the check does not cover it. A full 36-module pallet is two
+  pages at the defaults (as before) and three at 20 mm bars. [built]
 - **The text under a packing-list barcode is a Settings choice** - font (a fixed
   list every plant PC has, Poppins bundled), size, letter spacing, gap, bold,
   italic, underline - Super Admin writes, others read. Always below the bars,
@@ -291,6 +296,13 @@ no one signs twice. [enforcement unverified]
   are role-gated, never per-user; master-data changes are Super Admin only.
 - Per-screen flags cannot express a per-action rule, so action limits use an
   inline role check (`_require_role`). "Cancel a challan" is one of them.
+- **`/settings` is not an app of its own.** Evidence Sources is a tab of Admin
+  (Stations & sources); `/settings` (GET) redirects to `/#admin/stations`, signed
+  in or not - it shows nothing itself, and the fragment it lands on is gated
+  as before. The URL hash can name an Admin tab, `#admin/<tab>`, read off the tab
+  buttons (an id that is not one of them does nothing); picking a tab writes its
+  hash, so a refresh returns to it, and the first tab stays plain `#admin`. The
+  form's POST keeps its Super-Admin gate. [built]
 - Every `/api/*` route must be gated except `/api/session` (it says who the
   cookie belongs to, and nothing else when nobody is signed in). `/api/boot`
   gates itself. A new ungated route fails `test_anonymous_routes.py`, which

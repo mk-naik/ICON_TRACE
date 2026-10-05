@@ -6755,7 +6755,11 @@ function wireFqcAnomalies() {
                                     miniature. */
     var _origHome = (ROLES[USER.role] && ROLES[USER.role].home) || null;
     var home = _origHome || 'search';
-    var h = (location.hash || '').replace(/^#/, '').trim();
+    /* "#admin/stations": a screen, and for Admin the tab inside it (see
+       adminTabFor / hashFor). Only the screen is checked here; the tab is
+       checked against the real tab buttons once the screen is up. */
+    var hashParts = (location.hash || '').replace(/^#/, '').trim().split('/');
+    var h = hashParts[0];
     var landing = (h && typeof can === 'function' && can(h)) ? h : home;
 
     /* Paint only the landing screen at boot (see rerender's _bootRenderOnly):
@@ -6784,6 +6788,7 @@ function wireFqcAnomalies() {
     wireMatDefaults();
     wireSourcesRedraw();
     mergeEvidenceSources();
+    if (landing === 'admin' && hashParts[1]) openAdminTab(hashParts[1]);
     cancelDocSetup();
     wireResets();
     wireExports();
@@ -12770,20 +12775,74 @@ function wireFqcAnomalies() {
    * challan-list, gp -> gp-list, loadver -> loading-list). currentView() reads
    * the .view.on element, so a refused/failed navigation (which leaves the
    * shown screen unchanged) never rewrites the hash to somewhere it did not go. */
+  /* Admin has tabs, and a tab is where people actually work (Stations &
+     sources holds the evidence paths and the barcode settings), so the hash
+     can name one: "#admin/stations". Read off the tab buttons' own onclick,
+     adTab(this,'stations'), so there is no second list of tab ids to keep in
+     step - and an id that is not one of them does nothing. The first tab is
+     the Admin screen's own home and stays plain "#admin". */
+  var AD_TAB = /adTab\(this,\s*'([a-z]+)'\)/;
+  function adminTabIds() {
+    var out = [], btns = document.querySelectorAll('#adTabs button');
+    for (var i = 0; i < btns.length; i++) {
+      var m = (btns[i].getAttribute('onclick') || '').match(AD_TAB);
+      out.push(m ? m[1] : '');
+    }
+    return out;
+  }
+
+  function hashFor(shown) {
+    if (shown !== 'admin') return '#' + shown;
+    var ids = adminTabIds(), btns = document.querySelectorAll('#adTabs button');
+    for (var i = 0; i < btns.length; i++) {
+      if (btns[i].classList.contains('on') && ids[i] && i > 0) return '#admin/' + ids[i];
+    }
+    return '#admin';
+  }
+
+  function openAdminTab(id) {
+    if (!/^[a-z]+$/.test(id || '') || typeof window.adTab !== 'function') return;
+    var ids = adminTabIds(), btns = document.querySelectorAll('#adTabs button');
+    for (var i = 0; i < ids.length; i++) {
+      if (ids[i] === id && btns[i].style.display !== 'none' &&
+          document.getElementById('ad-' + id)) {
+        window.adTab(btns[i], id);
+        return;
+      }
+    }
+  }
+
+  function writeHash(h) {
+    try {
+      if (h !== location.hash && window.history &&
+          typeof history.replaceState === 'function') {
+        history.replaceState(history.state, '', h);
+      }
+    } catch (e) { /* a browser without the history API still navigates fine */ }
+  }
+
   if (typeof window.go === 'function' && !window.go.__hashWrapped) {
     var _goForHash = window.go;
     window.go = function () {
       var r = _goForHash.apply(this, arguments);
-      try {
-        var shown = (typeof currentView === 'function') ? currentView() : '';
-        if (shown && ('#' + shown) !== location.hash && window.history &&
-            typeof history.replaceState === 'function') {
-          history.replaceState(history.state, '', '#' + shown);
-        }
-      } catch (e) { /* a browser without the history API still navigates fine */ }
+      var shown = (typeof currentView === 'function') ? currentView() : '';
+      if (shown) writeHash(hashFor(shown));
       return r;
     };
     window.go.__hashWrapped = true;
+  }
+
+  /* picking an Admin tab is a navigation too: a refresh returns to it */
+  if (typeof window.adTab === 'function' && !window.adTab.__hashWrapped) {
+    var _adTabForHash = window.adTab;
+    window.adTab = function () {
+      var r = _adTabForHash.apply(this, arguments);
+      if (typeof currentView === 'function' && currentView() === 'admin') {
+        writeHash(hashFor('admin'));
+      }
+      return r;
+    };
+    window.adTab.__hashWrapped = true;
   }
 
   /* Pre-wire on load if either screen is already active */

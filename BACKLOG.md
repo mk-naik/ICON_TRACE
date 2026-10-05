@@ -6482,10 +6482,45 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
   before the barcode patch (checked on c6d51d0) - and three at 20 mm bars.
   Custom (non-ICON) serials, up to 40 characters, can be far wider than the
   211-module sample; neither the check nor the preview covers them.
+- **Follow-up, same day:** the preview warned on a barcode that looked short of
+  the cell (screenshot: bars with room either side, "Wider than the packing list
+  cell"). The room was the quiet zones - blank, so invisible - and a 20-module
+  quiet zone at 0.33 mm is 82.8 mm. Now: the limit is the cell up to its border
+  (80 mm print area + 2 mm padding each side = 84 mm; the quiet zone is white, so
+  it may use the padding, never the border line); the sheet centres a wider barcode
+  (`.bcs` is a flex box - text-align spilled it all to the right); the preview box
+  is that cell, the quiet zones are shaded, and the warning gives both widths. The
+  preview also compared against `clientWidth`, which rounds to whole pixels, so
+  it could refuse what the server accepts - now the exact computed width.
 - **Tests:** `test_box_number.py` +1 (validation, fallbacks, drawn width = computed
   width), `test_barcode_text.py` +2 (saved and printed; overflow refused, judged
   on stored values) and the refusals / fragment tests widened,
   `test_barcode_text_ui.py` +2 (Chromium: the preview redrawn, warns, refuses and
   resets; bars saved from the card print at that size, the widest the cell holds
   included, inside the page with the text centred) and the Admin lock extended.
+
+## 5 Oct 2026 - /settings was a second app; it now lands in Admin > Stations & sources
+
+- **Reported:** "/settings should land on /#admin > Stations & sources ... /settings
+  is another app" (and Stations & sources "reverted to old", which could not be
+  reproduced - see below).
+- **Evidence:** `/settings` has been a standalone page since the first commit
+  (git: 8ca6e49), with its own cut-down sidebar ("Back to the main app", Evidence
+  Sources) - it never redirected. Evidence Sources was merged into Admin > Stations
+  & sources on 8 Sep (`mergeEvidenceSources`); production (:8080 folder, read-only)
+  has the same code. In a browser the Stations tab shows the merged card (Line A/B,
+  Plant, Barcode, Database) above v4's own tables - nothing had reverted. And the
+  hash only understood a screen: `/#admin` opened the Users tab, `/#admin/stations`
+  fell back to home.
+- **Change:** `GET /settings` redirects to `/#admin/stations` (signed in or not;
+  it shows nothing itself, the fragment stays gated); the POST keeps its gate. The
+  hash can name an Admin tab, `#admin/<tab>`, read off the tab buttons' own
+  onclick (no second list of ids; an unknown id does nothing, and a screen the
+  account cannot view still lands on its home); picking a tab writes its hash so a
+  refresh returns to it; the first tab stays `#admin`.
+- **Tests:** `test_hash_route.py` +3 (the tab in the hash, refresh, unknown tabs
+  ignored, an account without Admin not forced onto it; `/settings` followed in a
+  real browser ends on Stations & sources with the barcode card),
+  `test_barcode_text.py` (the redirect for every caller, the fragment for Admin
+  and Super Admin), `test_role_gates.py` (an Admin still reads the fragment).
 

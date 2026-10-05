@@ -26,6 +26,10 @@
  /* barcode and its text: the box is as wide as the wider of the two and both
     are centred in it, so the text is always centred on the bars, whatever
     the serial's width. Style of the text comes from Settings (bc_text). */
+ /* .bcs centres the box with flex, which spills a box wider than the cell
+    evenly into both paddings (text-align would spill it all to the right) -
+    a barcode's blank quiet zone may use the padding, never the border */
+ .bcs{display:flex;justify-content:center}
  .bcw{display:inline-flex;flex-direction:column;align-items:center;vertical-align:middle}
  .bcw svg{display:block}
  .bct{display:block;white-space:nowrap;line-height:1.05;color:#000}

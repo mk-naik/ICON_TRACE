@@ -140,17 +140,29 @@ def t_widths_follow_serial():
         pg.close()
 
 
-@test("the Settings preview box is the width of the real printed barcode cell (within 1 mm)")
+@test("the Settings preview box is the real printed barcode cell, up to its border: "
+      "the print area and the padding each side (within 1 mm)")
 def t_preview_cell_is_true():
     _, box = T.packed_box()
+    A = H.APP
     with H.browser() as b:
         pg = sheet(b, box, width=A4_PRINTABLE_PX, media="print")
-        cell = pg.evaluate("""() => { const td = document.querySelector('td.bc'), cs = getComputedStyle(td);
-            return td.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight); }""") / MM
-        assert abs(cell - H.APP.PACKING_LIST_BARCODE_CELL_MM) <= 1.0, \
-            "the packing list cell is %.1f mm; PACKING_LIST_BARCODE_CELL_MM says %d - update it" % (
-                cell, H.APP.PACKING_LIST_BARCODE_CELL_MM)
+        r = pg.evaluate("""() => { const td = document.querySelector('td.bc'), cs = getComputedStyle(td);
+            return {pad: parseFloat(cs.paddingLeft), room: td.clientWidth,
+                    area: td.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)}; }""")
+        assert abs(r["area"] / MM - A.PACKING_LIST_BARCODE_CELL_MM) <= 1.0, \
+            "the packing list cell prints %.1f mm; PACKING_LIST_BARCODE_CELL_MM says %d - update it" % (
+                r["area"] / MM, A.PACKING_LIST_BARCODE_CELL_MM)
+        assert abs(r["pad"] / MM - A.PACKING_LIST_BARCODE_PAD_MM) <= 0.2, \
+            "the cell's padding is %.2f mm; PACKING_LIST_BARCODE_PAD_MM says %d" % (
+                r["pad"] / MM, A.PACKING_LIST_BARCODE_PAD_MM)
+        assert abs(r["room"] / MM - A.PACKING_LIST_BARCODE_ROOM_MM) <= 1.0, r
         pg.close()
+        # and the Settings preview box is exactly that room
+        card = settings_card(b, "Super Admin")
+        w = card.eval_on_selector("#bt_cell", "e => parseFloat(getComputedStyle(e).width)") / MM
+        assert abs(w - A.PACKING_LIST_BARCODE_ROOM_MM) < 0.01, w
+        card.close()
 
 
 def settings_card(b, role):
@@ -225,9 +237,27 @@ def t_settings_bars_preview():
             return [(gr.left - sr.left) / 3.7795, (sr.right - gr.right) / 3.7795]; }""")
         assert abs(edge[0] - 14 * 0.3) < 0.1 and abs(edge[1] - 14 * 0.3) < 0.1, edge
         assert pg.text_content("#bt_warn") == ""
-        # too wide for the cell: said at once, and Save refuses before asking the server
+        # the quiet zones are drawn (shaded), at the width typed, one each end
+        q = pg.evaluate("""() => [...document.querySelectorAll('#bt_wrap svg rect[id^=bt_q]')].map(r => {
+            const b = r.getBoundingClientRect(), s = document.querySelector('#bt_wrap svg').getBoundingClientRect();
+            return [(b.left - s.left) / 3.7795, b.width / 3.7795]; })""")
+        q.sort()                                    # left one first, whatever the DOM order
+        assert len(q) == 2 and abs(q[0][1] - 14 * 0.3) < 0.1 and abs(q[1][1] - 14 * 0.3) < 0.1, q
+        assert abs(q[0][0]) < 0.1 and abs(q[1][0] - (modules + 14) * 0.3) < 0.1, q
+        # too wide for the cell: said at once, with the numbers, and Save refuses
+        # before asking the server
         pg.fill("#bt_barw", "0.4")
+        warn = pg.text_content("#bt_warn")
+        assert "Wider than the packing list cell" in warn, warn
+        assert "quiet zones (shaded)" in warn and "mm up to its border" in warn, warn
+        assert "%.1f mm" % ((modules + 28) * 0.4) in warn, warn
+        # a barcode that LOOKS short of the cell can still be too wide: its blank
+        # quiet zones count. 0.33 mm x (211 + 2 x 25 modules) = 86 mm
+        pg.fill("#bt_barw", "0.33"); pg.fill("#bt_quiet", "25")
         assert "Wider than the packing list cell" in pg.text_content("#bt_warn")
+        ink = (modules * 0.33)
+        assert ink < H.APP.PACKING_LIST_BARCODE_ROOM_MM - 8, "the bars alone would fit with room to spare"
+        pg.fill("#bt_quiet", "14"); pg.fill("#bt_barw", "0.4")
         pg.click('button[onclick="btSave()"]')
         pg.wait_for_timeout(600)
         assert "Not saved" in pg.text_content("#bt_msg"), pg.text_content("#bt_msg")
@@ -249,7 +279,10 @@ def t_settings_bars_preview():
 def t_settings_bars_saved_and_printed():
     _, box = T.packed_box()
     with H.browser() as b:
-        for width, height, quiet in (("0.3", "14", "12"), ("0.346", "9", "10")):
+        # 0.36 mm x 231 modules = 83.2 mm: more than the 80 mm print area, within
+        # the 84 mm up to the border - allowed, and centred so it spills evenly
+        for width, height, quiet in (("0.3", "14", "12"), ("0.346", "9", "10"),
+                                     ("0.36", "9", "10")):
             set_text()
             pg = settings_card(b, "Super Admin")
             pg.fill("#bt_barw", width); pg.fill("#bt_barh", height); pg.fill("#bt_quiet", quiet)
@@ -273,6 +306,15 @@ def t_settings_bars_saved_and_printed():
                 assert r <= 0, (width, media, "the sheet runs past the page", r)
                 lay = box_offsets(sp)
                 assert all(abs(o) <= 0.5 for o in lay), (width, media, lay)
+                # centred in its cell, and the blank quiet zone stays inside the
+                # border - spilled evenly, never against the line
+                gaps = sp.evaluate("""() => [...document.querySelectorAll('td.bc')].map(td => {
+                    const t = td.getBoundingClientRect(), s = td.querySelector('svg').getBoundingClientRect();
+                    return [s.left - t.left, t.right - s.right]; })""")
+                assert all(g[0] >= 1 and g[1] >= 1 for g in gaps), \
+                    (width, media, "the barcode reaches the cell border", gaps)
+                assert all(abs(g[0] - g[1]) <= 1 for g in gaps), \
+                    (width, media, "the barcode is off-centre in its cell", gaps)
                 sp.close()
     set_text()
 

@@ -321,7 +321,12 @@ def t_admin_keeps_read_access_to_master_screens():
     fresh()
     c = APP.app.test_client()
     AUTH.test_login(c, role="Admin")
-    assert c.get("/settings").status_code == 200
+    # /settings lands in Admin > Stations & sources; what it shows is the
+    # fragment, which an Admin may read
+    r = c.get("/settings")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/#admin/stations"), \
+        (r.status_code, r.headers.get("Location"))
+    assert c.get("/view/settings").status_code == 200
     assert c.get("/admin/challan-import").status_code == 200
     # CHECK writes nothing, so it stays open to Admin...
     assert c.post("/admin/challan-import",
