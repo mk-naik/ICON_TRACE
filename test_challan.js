@@ -747,6 +747,19 @@ function () {
   var html = el('chDocRows').innerHTML;
   assert(html.indexOf('/challan/2026/42/print') !== -1, html);
   assert(html.indexOf('/challan/2026/42/excel') !== -1, html);
+  assert(html.indexOf('suffix') === -1, 'a never-edited challan grew a suffix: ' + html);
+});
+
+test('an edited challan\'s outputs name ITS version - the bare number is the '
+    + 'superseded original, which the server refuses to produce', function () {
+  reset();
+  chRenderDocs({ fy: 2026, seq: 42, suffix: 'MA' });
+  var html = el('chDocRows').innerHTML;
+  assert(html.indexOf('/challan/2026/42/print?suffix=MA') !== -1, html);
+  assert(html.indexOf('/challan/2026/42/excel?suffix=MA') !== -1, html);
+  assert(html.indexOf('/challan/2026/42/ftr?suffix=MA') !== -1, html);
+  assert(html.indexOf('/print"') === -1 && html.indexOf('/excel"') === -1,
+         'a link to the bare number is still offered: ' + html);
 });
 
 

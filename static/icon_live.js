@@ -11624,14 +11624,23 @@ function wireFqcAnomalies() {
       'as draft or Create first.</td></tr>';
   }
 
+  /* A challan is addressed by (fy, seq) AND its edit suffix. A bare
+     /challan/<fy>/<seq>/... is the ORIGINAL row: once an edit supersedes it
+     the server refuses to produce it ("print ... (MA) instead"), so a link to
+     a document must name the version it belongs to. A challan that was never
+     edited has no suffix and keeps the plain URL. */
+  function chDocUrl(c, doc) {
+    return '/challan/' + c.fy + '/' + c.seq + '/' + doc +
+      (c.suffix ? '?suffix=' + encodeURIComponent(c.suffix) : '');
+  }
+
   function chRenderDocs(d) {
     var host = chEl('chDocRows');
     if (!host) return;
-    var base = '/challan/' + d.fy + '/' + d.seq;
     var docs = [
-      { n: 'Challan — print (driver’s copy)', href: base + '/print' },
-      { n: 'Challan — Excel + Flash Test Report', href: base + '/excel' },
-      { n: 'Flash Test Report', href: base + '/ftr' }
+      { n: 'Challan — print (driver’s copy)', href: chDocUrl(d, 'print') },
+      { n: 'Challan — Excel + Flash Test Report', href: chDocUrl(d, 'excel') },
+      { n: 'Flash Test Report', href: chDocUrl(d, 'ftr') }
     ];
     host.innerHTML = docs.map(function (x) {
       return '<tr><td><div style="font-weight:600;font-size:12px">' +
@@ -11982,10 +11991,13 @@ function wireFqcAnomalies() {
       '</tr>';
     }).join('');
 
-    var printBase = '/challan/' + ch.fy + '/' + ch.seq;
-    var docs = (ch.status !== 'cancelled') ? (
-      '<a class="btn btn-ghost btn-sm" href="' + printBase + '/print" target="_blank">Print</a> ' +
-      '<a class="btn btn-ghost btn-sm" href="' + printBase + '/excel" target="_blank">Excel + FTR</a> '
+    /* The documents belong to THIS version (its suffix is in the link). A
+       cancelled or superseded one is never produced - the server refuses it -
+       so it offers no link to an error page; a superseded one has "View the
+       replacement" below. */
+    var docs = (ch.status !== 'cancelled' && ch.status !== 'superseded') ? (
+      '<a class="btn btn-ghost btn-sm" href="' + chDocUrl(ch, 'print') + '" target="_blank">Print</a> ' +
+      '<a class="btn btn-ghost btn-sm" href="' + chDocUrl(ch, 'excel') + '" target="_blank">Excel + FTR</a> '
     ) : '';
 
     var statusClass = ch.status === 'issued' ? 't-pass'

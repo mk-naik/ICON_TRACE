@@ -4312,12 +4312,15 @@ def api_print_resolve():
             if b:
                 return jsonify({"url": "/box/%d/sheet" % b["box_id"]})
         if kind.startswith("challan") or kind.startswith("flash"):
-            c = store.one(cur, "SELECT fy, seq FROM challan ORDER BY challan_id "
-                               "DESC")
+            c = store.one(cur, "SELECT fy, seq, suffix FROM challan ORDER BY "
+                               "challan_id DESC")
             if c:
                 tail = "/ftr" if kind.startswith("flash") else "/print"
-                return jsonify({"url": "/challan/%d/%d%s"
-                                       % (c["fy"], c["seq"], tail)})
+                # the newest row is usually an edit (MA...); without its
+                # suffix the URL names the superseded original instead
+                q = "?" + urlencode({"suffix": c["suffix"]}) if c["suffix"] else ""
+                return jsonify({"url": "/challan/%d/%d%s%s"
+                                       % (c["fy"], c["seq"], tail, q)})
     return jsonify({"url": None,
                     "why": "No %s found for %r. It has to exist before it can "
                            "be printed." % (kind or "document", ref)})

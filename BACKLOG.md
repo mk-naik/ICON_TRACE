@@ -6394,3 +6394,33 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
   refused post carry the card); `test_barcode_text_ui.py` centring as above;
   `test_role_gates.py` back to 11/11.
 
+## 5 Oct 2026 - Print of an edited challan opened the superseded original
+
+- **Reported:** after an edit (the original superseded, a new challan made) and
+  Loading Verification completed, Print (v1) showed an error. The guess: it uses
+  the original URL, `/challan/2026/1/print`.
+- **Evidence:** reproduced in Chromium on three pallets: the detail panel of the
+  live (MA) version links `/challan/2026/1/print`, which answers 400 "This challan
+  has been superseded by an edit - print IS-05.10.2026/0001 (MA) instead." A bare
+  (fy, seq) is the row with no suffix - the original - and the server is right to
+  refuse it (`test_challan.py`, "printing a superseded challan by its BARE number").
+- **Cause:** `icon_live.js` built every document link from fy and seq alone
+  (`chRenderDocs`, the detail panel's Print and Excel), and `/api/print/resolve`
+  did the same for v4's print buttons. The suffix was always available - the
+  create/edit response, the list and the detail all carry it - and never used.
+- **Change:** `chDocUrl(c, doc)` adds `?suffix=MA` for an edited version and is used
+  by both screens; the detail panel offers no Print / Excel on a cancelled or
+  superseded challan (they could only open a refusal) - a superseded one has "View
+  the replacement"; `/api/print/resolve` carries the newest challan's suffix. The
+  server's refusal of the bare number is unchanged.
+- **Found on the way:** `test_loading.py` "editing a challan produces fresh
+  challan_box rows at 'pending'" printed the BARE number after an edit and read the
+  superseded refusal as "needs its own verification" - it passed for the wrong
+  reason, and nothing printed an edited challan after its own loading. It now asks
+  by suffix and checks the loading message; a new test prints, exports and takes
+  the Flash Test Report of the edited version once its loading is submitted.
+- **Tests:** `test_challan.js` +1, `test_loading.py` +1, `test_challan_edit_ui.py`
+  (new, Chromium: edit through the screen, load, then the Print link opens the
+  printed MA challan with the edited driver mobile; the original offers no Print).
+  Each of the three fails on the old code with the bare URL.
+

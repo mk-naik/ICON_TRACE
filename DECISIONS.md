@@ -117,6 +117,13 @@ no one signs twice. [enforcement unverified]
   `superseded` (a status distinct from `cancelled`). Only the live version can
   be edited. The invoice is locked; everything else is editable. Abandoning an
   edit changes nothing. Edit is blocked once a gate pass exists. [built]
+- **A challan is named by its number AND its suffix.** The documents of an
+  edited challan (Print, Excel + FTR) are asked for as `?suffix=MA`; a bare
+  `/challan/<fy>/<seq>/...` is the ORIGINAL row, which the server refuses once an
+  edit has superseded it (the refusal names the live number) - that stays. So every
+  link names the version it shows (the detail panel, the Documents card, v4's
+  print buttons through `/api/print/resolve`), and a cancelled or superseded
+  challan offers no Print / Excel link at all, only "View the replacement". [built]
 - **Cancel is a separate action: Admin or Super Admin only**, reason mandatory
   (never defaulted), plus the authenticator step-up (Round 34). Blocked once a
   gate pass exists. Serials revert `dispatched -> packed`, pallets and invoice

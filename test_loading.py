@@ -397,13 +397,60 @@ def t_edit_resets_loading_status():
     assert list(new_status.values())[0] == "pending", \
         "the edited challan's pallet did not start clean: %s" % new_status
     # and the new document is correctly gated again, unrelated to the old
-    # session's progress
+    # session's progress. Asked for by ITS OWN suffix: the bare number is the
+    # superseded original, which is refused for a different reason entirely.
     with store.conn() as (cx, cur):
-        row = store.one(cur, "SELECT fy, seq FROM challan WHERE challan_id=%s",
-                        (new_id,))
-    r2 = c.get("/challan/%d/%d/print" % (row["fy"], row["seq"]))
+        row = store.one(cur, "SELECT fy, seq, suffix FROM challan WHERE "
+                             "challan_id=%s", (new_id,))
+    r2 = c.get("/challan/%d/%d/print?suffix=%s"
+               % (row["fy"], row["seq"], row["suffix"]))
     assert r2.status_code == 400, \
         "a freshly edited challan printed without its own verification"
+    assert "loading verification" in r2.get_data(as_text=True).lower(), \
+        "refused, but not for want of its own verification: " + \
+        r2.get_data(as_text=True)
+
+
+@test("an edited challan prints, exports and gets its Flash Test Report once "
+      "ITS loading is submitted - asked for by its own suffix; the bare "
+      "number still names the replacement, and the print resolver points at "
+      "the live version")
+def t_edited_challan_prints_after_its_loading():
+    c = setup()
+    b1 = packed_box(c, [44, 45])
+    b2 = packed_box(c, [46, 47])
+    inv = make_invoice(qty=2, invoice_no="INV-LOAD-EDITPRINT")
+    chid = make_issued_challan(c, [b1], inv)
+    r = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": [b2], "invoice_id": inv})   # a real change: other pallet
+    assert r.status_code == 200, r.get_json()
+    ma = r.get_json()
+    assert ma["suffix"] == "MA", ma
+    fy, seq, q = ma["fy"], ma["seq"], "?suffix=MA"
+
+    c.post("/api/loading/%d/confirm" % ma["challan_id"],
+           json={"box_no": box_no_of(ma["challan_id"])})
+    assert c.post("/api/loading/%d/submit" % ma["challan_id"],
+                  json={}).status_code == 200
+
+    for doc in ("print", "excel", "ftr"):
+        rd = c.get("/challan/%d/%d/%s%s" % (fy, seq, doc, q))
+        assert rd.status_code == 200, (doc, rd.status_code,
+                                       rd.get_data(as_text=True)[:200])
+    assert ma["no"] in c.get("/challan/%d/%d/print%s" % (fy, seq, q)
+                             ).get_data(as_text=True), \
+        "the printed challan does not carry its own (MA) number"
+
+    # the bare number is the original, superseded: refused, naming the live one
+    bare = c.get("/challan/%d/%d/print" % (fy, seq))
+    assert bare.status_code == 400 and ma["no"] in bare.get_data(as_text=True), \
+        bare.get_data(as_text=True)
+
+    # v4's print buttons ask the server where the document is
+    for kind, tail in (("challan", "print"), ("flash", "ftr")):
+        res = c.get("/api/print/resolve?kind=%s&ref=" % kind).get_json()
+        assert res["url"] == "/challan/%d/%d/%s%s" % (fy, seq, tail, q), res
+        assert c.get(res["url"]).status_code == 200, res
 
 
 @test("a challan whose loading has been submitted - and so has a real "
