@@ -480,11 +480,45 @@ def t_barcode_text_style():
     assert "Consolas" in st and "font-weight:400" in st, st
     assert "font-size:10pt" in st, "a corrupt stored size did not fall back: " + st
     assert "margin-right:0pt" in bc.text_style({}), bc.text_style({})
-    ok, why = bc.clean_text_settings({"bc_text_font": "consolas", "bc_text_size": "40"})
+    ok, why = bc.clean_settings({"bc_text_font": "consolas", "bc_text_size": "40"})
     assert ok is None and "6 to 20" in why, (ok, why)    # all or nothing
-    ok, why = bc.clean_text_settings({"bc_text_size": "12.50", "bc_text_bold": "true"})
+    ok, why = bc.clean_settings({"bc_text_size": "12.50", "bc_text_bold": "true"})
     assert ok == {"bc_text_size": "12.5", "bc_text_bold": "1"} and why is None, ok
-    assert bc.clean_text_settings({"bc_text_font": "x;}body{display:none"})[0] is None
+    assert bc.clean_settings({"bc_text_font": "x;}body{display:none"})[0] is None
+
+
+@test("barcode bar settings: width, height and quiet zone are validated, a bad "
+      "stored value prints with the default, and the drawn width is exactly "
+      "what bars_width_mm says")
+def t_barcode_bar_settings():
+    import icon_barcode as bc
+    assert bc.bar_params({}) == {"module_mm": 0.254, "height_mm": 11.0, "quiet": 10}
+    p = bc.bar_params({"bc_bar_width": "0.3", "bc_bar_height": "14.5",
+                       "bc_bar_quiet": "12"})
+    assert p == {"module_mm": 0.3, "height_mm": 14.5, "quiet": 12}, p
+    # a corrupt stored value falls back alone; the good ones are kept
+    p = bc.bar_params({"bc_bar_width": "junk", "bc_bar_height": "14", "bc_bar_quiet": "3"})
+    assert p == {"module_mm": 0.254, "height_mm": 14.0, "quiet": 10}, p
+    ok, why = bc.clean_settings({"bc_bar_width": "0.2540", "bc_bar_height": "11.00",
+                                 "bc_bar_quiet": "10"})
+    assert ok == {"bc_bar_width": "0.254", "bc_bar_height": "11", "bc_bar_quiet": "10"}, ok
+    for body, word in (({"bc_bar_width": "0.1"}, "0.15 to 0.4 mm"),
+                       ({"bc_bar_width": "0.5"}, "0.15 to 0.4 mm"),
+                       ({"bc_bar_width": "wide"}, "number"),
+                       ({"bc_bar_height": "5"}, "6 to 20 mm"),
+                       ({"bc_bar_height": "21"}, "6 to 20 mm"),
+                       ({"bc_bar_quiet": "9"}, "10 to 25 modules"),
+                       ({"bc_bar_quiet": "10.5"}, "whole number"),
+                       ({"bc_bar_quiet": "nan"}, "10 to 25")):
+        ok, why = bc.clean_settings(body)
+        assert ok is None and word in why, (body, ok, why)
+    ok, why = bc.clean_settings({"bc_bar_width": "0.3", "bc_text_size": "99"})
+    assert ok is None and "6 to 20" in why, "a bad text value must refuse the bars with it"
+    s = "ICON520R12A2134347"                                 # 211 modules
+    svg = bc.code128_bars_svg(s, module_mm=0.3, height_mm=14.5, quiet=12)
+    assert 'width="%.3fmm"' % ((211 + 24) * 0.3) in svg and 'height="14.500mm"' in svg, svg[:200]
+    assert 'data-modules="211" data-quiet="12"' in svg, svg[:260]
+    assert abs(bc.bars_width_mm(s, 0.3, 12) - (211 + 24) * 0.3) < 1e-9
 
 
 if __name__ == "__main__":

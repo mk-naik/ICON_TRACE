@@ -6458,3 +6458,34 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
 - **Open:** a real edit now keeps the challan's date; it used to take the day of
   the edit, as a side effect of the form. See DECISIONS section 3.
 
+## 5 Oct 2026 - Packing list barcode: the bars are Settings too
+
+- **Asked:** the Settings card only let the text under the barcode be edited; add
+  controls for the barcode itself - module width, height, "etc".
+- **Change:** three settings beside the text ones (Settings > Stations & sources >
+  "Barcode - packing list"): module width 0.15-0.40 mm (default 0.254), height
+  6-20 mm (11), quiet zone 10-25 modules (10). `icon_barcode.BAR_DEFAULTS` /
+  `BAR_RANGES` / `clean_settings` (text and bars validated together, all or
+  nothing) / `bar_params`; the sheet draws with `bar_params(cfg)`. The preview is
+  redrawn as you type (the SVG carries `data-modules` / `data-quiet`), shows the
+  barcode's width, the dots it is at 300 and 600 dpi, and about how tall a sheet
+  row is; "Reset to defaults" fills the standard values (Save keeps them).
+- **Checked on the server this time:** unlike a font, a bar's width is exact, so
+  `api_settings` refuses a width at which the widest ICON serial plus its quiet
+  zones exceeds the 80 mm cell, judged on the stored values with the save laid
+  over them (a quiet zone alone can overflow beside a stored width). The preview
+  still measures bars plus text together in the browser.
+- **Found on the way:** the preview's cell was a border-box, so its inside was 1 px
+  a side short of the 80 mm it models and it refused a barcode the server accepts;
+  now 80 mm of content. The real print cell measures 80.14 mm (81.46 on screen).
+- **Not changed:** a full 36-module pallet is two pages at the defaults - as it was
+  before the barcode patch (checked on c6d51d0) - and three at 20 mm bars.
+  Custom (non-ICON) serials, up to 40 characters, can be far wider than the
+  211-module sample; neither the check nor the preview covers them.
+- **Tests:** `test_box_number.py` +1 (validation, fallbacks, drawn width = computed
+  width), `test_barcode_text.py` +2 (saved and printed; overflow refused, judged
+  on stored values) and the refusals / fragment tests widened,
+  `test_barcode_text_ui.py` +2 (Chromium: the preview redrawn, warns, refuses and
+  resets; bars saved from the card print at that size, the widest the cell holds
+  included, inside the page with the text centred) and the Admin lock extended.
+

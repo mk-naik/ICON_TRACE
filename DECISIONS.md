@@ -252,14 +252,24 @@ no one signs twice. [enforcement unverified]
   letters, subset C (two digits a symbol) for digit runs, chosen as a shortest
   path. Width follows the serial: 189 modules for a Jan-Sep v2 serial, 211 for
   Oct-Dec (the hex month letter splits the digit run); subset B alone was 233.
-  Bars print at a fixed 0.254 mm narrow bar, 11 mm tall, ten modules of quiet
-  zone a side. [built]
+  Bars default to a 0.254 mm narrow bar, 11 mm tall, ten modules of quiet zone a
+  side. [built]
+- **The bars of a packing-list barcode are a Settings choice** (Mukesh, 5 Oct):
+  module width 0.15-0.40 mm, height 6-20 mm, quiet zone 10-25 modules (Code128
+  asks for ten; less is not a layout choice). The server refuses a width at
+  which the widest ICON serial (211 modules) plus its quiet zones is wider than the
+  80 mm barcode cell, judged on the stored values with the save laid over them -
+  it knows the bars' exact width. **[open]** a custom (non-ICON) serial can be
+  longer than that and wider still; the check does not cover it. A full 36-module
+  pallet is two pages at the defaults (as before) and three at 20 mm bars.
+  [built]
 - **The text under a packing-list barcode is a Settings choice** - font (a fixed
   list every plant PC has, Poppins bundled), size, letter spacing, gap, bold,
   italic, underline - Super Admin writes, others read. Always below the bars,
-  always centred on them, fixed size. Settings will not save text wider than
-  the barcode cell (its preview measures it); the server checks ranges only, as
-  it cannot measure a font. [built]
+  always centred on them, fixed size. Settings will not save barcode and text
+  wider than the barcode cell (its preview measures it, in the browser that
+  prints); the server cannot measure a font, so it checks text ranges only.
+  [built]
 
 ## 8. Counting and time
 

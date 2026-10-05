@@ -2288,11 +2288,12 @@ def pallet_sheet(box_id):
          "capacity": b["capacity"], "partial": bool(b["is_partial"]),
          "shift": b["pack_shift"], "bin": b["bin_no"], "customer": cust}
     half = (len(serials) + 1) // 2
-    # Bars at a real narrow-bar width, the serial under them as text styled
-    # from Settings - see icon_barcode.code128_bars_svg and text_style.
-    left = [{"i": i + 1, "serial": s, "svg": bc.code128_bars_svg(s)}
+    # Bars at a real narrow-bar width and height, the serial under them as text,
+    # both from Settings - see icon_barcode.bar_params and text_style.
+    bars = bc.bar_params(cfg)
+    left = [{"i": i + 1, "serial": s, "svg": bc.code128_bars_svg(s, **bars)}
             for i, s in enumerate(serials[:half])]
-    right = [{"i": half + i + 1, "serial": s, "svg": bc.code128_bars_svg(s)}
+    right = [{"i": half + i + 1, "serial": s, "svg": bc.code128_bars_svg(s, **bars)}
              for i, s in enumerate(serials[half:])]
     rows = [(left[i], right[i] if i < len(right) else None)
             for i in range(len(left))]
@@ -5853,8 +5854,12 @@ def _settings_context(cfg):
     return dict(cfg=cfg, probe=_evidence_probe(cfg),
                 bc_fonts=bc.TEXT_FONTS,
                 bc_text=bc.text_settings(cfg),
+                bc_bar=bc.bar_settings(cfg),
+                bc_ranges=bc.BAR_RANGES,
+                bc_defaults=bc.SETTING_DEFAULTS,
                 bc_sample=BC_SAMPLE_SERIAL,
-                bc_sample_svg=bc.code128_bars_svg(BC_SAMPLE_SERIAL),
+                bc_sample_svg=bc.code128_bars_svg(BC_SAMPLE_SERIAL,
+                                                  **bc.bar_params(cfg)),
                 bc_cell_mm=PACKING_LIST_BARCODE_CELL_MM)
 
 
@@ -6001,6 +6006,20 @@ def api_cell_efficiencies():
     return jsonify({"ok": True, "values": vals})
 
 
+def _bars_overflow(cfg):
+    """Why these bar settings cannot print, or None: the widest serial's barcode
+    (quiet zones included) must fit the packing list's barcode cell. Custom
+    (non-ICON) serials can be longer than that sample and wider still."""
+    p = bc.bar_params(cfg)
+    w = bc.bars_width_mm(BC_SAMPLE_SERIAL, p["module_mm"], p["quiet"])
+    if w <= PACKING_LIST_BARCODE_CELL_MM:
+        return None
+    return ("Not saved - at this module width and quiet zone the widest serial's "
+            "barcode is %.1f mm wide, and the packing list's barcode cell is %d mm. "
+            "Make the bars narrower or the quiet zone smaller."
+            % (w, PACKING_LIST_BARCODE_CELL_MM))
+
+
 @app.route("/api/settings", methods=["POST"])
 @require_role(*_R_MASTER)
 def api_settings():
@@ -6010,11 +6029,17 @@ def api_settings():
                                             % ", ".join(cform.STYLES)}), 400
     if "print_style" in d:
         d["print_style"] = str(d["print_style"]).strip().lower()
-    clean, why = bc.clean_text_settings(d)
+    clean, why = bc.clean_settings(d)
     if why:
         return jsonify({"ok": False, "why": why}), 400
     d.update(clean)
     with store.conn() as (cx, cur):
+        if any(k in clean for k in bc.BAR_DEFAULTS):
+            # bars have an exact width, so unlike the text this is checked here
+            # too: the stored bar values with this save laid over them
+            why = _bars_overflow(dict(db.get_config(cur), **clean))
+            if why:
+                return jsonify({"ok": False, "why": why}), 400
         db.set_config(cur, {k: str(v) for k, v in d.items()
                             if k in db.DEFAULT_CONFIG})
         db.audit(cur, actor(), "config.update", "config", None, d)

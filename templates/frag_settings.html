@@ -69,11 +69,31 @@
 <div class="card-f"><button class="btn btn-primary" onclick="setSave()">Save</button>
   <span class="sp hint" id="s_msg"></span></div></div>
 
-<div class="card" id="bcTextCard"><div class="card-h"><h3>Barcode text &mdash; packing list</h3></div>
+<div class="card" id="bcTextCard"><div class="card-h"><h3>Barcode &mdash; packing list</h3></div>
 <div class="card-b">
-  <p class="hint">The serial printed under each barcode. It is always below the bars
-    and always centred on them; its size is fixed, so a wider barcode (an
-    Oct&ndash;Dec serial) does not change it.</p>
+  <p class="hint">How each module&rsquo;s barcode prints on the packing list: the bars,
+    and the serial under them. The serial is always below the bars and always
+    centred on them, whatever the width of the serial&rsquo;s barcode (an
+    Oct&ndash;Dec serial is wider than a Jan&ndash;Sep one).</p>
+  <div class="bt-sec">Bars</div>
+  <div class="grid g4">
+    <div class="fld"><label>Module width (mm)</label>
+      <input id="bt_barw" type="number" min="{{ bc_ranges.bc_bar_width[0] }}" max="{{ bc_ranges.bc_bar_width[1] }}" step="0.001" value="{{ bc_bar.bc_bar_width }}">
+      <div class="hint" id="bt_dots"></div></div>
+    <div class="fld"><label>Height (mm)</label>
+      <input id="bt_barh" type="number" min="{{ bc_ranges.bc_bar_height[0] }}" max="{{ bc_ranges.bc_bar_height[1] }}" step="0.5" value="{{ bc_bar.bc_bar_height }}">
+      <div class="hint">Each row of the sheet is about <span id="bt_row">&mdash;</span> mm tall.</div></div>
+    <div class="fld"><label>Quiet zone (modules)</label>
+      <input id="bt_quiet" type="number" min="{{ bc_ranges.bc_bar_quiet[0] }}" max="{{ bc_ranges.bc_bar_quiet[1] }}" step="1" value="{{ bc_bar.bc_bar_quiet }}">
+      <div class="hint">White each side. Code128 asks for at least {{ bc_ranges.bc_bar_quiet[0] }}.</div></div>
+    <div class="fld"><label>Widest barcode</label>
+      <div class="mono" id="bt_barwide" style="padding:7px 0">&mdash;</div>
+      <div class="hint">of {{ bc_cell_mm }}&nbsp;mm in the cell</div></div>
+  </div>
+  <div class="hint" style="margin-top:6px">Module width is the narrowest bar. A width that is a
+    whole number of printer dots prints every bar the same: 0.254&nbsp;mm is 3 dots
+    at 300&nbsp;dpi and 6 at 600.</div>
+  <div class="bt-sec">Text under the bars</div>
   <div class="grid g4">
     <div class="fld"><label>Font</label>
       <select id="bt_font">
@@ -96,21 +116,29 @@
   <div class="hint" style="margin-top:14px">Preview at print size, inside the width of the
     packing list&rsquo;s barcode cell ({{ bc_cell_mm }}&nbsp;mm), with the widest serial
     there is.</div>
-  <style>#bt_wrap svg{display:block}</style>
-  <div id="bt_cell" style="width:{{ bc_cell_mm }}mm;box-sizing:border-box;border:1px dashed #9AA8B8;background:#fff;padding:3mm 0;margin-top:6px;text-align:center;overflow:visible">
+  <style>#bt_wrap svg{display:block}
+    .bt-sec{margin:16px 0 6px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--ink3)}</style>
+  <div id="bt_cell" style="width:{{ bc_cell_mm }}mm;box-sizing:content-box;border:1px dashed #9AA8B8;background:#fff;padding:3mm 0;margin-top:6px;text-align:center;overflow:visible">
     <span id="bt_wrap" style="display:inline-flex;flex-direction:column;align-items:center;vertical-align:middle">{{ bc_sample_svg | safe }}<span id="bt_text" style="display:block;white-space:nowrap;line-height:1.05;color:#000">{{ bc_sample }}</span></span>
   </div>
   <div class="hint" id="bt_warn" style="color:var(--review);margin-top:6px"></div>
 </div>
 <div class="card-f"><button class="btn btn-primary" onclick="btSave()">Save</button>
+  <button class="btn btn-ghost" onclick="btReset()" title="Fills the fields with the standard values; nothing is kept until you press Save">Reset to defaults</button>
   <span class="sp hint" id="bt_msg"></span></div></div>
 
 <script>
 (function(){
   function g(id){var el=document.getElementById(id);return el?el.value.trim():'';}
   function on(id){var el=document.getElementById(id);return el&&el.checked?'1':'0';}
+  var DEF={{ bc_defaults | tojson }};
+  var FIELDS={bc_bar_width:'bt_barw', bc_bar_height:'bt_barh', bc_bar_quiet:'bt_quiet',
+              bc_text_font:'bt_font', bc_text_size:'bt_size', bc_text_spacing:'bt_spacing',
+              bc_text_gap:'bt_gap', bc_text_bold:'bt_bold', bc_text_italic:'bt_italic',
+              bc_text_underline:'bt_underline'};
   function vals(){
-    return {bc_text_font:g('bt_font'), bc_text_size:g('bt_size'),
+    return {bc_bar_width:g('bt_barw'), bc_bar_height:g('bt_barh'), bc_bar_quiet:g('bt_quiet'),
+            bc_text_font:g('bt_font'), bc_text_size:g('bt_size'),
             bc_text_spacing:g('bt_spacing'), bc_text_gap:g('bt_gap'),
             bc_text_bold:on('bt_bold'), bc_text_italic:on('bt_italic'),
             bc_text_underline:on('bt_underline')};
@@ -129,26 +157,53 @@
     t.style.letterSpacing=sp+'pt';
     t.style.marginRight=(-sp)+'pt';
     t.style.marginTop=(parseFloat(v.bc_text_gap)||0)+'mm';
+    /* The bars: the SVG was drawn once, in modules; its size is set here from
+       the same three numbers the server prints with (the group is shifted when
+       the quiet zone changes, as the rects are laid out after the old one). */
+    var svg=document.querySelector('#bt_wrap svg');
+    var bw=parseFloat(v.bc_bar_width), bh=parseFloat(v.bc_bar_height), bq=parseInt(v.bc_bar_quiet,10);
+    if(svg&&bw>0&&bh>0&&bq>=0){
+      var inner=+svg.getAttribute('data-modules'), q0=+svg.getAttribute('data-quiet');
+      svg.setAttribute('viewBox','0 0 '+(inner+2*bq)+' 1');
+      svg.querySelector('g').setAttribute('transform','translate('+(bq-q0)+' 0)');
+      svg.setAttribute('width',((inner+2*bq)*bw)+'mm');
+      svg.setAttribute('height',bh+'mm');
+      document.getElementById('bt_barwide').textContent=((inner+2*bq)*bw).toFixed(1)+' mm';
+      document.getElementById('bt_dots').textContent='= '+(bw/25.4*300).toFixed(2)+' dots at 300 dpi, '+
+        (bw/25.4*600).toFixed(2)+' at 600';
+    }
     var cell=document.getElementById('bt_cell'), wrap=document.getElementById('bt_wrap');
-    var over=wrap.getBoundingClientRect().width > cell.clientWidth+0.5;
+    var r=wrap.getBoundingClientRect();
+    /* a row is the barcode and its text plus the cell's 1 mm padding and 1 px border each side */
+    document.getElementById('bt_row').textContent=(r.height*25.4/96+2.3).toFixed(1);
+    var over=r.width > cell.clientWidth+0.5;
     btPreview.over=over;
     document.getElementById('bt_warn').textContent = over
-      ? 'Wider than the packing list cell - it will run over the cell border when printed. Make it smaller or tighter.'
+      ? 'Wider than the packing list cell - it will run over the cell border when printed. Make the bars narrower, the quiet zone smaller, or the text smaller or tighter.'
       : '';
   };
-  ['bt_font','bt_size','bt_spacing','bt_gap','bt_bold','bt_italic','bt_underline'].forEach(function(id){
+  ['bt_barw','bt_barh','bt_quiet','bt_font','bt_size','bt_spacing','bt_gap','bt_bold','bt_italic','bt_underline'].forEach(function(id){
     var el=document.getElementById(id);
     if(el){ el.addEventListener('input',btPreview); el.addEventListener('change',btPreview); }
   });
   btPreview();
+  window.btReset=function(){
+    Object.keys(FIELDS).forEach(function(k){
+      var el=document.getElementById(FIELDS[k]); if(!el) return;
+      if(el.type==='checkbox') el.checked=DEF[k]==='1'; else el.value=DEF[k];
+    });
+    btPreview();
+    document.getElementById('bt_msg').textContent='Standard values filled in - press Save to keep them.';
+  };
   window.btSave=function(){
     /* The server cannot measure a font; this preview can, in the same kind
-       of browser that prints the sheet. Text wider than the cell would run
-       past the page edge, and the browser would then shrink the whole
-       sheet - bars included - to fit. So it is not saved. */
+       of browser that prints the sheet. A barcode and text wider than the cell
+       would run past the page edge, and the browser would then shrink the whole
+       sheet - bars included - to fit. So it is not saved. (The bars alone are
+       checked by the server as well: it knows their exact width.) */
     btPreview();
     if(btPreview.over){
-      var why='Not saved - the text is wider than the packing list cell. Make it smaller or tighter.';
+      var why='Not saved - the barcode and its text are wider than the packing list cell. Make the bars narrower, the quiet zone smaller, or the text smaller or tighter.';
       document.getElementById('bt_msg').textContent=why;
       if(typeof toast==='function') toast(why);
       return;
@@ -166,7 +221,7 @@
          return;
        }
        document.getElementById('bt_msg').textContent='Saved.';
-       if(typeof toast==='function') toast('Barcode text saved.');
+       if(typeof toast==='function') toast('Barcode settings saved.');
        if(window.iconLoadView) iconLoadView('settings','/view/settings');
      });
   };

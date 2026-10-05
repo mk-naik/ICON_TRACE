@@ -1,5 +1,5 @@
 """
-ICON TRACE - the packing list's barcode text, measured in a real browser.
+ICON TRACE - the packing list's barcode (bars and text), measured in a real browser.
 
     python test_barcode_text_ui.py        (needs Playwright + Chromium)
 
@@ -8,8 +8,9 @@ pixels: each barcode on the sheet is photographed and the ink of its text is
 compared with the ink of its bars. Letter-spacing is the trap - browsers add
 it after the last letter too, so plain centred text drifts left by half a
 space. Also here: the sheet stays inside the page whatever the setting, the
-Settings preview is drawn at the width the sheet really has, and the Settings
-card saves for a Super Admin and is locked, with the reason, for an Admin.
+Settings preview is drawn at the width the sheet really has (bars - module
+width, height, quiet zone - and text), and the Settings card saves for a Super
+Admin and is locked, with the reason, for an Admin.
 """
 
 import io, os, shutil, sys, traceback
@@ -34,8 +35,11 @@ def test(name):
 
 
 def set_text(**kw):
+    """Every barcode setting back to its default, then these: text ones by
+    their short name (size=14), bar ones as bar_width / bar_height / bar_quiet."""
+    key = lambda k: "bc_" + k if k.startswith("bar_") else "bc_text_" + k
     with store.conn() as (cx, cur):
-        db.set_config(cur, dict(bc.TEXT_DEFAULTS, **{"bc_text_" + k: str(v) for k, v in kw.items()}))
+        db.set_config(cur, dict(bc.SETTING_DEFAULTS, **{key(k): str(v) for k, v in kw.items()}))
 
 
 def sheet(b, box, width=1400, media="screen", scale=1):
@@ -175,7 +179,7 @@ def t_settings_super_admin():
         pg.click('button[onclick="btSave()"]')
         pg.wait_for_timeout(800)
         assert "Not saved" in pg.text_content("#bt_msg"), pg.text_content("#bt_msg")
-        assert T.stored() == bc.TEXT_DEFAULTS, T.stored()
+        assert T.stored() == bc.SETTING_DEFAULTS, T.stored()
         pg.fill("#bt_size", "14"); pg.fill("#bt_spacing", "0")
         pg.uncheck("#bt_bold")
         pg.click('button[onclick="btSave()"]')
@@ -187,13 +191,100 @@ def t_settings_super_admin():
         pg.close()
 
 
+def svg_mm(pg, sel):
+    """(width, height) in mm of the first element matching sel, as drawn."""
+    r = pg.eval_on_selector(sel, "e => { const r = e.getBoundingClientRect(); return [r.width, r.height]; }")
+    return r[0] / MM, r[1] / MM
+
+
+@test("Settings: the bars are controls too - the preview is redrawn at the module width, "
+      "height and quiet zone typed, shows its size, warns when it cannot fit the cell, "
+      "refuses to save then, and Reset puts the standard values back")
+def t_settings_bars_preview():
+    T.packed_box()
+    modules = bc.code128_modules(H.APP.BC_SAMPLE_SERIAL)          # 211
+    with H.browser() as b:
+        pg = settings_card(b, "Super Admin")
+        w, h = svg_mm(pg, "#bt_wrap svg")
+        assert abs(w - (modules + 20) * 0.254) < 0.1 and abs(h - 11) < 0.05, (w, h)
+        pg.fill("#bt_barw", "0.3")
+        w, h = svg_mm(pg, "#bt_wrap svg")
+        assert abs(w - (modules + 20) * 0.3) < 0.1, w
+        assert pg.text_content("#bt_barwide").strip() == "%.1f mm" % ((modules + 20) * 0.3)
+        assert "3.54 dots at 300 dpi" in pg.text_content("#bt_dots"), pg.text_content("#bt_dots")
+        pg.fill("#bt_barh", "15")
+        assert abs(svg_mm(pg, "#bt_wrap svg")[1] - 15) < 0.05
+        row = float(pg.text_content("#bt_row"))
+        assert row > 15 + 3, "the row height ignores the bars: %s" % row
+        pg.fill("#bt_quiet", "14")
+        w, h = svg_mm(pg, "#bt_wrap svg")
+        assert abs(w - (modules + 28) * 0.3) < 0.1, w
+        # the bars still start where the quiet zone says: nothing is clipped
+        edge = pg.evaluate("""() => { const s = document.querySelector('#bt_wrap svg'), g = s.querySelector('g'),
+            sr = s.getBoundingClientRect(), gr = g.getBoundingClientRect();
+            return [(gr.left - sr.left) / 3.7795, (sr.right - gr.right) / 3.7795]; }""")
+        assert abs(edge[0] - 14 * 0.3) < 0.1 and abs(edge[1] - 14 * 0.3) < 0.1, edge
+        assert pg.text_content("#bt_warn") == ""
+        # too wide for the cell: said at once, and Save refuses before asking the server
+        pg.fill("#bt_barw", "0.4")
+        assert "Wider than the packing list cell" in pg.text_content("#bt_warn")
+        pg.click('button[onclick="btSave()"]')
+        pg.wait_for_timeout(600)
+        assert "Not saved" in pg.text_content("#bt_msg"), pg.text_content("#bt_msg")
+        assert T.stored() == bc.SETTING_DEFAULTS, T.stored()
+        # Reset: the standard values, in the fields, nothing saved
+        pg.click('button[onclick="btReset()"]')
+        assert pg.input_value("#bt_barw") == "0.254" and pg.input_value("#bt_barh") == "11" \
+            and pg.input_value("#bt_quiet") == "10"
+        w, h = svg_mm(pg, "#bt_wrap svg")
+        assert abs(w - (modules + 20) * 0.254) < 0.1 and abs(h - 11) < 0.05, (w, h)
+        assert pg.text_content("#bt_warn") == ""
+        assert not pg.errors, pg.errors
+        pg.close()
+
+
+@test("Settings: bars saved from the card are what the packing list prints - the "
+      "widest the cell holds included - inside the page, with the text still "
+      "centred on them")
+def t_settings_bars_saved_and_printed():
+    _, box = T.packed_box()
+    with H.browser() as b:
+        for width, height, quiet in (("0.3", "14", "12"), ("0.346", "9", "10")):
+            set_text()
+            pg = settings_card(b, "Super Admin")
+            pg.fill("#bt_barw", width); pg.fill("#bt_barh", height); pg.fill("#bt_quiet", quiet)
+            assert pg.text_content("#bt_warn") == "", pg.text_content("#bt_warn")
+            pg.click('button[onclick="btSave()"]')
+            pg.wait_for_timeout(1500)          # the save, then the card reloads itself
+            s = T.stored()
+            assert (s["bc_bar_width"], s["bc_bar_height"], s["bc_bar_quiet"]) == (width, height, quiet), s
+            assert not pg.errors, pg.errors
+            pg.close()
+            q = int(quiet)
+            for pw, media in ((1400, "screen"), (A4_PRINTABLE_PX, "print")):
+                sp = sheet(b, box, width=pw, media=media)
+                got = sp.eval_on_selector_all(
+                    "td.bc svg", "els => els.map(e => { const r = e.getBoundingClientRect(); return [r.width, r.height]; })")
+                want = [(m + 2 * q) * float(width) for m in (189, 211)]
+                assert all(abs(g[0] / MM - w) < 0.1 and abs(g[1] / MM - float(height)) < 0.05
+                           for g, w in zip(got, want)), (width, height, quiet, media,
+                                                         [(g[0] / MM, g[1] / MM) for g in got], want)
+                r = sp.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+                assert r <= 0, (width, media, "the sheet runs past the page", r)
+                lay = box_offsets(sp)
+                assert all(abs(o) <= 0.5 for o in lay), (width, media, lay)
+                sp.close()
+    set_text()
+
+
 @test("Settings: an Admin sees the card and its preview, every control locked with the reason")
 def t_settings_admin_locked():
     T.packed_box()
     with H.browser() as b:
         pg = settings_card(b, "Admin")
         for sel in ("#bt_font", "#bt_size", "#bt_spacing", "#bt_gap", "#bt_bold",
-                    'button[onclick="btSave()"]'):
+                    "#bt_barw", "#bt_barh", "#bt_quiet",
+                    'button[onclick="btSave()"]', 'button[onclick="btReset()"]'):
             assert pg.is_disabled(sel), sel + " is editable by an Admin"
             assert "Super Admin" in (pg.get_attribute(sel, "title") or ""), sel
         assert pg.is_visible("#bt_cell svg")

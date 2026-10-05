@@ -168,16 +168,20 @@ def code128_svg(text, height=34, module=1.6, show_text=True, font=8):
 # draws every bar the same width; it is also what a 203 dpi Zebra prints at
 # 2 dots. The text is NOT inside the SVG: there it shrank with the bars. It is
 # set beside it in HTML, so its size is a real point size.
+#
+# These three are the DEFAULTS of the Settings "Barcode" card (bar width,
+# height, quiet zone); BAR_DEFAULTS below is what is stored.
 
 NARROW_BAR_MM = 0.254
 BAR_HEIGHT_MM = 11.0
-QUIET_MODULES = 10          # Code128 needs ten modules of white on each side
+QUIET_MODULES = 10          # Code128 asks for ten modules of white on each side
 
 
 def code128_bars_svg(text, module_mm=NARROW_BAR_MM, height_mm=BAR_HEIGHT_MM,
                      quiet=QUIET_MODULES):
     """Bars only, quiet zones included, sized in mm. Empty string for no
-    serial. The serial rides along as aria-label, escaped."""
+    serial. The serial rides along as aria-label, escaped. data-modules and
+    data-quiet let the Settings preview resize it without re-encoding."""
     s = (text or "").strip()
     codes = code128_codes(s)
     if not codes:
@@ -194,8 +198,33 @@ def code128_bars_svg(text, module_mm=NARROW_BAR_MM, height_mm=BAR_HEIGHT_MM,
     total = x + quiet
     return ('<svg xmlns="http://www.w3.org/2000/svg" width="%.3fmm" height="%.3fmm" '
             'viewBox="0 0 %d 1" preserveAspectRatio="none" shape-rendering="crispEdges" '
+            'data-modules="%d" data-quiet="%d" '
             'role="img" aria-label="%s"><g fill="#000">%s</g></svg>'
-            % (total * module_mm, height_mm, total, _xml_escape(s), "".join(rects)))
+            % (total * module_mm, height_mm, total, total - 2 * quiet, quiet,
+               _xml_escape(s), "".join(rects)))
+
+
+def bars_width_mm(text, module_mm=NARROW_BAR_MM, quiet=QUIET_MODULES):
+    """Printed width of one barcode, quiet zones included - exactly what
+    code128_bars_svg draws, so a layout can be checked before it prints."""
+    return (code128_modules(text) + 2 * quiet) * module_mm
+
+
+# The bars: width of the narrowest bar (the "module" or "X dimension"), height,
+# and the white margin each side, in modules. Stored as strings like every
+# setting. The quiet zone is held at the Code128 minimum of ten modules or
+# more: less is not a layout choice, it is a barcode some scanners will not read.
+
+BAR_DEFAULTS = {
+    "bc_bar_width": "0.254",     # mm, the narrowest bar
+    "bc_bar_height": "11",       # mm
+    "bc_bar_quiet": "10",        # modules of white each side
+}
+BAR_RANGES = {   # key: (low, high, unit, name, decimals)
+    "bc_bar_width": (0.15, 0.40, "mm", "Barcode module width", 3),
+    "bc_bar_height": (6, 20, "mm", "Barcode height", 2),
+    "bc_bar_quiet": (10, 25, "modules", "Barcode quiet zone", 0),
+}
 
 
 # The text under a barcode - what Bartender and Zebra Designer let you set on
@@ -238,11 +267,14 @@ _YES = {"1": "1", "true": "1", "on": "1", "yes": "1",
         "0": "0", "false": "0", "off": "0", "no": "0", "": "0"}
 
 
-def clean_text_settings(d):
-    """(clean, why) for the barcode-text keys present in `d`. All or nothing:
-    one bad value refuses the lot, so a save never half-applies."""
+SETTING_DEFAULTS = dict(TEXT_DEFAULTS, **BAR_DEFAULTS)    # everything stored
+
+
+def clean_settings(d):
+    """(clean, why) for the barcode keys present in `d` - the bars and the text.
+    All or nothing: one bad value refuses the lot, so a save never half-applies."""
     out = {}
-    for k in TEXT_DEFAULTS:
+    for k in SETTING_DEFAULTS:
         if k not in d:
             continue
         v = str(d[k] if d[k] is not None else "").strip()
@@ -255,29 +287,52 @@ def clean_text_settings(d):
             if v is None:
                 return None, "%s must be on or off." % _TEXT_FLAGS[k]
         else:
-            lo, hi, unit, name = _TEXT_RANGES[k]
+            if k in BAR_RANGES:
+                lo, hi, unit, name, places = BAR_RANGES[k]
+            else:
+                (lo, hi, unit, name), places = _TEXT_RANGES[k], 2
             try:
                 f = float(v)
             except ValueError:
                 return None, "%s must be a number, not %r." % (name, v)
             if not (lo <= f <= hi):           # also refuses NaN
                 return None, "%s must be from %g to %g %s." % (name, lo, hi, unit)
-            v = "%g" % round(f, 2)
+            if places == 0 and f != int(f):
+                return None, "%s must be a whole number of modules, not %s." % (name, v)
+            v = "%g" % round(f, places)
         out[k] = v
     return out, None
 
 
-def text_settings(cfg):
-    """The barcode-text settings to print with: each stored value that still
-    validates, the default for any that does not. A bad stored value must
-    never stop a pallet sheet from printing."""
-    c = dict(TEXT_DEFAULTS)
-    for k in TEXT_DEFAULTS:
+def _valid_settings(cfg, defaults):
+    """`defaults`' keys, each from `cfg` where the stored value still
+    validates, else the default. A bad stored value must never stop a pallet
+    sheet from printing."""
+    c = dict(defaults)
+    for k in defaults:
         if cfg and k in cfg:
-            ok, _ = clean_text_settings({k: cfg[k]})
+            ok, _ = clean_settings({k: cfg[k]})
             if ok:
                 c.update(ok)
     return c
+
+
+def text_settings(cfg):
+    """The barcode-text settings to print with (see _valid_settings)."""
+    return _valid_settings(cfg, TEXT_DEFAULTS)
+
+
+def bar_settings(cfg):
+    """The bar settings to print with, as the stored strings."""
+    return _valid_settings(cfg, BAR_DEFAULTS)
+
+
+def bar_params(cfg):
+    """Keyword arguments for code128_bars_svg from the stored bar settings."""
+    c = bar_settings(cfg)
+    return {"module_mm": float(c["bc_bar_width"]),
+            "height_mm": float(c["bc_bar_height"]),
+            "quiet": int(float(c["bc_bar_quiet"]))}
 
 
 def text_style(cfg):
