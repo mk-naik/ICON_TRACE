@@ -11431,8 +11431,14 @@ function wireFqcAnomalies() {
     }
     var was = chEditingNo || 'the original';
     if (typeof toast === 'function') {
-      toast(d.no + ' saved, replacing ' + was + ' — ' + d.qty +
-            ' serial(s) dispatched. ' + was + ' is kept, marked superseded.');
+      /* The server compares what was posted with what the challan already is.
+         Nothing changed: no new version, the original stays issued - said so,
+         not dressed up as a save. */
+      toast(d.changed === false
+        ? 'Nothing was changed, so ' + was + ' stays as it is — no new ' +
+          'version was made.'
+        : d.no + ' saved, replacing ' + was + ' — ' + d.qty +
+          ' serial(s) dispatched. ' + was + ' is kept, marked superseded.');
     }
     chEditingId = null; chEditingNo = null;
     chResetFields();
@@ -11547,6 +11553,28 @@ function wireFqcAnomalies() {
       set('LR / GR no.', prefill.lr_no);
       set('Driver name', prefill.driver_name);
       set('Driver mobile', prefill.driver_mobile);
+      // ...and so do the date, the buyer and the consignee. The form was just
+      // filled from the invoice and today's date; saving without touching a
+      // thing must post exactly what the challan already holds, or the server
+      // can not tell "nothing changed" from a re-dated, re-read challan.
+      set('Challan date', prefill.challan_date);
+      var party = chEl('chParty');
+      if (party && prefill.buyer_name != null) party.value = prefill.buyer_name;
+      var gst = chEl('chGst');
+      if (gst && prefill.buyer_gstin != null) {
+        gst.value = String(prefill.buyer_gstin);       // exactly as stored
+        if (typeof window.gstCheck === 'function') window.gstCheck();
+      }
+      var sameBox = chField('Consignee is the same');
+      if (sameBox && prefill.consignee_same_as_buyer != null) {
+        sameBox.checked = !!prefill.consignee_same_as_buyer;
+        if (typeof window.sameCons === 'function') window.sameCons(sameBox);
+        var consEl = chField('Consignee name');
+        if (consEl && !sameBox.checked) {
+          consEl.value = (prefill.consignee_name || '') +
+            (prefill.consignee_address ? '\n' + prefill.consignee_address : '');
+        }
+      }
       chShowEditBar();
       chRenderDocsPlaceholder();
       chLoadBoxes().then(chRunChecksNow);

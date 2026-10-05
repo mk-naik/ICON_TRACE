@@ -37,22 +37,38 @@ def test(name):
     return deco
 
 
-def seed():
+def seed(**over):
     """(client, challan_id, box_ids): three pallets of two modules on an issued
-    challan, created with the fields the Create screen posts for an invoice."""
+    challan, created with the fields the Create screen posts for an invoice.
+    `over` replaces any of those fields (a date, a buyer typed differently...)."""
     c = T.setup()
     boxes = [T.packed_box(c, [10, 11]), T.packed_box(c, [12, 13]),
              T.packed_box(c, [14, 15])]
     inv = T.make_invoice(qty=6, invoice_no="INV-EDIT-UI")
-    r = c.post("/api/challan", json={
+    body = {
         "action": "create", "boxes": boxes, "invoice_id": inv,
         "buyer_name": T.AGNI_NAME, "buyer_gstin": T.AGNI_GSTIN,
         "consignee_same_as_buyer": True, "consignee_name": "",
         "consignee_address": "", "vehicle_no": "CG04AB1234",
         "transporter": "Sharma Transport", "lr_no": "LR-778",
-        "driver_name": "Ramesh", "driver_mobile": "9876543210"})
+        "driver_name": "Ramesh", "driver_mobile": "9876543210"}
+    body.update(over)
+    r = c.post("/api/challan", json=body)
     assert r.status_code == 200, r.get_json()
     return c, r.get_json()["challan_id"], boxes
+
+
+def challans():
+    """Every challan row, as the list screen sees the lineage."""
+    with store.conn() as (cx, cur):
+        return [dict(r) for r in store.rows(
+            cur, "SELECT challan_id, suffix, status, challan_date, buyer_name, "
+                 "consignee_name, consignee_address FROM challan "
+                 "ORDER BY challan_id")]
+
+
+def toast_text(pg):
+    return pg.evaluate("(document.getElementById('toast') || {}).textContent || ''")
 
 
 def open_detail(pg, cid):
@@ -148,6 +164,85 @@ def t_edit_then_print():
         assert "9111222333" in flat and "9876543210" not in flat, \
             "the printed challan is not the edited version"
         assert not pg.errors, pg.errors
+
+
+def said_nothing_changed(pg):
+    pg.wait_for_function(
+        "((document.getElementById('toast') || {}).textContent || '')"
+        ".indexOf('Nothing was changed') >= 0", timeout=8000)
+    t = toast_text(pg)
+    assert "stays as it is" in t and "no new version" in t, t
+    assert "saved" not in t and "superseded" not in t and "dispatched" not in t, \
+        "a save that changed nothing was announced as a save: " + t
+
+
+@test("Edit, change nothing, Save: the answer says nothing was changed, and no new "
+      "version is made - the original stays the one issued challan")
+def t_untouched_edit_is_nothing():
+    c, chid, boxes = seed()
+    before = challans()
+    with H.browser() as b:
+        pg = H.open_page(b, role="Super Admin", login_id="edit.ui", wait_ms=1200)
+        begin_edit(pg, chid)
+        saved = save_edit(pg)
+        assert saved["ok"] and saved["changed"] is False and \
+            saved["challan_id"] == chid, saved
+        said_nothing_changed(pg)
+        assert not pg.errors, pg.errors
+    assert challans() == before, "a save with nothing changed wrote to the challans"
+    assert [r["status"] for r in challans()] == ["issued"]
+
+
+@test("a challan dated a day earlier: Edit opens on ITS date, an untouched Save is "
+      "still nothing, and a real change keeps that date")
+def t_untouched_edit_a_day_later():
+    import datetime
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    c, chid, boxes = seed(challan_date=yesterday)
+    with H.browser() as b:
+        pg = H.open_page(b, role="Super Admin", login_id="edit.ui", wait_ms=1200)
+        begin_edit(pg, chid)
+        assert field(pg, "Challan date").input_value() == yesterday, \
+            "the Edit form opened on today's date, not the challan's own"
+        saved = save_edit(pg)
+        assert saved["changed"] is False, saved
+        said_nothing_changed(pg)
+        assert len(challans()) == 1, challans()
+
+        # now a real change: the corrected challan keeps the date it had
+        begin_edit(pg, chid)
+        field(pg, "Driver mobile").fill("9111222333")
+        saved = save_edit(pg)
+        assert saved["changed"] is True and saved["suffix"] == "MA", saved
+    rows = challans()
+    assert [r["status"] for r in rows] == ["superseded", "issued"], rows
+    assert rows[1]["challan_date"] == yesterday, rows
+
+
+@test("a buyer and consignee typed differently from the invoice's survive Edit - "
+      "an untouched Save is nothing, and a real change does not re-read them "
+      "from the invoice")
+def t_edit_keeps_own_buyer_and_consignee():
+    c, chid, boxes = seed(
+        buyer_name="Typed Buyer Pvt Ltd", buyer_gstin="22AAAAA0000A1Z5",
+        consignee_same_as_buyer=False, consignee_name="Site Store",
+        consignee_address="Plot 4\nRaipur")
+    with H.browser() as b:
+        pg = H.open_page(b, role="Super Admin", login_id="edit.ui", wait_ms=1200)
+        begin_edit(pg, chid)
+        saved = save_edit(pg)
+        assert saved["changed"] is False, \
+            "an untouched Edit re-read the buyer / consignee from the invoice: %s" % saved
+        said_nothing_changed(pg)
+        assert len(challans()) == 1, challans()
+
+        begin_edit(pg, chid)
+        field(pg, "Driver mobile").fill("9111222333")
+        saved = save_edit(pg)
+        assert saved["changed"] is True, saved
+    new = challans()[-1]
+    assert (new["buyer_name"], new["consignee_name"], new["consignee_address"]) == \
+        ("Typed Buyer Pvt Ltd", "Site Store", "Plot 4\nRaipur"), new
 
 
 if __name__ == "__main__":

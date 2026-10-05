@@ -1153,7 +1153,10 @@ def t_edit_invoice_locked():
     with store.conn() as (cx, cur):
         cur.execute("UPDATE invoice SET declared_qty=2 WHERE invoice_id=%s",
                     (inv2,))
-    r2 = c.post("/api/challan/%d/edit-save" % chid, json={"boxes": [b]})
+    # (with a real change: a save in which nothing changed writes no new row,
+    # so it would not show where the server took the invoice from)
+    r2 = c.post("/api/challan/%d/edit-save" % chid,
+                json={"boxes": [b], "driver_name": "Suresh"})
     assert r2.status_code == 200, r2.get_json()
     assert dict(challan_row(r2.get_json()["challan_id"]))["invoice_id"] == inv1
 
@@ -1238,10 +1241,13 @@ def t_edit_resolves_box_no_to_box_id():
         "box_no %r did not resolve to the real box_id %r: got %r" % \
         (cb["box_no"], b, d["boxes"])
 
+    # (the pre-filled ticks are accepted as they came; a driver change makes it
+    # a real save - an untouched one writes nothing, tested below)
     r2 = c.post("/api/challan/%d/edit-save" % chid,
-               json={"boxes": d["boxes"], "invoice_id": inv})
+               json={"boxes": d["boxes"], "invoice_id": inv,
+                     "driver_mobile": "9000000001"})
     assert r2.status_code == 200, r2.get_json()
-    assert r2.get_json()["qty"] == 3
+    assert r2.get_json()["qty"] == 3 and r2.get_json()["changed"] is True
 
 
 @test("editing a draft or a cancelled challan is refused, not just a "
@@ -1270,9 +1276,11 @@ def t_edit_save_refuses_non_issued():
     chid = make_issued_challan(c, [b], inv)
 
     r1 = c.post("/api/challan/%d/edit-save" % chid,
-               json={"boxes": [b], "invoice_id": inv})
+               json={"boxes": [b], "invoice_id": inv,
+                     "vehicle_no": "CG04FIRST01"})
     assert r1.status_code == 200, r1.get_json()
     ma_id = r1.get_json()["challan_id"]
+    assert ma_id != chid, "the first edit wrote no new version"
 
     # chid is now 'superseded' - saving against it again must be refused,
     # by edit-save itself, independent of whatever edit-draft would say
@@ -1286,6 +1294,227 @@ def t_edit_save_refuses_non_issued():
     assert dict(challan_row(chid))["superseded_by"] == ma_id
     assert dict(challan_row(ma_id))["status"] == "issued"
     assert dict(challan_row(ma_id))["vehicle_no"] != "SHOULD-NOT-LAND"
+
+
+# --------------------------------------------------------------------------
+# An edit in which nothing changed is not an edit
+# --------------------------------------------------------------------------
+
+def edit_payload(c, chid, **over):
+    """What the Edit screen posts for a form nobody touched: every value
+    edit-draft hands it, in the shapes chPayload() sends them (an empty field is
+    '', the consignee is one text of name and address). `over` is what the
+    person changed."""
+    d = c.post("/api/challan/%d/edit-draft" % chid, json={}).get_json()
+    assert d["ok"], d
+    body = {"boxes": d["boxes"], "invoice_id": d["invoice_id"],
+            "challan_date": d["challan_date"],
+            "buyer_name": d["buyer_name"] or "",
+            "buyer_gstin": d["buyer_gstin"] or "",
+            "consignee_same_as_buyer": d["consignee_same_as_buyer"],
+            "consignee_name": d["consignee_name"] or "",
+            "consignee_address": d["consignee_address"] or "",
+            "vehicle_no": d["vehicle_no"] or "",
+            "transporter": d["transporter"] or "", "lr_no": d["lr_no"] or "",
+            "driver_name": d["driver_name"] or "",
+            "driver_mobile": d["driver_mobile"] or ""}
+    body.update(over)
+    return body
+
+
+def all_challans():
+    with store.conn() as (cx, cur):
+        return [dict(r) for r in store.rows(
+            cur, "SELECT challan_id, suffix, status, superseded_by FROM "
+                 "challan ORDER BY challan_id")]
+
+
+def audit_count(action):
+    with store.conn() as (cx, cur):
+        return store.one(cur, "SELECT COUNT(*) AS n FROM dispatch_audit WHERE "
+                              "action=%s", (action,))["n"]
+
+
+@test("saving an edit in which nothing changed writes nothing: no new version, "
+      "the original stays issued, no suffix is used up, nothing is audited - "
+      "and the answer says so instead of pretending to have saved")
+def t_edit_unchanged_writes_nothing():
+    c = setup()
+    b1 = packed_box(c, [140, 141])
+    b2 = packed_box(c, [142, 143])
+    inv = make_invoice(qty=4, invoice_no="INV-NOCHANGE")
+    r = c.post("/api/challan", json={
+        "action": "create", "boxes": [b1, b2], "invoice_id": inv,
+        "buyer_name": AGNI_NAME, "buyer_gstin": AGNI_GSTIN,
+        "consignee_same_as_buyer": True, "consignee_name": "",
+        "consignee_address": "", "vehicle_no": "CG04AB1234",
+        "transporter": "Sharma Transport", "lr_no": "LR-778",
+        "driver_name": "Ramesh", "driver_mobile": "9876543210"})
+    assert r.status_code == 200, r.get_json()
+    chid, no = r.get_json()["challan_id"], r.get_json()["no"]
+    before, edits = all_challans(), audit_count("challan.edit")
+
+    r = c.post("/api/challan/%d/edit-save" % chid, json=edit_payload(c, chid))
+    assert r.status_code == 200, r.get_json()
+    j = r.get_json()
+    assert j["ok"] is True and j["changed"] is False, j
+    assert j["challan_id"] == chid and j["no"] == no and j["suffix"] is None, j
+    assert "nothing was changed" in j["note"].lower(), j
+    assert all_challans() == before, "an unchanged save wrote a challan row"
+    assert dict(challan_row(chid))["status"] == "issued"
+    assert audit_count("challan.edit") == edits, \
+        "an unchanged save was audited as an edit"
+    assert state_of(serial(140)) == "dispatched" == state_of(serial(143))
+
+    # no suffix was used up: the next REAL edit is still MA
+    r2 = c.post("/api/challan/%d/edit-save" % chid,
+                json=edit_payload(c, chid, driver_name="Suresh"))
+    assert r2.get_json()["changed"] is True and \
+        r2.get_json()["suffix"] == "MA", r2.get_json()
+    assert audit_count("challan.edit") == edits + 1
+
+
+@test("a challan made from nothing but pallets and an invoice is also unchanged "
+      "when the screen posts it back - the buyer the screen shows is the "
+      "invoice's, which is what was stored")
+def t_edit_unchanged_when_buyer_came_from_invoice():
+    c = setup()
+    b = packed_box(c, [146, 147])
+    inv = make_invoice(qty=2, invoice_no="INV-NOCHANGE2")
+    chid = make_issued_challan(c, [b], inv)
+    body = {"boxes": [b], "invoice_id": inv, "buyer_name": AGNI_NAME,
+            "buyer_gstin": AGNI_GSTIN, "consignee_same_as_buyer": True,
+            "consignee_name": "", "consignee_address": "",
+            "challan_date": challan_row(chid)["challan_date"],
+            "vehicle_no": "", "transporter": "", "lr_no": "",
+            "driver_name": "", "driver_mobile": ""}
+    for post in (body, {"boxes": [b]}, {"boxes": [b], "invoice_id": inv}):
+        r = c.post("/api/challan/%d/edit-save" % chid, json=post)
+        assert r.status_code == 200 and r.get_json()["changed"] is False, \
+            (post, r.get_json())
+    assert len(all_challans()) == 1, all_challans()
+
+
+@test("every field an edit may change makes a new version - and after each, an "
+      "untouched save of the new version is again nothing (what the screen "
+      "posts back round-trips exactly)")
+def t_edit_each_field_is_a_change():
+    c = setup()
+    b1 = packed_box(c, [148, 149])
+    b2 = packed_box(c, [150, 151])
+    b3 = packed_box(c, [152, 153])
+    inv = make_invoice(qty=4, invoice_no="INV-EACHFIELD")
+    live = make_issued_challan(c, [b1, b2], inv)
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    steps = [   # (what the person changed, the column that must then hold it)
+        ({"vehicle_no": "CG04CH0001"}, "vehicle_no", "CG04CH0001"),
+        ({"transporter": "Other Transport"}, "transporter", "Other Transport"),
+        ({"lr_no": "LR-1"}, "lr_no", "LR-1"),
+        ({"driver_name": "Mahesh"}, "driver_name", "Mahesh"),
+        ({"driver_mobile": "9111111111"}, "driver_mobile", "9111111111"),
+        ({"challan_date": yesterday}, "challan_date", yesterday),
+        ({"buyer_name": "AGNI GREEN POWER LTD"}, "buyer_name",
+         "AGNI GREEN POWER LTD"),
+        ({"buyer_gstin": "27AAACX0000A1Z5"}, "buyer_gstin", "27AAACX0000A1Z5"),
+        ({"consignee_same_as_buyer": False, "consignee_name": "Site Store",
+          "consignee_address": "Plot 4\nRaipur"}, "consignee_name", "Site Store"),
+        ({"consignee_address": "Plot 9\nRaipur"}, "consignee_address",
+         "Plot 9\nRaipur"),
+        ({"boxes": [b2, b1]}, None, None),      # the same pallets, another order
+        ({"boxes": [b2, b3]}, None, None),      # a different pallet
+    ]
+    for over, col, want in steps:
+        r = c.post("/api/challan/%d/edit-save" % live,
+                   json=edit_payload(c, live, **over))
+        assert r.status_code == 200, (over, r.get_json())
+        j = r.get_json()
+        assert j["changed"] is True and j["challan_id"] != live, (over, j)
+        assert dict(challan_row(live))["status"] == "superseded", over
+        live = j["challan_id"]
+        if col:
+            assert dict(challan_row(live))[col] == want, (over, dict(challan_row(live)))
+        if "boxes" in over:
+            assert edit_payload(c, live)["boxes"] == over["boxes"], over
+        again = c.post("/api/challan/%d/edit-save" % live,
+                       json=edit_payload(c, live))
+        assert again.get_json()["changed"] is False, \
+            ("did not round-trip after", over, again.get_json())
+        assert dict(challan_row(live))["status"] == "issued", over
+    assert dict(challan_row(live))["suffix"] == "ML", dict(challan_row(live))
+
+
+@test("an edit keeps the challan's own date unless the date was changed - left "
+      "out of the post it is the challan's, not today's; today posted over an "
+      "older date IS a change")
+def t_edit_keeps_challan_date():
+    c = setup()
+    b1 = packed_box(c, [154, 155])
+    b2 = packed_box(c, [156, 157])
+    inv = make_invoice(qty=2, invoice_no="INV-KEEPDATE")
+    old = datetime.date.today() - datetime.timedelta(days=3)
+    r = c.post("/api/challan", json={"action": "create", "boxes": [b1],
+                                     "invoice_id": inv,
+                                     "challan_date": old.isoformat()})
+    assert r.status_code == 200, r.get_json()
+    chid = r.get_json()["challan_id"]
+
+    # a real change that says nothing about the date
+    r = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": [b2], "invoice_id": inv})
+    j = r.get_json()
+    assert r.status_code == 200 and j["changed"] is True, j
+    assert dict(challan_row(j["challan_id"]))["challan_date"] == old.isoformat()
+    assert old.strftime("%d.%m.%Y") in j["no"], \
+        "the corrected challan's number does not carry its own date: " + j["no"]
+
+    # the person changing the date to today is a change of the date
+    today = datetime.date.today().isoformat()
+    r2 = c.post("/api/challan/%d/edit-save" % j["challan_id"],
+                json=edit_payload(c, j["challan_id"], challan_date=today))
+    assert r2.get_json()["changed"] is True, r2.get_json()
+    assert dict(challan_row(r2.get_json()["challan_id"]))["challan_date"] == today
+
+
+@test("edit-draft hands the screen the challan's OWN date, buyer, consignee and "
+      "transport - never today's date and the invoice's buyer - so what the "
+      "screen posts back untouched is exactly what is stored")
+def t_edit_draft_returns_own_values():
+    c = setup()
+    b = packed_box(c, [158, 159])
+    inv = make_invoice(qty=2, invoice_no="INV-OWNVALUES")
+    old = (datetime.date.today() - datetime.timedelta(days=5)).isoformat()
+    r = c.post("/api/challan", json={
+        "action": "create", "boxes": [b], "invoice_id": inv,
+        "challan_date": old, "buyer_name": "Typed Buyer Pvt Ltd",
+        "buyer_gstin": "22AAAAA0000A1Z5", "consignee_same_as_buyer": False,
+        "consignee_name": "Site Store", "consignee_address": "Plot 4\nRaipur",
+        "vehicle_no": "CG04XY9999", "transporter": "Tee", "lr_no": "LR-5",
+        "driver_name": "Dee", "driver_mobile": "9000000009"})
+    assert r.status_code == 200, r.get_json()
+    chid = r.get_json()["challan_id"]
+
+    d = c.post("/api/challan/%d/edit-draft" % chid, json={}).get_json()
+    assert d["challan_date"] == old, d
+    assert d["buyer_name"] == "Typed Buyer Pvt Ltd", d
+    assert d["buyer_gstin"] == "22AAAAA0000A1Z5", d
+    assert d["consignee_same_as_buyer"] is False, d
+    assert d["consignee_name"] == "Site Store", d
+    assert d["consignee_address"] == "Plot 4\nRaipur", d
+    assert (d["vehicle_no"], d["transporter"], d["lr_no"], d["driver_name"],
+            d["driver_mobile"]) == ("CG04XY9999", "Tee", "LR-5", "Dee",
+                                    "9000000009"), d
+
+    j = c.post("/api/challan/%d/edit-save" % chid,
+               json=edit_payload(c, chid)).get_json()
+    assert j["changed"] is False, j
+    assert len(all_challans()) == 1, all_challans()
+
+    # and a challan whose consignee is the buyer says so
+    b2 = packed_box(c, [160, 161])
+    inv2 = make_invoice(qty=2, invoice_no="INV-OWNVALUES2")
+    other = make_issued_challan(c, [b2], inv2)
+    d2 = c.post("/api/challan/%d/edit-draft" % other, json={}).get_json()
+    assert d2["consignee_same_as_buyer"] is True and not d2["consignee_name"], d2
 
 
 # --------------------------------------------------------------------------

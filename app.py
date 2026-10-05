@@ -2884,6 +2884,27 @@ def api_challan_checks():
     return jsonify(chk)
 
 
+def _challan_header(d, invoice):
+    """The header columns a challan stores from a posted form. ONE place, so what
+    Create writes and what an Edit is compared against can never read the same
+    payload two ways: the buyer falls back to the invoice's, a consignee 'same as
+    the buyer' is stored as nothing, every text is stripped and an empty one is
+    None."""
+    def txt(k):
+        return (d.get(k) or "").strip() or None
+    same = bool(d.get("consignee_same_as_buyer"))
+    return {
+        "buyer_name": txt("buyer_name") or
+                      (invoice.get("buyer_name") if invoice else None),
+        "buyer_gstin": txt("buyer_gstin") or
+                       (invoice.get("buyer_gstin") if invoice else None),
+        "consignee_name": None if same else txt("consignee_name"),
+        "consignee_address": None if same else txt("consignee_address"),
+        "transporter": txt("transporter"), "vehicle_no": txt("vehicle_no"),
+        "lr_no": txt("lr_no"), "driver_name": txt("driver_name"),
+        "driver_mobile": txt("driver_mobile")}
+
+
 def _write_challan(cur, d, status, exclude_challan_id=None, fy=None, seq=None,
                    suffix=None):
     """Shared by a fresh draft, a fresh create, and an edit's save - the
@@ -2918,7 +2939,6 @@ def _write_challan(cur, d, status, exclude_challan_id=None, fy=None, seq=None,
     challan_date = (d.get("challan_date") or "").strip() or \
         clock.today().isoformat()
 
-    consignee_same = bool(d.get("consignee_same_as_buyer"))
     model_label = (" + ".join(chk["models"]) if len(chk["models"]) > 1
                   else (chk["models"][0] if chk["models"] else None))
     # A single wattage column has to serve mixed-model challans too. Storing
@@ -2932,31 +2952,18 @@ def _write_challan(cur, d, status, exclude_challan_id=None, fy=None, seq=None,
                                   ).get("wattage", 0) for b in chk["boxes"])
     avg_watt = round(total_watts / chk["qty"], 3) if chk["qty"] else None
 
-    chid = store.insert(cur, "challan", {
+    chid = store.insert(cur, "challan", dict(_challan_header(d, invoice), **{
         "fy": fy, "seq": seq, "suffix": suffix, "challan_date": challan_date,
         "invoice_id": invoice_id,
         "invoice_no": invoice.get("invoice_no") if invoice else None,
         "irn": invoice.get("irn") if invoice else None,
-        "buyer_name": (d.get("buyer_name") or "").strip() or
-                      (invoice.get("buyer_name") if invoice else None),
-        "buyer_gstin": (d.get("buyer_gstin") or "").strip() or
-                       (invoice.get("buyer_gstin") if invoice else None),
-        "consignee_name": None if consignee_same else
-                          ((d.get("consignee_name") or "").strip() or None),
-        "consignee_address": None if consignee_same else
-                             ((d.get("consignee_address") or "").strip() or None),
-        "transporter": (d.get("transporter") or "").strip() or None,
-        "vehicle_no": (d.get("vehicle_no") or "").strip() or None,
-        "lr_no": (d.get("lr_no") or "").strip() or None,
-        "driver_name": (d.get("driver_name") or "").strip() or None,
-        "driver_mobile": (d.get("driver_mobile") or "").strip() or None,
         "model": model_label, "wattage": avg_watt,
         "qty": chk["qty"],
         "declared_qty": invoice.get("declared_qty") if invoice else None,
         "origin": "system", "status": status, "created_by": actor(),
         # when its modules left - dispatch is counted by this, not by the
         # date printed on the challan
-        "issued_at": clock.stamp() if status == "issued" else None})
+        "issued_at": clock.stamp() if status == "issued" else None}))
 
     # Icon Stock pallets take the buyer's name here, with the reason on record
     # (the challan is the reason - and the number exists only now)
@@ -3899,13 +3906,55 @@ def api_challan_edit_draft(challan_id):
         no = db.render_challan_no(
             datetime.date.fromisoformat(ch["challan_date"]), ch["seq"],
             ch["suffix"])
+    # Everything the form posts back. The Edit screen fills itself from the
+    # INVOICE first (the buyer, consignee and transport are the invoice's own
+    # fields and hidden there) and today's date; these are the challan's own
+    # values, which have to win - otherwise saving without touching anything
+    # would quietly re-date the challan and re-read the buyer from the invoice.
     return jsonify({"ok": True, "editing_challan_id": challan_id, "no": no,
                     "fy": ch["fy"], "seq": ch["seq"],
                     "invoice_id": ch["invoice_id"], "boxes": box_ids,
+                    "challan_date": ch["challan_date"],
+                    "buyer_name": ch["buyer_name"],
+                    "buyer_gstin": ch["buyer_gstin"],
+                    "consignee_same_as_buyer": not (ch["consignee_name"] or
+                                                    ch["consignee_address"]),
+                    "consignee_name": ch["consignee_name"],
+                    "consignee_address": ch["consignee_address"],
                     "vehicle_no": ch["vehicle_no"],
                     "transporter": ch["transporter"], "lr_no": ch["lr_no"],
                     "driver_name": ch["driver_name"],
                     "driver_mobile": ch["driver_mobile"]})
+
+
+def _edit_changes_nothing(cur, ch, d):
+    """True when the posted edit asks for exactly what the live challan already
+    is: the same pallets in the same order, the same date, the same header.
+
+    The header is read by _challan_header - the function that WRITES a challan -
+    so the comparison cannot disagree with what a save would have stored. The
+    invoice is the challan's own (an edit cannot move it). A pallet that no
+    longer resolves, or a box list that is not numbers, is not 'nothing': the
+    ordinary save then answers it."""
+    invoice = db.get_invoice_by_id(cur, ch["invoice_id"]) \
+        if ch.get("invoice_id") else None
+    want = _challan_header(d, invoice)
+    want["challan_date"] = d.get("challan_date")
+    if any((ch.get(k) or None) != (v or None) for k, v in want.items()):
+        return False
+    try:
+        posted = [int(x) for x in (d.get("boxes") or [])]
+    except (TypeError, ValueError):
+        return False
+    have = []
+    for cb in store.rows(cur, "SELECT box_no FROM challan_box WHERE "
+                              "challan_id=%s ORDER BY load_order",
+                         (ch["challan_id"],)):
+        row = _resolve_box_no(cur, cb["box_no"])
+        if not row:
+            return False
+        have.append(row["box_id"])
+    return posted == have
 
 
 @app.route("/api/challan/<int:challan_id>/edit-save", methods=["POST"])
@@ -3955,6 +4004,24 @@ def api_challan_edit_save(challan_id):
                 "different invoice."}), 400
         d = dict(d)
         d["invoice_id"] = ch["invoice_id"]
+        # An edit corrects the document, so it keeps its own date unless the
+        # date was changed: left out, it is the challan's, not today's.
+        d["challan_date"] = (d.get("challan_date") or "").strip() or \
+            ch["challan_date"]
+
+        # Saving an edit in which nothing changed is not an edit: no new
+        # version, no suffix used up, the original stays issued and nothing is
+        # written or audited. Said plainly in the answer, never a fake save.
+        if _edit_changes_nothing(cur, ch, d):
+            return jsonify({"ok": True, "changed": False,
+                            "challan_id": challan_id, "fy": ch["fy"],
+                            "seq": ch["seq"], "suffix": ch["suffix"],
+                            "no": db.render_challan_no(
+                                datetime.date.fromisoformat(ch["challan_date"]),
+                                ch["seq"], ch["suffix"]),
+                            "status": ch["status"], "qty": ch["qty"],
+                            "note": "Nothing was changed, so no new version "
+                                    "was made."})
 
         orig_serials = {r["serial"] for r in store.rows(
             cur, "SELECT serial FROM challan_serial WHERE challan_id=%s",
@@ -3994,6 +4061,7 @@ def api_challan_edit_save(challan_id):
         db.audit(cur, actor(), "challan.edit", "challan", challan_id,
                  {"new_challan_id": out["challan_id"], "released": released})
     out["superseded_original"] = challan_id
+    out["changed"] = True
     return jsonify(out)
 
 

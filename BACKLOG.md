@@ -6424,3 +6424,37 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
   printed MA challan with the edited driver mobile; the original offers no Print).
   Each of the three fails on the old code with the bare URL.
 
+## 5 Oct 2026 - Saving an edit with nothing changed still superseded the original
+
+- **Reported:** edit a challan, press Save, change nothing - the original is
+  still cancelled and a new one made. (The last words came as "it should cancel
+  original"; read as "should NOT", since that is the complaint.)
+- **Evidence:** in Chromium, three pallets, full transport details: Edit -> Save
+  changes, nothing touched, posted exactly what was stored; the server answered
+  200 `(MA)`, the original became `superseded`, and the toast read "... saved,
+  replacing ... 6 serial(s) dispatched".
+- **Cause:** `api_challan_edit_save` compared nothing - every save was a new
+  version. And the Edit form was not a faithful copy of the challan: it opened on
+  today's date and filled the buyer and consignee from the INVOICE (those fields
+  are hidden on this screen, "the invoice's own"). So an untouched save on a later
+  day re-dated the challan (its number carries the date), and a buyer or consignee
+  that differed from the invoice's was silently re-read from it.
+- **Change:** `_challan_header` is the one reader of a posted form, used by Create
+  and by the comparison, so the two cannot disagree. `_edit_changes_nothing`
+  compares the pallets (in order), date, buyer, consignee and transport; the same
+  means `changed: false`, nothing written, nothing audited, no suffix used. A real
+  save answers `changed: true`. `edit-draft` returns the challan's own date,
+  buyer, consignee and transport and `chBeginEdit` puts them in the form; an edit
+  that leaves the date out keeps the challan's. The toast says "Nothing was
+  changed". Superseded / gate-pass / invoice refusals still come first.
+- **Changed tests:** three used a no-change save as shorthand for "make a
+  version" (`t_edit_invoice_locked`, `t_edit_resolves_box_no_to_box_id`,
+  `t_edit_save_refuses_non_issued`); each now makes a real change.
+- **Tests:** `test_challan.py` +5 (nothing writes; invoice-sourced buyer; every
+  field - and a pallet reorder and swap - makes a version and round-trips; the
+  date; edit-draft's own values), `test_challan_edit_ui.py` +3 (Chromium: an
+  untouched Save; a challan dated yesterday; a typed buyer and consignee). The
+  server and browser ones fail on the old code.
+- **Open:** a real edit now keeps the challan's date; it used to take the day of
+  the edit, as a side effect of the form. See DECISIONS section 3.
+

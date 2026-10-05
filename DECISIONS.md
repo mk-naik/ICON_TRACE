@@ -117,6 +117,19 @@ no one signs twice. [enforcement unverified]
   `superseded` (a status distinct from `cancelled`). Only the live version can
   be edited. The invoice is locked; everything else is editable. Abandoning an
   edit changes nothing. Edit is blocked once a gate pass exists. [built]
+- **An edit in which nothing changed makes no new version.** Save compares what
+  the screen posts - the pallets in their order, the date, the buyer, the
+  consignee and the transport - with the live challan. If it is all the same the
+  server answers `changed: false` and writes nothing: the original stays issued,
+  no suffix is used up, nothing is audited, and the screen says "Nothing was
+  changed" instead of announcing a save. Refusals (superseded, gate pass, invoice
+  moved) still come first. To make that true the Edit screen opens with the
+  challan's OWN date, buyer, consignee and transport - it used to open on today's
+  date and the invoice's buyer, so an untouched save re-dated the challan and
+  re-read its buyer. A real edit therefore keeps the challan's date unless the
+  date field is changed. [built] **[open]** whether a corrected challan should
+  instead take the day it was corrected (the number carries the date; it did so,
+  by accident of the form, before).
 - **A challan is named by its number AND its suffix.** The documents of an
   edited challan (Print, Excel + FTR) are asked for as `?suffix=MA`; a bare
   `/challan/<fy>/<seq>/...` is the ORIGINAL row, which the server refuses once an
