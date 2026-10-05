@@ -6321,3 +6321,51 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
   line (Doc No, Revision 0, 01.03.2026) is small, at the foot; freight is not printed.
 - **Not done:** the Excel V2 is unchanged (still the plain sheet, no QR); the pallet
   sheet / labels keep their own layouts.
+
+## 5 Oct 2026 - Packing list barcodes: Code128 Auto, real size, text from Settings
+
+- **Asked:** the packing list's barcodes were far wider than the same serial from
+  Zebra Designer 3 (Code128 Auto); the human-readable text was too small; with
+  barcodes on, the on-screen sheet ran past the page margin (printing was fine).
+  Use Code128 Auto, turn the barcode's own text off, and print the serial under
+  it as text whose font, size, letter spacing, bold, italic etc. can be set, as
+  in Bartender / Zebra Designer - always below, always centred on the barcode,
+  fixed size.
+- **Evidence:** `icon_barcode.code128_svg` encoded subset B only ("no subset
+  switching is needed"): 233 modules for every 18-character v2 serial. The sheet
+  sized each SVG by height (`td.bc svg{height:11mm}`), so its width followed the
+  aspect ratio - 91 mm in an ~80 mm cell - and the text, inside the SVG, shrank
+  with the bars to ~2.5 mm. Chrome shrinks an over-wide page to fit when
+  printing, which is why the print looked right.
+- **Change:** `code128_codes` / `code128_modules`: Code128 Auto, B and C, optimal
+  switching. `code128_bars_svg`: bars only, at 0.254 mm (10 mil - 3 dots at
+  300 dpi, 6 at 600, 2 at a 203 dpi Zebra) and 11 mm, quiet zones included.
+  `text_style` / `clean_text_settings` / `TEXT_FONTS`: the text settings,
+  validated, stored as keys (never CSS). Pallet sheet: barcode and text sit in
+  one box as wide as the wider of the two, both centred; `table-layout:fixed` so
+  nothing in a cell can widen the table. Settings > Stations & sources: a
+  "Barcode text - packing list" card with a print-size preview of the widest
+  serial in a box the width of the real cell, which warns and refuses Save when
+  the text would overrun it. `code128_svg` kept, unchanged in output.
+- **Found on the way:** letter-spacing is added after the LAST letter too, so
+  centred spaced text sits half a space left (Chromium 141: 3.5 px at 6 pt); a
+  negative right margin of one spacing takes it back (0.5 px, glyph rounding).
+  `python-barcode`'s Code128 is not a safe drop-in: it encodes `99ICON` as a
+  barcode that scans `ICON`.
+- **Tests:** `test_box_number.py` (+4: widths 189/211/167, no lossy start, bars
+  in mm, text style), `test_barcode_text.py` (server: defaults, save, refusals
+  store nothing, Admin 403, sheet markup, Settings fragment),
+  `test_barcode_text_ui.py` (Chromium: text ink centred on bar ink within 0.5 px
+  for both widths at three settings; sheet inside the page on screen and at A4
+  print width; Oct-Dec 5.59 mm wider; preview box = real cell within 1 mm;
+  Settings preview, refusal and save; Admin locked with the reason). Also
+  verified outside the suite: 6,020 encodings decoded by zxing-cpp; all four
+  barcodes and the QR read off a printed A4 PDF at 150 dpi.
+- **Decided on instinct, change if wrong:** defaults Arial 10 pt bold, no
+  spacing, 0.8 mm gap; size 6-20 pt, spacing -1 to 6 pt, gap 0-5 mm; underline
+  is offered (with letter spacing it runs one spacing past the last letter);
+  bar width and height are fixed, not Settings - their limit depends on the
+  cell, which the pending design system may change.
+- **Not done:** the rest of the packing list's look waits for the challan V1
+  design system to be signed off. Not yet scanned with the plant's handheld.
+

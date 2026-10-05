@@ -69,6 +69,110 @@
 <div class="card-f"><button class="btn btn-primary" onclick="setSave()">Save</button>
   <span class="sp hint" id="s_msg"></span></div></div>
 
+<div class="card" id="bcTextCard"><div class="card-h"><h3>Barcode text &mdash; packing list</h3></div>
+<div class="card-b">
+  <p class="hint">The serial printed under each barcode. It is always below the bars
+    and always centred on them; its size is fixed, so a wider barcode (an
+    Oct&ndash;Dec serial) does not change it.</p>
+  <div class="grid g4">
+    <div class="fld"><label>Font</label>
+      <select id="bt_font">
+        {% for k, f in bc_fonts.items() %}<option value="{{ k }}" data-css="{{ f[1] }}"{{ ' selected' if bc_text.bc_text_font == k }}>{{ f[0] }}</option>
+        {% endfor %}
+      </select>
+      <div class="hint">Fonts every plant PC has. Fixed-width ones keep 0/O and 1/I apart.</div></div>
+    <div class="fld"><label>Size (pt)</label>
+      <input id="bt_size" type="number" min="6" max="20" step="0.5" value="{{ bc_text.bc_text_size }}"></div>
+    <div class="fld"><label>Letter spacing (pt)</label>
+      <input id="bt_spacing" type="number" min="-1" max="6" step="0.25" value="{{ bc_text.bc_text_spacing }}"></div>
+    <div class="fld"><label>Gap under the bars (mm)</label>
+      <input id="bt_gap" type="number" min="0" max="5" step="0.1" value="{{ bc_text.bc_text_gap }}"></div>
+  </div>
+  <div style="display:flex;gap:22px;margin-top:10px">
+    <label><input type="checkbox" id="bt_bold"{{ ' checked' if bc_text.bc_text_bold == '1' }}> Bold</label>
+    <label><input type="checkbox" id="bt_italic"{{ ' checked' if bc_text.bc_text_italic == '1' }}> Italic</label>
+    <label><input type="checkbox" id="bt_underline"{{ ' checked' if bc_text.bc_text_underline == '1' }}> Underline</label>
+  </div>
+  <div class="hint" style="margin-top:14px">Preview at print size, inside the width of the
+    packing list&rsquo;s barcode cell ({{ bc_cell_mm }}&nbsp;mm), with the widest serial
+    there is.</div>
+  <style>#bt_wrap svg{display:block}</style>
+  <div id="bt_cell" style="width:{{ bc_cell_mm }}mm;box-sizing:border-box;border:1px dashed #9AA8B8;background:#fff;padding:3mm 0;margin-top:6px;text-align:center;overflow:visible">
+    <span id="bt_wrap" style="display:inline-flex;flex-direction:column;align-items:center;vertical-align:middle">{{ bc_sample_svg | safe }}<span id="bt_text" style="display:block;white-space:nowrap;line-height:1.05;color:#000">{{ bc_sample }}</span></span>
+  </div>
+  <div class="hint" id="bt_warn" style="color:var(--review);margin-top:6px"></div>
+</div>
+<div class="card-f"><button class="btn btn-primary" onclick="btSave()">Save</button>
+  <span class="sp hint" id="bt_msg"></span></div></div>
+
+<script>
+(function(){
+  function g(id){var el=document.getElementById(id);return el?el.value.trim():'';}
+  function on(id){var el=document.getElementById(id);return el&&el.checked?'1':'0';}
+  function vals(){
+    return {bc_text_font:g('bt_font'), bc_text_size:g('bt_size'),
+            bc_text_spacing:g('bt_spacing'), bc_text_gap:g('bt_gap'),
+            bc_text_bold:on('bt_bold'), bc_text_italic:on('bt_italic'),
+            bc_text_underline:on('bt_underline')};
+  }
+  /* Mirrors icon_barcode.text_style - including the negative right margin
+     that takes back the space letter-spacing adds after the last letter. */
+  window.btPreview=function(){
+    var v=vals(), t=document.getElementById('bt_text'), sel=document.getElementById('bt_font');
+    if(!t||!sel) return;
+    var opt=sel.options[sel.selectedIndex], sp=parseFloat(v.bc_text_spacing)||0;
+    t.style.fontFamily=opt?opt.getAttribute('data-css'):'';
+    t.style.fontSize=(parseFloat(v.bc_text_size)||10)+'pt';
+    t.style.fontWeight=v.bc_text_bold==='1'?'700':'400';
+    t.style.fontStyle=v.bc_text_italic==='1'?'italic':'normal';
+    t.style.textDecoration=v.bc_text_underline==='1'?'underline':'none';
+    t.style.letterSpacing=sp+'pt';
+    t.style.marginRight=(-sp)+'pt';
+    t.style.marginTop=(parseFloat(v.bc_text_gap)||0)+'mm';
+    var cell=document.getElementById('bt_cell'), wrap=document.getElementById('bt_wrap');
+    var over=wrap.getBoundingClientRect().width > cell.clientWidth+0.5;
+    btPreview.over=over;
+    document.getElementById('bt_warn').textContent = over
+      ? 'Wider than the packing list cell - it will run over the cell border when printed. Make it smaller or tighter.'
+      : '';
+  };
+  ['bt_font','bt_size','bt_spacing','bt_gap','bt_bold','bt_italic','bt_underline'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(el){ el.addEventListener('input',btPreview); el.addEventListener('change',btPreview); }
+  });
+  btPreview();
+  window.btSave=function(){
+    /* The server cannot measure a font; this preview can, in the same kind
+       of browser that prints the sheet. Text wider than the cell would run
+       past the page edge, and the browser would then shrink the whole
+       sheet - bars included - to fit. So it is not saved. */
+    btPreview();
+    if(btPreview.over){
+      var why='Not saved - the text is wider than the packing list cell. Make it smaller or tighter.';
+      document.getElementById('bt_msg').textContent=why;
+      if(typeof toast==='function') toast(why);
+      return;
+    }
+    fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(vals())})
+     .then(function(r){return r.json().then(function(d){return {ok:r.ok&&d.ok!==false,d:d};});})
+     .then(function(res){
+       /* the server's answer decides what is said - an Admin can read this
+          card but only a Super Admin's save is stored */
+       if(!res.ok){
+         var why=(res.d&&res.d.why)||'Not saved - the server refused it.';
+         document.getElementById('bt_msg').textContent=why;
+         if(typeof toast==='function') toast(why);
+         return;
+       }
+       document.getElementById('bt_msg').textContent='Saved.';
+       if(typeof toast==='function') toast('Barcode text saved.');
+       if(window.iconLoadView) iconLoadView('settings','/view/settings');
+     });
+  };
+})();
+</script>
+
 <div class="card"><div class="card-h"><h3>Database</h3>
   <div class="ch-r"><span class="tag t-mute mono" id="s_db"></span></div></div>
 <div class="card-b">

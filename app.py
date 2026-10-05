@@ -2254,6 +2254,14 @@ def api_box(box_id):
     return jsonify(b)
 
 
+# The Settings preview of the barcode text draws the widest serial there is -
+# an Oct-Dec one, whose month letter splits the digit run - inside a box the
+# width of the packing list's barcode cell, so overflow shows before printing.
+# test_barcode_text_ui.py measures the real cell and fails if this drifts.
+BC_SAMPLE_SERIAL = "ICON520R12A2134347"
+PACKING_LIST_BARCODE_CELL_MM = 80
+
+
 @app.route("/box/<int:box_id>/sheet")
 @require_screen_view("pack", "repack", "packdash")
 def pallet_sheet(box_id):
@@ -2264,6 +2272,7 @@ def pallet_sheet(box_id):
         if not b:
             abort(404)
         serials = store.box_serials(cur, box_id)
+        cfg = db.get_config(cur)
     d = datetime.date.fromisoformat(b["pack_date"])
     box_no = boxno.render(d, b["seq"], b["grade"] or "A",
                           b["code_map_version"] or 1)
@@ -2279,16 +2288,18 @@ def pallet_sheet(box_id):
          "capacity": b["capacity"], "partial": bool(b["is_partial"]),
          "shift": b["pack_shift"], "bin": b["bin_no"], "customer": cust}
     half = (len(serials) + 1) // 2
-    left = [{"i": i + 1, "serial": s, "svg": bc.code128_svg(s)}
+    # Bars at a real narrow-bar width, the serial under them as text styled
+    # from Settings - see icon_barcode.code128_bars_svg and text_style.
+    left = [{"i": i + 1, "serial": s, "svg": bc.code128_bars_svg(s)}
             for i, s in enumerate(serials[:half])]
-    right = [{"i": half + i + 1, "serial": s, "svg": bc.code128_svg(s)}
+    right = [{"i": half + i + 1, "serial": s, "svg": bc.code128_bars_svg(s)}
              for i, s in enumerate(serials[half:])]
     rows = [(left[i], right[i] if i < len(right) else None)
             for i in range(len(left))]
     qr = bc.qr_svg(bc.box_qr_payload(box_no, b["model"], b["grade"],
                                      len(serials), b["pack_date"]))
     return render_template("pallet_sheet.html", box_no=box_no, L=L,
-                           rows=rows, qr=qr)
+                           rows=rows, qr=qr, bc_text=bc.text_style(cfg))
 
 
 @app.route("/loading")
@@ -5752,7 +5763,12 @@ def view_fragment(name):
     if name == "settings":
         with store.conn() as (cx, cur):
             cfg = db.get_config(cur)
-        return render_template(allowed[name], cfg=cfg, probe=_evidence_probe(cfg))
+        return render_template(allowed[name], cfg=cfg, probe=_evidence_probe(cfg),
+                               bc_fonts=bc.TEXT_FONTS,
+                               bc_text=bc.text_settings(cfg),
+                               bc_sample=BC_SAMPLE_SERIAL,
+                               bc_sample_svg=bc.code128_bars_svg(BC_SAMPLE_SERIAL),
+                               bc_cell_mm=PACKING_LIST_BARCODE_CELL_MM)
     if name == "indent-form":
         with store.conn() as (cx, cur):
             known = db.known_customers(cur)
@@ -5915,6 +5931,10 @@ def api_settings():
                                             % ", ".join(cform.STYLES)}), 400
     if "print_style" in d:
         d["print_style"] = str(d["print_style"]).strip().lower()
+    clean, why = bc.clean_text_settings(d)
+    if why:
+        return jsonify({"ok": False, "why": why}), 400
+    d.update(clean)
     with store.conn() as (cx, cur):
         db.set_config(cur, {k: str(v) for k, v in d.items()
                             if k in db.DEFAULT_CONFIG})

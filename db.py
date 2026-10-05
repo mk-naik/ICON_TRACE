@@ -1912,6 +1912,11 @@ DEFAULT_CONFIG = {
     "print_style": "premium",
 }
 DEFAULT_CONFIG.update({"ss_" + k: v for k, v in _SS_COLS.items()})
+# The text printed under each barcode on the packing list (font, size,
+# spacing, bold...). Defaults and validation live in icon_barcode beside the
+# code that draws it; listed here so /api/settings accepts and stores them.
+import icon_barcode as _icon_barcode                         # noqa: E402
+DEFAULT_CONFIG.update(_icon_barcode.TEXT_DEFAULTS)
 
 # Unit-2 runs two lines, each with its own Sun Simulator and its own EL.
 for _ln in ("a", "b"):

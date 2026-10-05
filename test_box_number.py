@@ -429,6 +429,64 @@ def t_barcode_label_escaped():
         'font-family="Consolas,monospace">ICON625R1290710001</text></svg>')
 
 
+
+@test("barcodes are Code128 Auto - a digit run packs two digits per symbol, "
+      "so the width follows the serial, not only its length")
+def t_barcode_code128_auto():
+    import icon_barcode as bc
+    # decode-verified with an independent scanner (zxing-cpp) when written;
+    # subset B alone was 233 modules for every 18-character serial
+    assert bc.code128_modules("ICON520R1292134347") == 189      # month 9
+    assert bc.code128_modules("ICON520R12A2134347") == 211      # month A splits the tail
+    assert bc.code128_modules("ICON5201202134945") == 167       # Unit-1 v1, one 13-digit tail
+    c = bc.code128_codes("ICON520R1292134347")
+    assert c[0] == 104 and 99 in c, c              # starts in B, switches to C
+    assert c[-1] == 106, c
+    for m in "123456789":
+        assert bc.code128_modules("ICON520R12%s2134347" % m) == 189, m
+    for m in "ABC":
+        assert bc.code128_modules("ICON520R12%s2134347" % m) == 211, m
+
+
+@test("Code128 Auto never drops data to look shorter - '99ICON' stays in B "
+      "(a common library encodes it as a barcode that scans 'ICON')")
+def t_barcode_no_lossy_start():
+    import icon_barcode as bc
+    assert bc.code128_codes("99ICON")[0] == 104
+    assert bc.code128_codes("12345678")[0] == 105       # pure digits start in C
+    assert bc.code128_codes("") == [] and bc.code128_svg("") == ""
+
+
+
+@test("print barcodes have a real size: 0.254 mm narrow bar, 11 mm tall, ten "
+      "modules of quiet zone each side, and no text inside the SVG")
+def t_barcode_bars_in_mm():
+    import icon_barcode as bc
+    for s, mods in (("ICON520R1292134347", 189), ("ICON520R12A2134347", 211)):
+        svg = bc.code128_bars_svg(s)
+        assert 'width="%.3fmm"' % ((mods + 20) * 0.254) in svg, svg[:120]
+        assert 'height="11.000mm"' in svg and "<text" not in svg, svg[:160]
+    assert 'aria-label="A&lt;b&gt;&amp;Z"' in bc.code128_bars_svg("A<b>&Z")
+    assert bc.code128_bars_svg("") == ""
+
+
+@test("barcode text style: letter spacing is taken back off the right so the "
+      "text centres on the bars; a bad stored value prints with the default")
+def t_barcode_text_style():
+    import icon_barcode as bc
+    st = bc.text_style({"bc_text_spacing": "3", "bc_text_font": "consolas",
+                        "bc_text_bold": "0", "bc_text_size": "junk"})
+    assert "letter-spacing:3pt;margin-right:-3pt" in st, st
+    assert "Consolas" in st and "font-weight:400" in st, st
+    assert "font-size:10pt" in st, "a corrupt stored size did not fall back: " + st
+    assert "margin-right:0pt" in bc.text_style({}), bc.text_style({})
+    ok, why = bc.clean_text_settings({"bc_text_font": "consolas", "bc_text_size": "40"})
+    assert ok is None and "6 to 20" in why, (ok, why)    # all or nothing
+    ok, why = bc.clean_text_settings({"bc_text_size": "12.50", "bc_text_bold": "true"})
+    assert ok == {"bc_text_size": "12.5", "bc_text_bold": "1"} and why is None, ok
+    assert bc.clean_text_settings({"bc_text_font": "x;}body{display:none"})[0] is None
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0

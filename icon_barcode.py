@@ -5,7 +5,7 @@ No internet, no image files, no fonts. The SVG goes straight into the page,
 so a label prints identically from any browser on the plant network and
 nothing has to be fetched at print time.
 
-Code128 is implemented here rather than pulled from a package: it is about
+Code128 Auto is implemented here rather than pulled from a package: it is about
 sixty lines, it has no dependencies, and the pallet sheet needs one barcode
 per module - a package that fails to install on the plant machine would stop
 printing, which is the one thing a label routine must not do.
@@ -16,8 +16,24 @@ QR is a degraded label; a crash is no label.
 """
 
 # --------------------------------------------------------------------------
-# Code128 subset B/C
+# Code128 Auto (subsets B and C, optimal switching)
 # --------------------------------------------------------------------------
+#
+# Code128 Auto is what Zebra Designer and every label printer call it: the
+# encoder picks subset B for letters and subset C for runs of digits, where
+# one symbol carries TWO digits. A serial's numeric tail therefore costs
+# half as many symbols, and the printed barcode is that much narrower.
+#
+# The width depends on the serial, not just its length. Same 18 characters:
+#   ICON520R1292134347  ->  189 modules  (month 9: one 10-digit tail)
+#   ICON520R12A2134347  ->  211 modules  (month A: the letter splits the tail)
+# Subset B alone was 233 for both. So barcodes on one sheet can differ in
+# width - a pallet that mixes September and October modules will show both -
+# and anything laid out around a barcode must centre on it, not assume a size.
+#
+# The choice of subsets is a shortest-path over (position, current subset),
+# so the result is the minimum symbol count, not a rule of thumb. Serials are
+# A-Z0-9 and subset A adds nothing over B for them, so only B and C are used.
 
 _PATTERNS = [
     "212222", "222122", "222221", "121223", "121322", "131222", "122213",
@@ -37,7 +53,8 @@ _PATTERNS = [
     "411311", "113141", "114131", "311141", "411131", "211412", "211214",
     "211232", "2331112",
 ]
-_START_B, _STOP = 104, 106
+_START_B, _START_C, _STOP = 104, 105, 106
+_CODE_C, _CODE_B = 99, 100      # switch codes: 99 inside B, 100 inside C
 
 
 def _xml_escape(s):
@@ -48,23 +65,71 @@ def _xml_escape(s):
              .replace('"', "&quot;"))
 
 
-def code128_svg(text, height=34, module=1.6, show_text=True, font=8):
-    """One Code128-B barcode as inline SVG. Serials are A-Z0-9, which sits
-    inside subset B, so no subset switching is needed."""
-    s = (text or "").strip()
+def _pair(s, i):
+    return i + 1 < len(s) and s[i].isdigit() and s[i + 1].isdigit()
+
+
+def code128_codes(text):
+    """Symbol values for `text`: start code, data (with any subset switches),
+    checksum, stop. Characters outside subset B are dropped rather than
+    encoded as something a scanner would read as garbage."""
+    s = "".join(ch for ch in (text or "").strip() if 32 <= ord(ch) <= 126)
     if not s:
-        return ""
-    codes = [_START_B]
-    for ch in s:
-        v = ord(ch) - 32
-        if v < 0 or v > 94:          # outside subset B - drop rather than
-            continue                 # emit a barcode that scans as garbage
-        codes.append(v)
+        return []
+    n = len(s)
+    INF = float("inf")
+    # best[i][k]: fewest symbols to encode s[i:] when subset k is active
+    # (k=0 is B, k=1 is C). Every move consumes input, so there is no cycle.
+    best = [[INF, INF] for _ in range(n + 1)]
+    move = [[None, None] for _ in range(n + 1)]
+    best[n] = [0, 0]
+    for i in range(n - 1, -1, -1):
+        # in B: one character, or switch to C and take a digit pair
+        b = (1 + best[i + 1][0], "b")
+        if _pair(s, i):
+            b = min(b, (2 + best[i + 2][1], "b>c"), key=lambda t: t[0])
+        best[i][0], move[i][0] = b
+        # in C: a digit pair, or switch to B and take one character
+        c = (2 + best[i + 1][0], "c>b")
+        if _pair(s, i):
+            c = min((1 + best[i + 2][1], "c"), c, key=lambda t: t[0])
+        best[i][1], move[i][1] = c
+
+    # start in C only when it is strictly shorter; ties stay in B
+    k = 1 if (_pair(s, 0) and best[0][1] < best[0][0]) else 0
+    codes = [_START_C if k else _START_B]
+    i = 0
+    while i < n:
+        m = move[i][k]
+        if m == "b":
+            codes.append(ord(s[i]) - 32); i += 1
+        elif m == "c":
+            codes.append(int(s[i:i + 2])); i += 2
+        elif m == "b>c":
+            codes += [_CODE_C, int(s[i:i + 2])]; i += 2; k = 1
+        else:  # "c>b"
+            codes += [_CODE_B, ord(s[i]) - 32]; i += 1; k = 0
+
     check = codes[0]
-    for i, c in enumerate(codes[1:], start=1):
-        check += c * i
+    for pos, c in enumerate(codes[1:], start=1):
+        check += c * pos
     codes.append(check % 103)
     codes.append(_STOP)
+    return codes
+
+
+def code128_modules(text):
+    """Width of the barcode in modules (narrow-bar units), quiet zones not
+    included. Lets a layout size a barcode in mm before drawing it."""
+    return sum(int(w) for c in code128_codes(text) for w in _PATTERNS[c])
+
+
+def code128_svg(text, height=34, module=1.6, show_text=True, font=8):
+    """One Code128 Auto barcode as inline SVG."""
+    s = (text or "").strip()
+    codes = code128_codes(s)
+    if not codes:
+        return ""
 
     bars, x = [], 0.0
     for c in codes:
@@ -86,6 +151,152 @@ def code128_svg(text, height=34, module=1.6, show_text=True, font=8):
             'viewBox="0 0 %.2f %d" shape-rendering="crispEdges">'
             '<g fill="#000">%s</g>%s</svg>'
             % (total, height + th, total, height + th, "".join(bars), label))
+
+
+# --------------------------------------------------------------------------
+# Barcode for print: bars at a real size, the text under them styled apart
+# --------------------------------------------------------------------------
+#
+# The pallet sheet used to size each barcode by its HEIGHT and let the width
+# land wherever the aspect ratio put it - so the width followed the serial and
+# whether the text sat inside the SVG, and a wide one pushed the table past
+# the page margin. Here the narrow bar has a real width in mm, like a label
+# designer's "narrow bar" setting, and the barcode is exactly as wide as its
+# modules make it.
+#
+# 0.254 mm (10 mil) is 3 dots at 300 dpi and 6 at 600, so a laser printer
+# draws every bar the same width; it is also what a 203 dpi Zebra prints at
+# 2 dots. The text is NOT inside the SVG: there it shrank with the bars. It is
+# set beside it in HTML, so its size is a real point size.
+
+NARROW_BAR_MM = 0.254
+BAR_HEIGHT_MM = 11.0
+QUIET_MODULES = 10          # Code128 needs ten modules of white on each side
+
+
+def code128_bars_svg(text, module_mm=NARROW_BAR_MM, height_mm=BAR_HEIGHT_MM,
+                     quiet=QUIET_MODULES):
+    """Bars only, quiet zones included, sized in mm. Empty string for no
+    serial. The serial rides along as aria-label, escaped."""
+    s = (text or "").strip()
+    codes = code128_codes(s)
+    if not codes:
+        return ""
+    rects, x = [], quiet
+    for c in codes:
+        dark = True
+        for w in _PATTERNS[c]:
+            w = int(w)
+            if dark:
+                rects.append('<rect x="%d" y="0" width="%d" height="1"/>' % (x, w))
+            x += w
+            dark = not dark
+    total = x + quiet
+    return ('<svg xmlns="http://www.w3.org/2000/svg" width="%.3fmm" height="%.3fmm" '
+            'viewBox="0 0 %d 1" preserveAspectRatio="none" shape-rendering="crispEdges" '
+            'role="img" aria-label="%s"><g fill="#000">%s</g></svg>'
+            % (total * module_mm, height_mm, total, _xml_escape(s), "".join(rects)))
+
+
+# The text under a barcode - what Bartender and Zebra Designer let you set on
+# a text object. Always centred on the barcode, always below it, fixed size.
+#
+# Fonts are a fixed list, not free text: the sheet prints from whatever PC
+# opens it, and a font that PC lacks silently falls back to something else.
+# Windows ships every one of these; Poppins is bundled under static/fonts.
+# A key is stored, never CSS, so a setting cannot inject into the page.
+
+TEXT_FONTS = {   # key: (shown in Settings, CSS font stack)
+    "arial":       ("Arial", "Arial, Helvetica, sans-serif"),
+    "arial_black": ("Arial Black", "'Arial Black', Arial, sans-serif"),
+    "calibri":     ("Calibri", "Calibri, Arial, sans-serif"),
+    "segoe":       ("Segoe UI", "'Segoe UI', Arial, sans-serif"),
+    "tahoma":      ("Tahoma", "Tahoma, Arial, sans-serif"),
+    "verdana":     ("Verdana", "Verdana, Arial, sans-serif"),
+    "poppins":     ("Poppins (bundled)", "Poppins, Arial, sans-serif"),
+    "consolas":    ("Consolas (fixed width)", "Consolas, 'Courier New', monospace"),
+    "courier":     ("Courier New (fixed width)", "'Courier New', Courier, monospace"),
+    "lucida":      ("Lucida Console (fixed width)", "'Lucida Console', Consolas, monospace"),
+    "times":       ("Times New Roman", "'Times New Roman', Times, serif"),
+}
+
+TEXT_DEFAULTS = {
+    "bc_text_font": "arial",
+    "bc_text_size": "10",        # pt
+    "bc_text_spacing": "0",      # pt between letters
+    "bc_text_gap": "0.8",        # mm between the bars and the text
+    "bc_text_bold": "1",
+    "bc_text_italic": "0",
+    "bc_text_underline": "0",
+}
+_TEXT_RANGES = {"bc_text_size": (6, 20, "pt", "Barcode text size"),
+                "bc_text_spacing": (-1, 6, "pt", "Barcode letter spacing"),
+                "bc_text_gap": (0, 5, "mm", "Gap under the barcode")}
+_TEXT_FLAGS = {"bc_text_bold": "Bold", "bc_text_italic": "Italic",
+               "bc_text_underline": "Underline"}
+_YES = {"1": "1", "true": "1", "on": "1", "yes": "1",
+        "0": "0", "false": "0", "off": "0", "no": "0", "": "0"}
+
+
+def clean_text_settings(d):
+    """(clean, why) for the barcode-text keys present in `d`. All or nothing:
+    one bad value refuses the lot, so a save never half-applies."""
+    out = {}
+    for k in TEXT_DEFAULTS:
+        if k not in d:
+            continue
+        v = str(d[k] if d[k] is not None else "").strip()
+        if k == "bc_text_font":
+            if v not in TEXT_FONTS:
+                return None, ("Barcode text font must be one of: %s."
+                              % ", ".join(lbl for lbl, _ in TEXT_FONTS.values()))
+        elif k in _TEXT_FLAGS:
+            v = _YES.get(v.lower())
+            if v is None:
+                return None, "%s must be on or off." % _TEXT_FLAGS[k]
+        else:
+            lo, hi, unit, name = _TEXT_RANGES[k]
+            try:
+                f = float(v)
+            except ValueError:
+                return None, "%s must be a number, not %r." % (name, v)
+            if not (lo <= f <= hi):           # also refuses NaN
+                return None, "%s must be from %g to %g %s." % (name, lo, hi, unit)
+            v = "%g" % round(f, 2)
+        out[k] = v
+    return out, None
+
+
+def text_settings(cfg):
+    """The barcode-text settings to print with: each stored value that still
+    validates, the default for any that does not. A bad stored value must
+    never stop a pallet sheet from printing."""
+    c = dict(TEXT_DEFAULTS)
+    for k in TEXT_DEFAULTS:
+        if cfg and k in cfg:
+            ok, _ = clean_text_settings({k: cfg[k]})
+            if ok:
+                c.update(ok)
+    return c
+
+
+def text_style(cfg):
+    """Inline CSS for the text under a barcode.
+
+    Letter-spacing is added after EVERY character, the last one included, so
+    centred text with spacing sits half a space left of centre (measured in
+    Chromium 141: 6 pt spacing put it 3.5 px off). A negative right margin of
+    one spacing takes the trailing space back out, and the text centres on
+    the bars exactly."""
+    c = text_settings(cfg)
+    sp = float(c["bc_text_spacing"])
+    return ("font-family:%s;font-size:%spt;font-weight:%d;font-style:%s;"
+            "text-decoration:%s;letter-spacing:%gpt;margin-right:%gpt;margin-top:%smm"
+            % (TEXT_FONTS[c["bc_text_font"]][1], c["bc_text_size"],
+               700 if c["bc_text_bold"] == "1" else 400,
+               "italic" if c["bc_text_italic"] == "1" else "normal",
+               "underline" if c["bc_text_underline"] == "1" else "none",
+               sp, (-sp) or 0, c["bc_text_gap"]))
 
 
 # --------------------------------------------------------------------------

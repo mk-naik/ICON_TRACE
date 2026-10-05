@@ -228,6 +228,18 @@ no one signs twice. [enforcement unverified]
   make-to-order pallet (a pallet takes its customer from its first module).
 - Repack: fresh graded modules may be scanned in, leftovers return to unpacked
   stock, lineage is kept. A pallet on a live challan is not offered. [built]
+- **Packing-list barcodes are Code128 Auto** (Mukesh, 5 Oct): subset B for
+  letters, subset C (two digits a symbol) for digit runs, chosen as a shortest
+  path. Width follows the serial: 189 modules for a Jan-Sep v2 serial, 211 for
+  Oct-Dec (the hex month letter splits the digit run); subset B alone was 233.
+  Bars print at a fixed 0.254 mm narrow bar, 11 mm tall, ten modules of quiet
+  zone a side. [built]
+- **The text under a packing-list barcode is a Settings choice** - font (a fixed
+  list every plant PC has, Poppins bundled), size, letter spacing, gap, bold,
+  italic, underline - Super Admin writes, others read. Always below the bars,
+  always centred on them, fixed size. Settings will not save text wider than
+  the barcode cell (its preview measures it); the server checks ranges only, as
+  it cannot measure a font. [built]
 
 ## 8. Counting and time
 
