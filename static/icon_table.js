@@ -18,11 +18,51 @@
  *   </div>
  */
 (function () {
-  function textOf(cell) { return (cell.textContent || '').trim().toLowerCase(); }
+  /* A cell's value for filtering: its data-x when it carries one (the exact
+     value, as Export uses it - "AUG-05/2026" for a cell that also reads
+     "item 1"), else its text. */
+  function valOf(cell) {
+    var x = cell.getAttribute ? cell.getAttribute('data-x') : null;
+    return (x !== null && x !== undefined ? x : (cell.textContent || '')).trim();
+  }
 
   function rowsOf(root) {
     var tb = root.querySelector('table tbody');
     return tb ? Array.prototype.slice.call(tb.rows) : [];
+  }
+
+  function esc(v) {
+    return String(v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  /* Dynamic filters (Mukesh, 6 Oct 2026): a dropdown offers the values of its
+     column in the rows that pass the search and every OTHER filter - its own
+     left out, so a pick never hides its siblings. The first option ("All
+     ...") is kept as written; the value already picked is never dropped. A
+     substring filter (data-match="has") names categories, not cell values,
+     and keeps its options; data-facet="off" opts a dropdown out. */
+  function refill(sel, set) {
+    var keep = sel.selectedIndex > 0 ? sel.value : '';
+    var vals = Object.keys(set).sort(function (a, b) {
+      var na = +a, nb = +b;
+      if (a !== '' && b !== '' && !isNaN(na) && !isNaN(nb)) return na - nb;
+      return a.toLowerCase() < b.toLowerCase() ? -1 : (a.toLowerCase() > b.toLowerCase() ? 1 : 0);
+    });
+    if (keep && !vals.some(function (v) { return v.toLowerCase() === keep.toLowerCase(); }))
+      vals.push(keep);
+    var first = sel.options.length ? sel.options[0].outerHTML : '<option value="">All</option>';
+    sel.innerHTML = first + vals.map(function (v) {
+      return '<option value="' + esc(v) + '">' + esc(v) + '</option>';
+    }).join('');
+    if (keep) {
+      for (var i = 1; i < sel.options.length; i++) {
+        if (sel.options[i].value.toLowerCase() === keep.toLowerCase()) { sel.selectedIndex = i; break; }
+      }
+    } else {
+      sel.selectedIndex = 0;
+    }
   }
 
   function apply(root) {
@@ -30,32 +70,42 @@
     q = q.trim().toLowerCase();
     var filters = Array.prototype.slice
       .call(root.querySelectorAll('[data-role=filter]'))
-      .filter(function (f) { return f.value; })
       .map(function (f) {
-        return { col: parseInt(f.getAttribute('data-col'), 10),
-                 val: f.value.trim().toLowerCase(),
+        return { el: f, col: parseInt(f.getAttribute('data-col'), 10),
+                 val: f.selectedIndex > 0 || (f.value && f.tagName !== 'SELECT')
+                      ? String(f.value || '').trim().toLowerCase() : '',
                  mode: f.getAttribute('data-match') || 'eq' };
       });
+    var facets = filters.map(function () { return {}; });
 
     var shown = 0;
     rowsOf(root).forEach(function (tr) {
       if (tr.hasAttribute('data-empty') || tr.hasAttribute('data-none')) return;
-      var ok = true;
-      if (q) {
-        ok = (tr.textContent || '').toLowerCase().indexOf(q) !== -1;
+      var okQ = !q || (tr.textContent || '').toLowerCase().indexOf(q) !== -1;
+      var ok = filters.map(function (f) {
+        if (!f.val) return true;
+        var cell = tr.cells[f.col];
+        if (!cell) return false;
+        var t = valOf(cell).toLowerCase();
+        return f.mode === 'has' ? t.indexOf(f.val) !== -1 : t === f.val;
+      });
+      var all = okQ && ok.every(function (x) { return x; });
+      if (okQ) {
+        filters.forEach(function (f, i) {
+          if (f.mode === 'has') return;
+          for (var j = 0; j < ok.length; j++) if (j !== i && !ok[j]) return;
+          var cell = tr.cells[f.col];
+          var v = cell ? valOf(cell) : '';
+          if (v) facets[i][v] = 1;
+        });
       }
-      if (ok) {
-        for (var i = 0; i < filters.length; i++) {
-          var f = filters[i], cell = tr.cells[f.col];
-          if (!cell) { ok = false; break; }
-          var t = textOf(cell);
-          if (f.mode === 'has' ? t.indexOf(f.val) === -1 : t !== f.val) {
-            ok = false; break;
-          }
-        }
-      }
-      tr.style.display = ok ? '' : 'none';
-      if (ok) shown++;
+      tr.style.display = all ? '' : 'none';
+      if (all) shown++;
+    });
+    filters.forEach(function (f, i) {
+      if (f.mode === 'has' || f.el.tagName !== 'SELECT' ||
+          f.el.getAttribute('data-facet') === 'off') return;
+      refill(f.el, facets[i]);
     });
 
     var c = root.querySelector('[data-role=count]');

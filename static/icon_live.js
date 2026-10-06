@@ -8060,10 +8060,12 @@ function wireFqcAnomalies() {
               ('BAT-' + String(a.alloc_id).padStart(5, '0'))) +
               (a.alloc_type_label ? '<div class="hint">' +
                 a.alloc_type_label + '</div>' : '') + '</td>' +
-            '<td class="mono">' + (a.indent_no || '\u2014') +
+            /* data-x: the indent alone - what the Indent filter matches */
+            '<td class="mono" data-x="' + fqcEsc(a.indent_no || '') + '">' +
+              fqcEsc(a.indent_no || '\u2014') +
               (a.line_no ? ' \u00b7 item ' + a.line_no : '') + '</td>' +
-            '<td>' + (a.customer || '\u2014') + '</td>' +
-            '<td class="mono">' + a.model + '</td>' +
+            '<td>' + fqcEsc(a.customer || '\u2014') + '</td>' +
+            '<td class="mono">' + fqcEsc(a.model) + '</td>' +
             '<td class="mono">' + a.date_produced + '</td>' +
             '<td>' + a.shift + '</td>' +
             '<td class="num">' + a.n + '</td>' +
@@ -8083,17 +8085,7 @@ function wireFqcAnomalies() {
             '</td></tr>';
         }).join('');
 
-        var sel = document.getElementById('alIndent');
-        if (sel) {
-          var seen = {}, keep = sel.value;
-          sel.innerHTML = '<option value="">All indents</option>' +
-            rows.filter(function (a) {
-              if (!a.indent_no || seen[a.indent_no]) return false;
-              seen[a.indent_no] = 1; return true;
-            }).map(function (a) {
-              return '<option>' + a.indent_no + '</option>'; }).join('');
-          sel.value = keep;
-        }
+        /* the Indent and Status dropdowns are facets, rebuilt by icon_table */
         if (window.iconTable) window.iconTable.wireAll();
       });
   }

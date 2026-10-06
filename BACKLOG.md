@@ -6817,3 +6817,21 @@ Kept up to date through the night; each item is ticked with its commit.
   gradings facets) - 17/17; `test_dashboards_e2e` 27/27, `test_fqc_screen` 15/15,
   `test_dashboards_ist`, `test_bad_input`, `test_dashrath_case`,
   `test_print_and_favicon` pass.
+
+## 6 Oct 2026 - Table filters (icon_table.js) are facets; Recent Allocations' Indent filter matched nothing
+
+- **Found:** Recent Allocations' Indent filter compared the whole cell ("AUG-05/2026 ·
+  item 1") with the picked indent ("AUG-05/2026") - picking any indent emptied the
+  table. Its values were also written into the page unescaped.
+- **Change:** `icon_table.js`, the one table layer behind every searchable card:
+  a cell's filter value is its `data-x` when it has one (the exact value Export
+  already reads), else its text; every exact-match dropdown is rebuilt after each
+  change from the values in the rows that pass the search and every OTHER filter
+  (its first option kept, the pick never dropped); substring filters
+  (`data-match="has"`) keep their fixed options, `data-facet="off"` opts out. Recent
+  Allocations' indent cell carries `data-x`; its values are escaped. The Indent
+  list's Item and Status filters are exact facets now (Status never offered "in
+  progress" or "no items").
+- **Tests:** `test_screens.js` 17/17, `test_indent_export`, `test_export_formulas`
+  pass. Seen in Chromium: OCT-02/2026 picked shows its two items; on Indents, SG MEDA
+  picked narrows Item to its one item and keeps both customers.
