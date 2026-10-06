@@ -160,7 +160,7 @@ def challans_against_irn(cur, irn):
         return [c for c in _demo["challan"] if c.get("irn") == irn]
     cur.execute(
         "SELECT challan_id, fy, seq, suffix, challan_date, status "
-        "FROM challan WHERE irn=%s AND status<>'cancelled'", (irn,))
+        "FROM challan WHERE irn=%s AND status NOT IN ('cancelled', 'superseded')", (irn,))
     return cur.fetchall()
 
 
@@ -360,7 +360,8 @@ def serials_already_dispatched(cur, serials, exclude_challan_id=None):
     marks = ",".join(["%s"] * len(serials))
     sql = ("SELECT DISTINCT cs.serial FROM challan_serial cs "
            "JOIN challan c ON c.challan_id = cs.challan_id "
-           "WHERE c.status <> 'cancelled' AND cs.serial IN (%s)" % marks)
+           "WHERE c.status NOT IN ('cancelled', 'superseded') "
+           "AND cs.serial IN (%s)" % marks)
     params = list(serials)
     if excl:
         sql += " AND c.challan_id NOT IN (%s)" % ",".join(["%s"] * len(excl))
@@ -378,7 +379,7 @@ def serial_last_challan(cur, serial, exclude_challan_id=None):
     excl = _id_set(exclude_challan_id)
     sql = ("SELECT c.fy, c.seq, c.suffix, c.challan_date FROM challan_serial cs "
            "JOIN challan c ON c.challan_id = cs.challan_id "
-           "WHERE c.status <> 'cancelled' AND cs.serial = %s")
+           "WHERE c.status NOT IN ('cancelled', 'superseded') AND cs.serial = %s")
     params = [serial]
     if excl:
         sql += " AND c.challan_id NOT IN (%s)" % ",".join(["%s"] * len(excl))
@@ -2565,7 +2566,7 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
               SELECT bs.box_id FROM box_serial bs
               JOIN challan_serial cs ON cs.serial = bs.serial
               JOIN challan c ON c.challan_id = cs.challan_id
-              WHERE c.status != 'cancelled'
+              WHERE c.status NOT IN ('cancelled', 'superseded')
           )
     """
     cur.execute(sql_ready, tuple(bx_params))
@@ -2580,20 +2581,25 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
               SELECT bs.box_id FROM box_serial bs
               JOIN challan_serial cs ON cs.serial = bs.serial
               JOIN challan c ON c.challan_id = cs.challan_id
-              WHERE c.status != 'cancelled'
+              WHERE c.status NOT IN ('cancelled', 'superseded')
           )
     """
     cur.execute(sql_rev, tuple(bx_params))
     rev_stock = dict(cur.fetchone() or {})
     
     # 3. On open challan
+    # each pallet ONCE: summing b.qty across the box_serial x challan_serial
+    # join counted a pallet's quantity once per module in it (2 pallets of 2
+    # read 8 modules)
     sql_open_ch = f"""
-        SELECT COUNT(DISTINCT b.box_id) as box_count, COALESCE(SUM(b.qty), 0) as modules
+        SELECT COUNT(*) as box_count, COALESCE(SUM(b.qty), 0) as modules
         FROM box b
-        JOIN box_serial bs ON bs.box_id = b.box_id
-        JOIN challan_serial cs ON cs.serial = bs.serial
-        JOIN challan c ON c.challan_id = cs.challan_id
-        WHERE c.status != 'cancelled' AND c.status != 'dispatched' AND b.state = 'closed' AND {bx_where}
+        WHERE b.state = 'closed' AND {bx_where}
+          AND b.box_id IN (
+              SELECT bs.box_id FROM box_serial bs
+              JOIN challan_serial cs ON cs.serial = bs.serial
+              JOIN challan c ON c.challan_id = cs.challan_id
+              WHERE c.status NOT IN ('cancelled', 'superseded'))
     """
     cur.execute(sql_open_ch, tuple(bx_params))
     open_ch = dict(cur.fetchone() or {})
@@ -2604,7 +2610,7 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
         JOIN challan_serial cs ON cs.challan_id = c.challan_id
         JOIN box_serial bs ON bs.serial = cs.serial
         JOIN box b ON b.box_id = bs.box_id
-        WHERE c.status != 'cancelled' AND c.status != 'dispatched' AND {bx_where}
+        WHERE c.status NOT IN ('cancelled', 'superseded') AND {bx_where}
     """
     cur.execute(sql_open_ch_cnt, tuple(bx_params))
     row = cur.fetchone()
@@ -2674,7 +2680,7 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
               SELECT bs.box_id FROM box_serial bs
               JOIN challan_serial cs ON cs.serial = bs.serial
               JOIN challan c ON c.challan_id = cs.challan_id
-              WHERE c.status != 'cancelled'
+              WHERE c.status NOT IN ('cancelled', 'superseded')
           )
         GROUP BY b.customer, b.model, b.grade
         ORDER BY b.customer, b.model, b.grade

@@ -6610,9 +6610,9 @@ Kept up to date through the night; each item is ticked with its commit.
       shift it ran. See the entry below.
 - [ ] Management Overview: its Wattage and Line filters are read and never
       sent - picking one changes nothing.
-- [ ] Challan EDIT leaves a removed pallet stuck: the superseded original still
+- [x] Challan EDIT leaves a removed pallet stuck: the superseded original still
       "reserves" it - never offered again, refused on a new challan ("already on
-      IS-..."), and Stock & Dispatch counts both versions.
+      IS-..."), and Stock & Dispatch counts both versions. See the entry below.
 - [x] Search & Trace "Built" read the production entry's TYPING time (a C shift
       filed next morning said "shift A") - now the production date and shift.
 - [x] `test_dashboards_ist.py` asserted a loss's CALENDAR date, at whatever time
@@ -6749,3 +6749,27 @@ Kept up to date through the night; each item is ticked with its commit.
   not as any value starting "All". Seen in Chromium: SG Meda picked - every customer
   still offered, models narrow to SG Meda's one. Three leftover `console.log` debug
   lines removed.
+
+## 6 Oct 2026 - A pallet an edit took off a challan was stuck for good
+
+- **Found** while making Stock & Dispatch's filters dynamic (not reported).
+  **Reproduced** with the real routes: challan with pallet K001 -> Edit swaps it for
+  K002 (-> MA) -> K001 was never offered to any other challan, a new challan with it
+  was refused "ICON...0102 (in ISPL.../K001) is already on IS-06.10.2026/0001" (the
+  SUPERSEDED original), Stock & Dispatch read 0 ready and two open challans, and the
+  module journey still showed it dispatched on 0001.
+- **Cause:** a superseded challan keeps its challan_serial rows (history, on
+  purpose), and every "is it on a live challan" check excluded only `cancelled`:
+  the challan pallet selector, `/api/boxes`' locked list, the invoice "already
+  claimed" list, `db.serials_already_dispatched` / `serial_last_challan` (the
+  refusal), `challans_against_irn`, and five queries in `db.stock_dispatch`. The
+  Packing Log already excluded both. DECISIONS 1/3: a pallet returns to the
+  selectors when it is off every live challan.
+- **Change:** all of those read a challan as live only when it is not cancelled AND
+  not superseded. Search & Trace's Challan step reads the live challan; on none it
+  says "was on IS-... (superseded)". Also: "On open challan" summed each pallet's
+  quantity once per module in it (2 pallets of 2 read 8) - counted per pallet now.
+- **Test:** `test_challan.py` +1 (the swapped-out pallet is offered, accepted on a
+  new challan, counted once, and its journey says where it was) - 69/69;
+  `test_loading`, `test_packing`, `test_search_invoice`, `test_cancel_documents`,
+  `test_repack` pass.

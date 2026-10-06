@@ -1748,7 +1748,8 @@ def api_boxes():
             cur, "SELECT bs.box_id, MIN(c.seq) AS no FROM box_serial bs "
                  "JOIN challan_serial cs ON cs.serial=bs.serial "
                  "JOIN challan c ON c.challan_id=cs.challan_id "
-                 "WHERE c.status<>'cancelled' GROUP BY bs.box_id")}
+                 "WHERE c.status NOT IN ('cancelled', 'superseded') "
+                 "GROUP BY bs.box_id")}
     if exclude_live:
         rows = [b for b in rows if b["box_id"] not in locked]
     
@@ -2619,7 +2620,11 @@ def api_challan_available_boxes():
         q = ("SELECT DISTINCT bs.box_id FROM box_serial bs "
              "JOIN challan_serial cs ON cs.serial=bs.serial "
              "JOIN challan c ON c.challan_id=cs.challan_id "
-             "WHERE c.status<>'cancelled'")
+             # a challan holds its pallets while it is LIVE (draft or issued):
+             # a superseded original's rows are kept as history, and a pallet
+             # an edit took off is free again (6 Oct 2026 - it was refused on
+             # every later challan as "already on" the superseded original)
+             "WHERE c.status NOT IN ('cancelled', 'superseded')")
         params = ()
         if exclude:
             lineage = _lineage_ids(cur, exclude)
@@ -7610,7 +7615,7 @@ def api_trace_serial(serial):
                                "c.challan_date, c.vehicle_no, c.status, "
                                "c.created_by FROM challan_serial cs "
                                "JOIN challan c ON c.challan_id=cs.challan_id "
-                               "WHERE cs.serial=%s", (s,))
+                               "WHERE cs.serial=%s ORDER BY c.challan_id", (s,))
         events = store.rows(cur, "SELECT * FROM dispatch_audit WHERE "
                                  "(entity='serial' AND entity_id=%s) OR "
                                  "(entity='allocation' AND entity_id=%s) "
@@ -7826,13 +7831,25 @@ def api_trace_serial(serial):
         journey.append({"stage": "Packed", "value": "—", "done": False,
                         "detail": ["not packed yet"], "tag": "pending",
                         "tone": "t-mute"})
-    if chal:
-        c = chal[-1]
-        no = db.render_challan_no(datetime.date.fromisoformat(c["challan_date"]),
-                                  c["seq"], c["suffix"])
-        journey.append({"stage": "Challan", "value": no, "done": True,
+    # The challan it is ON is a live one (draft or issued). A superseded
+    # original and a cancelled challan are history: an edit that took the
+    # pallet off, or a cancel, leaves it on no challan - the journey said it
+    # was still on the superseded one, as done (6 Oct 2026).
+    def _chno(c):
+        return db.render_challan_no(datetime.date.fromisoformat(c["challan_date"]),
+                                    c["seq"], c["suffix"])
+    live_chal = [c for c in chal if c["status"] not in ("cancelled", "superseded")]
+    if live_chal:
+        c = live_chal[-1]
+        journey.append({"stage": "Challan", "value": _chno(c), "done": True,
                         "detail": [c["vehicle_no"] or "—", c["status"] or ""],
                         "tag": c["challan_date"] or "", "tone": "t-solar"})
+    elif chal:
+        c = chal[-1]
+        journey.append({"stage": "Challan", "value": "—", "done": False,
+                        "detail": ["was on %s (%s)" % (_chno(c), c["status"]),
+                                   "not on a live challan now"],
+                        "tag": "pending", "tone": "t-mute"})
     else:
         journey.append({"stage": "Challan", "value": "—", "done": False,
                         "detail": ["not dispatched"], "tag": "pending",
@@ -8373,7 +8390,8 @@ def api_invoices_list():
             # excluding any challan we are explicitly editing (so it can
             # keep its own invoice selected while the drop-down reloads).
             sql = ("SELECT DISTINCT invoice_id FROM challan "
-                   "WHERE status != 'cancelled' AND invoice_id IS NOT NULL")
+                   "WHERE status NOT IN ('cancelled', 'superseded') "
+                   "AND invoice_id IS NOT NULL")
             params = []
             if exclude_id:
                 sql += " AND challan_id != %s"

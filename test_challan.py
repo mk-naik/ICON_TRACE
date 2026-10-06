@@ -1024,6 +1024,34 @@ def t_edit_save_creates_ma():
     assert new_row["suffix"] == "MA"
 
 
+@test("a pallet an EDIT took off is free again: offered to the next challan, "
+      "accepted on it, counted once on Stock & Dispatch, and its journey no "
+      "longer says it is on the superseded original (6 Oct)")
+def t_edit_frees_the_pallet_it_removed():
+    c = setup()
+    b1 = packed_box(c, [102, 103])
+    b2 = packed_box(c, [104, 105])
+    inv = make_invoice(qty=2, invoice_no="INV-EDIT-FREE")
+    chid = make_issued_challan(c, [b1], inv)
+    r = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": [b2], "invoice_id": inv, "vehicle_no": "CG04ZZ1111"})
+    assert r.status_code == 200 and r.get_json()["suffix"] == "MA", r.get_json()
+
+    j = c.get("/api/trace/serial/" + serial(102)).get_json()
+    step = [x for x in j["journey"] if x["stage"] == "Challan"][0]
+    assert not step["done"] and "superseded" in step["detail"][0], step
+
+    inv2 = make_invoice(qty=2, invoice_no="INV-EDIT-FREE-2")
+    offered = [b["box_id"] for b in c.get("/api/challan/boxes?invoice_id=%d" % inv2).get_json()]
+    assert b1 in offered and b2 not in offered, offered
+    r2 = c.post("/api/challan", json={"action": "create", "boxes": [b1], "invoice_id": inv2})
+    assert r2.status_code == 200, r2.get_json()
+
+    sd = c.get("/api/stock_dispatch").get_json()
+    assert (sd["open_ch"]["box_count"], sd["open_ch"]["modules"]) == (2, 4), sd["open_ch"]
+    assert sd["fg_ready"]["box_count"] == 0, sd["fg_ready"]
+
+
 @test("printing a superseded challan by its BARE number (no suffix) is "
      "refused, not silently served as the stale original")
 def t_edit_print_refuses_superseded_bare_number():
