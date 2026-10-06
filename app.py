@@ -4474,72 +4474,109 @@ def _prod_payload():
 
 
 
+# --------------------------------------------------------------------------
+# Dynamic filters (Mukesh, 6 Oct 2026: the FQC Dashboard's dynamic filter on
+# EVERY filter in the app). A dropdown offers the values present in the data
+# under every OTHER filter on the screen - its own filter left out, so picking
+# one customer does not hide the other customers, while a shift that holds
+# nothing for that customer is not offered. One helper, every list.
+# --------------------------------------------------------------------------
+
+def _facets(cur, from_sql, clauses, dims):
+    """{dim: [values]} for each dimension in `dims` ({dim: SQL expression}),
+    each read with every clause applied EXCEPT the ones tagged with that same
+    dimension. `clauses` is a list of (dim_or_None, sql, args); None is a
+    filter that always applies (the period, a search, cancelled rows). Values
+    come back distinct, without blanks, sorted (numbers as numbers)."""
+    out = {}
+    for dim, expr in dims.items():
+        keep = [c for c in clauses if c[0] != dim]
+        sql = "SELECT DISTINCT %s AS v %s" % (expr, from_sql)
+        if keep:
+            sql += " WHERE " + " AND ".join("(%s)" % c[1] for c in keep)
+        args = tuple(a for c in keep for a in c[2])
+        vals = {r["v"] for r in store.rows(cur, sql, args)
+                if r["v"] is not None and str(r["v"]).strip() != ""}
+        out[dim] = sorted(vals, key=lambda v: (0, float(v), "") if _isnum(v)
+                          else (1, 0, str(v).upper()))
+    return out
+
+
+def _isnum(v):
+    try:
+        float(v)
+        return True
+    except (TypeError, ValueError):
+        return False
+
 @app.route("/api/prodentries", methods=["GET"])
 @require_screen_view("prodentry")
 def api_prodentries():
+    """Production entries, by the shift the production RAN in: prod_date and
+    shift are what the entry is FOR (chosen on the form, validated by
+    _prod_when); created_at is only when it was typed - a C shift report is
+    filed the next morning. The list is ordered, filtered and shown by the
+    first; the second is shown beside it (Mukesh, 6 Oct 2026: "show for which
+    production date shift it was entered")."""
     limit = _int_arg("limit", 100)
     q = (request.args.get("q") or "").strip()
     cust = (request.args.get("cust") or "").strip()
     shift = (request.args.get("shift") or "").strip()
     dfrom = (request.args.get("from") or "").strip()
     dto = (request.args.get("to") or "").strip()
-    
+
+    # allocation stores its own range as seq_from/seq_to - integers parsed
+    # out of the serial once, at generation - never as start_serial/end_serial
+    # text to lexicographically compare a range against (the project's own
+    # rule: nothing downstream re-parses the serial string). The serial table
+    # already carries its own customer directly, set at allocation/generation
+    # time - looked up from the entry's first serial, which names the batch's
+    # customer for the ordinary case of one customer per shift's entry.
+    cust_of = "(SELECT s.customer FROM serial s WHERE s.serial = p.start_serial LIMIT 1)"
+    clauses = [(None, "p.status<>'cancelled'", ())]      # Round 34
+    if q:
+        clauses.append((None, "p.start_serial LIKE %s OR p.end_serial LIKE %s OR p.model LIKE %s",
+                        ("%" + q + "%",) * 3))
+    if cust:
+        # the dropdown offers the master's NAME; the serial may hold the name
+        # in any case or the CODE (db.customer_match)
+        m_sql, m_args = db.customer_match("s.customer", cust)
+        clauses.append(("cust", "EXISTS (SELECT 1 FROM serial s WHERE s.serial = p.start_serial "
+                                "AND " + m_sql + ")", tuple(m_args)))
+    # By the shift the production RAN in, which is what prod_date and shift
+    # hold - not by when the report was typed. prod_date is already the
+    # factory day (06:00 to 06:00), so it is compared directly.
+    if clock.shift_number(shift):
+        clauses.append(("shift", "p.shift = %s",
+                        (clock.SHIFT_LETTER[clock.shift_number(shift)],)))
+    if dfrom:
+        clauses.append((None, "p.prod_date >= %s", (dfrom,)))
+    if dto:
+        clauses.append((None, "p.prod_date <= %s", (dto,)))
+
+    where = " AND ".join("(%s)" % c[1] for c in clauses)
+    args = tuple(a for c in clauses for a in c[2])
+    # newest production first: the day, then the shift within it (C ran last),
+    # then the order they were typed
+    sql = ("SELECT p.*, " + cust_of + " AS customer FROM production_entry p WHERE " + where +
+           " ORDER BY p.prod_date DESC, CASE p.shift WHEN 'C' THEN 3 WHEN 'B' THEN 2 "
+           "WHEN 'A' THEN 1 ELSE 0 END DESC, p.created_at DESC LIMIT %s")
     with store.conn() as (cx, cur):
-        # allocation stores its own range as seq_from/seq_to - integers
-        # parsed out of the serial once, at generation - never as
-        # start_serial/end_serial text to lexicographically compare a
-        # range against (the project's own rule: nothing downstream
-        # re-parses the serial string). The serial table already carries
-        # its own customer directly, set at allocation/generation time
-        # (NULL until decided, same as a box's own customer before it is
-        # assigned) - looked up from the entry's first serial, which
-        # names the batch's customer for the ordinary case of one
-        # customer per shift's production entry.
-        sql = ("SELECT p.*, (SELECT s.customer FROM serial s WHERE s.serial = p.start_serial LIMIT 1) as customer "
-               "FROM production_entry p WHERE 1=1 AND p.status<>'cancelled'")   # Round 34
-        args = []
-        if q:
-            sql += " AND (p.start_serial LIKE %s OR p.end_serial LIKE %s OR p.model LIKE %s)"
-            args.extend(["%" + q + "%", "%" + q + "%", "%" + q + "%"])
-        if cust:
-            # the dropdown offers the master's NAME; the serial may hold the
-            # name in any case or the CODE - a LIKE on the name missed a
-            # serial that stores "C0001" (db.customer_match)
-            m_sql, m_args = db.customer_match("s.customer", cust)
-            sql += """ AND EXISTS (
-                SELECT 1 FROM serial s
-                WHERE s.serial = p.start_serial
-                  AND """ + m_sql + """
-            )"""
-            args.extend(m_args)
-        # By the shift the production RAN in, which is what prod_date and
-        # shift now hold - not by when the report was typed. Filtering on
-        # created_at listed a C shift under the following morning, so the
-        # shift you were looking for was never on the day you asked for.
-        # prod_date is already the factory day (06:00 to 06:00), so it is
-        # compared directly - no shift_day_sql() on top of it.
-        if clock.shift_number(shift):
-            sql += " AND p.shift = %s"
-            args.append(clock.SHIFT_LETTER[clock.shift_number(shift)])
-        if dfrom:
-            sql += " AND p.prod_date >= %s"
-            args.append(dfrom)
-        if dto:
-            sql += " AND p.prod_date <= %s"
-            args.append(dto)
-            
-        sql += " ORDER BY p.created_at DESC LIMIT %s"
-        args.append(limit)
-        
-        rows = store.rows(cur, sql, tuple(args))
+        rows = store.rows(cur, sql, args + (limit,))
+        facets = _facets(cur, "FROM production_entry p", clauses,
+                         {"shift": "p.shift", "cust": cust_of})
+    facets["cust"] = db.customer_options(facets["cust"])
     for r in rows:
-        r["day"] = str(clock.shift_day(
-            datetime.datetime.fromisoformat(r["created_at"]))) if r.get("created_at") else None
-        # the master's name, not whichever spelling the serial row holds -
-        # the screen builds its Customer dropdown from these, one per name
+        made = (datetime.datetime.fromisoformat(r["created_at"])
+                if r.get("created_at") else None)
+        # when it was typed, on the factory clock: its day and its shift
+        r["day"] = str(clock.shift_day(made)) if made else None
+        r["recorded_shift"] = (clock.SHIFT_LETTER[clock.shift_of(made.hour)]
+                               if made else None)
+        # the master's name, not whichever spelling the serial row holds
         if r.get("customer"):
             r["customer"] = db.customer_display(r["customer"])
-    return jsonify({"entries": rows})
+    return jsonify({"entries": rows, "facets": facets})
 
 
 # --------------------------------------------------------------------------

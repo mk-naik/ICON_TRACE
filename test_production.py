@@ -362,6 +362,49 @@ def t_bad_date_or_shift_refused():
         assert store.one(cur, "SELECT COUNT(*) AS n FROM production_entry")["n"] == 0
 
 
+@test("the list is the production's: newest production date and shift first, "
+      "each row says when it was typed and the shift on the clock then, and "
+      "each dropdown offers what the OTHER filters leave (Mukesh, 6 Oct)")
+def t_list_by_production_with_facets():
+    c = setup()
+    with store.conn() as (cx, cur):
+        n = 0
+        for pd, sh, typed, cust in (("2026-09-11", "B", "2026-09-12T07:05:00", "SG MEDA"),
+                                    ("2026-09-11", "C", "2026-09-12T01:12:00", "MSEDCL"),
+                                    ("2026-09-12", "A", "2026-09-12T13:40:00", "SG MEDA"),
+                                    ("2026-09-10", "A", "2026-09-10T13:55:00", "MSEDCL")):
+            ss = plan_serials(cur, 2, start_seq=10 * n + 1)
+            cur.execute("UPDATE serial SET customer=%s WHERE serial IN (%s, %s)",
+                        (cust, ss[0], ss[1]))
+            store.insert(cur, "production_entry", {
+                "prod_date": pd, "shift": sh, "shift_incharge": "X", "line": "A-Line",
+                "model": MODEL, "wattage": WATT, "start_serial": ss[0], "end_serial": ss[1],
+                "qty": 2, "kw_output": 1.18, "created_at": typed, "created_by": "op1"})
+            n += 1
+    d = c.get("/api/prodentries").get_json()
+    order = [(e["prod_date"], e["shift"]) for e in d["entries"]]
+    assert order == [("2026-09-12", "A"), ("2026-09-11", "C"), ("2026-09-11", "B"),
+                     ("2026-09-10", "A")], order
+    c_shift = d["entries"][1]
+    assert (c_shift["day"], c_shift["recorded_shift"]) == ("2026-09-11", "C"), c_shift
+    b_shift = d["entries"][2]
+    assert (b_shift["day"], b_shift["recorded_shift"]) == ("2026-09-12", "A"), b_shift
+    assert d["facets"]["shift"] == ["A", "B", "C"], d["facets"]
+    # one customer picked: every customer is still offered (its own filter is
+    # left out), the shifts narrow to that customer's
+    sg = c.get("/api/prodentries?cust=SG%20MEDA").get_json()
+    assert len(sg["entries"]) == 2
+    assert sg["facets"]["shift"] == ["A", "B"], sg["facets"]
+    assert len(sg["facets"]["cust"]) == 2, sg["facets"]
+    # a shift picked: the customers narrow to that shift's, every shift stays
+    cs = c.get("/api/prodentries?shift=C").get_json()
+    assert [db.customer_display("MSEDCL")] == cs["facets"]["cust"], cs["facets"]
+    assert cs["facets"]["shift"] == ["A", "B", "C"], cs["facets"]
+    # the period always applies: the 10th's A shift is outside the 11th-12th
+    p = c.get("/api/prodentries?from=2026-09-11&to=2026-09-12&cust=MSEDCL").get_json()
+    assert p["facets"]["shift"] == ["C"], p["facets"]
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0

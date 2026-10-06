@@ -14077,11 +14077,18 @@ window.gpSetKind = function(k) {
     if (!card || card.__peWired) return;
     card.__peWired = true;
 
+    /* The production date and shift the entry is FOR come first - that is
+       what FROM / TO filter and what the list is ordered by; when it was
+       typed is the last column (a C shift report is filed next morning).
+       Mukesh, 6 Oct: "show for which production date shift it was entered". */
     var headRow = card.querySelector('thead tr');
     if (headRow) {
-      headRow.innerHTML = '<th>Date</th><th>Shift</th><th>Customer</th><th>Wattage</th>' +
+      headRow.innerHTML = '<th title="The day the production ran (06:00 to 06:00)">' +
+        'Production date</th><th>Shift</th><th>Customer</th><th>Wattage</th>' +
         '<th>Model</th><th>Start serial</th><th>End serial</th>' +
-        '<th style="text-align:right">Qty</th><th style="text-align:right">KW</th><th>By</th>';
+        '<th style="text-align:right">Qty</th><th style="text-align:right">KW</th>' +
+        '<th>Incharge</th><th title="When the entry was typed, and the shift on the ' +
+        'clock then">Recorded</th>';
     }
 
     var tbl = card.querySelector('table');
@@ -14100,8 +14107,10 @@ window.gpSetKind = function(k) {
         head.insertAdjacentHTML('afterend',
           '<div class="card-b" style="border-bottom:1px solid var(--line);padding-bottom:16px">' +
           '<div class="grid" style="grid-template-columns: 1fr 1fr 1fr 1.5fr 1.5fr auto; align-items: end; gap: 12px;">' +
-          '<div class="fld"><label>FROM</label><input type="date" id="peFilterFrom"></div>' +
-          '<div class="fld"><label>TO</label><input type="date" id="peFilterTo"></div>' +
+          '<div class="fld"><label title="Production date - the day the shift ran">' +
+            'FROM (production date)</label><input type="date" id="peFilterFrom"></div>' +
+          '<div class="fld"><label title="Production date - the day the shift ran">' +
+            'TO (production date)</label><input type="date" id="peFilterTo"></div>' +
           '<div class="fld"><label>SHIFT</label><select id="peFilterShift"><option value="">All shifts</option><option>A</option><option>B</option><option>C</option></select></div>' +
           '<div class="fld"><label>CUSTOMER</label><select id="peFilterCust"><option value="">All customers</option></select></div>' +
           '<div class="fld"><label>SEARCH</label><input id="peFilterQ" placeholder="serial / model…"></div>' +
@@ -14223,42 +14232,18 @@ window.gpSetKind = function(k) {
     if (q) params.push('q=' + encodeURIComponent(q));
     var qs = params.length ? '?' + params.join('&') : '';
 
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:12px;color:var(--ink3)">Loading...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:12px;color:var(--ink3)">Loading...</td></tr>';
 
     api('prodentries' + qs).then(function(d) {
       var data = d.entries || [];
 
-      /* Customer options come from what is actually on record, rebuilt
-         every fetch - not a fixed demo list. The current selection is
-         kept even when this (already customer-filtered) fetch only
-         returned that one name, so re-fetching does not blank it. */
-      var custSel = document.getElementById('peFilterCust');
-      if (custSel) {
-        var current = custSel.value, seen = {}, names = [];
-        data.forEach(function(r) {
-          if (r.customer && !seen[r.customer]) { seen[r.customer] = true; names.push(r.customer); }
-        });
-        if (current && !seen[current]) names.push(current);
-        names.sort();
-        custSel.innerHTML = '<option value="">All customers</option>' +
-          names.map(function(n) {
-            return '<option' + (n === current ? ' selected' : '') + '>' + fqcEsc(n) + '</option>';
-          }).join('');
-      }
-
-      var shiftSel = document.getElementById('peFilterShift');
-      if (shiftSel) {
-        var currentS = shiftSel.value, seenS = {}, namesS = [];
-        data.forEach(function(r) {
-          if (r.shift && !seenS[r.shift]) { seenS[r.shift] = true; namesS.push(r.shift); }
-        });
-        if (currentS && !seenS[currentS]) namesS.push(currentS);
-        namesS.sort();
-        shiftSel.innerHTML = '<option value="">All shifts</option>' +
-          namesS.map(function(n) {
-            return '<option' + (n === currentS ? ' selected' : '') + '>' + fqcEsc(n) + '</option>';
-          }).join('');
-      }
+      /* Dynamic filters: each dropdown offers what the entries hold under
+         the OTHER filters (the server's facets) - picking a customer does not
+         hide the other customers, and a shift with nothing for them is not
+         offered. A pick is never pulled out from under the user. */
+      var fc = d.facets || {};
+      _dashCascade('peFilterCust', fc.cust || [], 'All customers', cust, { facet: true });
+      _dashCascade('peFilterShift', fc.shift || [], 'All shifts', shift, { facet: true });
 
       var qtyTot = 0, kwTot = 0;
       data.forEach(function(r) { qtyTot += (+r.qty || 0); kwTot += (+r.kw_output || 0); });
@@ -14269,22 +14254,20 @@ window.gpSetKind = function(k) {
       if (kc) kc.textContent = data.length + (data.length === 1 ? ' row' : ' rows');
 
       if (!data.length) {
-        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:12px;color:var(--ink3)">No production entries found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:12px;color:var(--ink3)">No production entries found.</td></tr>';
         return;
       }
 
       tbody.innerHTML = data.map(function(r) {
-        /* when it was recorded, as stored - calendar date and IST time;
-           the From/To filter counts it on its factory day (06:00-06:00),
-           which the tooltip names when the two differ */
-        var dateParts = r.prod_date.split('-');
-        var fmtDate = r.created_at && typeof fmtIST === 'function' ? fmtIST(r.created_at) :
-          (dateParts.length === 3 ? dateParts[2]+'-'+dateParts[1]+'-'+dateParts[0] : r.prod_date);
-        var countsOn = r.day && r.day !== r.prod_date ?
-          ' title="Counts toward shift ' + fqcEsc(r.shift) + ' of ' + fqcEsc(fmtDay(r.day)) + '"' : '';
+        /* production date + shift: what the entry is FOR. Recorded: when it
+           was typed, IST, with the shift on the clock then ("12-09-2026
+           01:12 AM · C" for production of 11-09-2026, B). */
+        var recorded = r.created_at ? fmtIST(r.created_at) +
+          (r.recorded_shift ? ' · ' + r.recorded_shift : '') : '—';
+        var late = r.day && (r.day !== r.prod_date || r.recorded_shift !== r.shift);
         return '<tr>' +
-          '<td class="mono"' + countsOn + '>' + fqcEsc(fmtDate) + '</td>' +
-          '<td class="s' + r.shift + '">' + fqcEsc(r.shift) + '</td>' +
+          '<td class="mono">' + fqcEsc(fmtDay(r.prod_date)) + '</td>' +
+          '<td class="s' + fqcEsc(r.shift) + '">' + fqcEsc(r.shift) + '</td>' +
           '<td>' + fqcEsc(r.customer || '—') + '</td>' +
           '<td class="mono">' + r.wattage + 'W</td>' +
           '<td class="mono">' + fqcEsc(r.model) + '</td>' +
@@ -14293,10 +14276,14 @@ window.gpSetKind = function(k) {
           '<td class="num">' + r.qty + '</td>' +
           '<td class="num">' + Number(r.kw_output).toFixed(2) + '</td>' +
           '<td>' + fqcEsc(r.shift_incharge) + '</td>' +
+          '<td class="mono" style="' + (late ? 'color:var(--ink3)' : '') + '" title="' +
+            fqcEsc('Typed by ' + (r.created_by || '—') + (late ? ' - after the shift it ' +
+            'records (' + fmtDay(r.prod_date) + ' ' + r.shift + ')' : '')) + '">' +
+            fqcEsc(recorded) + '</td>' +
           '</tr>';
       }).join('');
     }).catch(function(e) {
-      tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:12px;color:var(--fail)">Failed to load entries: ' + fqcEsc(e.message) + '</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:12px;color:var(--fail)">Failed to load entries: ' + fqcEsc(e.message) + '</td></tr>';
     });
   };
 

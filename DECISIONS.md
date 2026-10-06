@@ -283,6 +283,16 @@ no one signs twice. [enforcement unverified]
   thing happened in the system (allocation, FQC decision, packed, challan
   issued), **never** from the date or shift printed in a serial. The server
   stamps these and the form fields are locked. [built]
+- **A production entry has two times, and the list leads with the production's**
+  (Mukesh, 6 Oct): the production date and shift it is FOR (picked on the form,
+  validated - a C shift report is filed next morning) and when it was typed.
+  The Production Entry list is ordered, filtered (FROM / TO = production date)
+  and shown by the first; "Recorded" beside it gives the typing time and the
+  shift on the clock then. [built]
+- **Every filter dropdown is dynamic** (Mukesh, 6 Oct): it offers the values the
+  data holds under every OTHER filter on the screen - its own left out, so a pick
+  does not hide its siblings - and never drops the value already picked.
+  [built on: Production Entry; the rest is listed in BACKLOG's 6 Oct to-do]
 - Serial format v1/v2 and the hex month (Oct=A, Nov=B, Dec=C): see
   PROJECT_OVERVIEW.md, "Facts that look like bugs".
 

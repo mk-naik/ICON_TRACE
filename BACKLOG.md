@@ -6567,8 +6567,9 @@ Kept up to date through the night; each item is ticked with its commit.
       Dashboard, Management, Production Dashboard, Packing Log, Stock & Dispatch,
       FQC Recent, Recent Allocations, Challan list, Loading list, Gate pass list,
       Production Entry list, LOP list, and every searchable table card.
-- [ ] Production Entry list: show the production date and shift the entry is FOR
-      ("for 11-09-2026 B, recorded 12-09-2026 01:12 (C)"), sort and filter by it.
+- [x] Production Entry list: show the production date and shift the entry is FOR
+      ("for 11-09-2026 B, recorded 12-09-2026 01:12 (C)"), sort and filter by it -
+      see the entry below.
 - [ ] LOP: the same - the date and shift a loss belongs to (a Retro event has no
       date field today, DECISIONS 11 / BACKLOG "LOP dating"), shown and counted.
 - [ ] Search & Trace: the production incharge(s) of a serial.
@@ -6576,7 +6577,18 @@ Kept up to date through the night; each item is ticked with its commit.
       station Dispatch-01) has no permission option - the menu was clipped, see
       the entry below. (He is still a Packing Operator by role: if he is meant to
       be the Dispatch Operator, change the role or tick his screens.)
-- [ ] Admin: resetting / setting a person's TOTP never shows backup codes.
+- [ ] **NEEDS MUKESH** - Admin: resetting / setting a person's TOTP never shows
+      backup codes. Why: by Stage 1a's design only a Super Admin gets recovery
+      codes (`icon_auth.enrol_commit`, rank == 3) and only a Super Admin may sign
+      in with one (`_login_impl`, rank < 3 refused); every person whose TOTP is
+      reset from the Users screen is an Admin, so the enrol page shows none. An
+      Admin who loses the phone is recovered by a Super Admin (Reset TOTP, or a
+      backup window). Proposed: codes for every authenticator account (Admin
+      too), shown once on the enrol page, each usable once at sign-in and forcing
+      a fresh enrolment, plus an in-app "set up your authenticator again" step
+      after a recovery sign-in. NOT done overnight: it opens a new way into an
+      Admin account, so it waits for your explicit yes (the session's safety
+      check stopped it too).
 - [ ] Admin: parts that are still v4 dummies.
 - [ ] BACKLOG: open items; items logged fixed that have since regressed.
 
@@ -6611,3 +6623,24 @@ Kept up to date through the night; each item is ticked with its commit.
 - **Test:** `test_users_screen.py` +1 - at 1500x950 and 1280x720, every item of the
   last account's menu is the element at its own centre, and Edit permissions opens
   the editor for that account. `test_permission_editor.py` 6/6.
+
+## 6 Oct 2026 - Production Entry list: by the production date and shift, recorded time beside it
+
+- **Asked:** "Production entry shows date time when it was created in DB ... show for
+  which production date shift it was entered like created at 12-09-2026 C shift for
+  production 11-09-2026 B shift ... landing page filter should shows production date."
+- **What was wrong:** the server already stored both (prod_date/shift = the shift it
+  ran, from the form; created_at = when typed) and already filtered FROM/TO on
+  prod_date - but the list's first column showed created_at and the list was ordered
+  by it, so an entry filtered in as "the 11th" read "12-09-2026 07:05" and a late C
+  shift report sat above the next day's A shift.
+- **Change:** columns Production date | Shift | ... | Incharge (was "By" - it is the
+  incharge) | Recorded ("12-09-2026 01:12:00 AM · C", greyed with a tooltip when it was
+  typed after the shift it records). Ordered by production date, then shift (C, B,
+  A), then typing time. FROM / TO are labelled "(production date)". The Shift and
+  Customer dropdowns are dynamic: the server returns facets (`_facets`, new - each
+  dimension read with every filter but its own), so a picked customer leaves every
+  customer on offer while the shifts narrow to that customer's.
+- **Tests:** `test_production.py` +1 (order, recorded day/shift of a C shift typed at
+  01:12 and a B shift typed next morning, facets with a customer / a shift / a period
+  picked) - 13/13. Seen in Chromium on a scratch DB.
