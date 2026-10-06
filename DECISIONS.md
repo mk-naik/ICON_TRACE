@@ -302,7 +302,7 @@ no one signs twice. [enforcement unverified]
 - **Every filter dropdown is dynamic** (Mukesh, 6 Oct): it offers the values the
   data holds under every OTHER filter on the screen - its own left out, so a pick
   does not hide its siblings - and never drops the value already picked.
-  [built on: Production Entry, Loss & Breakdown; the rest is listed in BACKLOG's 6 Oct to-do]
+  [built on: Production Entry, Loss & Breakdown, FQC Dashboard; the rest is listed in BACKLOG's 6 Oct to-do]
 - Serial format v1/v2 and the hex month (Oct=A, Nov=B, Dec=C): see
   PROJECT_OVERVIEW.md, "Facts that look like bugs".
 

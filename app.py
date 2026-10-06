@@ -5568,6 +5568,18 @@ def api_loss_event_close(event_id):
 _ISO_DAY = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+# When a production entry's modules were produced: the start of the shift it
+# RAN in (prod_date + shift, what the operator states - Mukesh, 26-09-2026),
+# as a stamp the counting SQL reads like any other - shift_day of it is
+# prod_date, its shift is the shift. It was the entry's created_at, the
+# moment it was TYPED: a C shift filed at 07:00 next morning was counted as
+# the next day's A shift on both dashboards (6 Oct 2026). A cancelled entry
+# names no production.
+_PE_RAN = ("(CASE WHEN pe.status = 'cancelled' THEN NULL ELSE pe.prod_date || "
+           "CASE pe.shift WHEN 'A' THEN 'T06:00:00' WHEN 'B' THEN 'T14:00:00' "
+           "ELSE 'T22:00:00' END END)")
+
+
 def _module_events(cur, customer="", model=""):
     """Every serial with the moment each thing happened to it, as a temp
     table for this connection - what both dashboards count from.
@@ -5621,9 +5633,9 @@ def _module_events(cur, customer="", model=""):
                -- second, before this falls back to genuinely blank.
                COALESCE(pe.line, ftr.line, '') AS line,
                a.created_at AS alloc_at,
-               CASE WHEN pe.created_at IS NULL THEN ff.first_at
-                    WHEN ff.first_at IS NULL THEN pe.created_at
-                    WHEN pe.created_at < ff.first_at THEN pe.created_at
+               CASE WHEN pe.entry_id IS NULL THEN ff.first_at
+                    WHEN ff.first_at IS NULL THEN """ + _PE_RAN + """
+                    WHEN """ + _PE_RAN + """ < ff.first_at THEN """ + _PE_RAN + """
                     ELSE ff.first_at END AS prod_at,
                f.at AS fqc_at, f.outcome AS outcome, f.quality_grade AS qgrade,
                pk.packed_at AS packed_at, dp.disp_at AS disp_at
@@ -10199,11 +10211,27 @@ def api_fqc_dashboard():
         # instead: every customer inspected in this date/shift range, BEFORE
         # the customer filter (so choosing one does not hide the others),
         # once per customer however it is spelled on file.
-        cust_options = db.customer_options(r["customer"] for r in store.rows(cur,
-            "SELECT DISTINCT s.customer AS customer "
-            "FROM fqc_record f JOIN serial s ON s.serial=f.serial "
-            "WHERE " + unplanned_clause + " AND s.customer IS NOT NULL",
-            unplanned_args))
+        # Every dropdown is a facet (Mukesh, 6 Oct): each one's values read
+        # with every OTHER filter applied - its own left out.
+        fcl = [(None, "f.superseded_by IS NULL", ()), (None, "f.status<>'cancelled'", ())]
+        if frm:
+            fcl.append((None, fqc_day + " >= %s", (frm,)))
+        if to:
+            fcl.append((None, fqc_day + " <= %s", (to,)))
+        if clock.shift_number(shift):
+            fcl.append(("shift", fqc_shift + " = %s", (clock.shift_number(shift),)))
+        if customer:
+            c_sql, c_args = db.customer_match("s.customer", customer)
+            fcl.append(("customer", c_sql, tuple(c_args)))
+        if model:
+            fcl.append(("model", "s.model = %s", (model,)))
+        if result in ("pass", "reject"):
+            fcl.append((None, "f.outcome = %s", (result,)))
+        facets = _facets(cur, "FROM fqc_record f JOIN serial s ON s.serial=f.serial", fcl,
+                         {"shift": fqc_shift, "customer": "s.customer", "model": "s.model"})
+        facets["shift"] = [clock.SHIFT_LETTER.get(int(v), str(v)) for v in facets["shift"]]
+        facets["customer"] = db.customer_options(facets["customer"])
+        cust_options = facets["customer"]
         totals = store.one(cur,
             "SELECT COUNT(*) AS inspected, "
             "SUM(CASE WHEN f.outcome='pass' THEN 1 ELSE 0 END) AS passed, "
@@ -10253,7 +10281,7 @@ def api_fqc_dashboard():
         t["anomalies"] = 0
 
     return jsonify({"rows": [dict(r) for r in summary], "totals": t,
-                    "customers": cust_options,
+                    "customers": cust_options, "facets": facets,
                     "by_defect": [dict(r) for r in by_defect],
                     "filters": {"from": frm, "to": to, "shift": shift,
                                "customer": customer, "model": model,

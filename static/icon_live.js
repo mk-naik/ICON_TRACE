@@ -2801,14 +2801,9 @@ function wireFqcAnomalies() {
     var g = function (id) { var e = document.getElementById(id); return e ? e.value : ''; };
     var range = (typeof fqcRange === 'function') ?
       fqcRange() : { from: g('fFrom'), to: g('fTo') || g('fFrom') };
-    var custName = g('fDashCust');
-    var customer = (custName && custName !== 'All customers') ? custName : '';
-    var model = g('fDashModel'); if (model === 'All') model = '';
-    var shift = g('fDashShift'); 
-    if (shift === 'All shifts') shift = '';
-    else if (shift === 'A') shift = 1;
-    else if (shift === 'B') shift = 2;
-    else if (shift === 'C') shift = 3;
+    var customer = _selVal('fDashCust');
+    var model = _selVal('fDashModel');
+    var shift = { A: 1, B: 2, C: 3 }[_selVal('fDashShift')] || '';
     var resultSel = g('fDashResult');
     var result = resultSel === 'Passed only' ? 'pass' :
                  resultSel === 'Rejected only' ? 'reject' : '';
@@ -2857,6 +2852,17 @@ function wireFqcAnomalies() {
    * dashboard" marker; function declarations at the top of this IIFE
    * are hoisted, so every other render function reaches these
    * regardless of source position. */
+  /* A filter dropdown's value, or '' when it is on its "no filter" option.
+     That option is the FIRST one, whatever it says ("All customers", "Both
+     lines", value=""): reading "anything starting with All" as no filter
+     dropped a real customer named "Allied ..." on every screen. */
+  function _selVal(id) {
+    var e = typeof id === 'string' ? document.getElementById(id) : id;
+    if (!e || e.selectedIndex <= 0) return '';
+    return e.value;
+  }
+  window._selVal = _selVal;
+
   function _dashCascade(selId, values, defaultLabel, currentFilterValue, opts) {
     opts = opts || {};
     var sel = typeof selId === 'string' ? document.getElementById(selId) : selId;
@@ -3476,7 +3482,6 @@ function wireFqcAnomalies() {
   function renderLiveFqcDash() {
     if (!can('dash')) return;   /* Round 28: the server would refuse it */
     var f = fqcDashFilters();
-    console.log("fetching dashboard with f=", f);
     fetch('/api/fqc/dashboard' + fqcDashQuery(f), { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
@@ -3659,13 +3664,17 @@ function wireFqcAnomalies() {
         var shiftSet = _facetSet(rows, function (r) {
           return r.shift ? (SHIFT_LETTER[r.shift] || r.shift) : null;
         });
-        _dashCascade('fDashShift', shiftSet, 'All shifts', f.shift);
-        if (d.customers && d.customers.length) {
-          _dashCascade('fDashCust', d.customers, 'All customers', f.customer, { facet: true });
+        /* the server's facets (each read with every OTHER filter applied);
+           an older server sends none - then the visible rows */
+        var fc = d.facets || null;
+        _dashCascade('fDashShift', fc ? fc.shift : shiftSet, 'All shifts', f.shift, { facet: !!fc });
+        if (fc || (d.customers && d.customers.length)) {
+          _dashCascade('fDashCust', fc ? fc.customer : d.customers, 'All customers',
+                       f.customer, { facet: true });
         } else {
           _dashCascade('fDashCust', custSet, 'All customers', f.customer);
         }
-        _dashCascade('fDashModel', modelSet, 'All', f.model);
+        _dashCascade('fDashModel', fc ? fc.model : modelSet, 'All', f.model, { facet: !!fc });
 
         var note = document.getElementById('fDashNote');
         if (note) {
@@ -3709,7 +3718,6 @@ function wireFqcAnomalies() {
      with fabricated ones. Replacing them outright is the only way Apply
      and Reset end up asking the one real question this screen has. */
   function wireFqcDash() {
-    console.log("wireFqcDash called!");
     fqcDashModelSelect();
     
     var fFrom = document.getElementById('fFrom');
@@ -3741,7 +3749,6 @@ function wireFqcAnomalies() {
     if (window.fqcApply && window.fqcApply.__live) return;
 
     window.fqcApply = function () { 
-      console.log("fqcApply called!");
       renderLiveFqcDash(); 
     };
     window.fqcApply.__live = true;

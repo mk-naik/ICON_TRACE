@@ -876,8 +876,11 @@ def t_prod_dashboard_learns_line_from_ftr_reading():
         # DEFAULT CURRENT_TIMESTAMP is UTC, not this app's IST clock, and
         # would silently land the row in the wrong shift/day
         import icon_clock as _clock
+        # ran in the shift the other module was graded in - production counts
+        # on the shift it RAN (prod_date + shift), so the two share one row
         eid = store.insert(cur, "production_entry", {
-            "prod_date": "2026-09-01", "shift": "A", "shift_incharge": "t",
+            "prod_date": _clock.shift_day().isoformat(),
+            "shift": _clock.SHIFT_LETTER[_clock.current_shift()], "shift_incharge": "t",
             "line": "A-Line", "model": "ISEN625-G12R", "wattage": 625,
             "start_serial": U_OTHER, "end_serial": U_OTHER, "qty": 1,
             "kw_output": 0.625, "created_by": "t",

@@ -441,6 +441,27 @@ def t_trace_shows_the_incharge():
     assert e["instances"][0]["incharge"] == "—" and e["production"] is None
 
 
+@test("the Production Dashboard counts production on the shift it RAN: a C "
+      "shift of yesterday filed now is yesterday's C, never today's (it was "
+      "dated by when the entry was typed)")
+def t_dashboard_counts_the_shift_that_ran():
+    c = setup()
+    with store.conn() as (cx, cur):
+        serials = plan_serials(cur, 4)
+    r = c.post("/api/prodentry", json={
+        "date": RAN_ON, "shift": "C", "incharge": "TEST INCHARGE",
+        "start_serial": serials[0], "end_serial": serials[3]})
+    assert r.status_code == 200, r.get_json()
+    ran = c.get("/api/prod/dashboard?from=%s&to=%s&shift=C" % (RAN_ON, RAN_ON)).get_json()
+    assert ran["kpi"]["prod"] == 4, ran["kpi"]
+    assert [(x["shift"], x["produced"]) for x in ran["lines"]] == [(3, 4)], ran["lines"]
+    today = clock.shift_day().isoformat()
+    now = c.get("/api/prod/dashboard?from=%s&to=%s" % (today, today)).get_json()
+    assert now["kpi"]["prod"] == 0, now["kpi"]
+    other = c.get("/api/prod/dashboard?from=%s&to=%s&shift=A" % (RAN_ON, RAN_ON)).get_json()
+    assert other["kpi"]["prod"] == 0, other["kpi"]
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0

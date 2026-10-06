@@ -6604,6 +6604,15 @@ Kept up to date through the night; each item is ticked with its commit.
       merge (1be5874), so older than tonight.
 - [x] `test_production.py` posted a fixed 2026-09-17, which the 30-day backdate
       limit refuses from 17 Oct - now yesterday's A shift.
+- [x] Production Dashboard / Management counted production by when the entry
+      was TYPED (`module_ev.prod_at` = `pe.created_at`): a C shift filed next
+      morning was the next day's A shift - missed by the 26 Sep fix. Now the
+      shift it ran. See the entry below.
+- [ ] Management Overview: its Wattage and Line filters are read and never
+      sent - picking one changes nothing.
+- [ ] Challan EDIT leaves a removed pallet stuck: the superseded original still
+      "reserves" it - never offered again, refused on a new challan ("already on
+      IS-..."), and Stock & Dispatch counts both versions.
 - [x] Search & Trace "Built" read the production entry's TYPING time (a C shift
       filed next morning said "shift A") - now the production date and shift.
 - [x] `test_dashboards_ist.py` asserted a loss's CALENDAR date, at whatever time
@@ -6714,3 +6723,29 @@ Kept up to date through the night; each item is ticked with its commit.
   (`test_fqc`, `test_repack`, `test_review`, `test_defect_readers`,
   `test_cancel_documents`, `test_custom_serials_ui`, `test_search_invoice`) pass.
   Seen in Chromium.
+
+## 6 Oct 2026 - Dashboards count production on the shift it ran
+
+- **What was wrong:** the 26 Sep fix made a production entry store the shift it RAN
+  (prod_date + shift, the operator's statement) and the list filter on it - but both
+  dashboards count from `_module_events`, whose `prod_at` was still the entry's
+  `created_at`, the moment it was typed. A C shift report filed at 07:00 next morning
+  was counted as the next day's A shift on the Production Dashboard (KPIs, Line &
+  shift table) and Management Overview.
+- **Change:** `prod_at` is the start of the shift the entry ran (`_PE_RAN`: prod_date
+  + 06:00 / 14:00 / 22:00 - its factory day is prod_date, its shift the shift), or
+  the first FQC scan when that came first or there is no entry; a cancelled entry
+  names no production.
+- **Tests:** `test_production.py` +1 (C of yesterday filed now counts on yesterday's
+  C, not today, not A) - 15/15. `test_fqc_unplanned.py`'s line-merge test put its
+  entry on 1 Sep A shift while expecting it in tonight's row - it passed only
+  because production was dated by typing time; its entry now runs in the current
+  shift (40/40). `test_dashboards_ist`, `test_customer_filters`, `test_loss`,
+  `test_cancel_documents`, `test_dashrath_case`, `test_hash_route` pass.
+- **Also in this commit - FQC Dashboard filters are facets:** `/api/fqc/dashboard`
+  returns `facets` (shift, customer, model - each read with every other filter, its
+  own left out; customer folded to the master's names) and the page rebuilds all
+  three from them. `_selVal()` (new, shared) reads "no filter" as the first option,
+  not as any value starting "All". Seen in Chromium: SG Meda picked - every customer
+  still offered, models narrow to SG Meda's one. Three leftover `console.log` debug
+  lines removed.
