@@ -1052,6 +1052,24 @@ def t_edit_frees_the_pallet_it_removed():
     assert sd["fg_ready"]["box_count"] == 0, sd["fg_ready"]
 
 
+@test("the Challan list's Status dropdown offers the statuses on file under the "
+      "search - Superseded included, which it never offered (6 Oct)")
+def t_challan_list_status_facet():
+    c = setup()
+    b1 = packed_box(c, [102, 103])
+    b2 = packed_box(c, [104, 105])
+    inv = make_invoice(qty=2, invoice_no="INV-FACET")
+    chid = make_issued_challan(c, [b1], inv)
+    c.post("/api/challan/%d/edit-save" % chid,
+           json={"boxes": [b2], "invoice_id": inv, "vehicle_no": "CG04ZZ2222"})
+    d = c.get("/api/challans").get_json()
+    assert d["facets"]["status"] == ["issued", "superseded"], d["facets"]
+    one = c.get("/api/challans?status=issued").get_json()
+    assert len(one["challans"]) == 1 and one["facets"]["status"] == ["issued", "superseded"], one
+    none = c.get("/api/challans?q=NOBODY-AT-ALL").get_json()
+    assert none["challans"] == [] and none["facets"]["status"] == [], none["facets"]
+
+
 @test("printing a superseded challan by its BARE number (no suffix) is "
      "refused, not silently served as the stale original")
 def t_edit_print_refuses_superseded_bare_number():

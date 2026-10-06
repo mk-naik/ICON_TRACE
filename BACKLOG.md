@@ -6563,7 +6563,11 @@ Kept up to date through the night; each item is ticked with its commit.
 
 **Asked by Mukesh**
 - [x] Merge `overnight-filter-work` into main - `bd70178`.
-- [ ] Dynamic filters on EVERY filter in the app, not only dashboards: a dropdown
+- [x] Dynamic filters on EVERY filter in the app, not only dashboards - done screen
+      by screen through 6 Oct (Production Entry d285944, LOP e71d38a, FQC Dashboard
+      42afeca, Production Dashboard + Management 5aa5810, Packing Log + Stock &
+      Dispatch + Recent gradings 3595fda, table filters 995ca38, the three lists
+      in the commit after). The FQC drill-in already was. Original wording: a dropdown
       offers only the values present under the other filters (the FQC drill-in's
       behaviour, with counts where the screen can afford them). Screens: FQC
       Dashboard, Management, Production Dashboard, Packing Log, Stock & Dispatch,
@@ -6620,10 +6624,11 @@ Kept up to date through the night; each item is ticked with its commit.
       filed next morning said "shift A") - now the production date and shift.
 - [x] `test_dashboards_ist.py` asserted a loss's CALENDAR date, at whatever time
       the suite ran; `test_loss.py` / `test_stored_xss.py` used fixed start times.
-- [ ] Every screen reads "no filter" as a value starting "All"/"Both"
+- [x] Every screen reads "no filter" as a value starting "All"/"Both"
       (`renderMgmt` g() and others) - a customer named "Allied ..." is ignored.
-- [ ] Production Dashboard's Customer / Model lists are the whole master, every
-      serial ever, not what the period holds.
+      Every dynamic dropdown now reads through `_selVal()` (first option).
+- [x] Production Dashboard's Customer / Model lists are the whole master, every
+      serial ever, not what the period holds - facets (5aa5810).
 - [x] FQC Recent: the client asks 1000 rows, the server caps at 100, so its
       dropdowns only know the newest 100 decisions - facets now read every live
       decision (the list itself still shows the newest 100).
@@ -6835,3 +6840,19 @@ Kept up to date through the night; each item is ticked with its commit.
 - **Tests:** `test_screens.js` 17/17, `test_indent_export`, `test_export_formulas`
   pass. Seen in Chromium: OCT-02/2026 picked shows its two items; on Indents, SG MEDA
   picked narrows Item to its one item and keeps both customers.
+
+## 6 Oct 2026 - Challan, Loading Verification and Gate Pass lists: dynamic filters
+
+- **Challan list:** its Status dropdown offered Draft / Issued / Cancelled - never
+  **Superseded**, a status every edited challan's original has had since the edit
+  rule went in, so those originals could not be picked out. `/api/challans` returns
+  the statuses the search holds (its own filter left out); the dropdown follows.
+- **Loading Verification list:** the loading states (pending / in progress / loaded)
+  the dates and search hold.
+- **Gate Pass list:** the Customer dropdown offered every party a gate pass ever went
+  to; it is the parties of the dates and search now (case folded, the on-file
+  spelling kept - rule 4 of test_customer_filters).
+- **Tests:** `test_challan.py` +1 (Superseded offered, kept when Issued is picked,
+  nothing for a search with no match) - 70/70; `test_loading` 15/15, the four
+  `test_gatepass*.py`, `test_customer_filters` 17/17, and the JS harnesses
+  (`test_gatepass`, `test_gatepass_landing`, `test_loading`, `test_challan`) pass.

@@ -2410,10 +2410,11 @@ def api_loading_challans():
         sql += " GROUP BY c.challan_id ORDER BY c.challan_id DESC"
         rows = store.rows(cur, sql, params)
 
-    out = []
+    out, present = [], set()
     for r in rows:
         r = dict(r)
         agg = _loading_agg_status(r["n_total"], r["n_saved"], r["n_loaded"])
+        present.add(agg)
         if status and status != agg:
             continue
         try:
@@ -2423,7 +2424,10 @@ def api_loading_challans():
             r["challan_no"] = None
         r["agg_status"] = agg
         out.append(r)
-    return jsonify({"challans": out})
+    # the Status dropdown: what the dates and search hold (dynamic filters)
+    facets = {"status": [st for st in ("pending", "in_progress", "loaded") if st in present] +
+                        sorted(present - {"pending", "in_progress", "loaded"})}
+    return jsonify({"challans": out, "facets": facets})
 
 
 @app.route("/api/loading/<int:challan_id>")
@@ -3145,6 +3149,13 @@ def api_challans_list():
     fy = (request.args.get("fy") or "").strip() or None
     with store.conn() as (cx, cur):
         rows = db.challans_list(cur, q=q, status=status, fy=fy)
+        # the Status dropdown: the statuses the search holds, its own filter
+        # left out - superseded (an edited challan's original) was never
+        # offered at all (Mukesh, 6 Oct 2026: dynamic filters)
+        present = {r["status"] for r in db.challans_list(cur, q=q, fy=fy, n=100000)}
+    order = ("draft", "issued", "superseded", "cancelled")
+    facets = {"status": [st for st in order if st in present] +
+                        sorted(present - set(order))}
     out = []
     for ch in rows:
         ch = dict(ch)
@@ -3154,7 +3165,7 @@ def api_challans_list():
         except (TypeError, ValueError):
             ch["challan_no"] = None
         out.append(ch)
-    return jsonify({"challans": out})
+    return jsonify({"challans": out, "facets": facets})
 
 
 @app.route("/api/challan/<int:challan_id>")
@@ -10987,7 +10998,15 @@ def api_gatepasses():
     with store.conn() as (cx, cur):
         rows = db.gatepasses_list(cur, q=q, date_from=d_from, date_to=d_to,
                                   customer=customer)
-        customers_ = db.gatepass_customers(cur)
+        # the Customer dropdown: parties of the gate passes the dates and
+        # search hold, its own filter left out (dynamic filters, 6 Oct) -
+        # case folded, the spelling on file kept
+        seen = {}
+        for r in db.gatepasses_list(cur, q=q, date_from=d_from, date_to=d_to, n=100000):
+            p = (r.get("party") or "").strip()
+            if p:
+                seen.setdefault(p.upper(), p)
+        customers_ = sorted(seen.values(), key=lambda v: v.upper())
     return jsonify({"rows": rows, "customers": customers_})
 
 

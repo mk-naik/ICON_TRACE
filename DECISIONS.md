@@ -302,7 +302,7 @@ no one signs twice. [enforcement unverified]
 - **Every filter dropdown is dynamic** (Mukesh, 6 Oct): it offers the values the
   data holds under every OTHER filter on the screen - its own left out, so a pick
   does not hide its siblings - and never drops the value already picked.
-  [built on: Production Entry, Loss & Breakdown, FQC Dashboard, Production Dashboard, Management Overview, Packing Log, Stock & Dispatch, FQC Recent gradings, and every table filter drawn by icon_table.js (Recent Allocations, Indents, Item Master); the rest is listed in BACKLOG's 6 Oct to-do]
+  [built on: Production Entry, Loss & Breakdown, FQC Dashboard, Production Dashboard, Management Overview, Packing Log, Stock & Dispatch, FQC Recent gradings, every table filter drawn by icon_table.js (Recent Allocations, Indents, Item Master), the Challan, Loading Verification and Gate Pass lists, and the FQC drill-in (which already was)]
   Management Overview's **Line** filter is disabled ("Not built yet"): a line is
   recorded only on production entries, so allocation, FQC, packing and dispatch
   cannot be split by it. **[open]** whether Mukesh wants it on the production

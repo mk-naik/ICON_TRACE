@@ -12003,6 +12003,9 @@ function wireFqcAnomalies() {
       .then(function (d) {
         clBusy = false;
         clRows = d.challans || [];
+        /* dynamic: the statuses the search holds (server facet) */
+        if (d.facets) _dashCascade('clStatusFilter', d.facets.status, 'All statuses', st,
+          { facet: true, label: function (v) { return v.charAt(0).toUpperCase() + v.slice(1); } });
         if (!clRows.length) {
           host.innerHTML = '<tr><td colspan="8"><div class="empty-state">' +
             '<p>No challans yet. Click <b>New Challan</b> to create one.</p>' +
@@ -12040,6 +12043,7 @@ function wireFqcAnomalies() {
           '<option value="">All statuses</option>' +
           '<option value="draft">Draft</option>' +
           '<option value="issued">Issued</option>' +
+          '<option value="superseded">Superseded</option>' +
           '<option value="cancelled">Cancelled</option>' +
         '</select></div>' +
         '<div class="sp"><button class="btn btn-primary" onclick="clLoad()">Refresh</button></div>' +
@@ -12575,6 +12579,10 @@ function wireFqcAnomalies() {
       .then(function (d) {
         ldBusy = false;
         ldRows = d.challans || [];
+        /* dynamic: the loading states the dates hold (server facet) */
+        if (d.facets) _dashCascade('ldStatusFilter', d.facets.status, 'All', status,
+          { facet: true, label: function (v) {
+              return { pending: 'Pending', in_progress: 'In progress', loaded: 'Loaded' }[v] || v; } });
         host.innerHTML = ldRows.length ? ldRows.map(ldRenderRow).join('') :
           '<tr><td colspan="7"><div class="empty-state"><p>No challan in this ' +
           'range.</p></div></td></tr>';
@@ -13550,17 +13558,11 @@ window.gpSetKind = function(k) {
           'color:var(--ink3)">No gate pass in this range.</td></tr>';
         var cnt = gpLEl('gpLCount');
         if (cnt) cnt.textContent = rows.length + (rows.length === 1 ? ' row' : ' rows');
-        var custSel = gpLEl('gpLCustomer');
-        if (custSel) {
-          var keep = customer || custSel.value;
-          custSel.innerHTML = '<option value="">All customers</option>' +
-            (d.customers || []).map(function (name) {
-              /* party is free text typed on the gate pass - escaped, as the
-                 table row beside it already is (stored XSS, found 25 Sep) */
-              return '<option value="' + fqcEsc(name) + '">' + fqcEsc(name) + '</option>';
-            }).join('');
-          if (keep) custSel.value = keep;
-        }
+        /* dynamic: the parties the dates and search hold (server facet);
+           party is free text typed on the gate pass - the helper escapes it,
+           as the table row beside it already is (stored XSS, found 25 Sep) */
+        _dashCascade('gpLCustomer', d.customers || [], 'All customers', customer,
+                     { facet: true });
       })
       .catch(function () {
         host.innerHTML = '<tr><td colspan="8" style="color:var(--fail);padding:20px">' +
