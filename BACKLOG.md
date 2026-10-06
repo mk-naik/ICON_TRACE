@@ -6572,8 +6572,10 @@ Kept up to date through the night; each item is ticked with its commit.
 - [ ] LOP: the same - the date and shift a loss belongs to (a Retro event has no
       date field today, DECISIONS 11 / BACKLOG "LOP dating"), shown and counted.
 - [ ] Search & Trace: the production incharge(s) of a serial.
-- [ ] Admin: the dispatch user (`khedram.yadav`, created as Packing Operator with
-      station Dispatch-01) has no permission option.
+- [x] Admin: the dispatch user (`khedram.yadav`, created as Packing Operator with
+      station Dispatch-01) has no permission option - the menu was clipped, see
+      the entry below. (He is still a Packing Operator by role: if he is meant to
+      be the Dispatch Operator, change the role or tick his screens.)
 - [ ] Admin: resetting / setting a person's TOTP never shows backup codes.
 - [ ] Admin: parts that are still v4 dummies.
 - [ ] BACKLOG: open items; items logged fixed that have since regressed.
@@ -6592,3 +6594,20 @@ Kept up to date through the night; each item is ticked with its commit.
 - [ ] Stale tests on main: `test_packing.js` 18 failing (`packHold is not
       defined`), `test_js.js` a syntax error, `test_fqc_dashboard.js` exits 1
       without output.
+
+## 6 Oct 2026 - Users: the last account's menu was cut off ("permission option is missing")
+
+- **Reported:** the dispatch user Mukesh created (`khedram.yadav`) has no
+  permission option.
+- **Reproduced** (Chromium, scratch DB, the same four accounts): the account is the
+  LAST card in the list. Its kebab menu is positioned inside the card list, and the
+  card around the list clips what overflows it - only "Reset password" showed;
+  "Edit permissions" and "Deactivate" were in the page but could not be seen or
+  clicked. Every other account's menu was whole. Nothing about the account itself
+  (role, station, creator) was involved.
+- **Change:** the menu is laid over the page at its kebab (fixed position), opens
+  upward when the window has no room below, follows the kebab when the page
+  scrolls, and closes when the kebab scrolls out of sight.
+- **Test:** `test_users_screen.py` +1 - at 1500x950 and 1280x720, every item of the
+  last account's menu is the element at its own centre, and Edit permissions opens
+  the editor for that account. `test_permission_editor.py` 6/6.

@@ -222,6 +222,36 @@ def t_deactivate_then_reactivate_from_the_screen():
         assert can_sign_in(), "a reactivated operator still could not sign in"
 
 
+@test("the LAST account's menu is not clipped: Edit permissions can be seen "
+      "and opens the editor (Mukesh, 6 Oct: the dispatch user had no "
+      "permission option)")
+def t_last_account_menu_is_whole():
+    base()
+    AUTH.make_user("Packing Operator", login_id="khedram.yadav",
+                   name="Khedram Yadav", station="Dispatch-01")
+    with H.browser() as b:
+        for vp in ((1500, 950), (1280, 720)):
+            pg = users_page(b, login_id="sa1")
+            pg.set_viewport_size({"width": vp[0], "height": vp[1]})
+            last = pg.locator(".usr-card").last
+            assert "khedram.yadav" in last.inner_text(), last.inner_text()
+            last.locator(".usr-kebab").click()
+            hidden = pg.evaluate("""() => {
+              const m = document.querySelector('.usr-menu.on');
+              if (!m) return ['no menu open'];
+              return Array.from(m.querySelectorAll('button')).filter(b => {
+                const q = b.getBoundingClientRect();
+                const el = document.elementFromPoint(q.x + q.width / 2, q.y + q.height / 2);
+                return !(el === b || b.contains(el));
+              }).map(b => b.innerText);
+            }""")
+            assert not hidden, "%s: covered or clipped: %r" % (vp, hidden)
+            pg.click(".usr-menu.on >> text=Edit permissions")
+            pg.wait_for_selector("#permEd", timeout=10000)
+            assert "khedram.yadav" in pg.inner_text("#permEd").lower()
+            pg.close()
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

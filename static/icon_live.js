@@ -436,9 +436,30 @@
           if (!menu) return;
           var open = menu.classList.contains('on');
           _closeUserMenus();
-          if (!open) menu.classList.add('on');
+          if (!open) {
+            menu.classList.add('on');
+            _placeUserMenu(menu, btn);
+          }
         });
       });
+  }
+
+  /* The menu is laid over the page at the kebab, not inside the card list:
+     the card around the list clips what overflows it, so on the LAST
+     account the menu was cut off below its first item - "Edit permissions"
+     and "Deactivate" were there but could not be seen or clicked (Mukesh,
+     6 Oct: the dispatch user, last in the list, "permission option is
+     missing"). Opens upward when the window has no room below. */
+  function _placeUserMenu(menu, btn) {
+    menu.__kebab = btn;
+    var r = btn.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+    menu.style.top = (r.bottom + 5) + 'px';
+    var h = menu.offsetHeight;
+    if (r.bottom + 5 + h > window.innerHeight - 8 && r.top - 5 - h >= 8) {
+      menu.style.top = (r.top - 5 - h) + 'px';
+    }
   }
 
   /* One listener for the whole document, added once: a menu left open
@@ -446,6 +467,17 @@
      at the same time. */
   if (!window.__usrMenuWired) {
     document.addEventListener('click', function () { _closeUserMenus(); });
+    /* a menu fixed to the window follows its kebab when the page scrolls,
+       and closes once the kebab has scrolled out of sight */
+    var follow = function () {
+      Array.prototype.forEach.call(document.querySelectorAll('.usr-menu.on'), function (m) {
+        var b = m.__kebab, r = b && b.getBoundingClientRect();
+        if (!r || r.bottom < 0 || r.top > window.innerHeight) m.classList.remove('on');
+        else _placeUserMenu(m, b);
+      });
+    };
+    window.addEventListener('scroll', follow, true);
+    window.addEventListener('resize', follow);
     window.__usrMenuWired = true;
   }
 
