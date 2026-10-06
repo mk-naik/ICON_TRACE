@@ -6554,3 +6554,41 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
   Playwright's own Chromium when the container path is absent; seeds a real defect
   code). Pre-existing, NOT from the merge (same on main before it): `test_packing.js`
   18 failing, `test_js.js` a syntax error, `test_fqc_dashboard.js` exits 1 silently.
+
+## 6 Oct 2026 - Overnight to-do (Mukesh's list, then what I find on the way)
+
+Kept up to date through the night; each item is ticked with its commit.
+
+**Asked by Mukesh**
+- [x] Merge `overnight-filter-work` into main - `bd70178`.
+- [ ] Dynamic filters on EVERY filter in the app, not only dashboards: a dropdown
+      offers only the values present under the other filters (the FQC drill-in's
+      behaviour, with counts where the screen can afford them). Screens: FQC
+      Dashboard, Management, Production Dashboard, Packing Log, Stock & Dispatch,
+      FQC Recent, Recent Allocations, Challan list, Loading list, Gate pass list,
+      Production Entry list, LOP list, and every searchable table card.
+- [ ] Production Entry list: show the production date and shift the entry is FOR
+      ("for 11-09-2026 B, recorded 12-09-2026 01:12 (C)"), sort and filter by it.
+- [ ] LOP: the same - the date and shift a loss belongs to (a Retro event has no
+      date field today, DECISIONS 11 / BACKLOG "LOP dating"), shown and counted.
+- [ ] Search & Trace: the production incharge(s) of a serial.
+- [ ] Admin: the dispatch user (`khedram.yadav`, created as Packing Operator with
+      station Dispatch-01) has no permission option.
+- [ ] Admin: resetting / setting a person's TOTP never shows backup codes.
+- [ ] Admin: parts that are still v4 dummies.
+- [ ] BACKLOG: open items; items logged fixed that have since regressed.
+
+**Found on the way**
+- [ ] Every screen reads "no filter" as a value starting "All"/"Both"
+      (`renderMgmt` g() and others) - a customer named "Allied ..." is ignored.
+- [ ] Production Dashboard's Customer / Model lists are the whole master, every
+      serial ever, not what the period holds.
+- [ ] FQC Recent: the client asks 1000 rows, the server caps at 100, so its
+      dropdowns only know the newest 100 decisions.
+- [ ] `wireDynamicFilters` fills dashboard dropdowns from the whole master at
+      sign-in, ahead of each screen's own dynamic list.
+- [ ] Dead code: the first `window.renderPackLog` (replaced by
+      `renderLivePackLog` a few hundred lines later).
+- [ ] Stale tests on main: `test_packing.js` 18 failing (`packHold is not
+      defined`), `test_js.js` a syntax error, `test_fqc_dashboard.js` exits 1
+      without output.
