@@ -5325,6 +5325,11 @@ def _loss_display_id(event_id):
 @app.route("/api/loss_events")
 @require_screen_view("loss")
 def api_loss_events():
+    """Downtime events by the production date and shift they belong to
+    (event_date, shift): a Live event's is the factory day and shift it was
+    opened in, a Retro event's is the one it was recorded FOR (Mukesh, 6 Oct
+    2026: "show for which production date shift it was entered ... This and
+    LOP datetime"). created_at - when it was typed - comes back beside it."""
     date = (request.args.get("date") or "").strip()
     date_from = (request.args.get("date_from") or "").strip()
     date_to = (request.args.get("date_to") or "").strip()
@@ -5332,35 +5337,32 @@ def api_loss_events():
     q = (request.args.get("q") or "").strip()
     limit = _int_arg("limit", 200)
 
-    sql = ("SELECT e.*, l.event_id AS link_event_id "
-           "FROM loss_event e "
-           "LEFT JOIN loss_event l ON l.event_id = e.linked_event_id "
-           "WHERE 1=1 AND e.status<>'cancelled'")   # Round 34: hide cancelled
-    args = []
-    # the factory day an event was opened in (06:00 to 06:00)
-    day = clock.shift_day_sql("e.created_at")
+    clauses = [(None, "e.status<>'cancelled'", ())]     # Round 34: hide cancelled
     if date:
-        sql += " AND " + day + " = %s"
-        args.append(date)
+        clauses.append((None, "e.event_date = %s", (date,)))
     if date_from:
-        sql += " AND " + day + " >= %s"
-        args.append(date_from)
+        clauses.append((None, "e.event_date >= %s", (date_from,)))
     if date_to:
-        sql += " AND " + day + " <= %s"
-        args.append(date_to)
+        clauses.append((None, "e.event_date <= %s", (date_to,)))
     if clock.shift_number(shift):
-        sql += " AND e.shift = %s"
-        args.append(clock.SHIFT_LETTER[clock.shift_number(shift)])
+        clauses.append(("shift", "e.shift = %s",
+                        (clock.SHIFT_LETTER[clock.shift_number(shift)],)))
     if q:
-        sql += " AND (e.line LIKE %s OR e.machine LIKE %s OR e.reason LIKE %s)"
-        args.extend(["%" + q + "%", "%" + q + "%", "%" + q + "%"])
-    sql += " ORDER BY e.event_id DESC"
+        clauses.append((None, "e.line LIKE %s OR e.machine LIKE %s OR e.reason LIKE %s",
+                        ("%" + q + "%",) * 3))
+    where = " AND ".join("(%s)" % c[1] for c in clauses)
+    args = tuple(a for c in clauses for a in c[2])
+    sql = ("SELECT e.* FROM loss_event e WHERE " + where +
+           " ORDER BY e.event_id DESC")
 
     with store.conn() as (cx, cur):
-        rows = store.rows(cur, sql, tuple(args), limit=limit)
+        rows = store.rows(cur, sql, args, limit=limit)
+        facets = _facets(cur, "FROM loss_event e", clauses, {"shift": "e.shift"})
 
     out = []
     for r in rows:
+        made = (datetime.datetime.fromisoformat(r["created_at"])
+                if r.get("created_at") else None)
         out.append({
             "event_id": r["event_id"],
             "id": _loss_display_id(r["event_id"]),
@@ -5373,8 +5375,66 @@ def api_loss_events():
                     if r["linked_event_id"] else None,
             "mode": r["entry_mode"], "minutes": r["minutes"],
             "event_date": r["event_date"], "shift": r["shift"],
+            # when it was typed, and the shift on the clock then
+            "created_at": r["created_at"], "created_by": r["created_by"],
+            "recorded_shift": (clock.SHIFT_LETTER[clock.shift_of(made.hour)]
+                               if made else None),
         })
-    return jsonify({"events": out})
+    return jsonify({"events": out, "facets": facets})
+
+
+# A shift's minutes on its own day's timeline - C runs 22:00 to 06:00, so its
+# morning half is 24:00 to 30:00 of the day it belongs to.
+_SHIFT_WINDOW = {1: (6 * 60, 14 * 60), 2: (14 * 60, 22 * 60), 3: (22 * 60, 30 * 60)}
+LIVE_START_MAX_AGO_MIN = 12 * 60
+
+
+def _hhmm(t):
+    """Minutes past midnight for 'HH:MM', or None."""
+    m = __import__("re").match(r"^(\d{1,2}):(\d{2})$", (t or "").strip())
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        return None
+    return int(m.group(1)) * 60 + int(m.group(2))
+
+
+def _on_shift(n, minute):
+    """`minute` (past midnight) on shift n's timeline: C's 00:00-06:00 is
+    24:00-30:00 of the day the shift belongs to."""
+    return minute + 24 * 60 if n == 3 and minute < 6 * 60 else minute
+
+
+def _retro_when(d, now):
+    """(event_date, shift letter, start, end, minutes, refusal) for a Retro
+    event: the production date and shift it belongs to (checked as a
+    production entry's are - _prod_when), and the start and end it was down,
+    both inside that shift. The minutes come from the two times, never typed."""
+    day, letter, why = _prod_when(d.get("date"), d.get("shift"), now=now)
+    if why:
+        return None, None, None, None, None, why
+    start, end = (d.get("start") or "").strip(), (d.get("end") or "").strip()
+    s_min, e_min = _hhmm(start), _hhmm(end)
+    if s_min is None or e_min is None:
+        return None, None, None, None, None, (
+            "A Retro event needs the time it stopped and the time it restarted (HH:MM).")
+    n = clock.shift_number(letter)
+    lo, hi = _SHIFT_WINDOW[n]
+    s_on, e_on = _on_shift(n, s_min), _on_shift(n, e_min)
+    span = "%s shift (%02d:00 to %02d:00)" % (letter, lo // 60, (hi // 60) % 24)
+    if not lo <= s_on < hi:
+        return None, None, None, None, None, (
+            "%s is outside %s - record it under the shift it happened in." % (start, span))
+    if e_on <= s_on:
+        return None, None, None, None, None, (
+            "It restarted at %s, which is not after it stopped (%s)." % (end, start))
+    if e_on > hi:
+        return None, None, None, None, None, (
+            "%s is after %s ended - record the rest under the next shift." % (end, span))
+    ended = datetime.datetime.combine(day, datetime.time()) + datetime.timedelta(minutes=e_on)
+    if ended > now:
+        return None, None, None, None, None, (
+            "%s on %s has not come yet - a Retro event is one that is over."
+            % (end, day.strftime("%d-%m-%Y")))
+    return day.isoformat(), letter, start, end, e_on - s_on, None
 
 
 @app.route("/api/loss_event", methods=["POST"])
@@ -5388,12 +5448,33 @@ def api_loss_event_open():
     kind = (d.get("kind") or "P").strip()
     start = (d.get("start") or "").strip()
     mode = (d.get("mode") or "Live").strip()
-    # When it was opened: the calendar date and the shift on the IST clock.
-    # The form's own Date and Shift were whatever the page showed - Shift
-    # opened on B at any hour - so they are not read.
+    # The production date and shift the loss belongs to. LIVE - happening
+    # now: the factory day (06:00 to 06:00) and shift on the IST clock when it
+    # is opened; the form's own Date and Shift are not read (they showed v4's
+    # B at any hour). It used to take the CALENDAR date, so a C shift stop at
+    # 01:00 was filed under the next day. RETRO - recorded after the fact: the
+    # date and shift it was FOR, and its start and end, from the form, checked
+    # (_retro_when); it is recorded closed. Mukesh, 6 Oct 2026.
     opened = clock.now()
-    date = opened.date().isoformat()
-    shift = clock.SHIFT_LETTER[clock.shift_of(opened.hour)]
+    mode = "Retro" if mode.lower().startswith("retro") else "Live"
+    end = minutes = None
+    if mode == "Retro":
+        date, shift, start, end, minutes, why = _retro_when(d, opened)
+        if why:
+            return jsonify({"ok": False, "why": why}), 400
+    else:
+        date = clock.shift_day(opened).isoformat()
+        shift = clock.SHIFT_LETTER[clock.shift_of(opened.hour)]
+        s_min = _hhmm(start)
+        if start and s_min is None:
+            return jsonify({"ok": False, "why": "Start time %r is not HH:MM." % start}), 400
+        if s_min is not None:
+            ago = (opened.hour * 60 + opened.minute - s_min) % (24 * 60)
+            if ago > LIVE_START_MAX_AGO_MIN:
+                return jsonify({"ok": False, "why":
+                    "%s is %d h %02d min ago - a Live event is one happening now. "
+                    "Record a stop that is over as Retro, with its date and shift."
+                    % (start, ago // 60, ago % 60)}), 400
     planned = bool(d.get("planned"))
     linked_raw = d.get("linked_event_id")
     try:
@@ -5417,7 +5498,16 @@ def api_loss_event_open():
                     "why": "An induced stop must name the primary event that caused it, or it double-counts."}), 400
             primary = store.one(cur,
                 "SELECT * FROM loss_event WHERE event_id=%s", (linked_event_id,))
-            if (not primary or primary["kind"] != "P" or
+            if mode == "Retro":
+                # recorded after the fact: the primary it starved behind is a
+                # real one of the SAME production date and shift, open or not
+                if (not primary or primary["kind"] != "P" or
+                        primary["status"] == "cancelled" or
+                        primary["event_date"] != date or primary["shift"] != shift):
+                    return jsonify({"ok": False, "why":
+                        "The primary event it was caused by must be one of %s shift "
+                        "on %s." % (shift, "-".join(reversed(date.split("-"))))}), 400
+            elif (not primary or primary["kind"] != "P" or
                     primary["end_time"] is not None or
                     primary["status"] == "cancelled"):   # Round 34
                 return jsonify({"ok": False,
@@ -5428,13 +5518,18 @@ def api_loss_event_open():
             "created_at": opened.isoformat(timespec="seconds"),
             "machine": machine, "reason": reason, "planned": planned,
             "kind": kind, "linked_event_id": linked_event_id,
-            "start_time": start, "end_time": None, "minutes": None,
-            "entry_mode": mode, "created_by": actor()
+            "start_time": start, "end_time": end, "minutes": minutes,
+            "entry_mode": mode, "created_by": actor(),
+            "closed_by": actor() if end else None
         })
         db.audit(cur, actor(), "loss.open", "loss_event", eid, {
-            "line": line, "machine": machine, "reason": reason, "kind": kind
+            "line": line, "machine": machine, "reason": reason, "kind": kind,
+            "mode": mode, "for": "%s %s" % (date, shift),
+            "start": start, "end": end, "minutes": minutes
         })
-    return jsonify({"ok": True, "event_id": eid, "id": _loss_display_id(eid)})
+    return jsonify({"ok": True, "event_id": eid, "id": _loss_display_id(eid),
+                    "event_date": date, "shift": shift, "mode": mode,
+                    "end": end, "minutes": minutes})
 
 
 @app.route("/api/loss_event/<int:event_id>/close", methods=["POST"])
@@ -5648,10 +5743,19 @@ def api_prod_dashboard():
         # Downtime opened in the period - closed events only; an open one
         # has no end yet, and Loss of Production counts it once closed.
         # Round 34: a cancelled event never counted (voided, not a real stop).
+        # on the production date and shift each loss belongs to (event_date,
+        # shift) - a Retro event typed next morning counts on its own shift
+        lw, la = ["end_time IS NOT NULL", "status<>'cancelled'"], []
+        if frm:
+            lw.append("event_date >= %s"); la.append(frm)
+        if to:
+            lw.append("event_date <= %s"); la.append(to)
+        if shift_no:
+            lw.append("shift = %s"); la.append(clock.SHIFT_LETTER[shift_no])
         loss_rows = store.rows(cur,
-            "SELECT created_at, line, machine, reason, kind, planned, minutes "
-            "FROM loss_event WHERE end_time IS NOT NULL AND status<>'cancelled' "
-            "AND " + inp("created_at") + " ORDER BY event_id")
+            "SELECT event_date, shift, line, machine, reason, kind, planned, minutes "
+            "FROM loss_event WHERE " + " AND ".join(lw) + " ORDER BY event_id",
+            tuple(la))
         # still open, whatever the period - "Needs a decision"
         open_loss = store.one(cur,
             "SELECT COUNT(*) AS n, MIN(created_at) AS oldest "
@@ -5704,9 +5808,8 @@ def api_prod_dashboard():
 
     loss = []
     for e in loss_rows:
-        at = datetime.datetime.fromisoformat(e["created_at"])
-        loss.append({"date": clock.shift_day(at).isoformat(),
-                     "shift": clock.shift_of(at.hour),
+        loss.append({"date": e["event_date"],
+                     "shift": clock.shift_number(e["shift"]),
                      "line": (e["line"] or "").strip()[:1].upper(),
                      "machine": e["machine"], "reason": e["reason"],
                      "kind": e["kind"], "planned": bool(e["planned"]),

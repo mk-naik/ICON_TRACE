@@ -380,21 +380,27 @@ def t_fqc_recent_shift_letter():
 # --------------------------------------------------------------------------
 
 @test("a downtime event is dated and shifted when it is opened, whatever "
-      "the form sends, and one that runs past midnight has its real length")
+      "the form sends - on the FACTORY day, so 01:00 is C shift of the day "
+      "before - and one that runs past midnight has its real length")
 def t_loss_stamped_and_crosses_midnight():
     c = setup()
-    before = clock.now()
-    r = c.post("/api/loss_event", json={"line": "A", "mach": "Laminator-1",
-        "reason": "LOP-POWER", "start": "23:50", "date": "2026-08-21", "shift": "B"})
-    assert r.get_json()["ok"], r.get_json()
-    eid = r.get_json()["event_id"]
-    with store.conn() as (cx, cur):
-        e = store.one(cur, "SELECT event_date, shift FROM loss_event")
-    assert e["event_date"] == before.date().isoformat(), e
-    assert e["shift"] == clock.SHIFT_LETTER[clock.shift_of(before.hour)], e
     real_now = clock.now
-    clock.now = lambda: datetime.datetime(2026, 9, 26, 0, 30, 0)
     try:
+        clock.now = lambda: datetime.datetime(2026, 9, 25, 23, 55, 0)
+        r = c.post("/api/loss_event", json={"line": "A", "mach": "Laminator-1",
+            "reason": "LOP-POWER", "start": "23:50", "date": "2026-08-21", "shift": "B"})
+        assert r.get_json()["ok"], r.get_json()
+        eid = r.get_json()["event_id"]
+        clock.now = lambda: datetime.datetime(2026, 9, 26, 1, 0, 0)
+        r2 = c.post("/api/loss_event", json={"line": "B", "mach": "Laminator-2",
+            "reason": "LOP-POWER", "start": "00:55", "date": "2026-08-21", "shift": "A"})
+        assert r2.get_json()["ok"], r2.get_json()
+        with store.conn() as (cx, cur):
+            e = [dict(x) for x in store.rows(cur,
+                 "SELECT event_date, shift FROM loss_event ORDER BY event_id")]
+        assert e == [{"event_date": "2026-09-25", "shift": "C"},
+                     {"event_date": "2026-09-25", "shift": "C"}], e
+        clock.now = lambda: datetime.datetime(2026, 9, 26, 0, 30, 0)
         r = c.post("/api/loss_event/%d/close" % eid)
     finally:
         clock.now = real_now

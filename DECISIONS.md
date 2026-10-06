@@ -289,10 +289,20 @@ no one signs twice. [enforcement unverified]
   The Production Entry list is ordered, filtered (FROM / TO = production date)
   and shown by the first; "Recorded" beside it gives the typing time and the
   shift on the clock then. [built]
+- **A downtime (LOP) event belongs to a production date and shift** (Mukesh, 6
+  Oct: "This and LOP datetime"). Live: the factory day and shift on the clock when
+  it is opened (it used to take the CALENDAR date - a C shift stop at 01:00 read the
+  next day); its start must be within the last 12 hours, else it is Retro. Retro:
+  the production date and shift it is FOR, and its start and end, typed - both
+  inside that shift (C runs 22:00-06:00), over already, minutes derived; recorded
+  closed. A Retro induced stop names a primary of the same date and shift. Lists,
+  filters and the Production Dashboard count on that date and shift; when it was
+  typed is shown beside it. Existing rows were moved to the factory day they
+  already counted on (store `_loss_on_factory_day`, once). [built]
 - **Every filter dropdown is dynamic** (Mukesh, 6 Oct): it offers the values the
   data holds under every OTHER filter on the screen - its own left out, so a pick
   does not hide its siblings - and never drops the value already picked.
-  [built on: Production Entry; the rest is listed in BACKLOG's 6 Oct to-do]
+  [built on: Production Entry, Loss & Breakdown; the rest is listed in BACKLOG's 6 Oct to-do]
 - Serial format v1/v2 and the hex month (Oct=A, Nov=B, Dec=C): see
   PROJECT_OVERVIEW.md, "Facts that look like bugs".
 
@@ -449,6 +459,4 @@ The Drafts screen is still v4 sample data.
 - How the 16-item FQC Matrix relates to the 44-item defect list.
 - Whether the Rounds 23–29 access-control system is exactly as intended.
 - Cancel permission scope: Admin and Super Admin is assumed.
-- **Loss of Production (LOP) dates** - not reviewed, skipped on purpose (priority is
-  indent to dispatch). A Retro downtime has no date field and counts on the day it was
-  typed. See BACKLOG 4 Oct, "LOP dating".
+- ~~Loss of Production (LOP) dates~~ - decided and built 6 Oct, see section 8.

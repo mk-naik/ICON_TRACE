@@ -14952,7 +14952,81 @@ window.gpSetKind = function(k) {
     if (loS) loS.value = _istShift();
 
     window.loWireFilters();
+    window.loWireRetro();
+    window.loHonest();
     window.loToggleForm(false);
+  };
+
+  /* v4 leftovers on this screen that read as data. The in-process scrap
+     table drew five invented rows (Layup 6, Stringer 11 ...) and "Shift so
+     far" counted their 31 - nothing records scrap yet, so it says that. The
+     setup bar's "Shift incharge" offered v4's demo names and nothing reads
+     it - an event records who typed it, not an incharge. */
+  window.loHonest = function () {
+    if (typeof SCRAP !== 'undefined') SCRAP.length = 0;
+    var view = document.getElementById('v-loss');
+    var bar = view && view.querySelector('.card .grid');
+    if (bar) {
+      Array.prototype.forEach.call(bar.querySelectorAll('.fld'), function (f) {
+        var lab = f.querySelector('label'), sel = f.querySelector('select');
+        if (!lab || !sel || !/incharge/i.test(lab.textContent)) return;
+        sel.innerHTML = '<option>— not recorded with events —</option>';
+        sel.disabled = true;
+        sel.title = 'Not built yet - a downtime event records who entered it, not a shift incharge.';
+      });
+    }
+  };
+
+  /* Retro - recorded after the fact - needs what Live takes from the clock:
+     the production date and shift the loss belongs to, and when it ended.
+     Shown only for Retro; the server checks them (inside that shift, over
+     already) and records the event closed, minutes from the two times. */
+  window.loWireRetro = function () {
+    var mode = document.getElementById('evMode');
+    if (!mode || document.getElementById('evRetro')) return;
+    var fld = mode.closest('.fld');
+    var box = document.createElement('div');
+    box.id = 'evRetro';
+    box.style.display = 'none';
+    box.innerHTML =
+      '<div class="fld req"><label>Production date</label>' +
+        '<input type="date" id="evDate"></div>' +
+      '<div class="fld req"><label>Shift</label><select id="evShift">' +
+        '<option>A</option><option>B</option><option>C</option></select>' +
+        '<div class="hint">the shift the machine was down in</div></div>' +
+      '<div class="fld req"><label>End time</label><input type="time" id="evEnd">' +
+        '<div class="hint">when it restarted - the minutes are derived from start and end</div></div>';
+    fld.parentNode.insertBefore(box, fld.nextSibling);
+    var sync = function () {
+      var retro = /^Retro/.test(mode.value);
+      box.style.display = retro ? '' : 'none';
+      var btn = document.querySelector('#v-loss .rail.o2 .rail-acts .btn-danger');
+      if (btn) btn.textContent = retro ? 'Record event' : 'Open event';
+      if (typeof evMachines === 'function') evMachines();
+    };
+    mode.addEventListener('change', sync);
+    ['evDate', 'evShift'].forEach(function (id) {
+      document.getElementById(id).addEventListener('change', function () {
+        if (typeof evMachines === 'function') evMachines();
+      });
+    });
+    window.loRetroSync = sync;
+  };
+
+  /* Fresh defaults each time the form is shown: Live starts now (v4 shipped
+     14:05 - a stop opened at 09:00 under it ran 19 hours), Retro defaults to
+     the shift on now's factory day. */
+  window.loFormDefaults = function () {
+    var p = _istParts();
+    var st = document.getElementById('evStart');
+    if (st) st.value = _pad2(p.h) + ':' + _pad2(p.mi);
+    var dt = document.getElementById('evDate');
+    if (dt) { dt.value = _shiftDay(); dt.max = _shiftDay(); }
+    var sh = document.getElementById('evShift');
+    if (sh) sh.value = _istShift();
+    var en = document.getElementById('evEnd');
+    if (en) en.value = '';
+    if (window.loRetroSync) window.loRetroSync();
   };
 
   /* A real filter bar for the landing tables - date RANGE (not just a
@@ -14979,8 +15053,10 @@ window.gpSetKind = function(k) {
     bar.style.marginBottom = '16px';
     bar.innerHTML =
       '<div class="grid" style="grid-template-columns: 1fr 1fr 1fr auto; align-items: end; gap: 12px;">' +
-      '<div class="fld"><label>DATE FROM</label><input type="date" id="loFilterFrom" value="' + today + '"></div>' +
-      '<div class="fld"><label>DATE TO</label><input type="date" id="loFilterTo" value="' + today + '"></div>' +
+      '<div class="fld"><label title="The production date the loss belongs to (06:00 to 06:00)">' +
+        'FROM (production date)</label><input type="date" id="loFilterFrom" value="' + today + '"></div>' +
+      '<div class="fld"><label title="The production date the loss belongs to (06:00 to 06:00)">' +
+        'TO (production date)</label><input type="date" id="loFilterTo" value="' + today + '"></div>' +
       '<div class="fld"><label>SHIFT</label><select id="loFilterShift"><option value="">All shifts</option>' +
       '<option>A</option><option>B</option><option>C</option></select></div>' +
       '<div style="display:flex;gap:8px;padding-bottom:2px">' +
@@ -15038,6 +15114,7 @@ window.gpSetKind = function(k) {
       newBtn.textContent = show ? 'Back to events' : 'Record downtime event';
       newBtn.className = show ? 'btn btn-ghost' : 'btn btn-primary';
     }
+    if (show && window.loFormDefaults) window.loFormDefaults();
     // Leaving the form (or just having landed on the list) is exactly
     // when "recent" needs to actually be current.
     if (!show) window.loFetchAndRender();
@@ -15058,19 +15135,9 @@ window.gpSetKind = function(k) {
       .then(function (d) {
         var rows = d.events || [];
         
-        var shiftSel = document.getElementById('loFilterShift');
-        if (shiftSel) {
-          var current = shiftSel.value, seen = {}, names = [];
-          rows.forEach(function(r) {
-            if (r.shift && !seen[r.shift]) { seen[r.shift] = true; names.push(r.shift); }
-          });
-          if (current && !seen[current]) names.push(current);
-          names.sort();
-          shiftSel.innerHTML = '<option value="">All shifts</option>' +
-            names.map(function(n) {
-              return '<option' + (n === current ? ' selected' : '') + '>' + fqcEsc(n) + '</option>';
-            }).join('');
-        }
+        /* dynamic: the shifts the events hold under the other filters */
+        _dashCascade('loFilterShift', (d.facets || {}).shift || [], 'All shifts',
+                     shiftEl ? shiftEl.value : '', { facet: true });
 
         if (typeof EVENTS === 'undefined') return;
         EVENTS.length = 0;
@@ -15120,18 +15187,35 @@ window.gpSetKind = function(k) {
         return '<option>' + m + '</option>';
       }).join('');
     }
-    var open = (typeof EVENTS !== 'undefined' ? EVENTS : []).filter(function (e) {
-      return !e.end && e.kind === 'P';
-    });
     var linkEl = document.getElementById('evLink');
-    if (linkEl) {
-      linkEl.innerHTML = open.length
-        ? open.map(function (e) {
+    var fill = function (list, none) {
+      if (!linkEl) return;
+      linkEl.innerHTML = list.length
+        ? list.map(function (e) {
             return '<option value="' + e.event_id + '">' + fqcEsc(e.id) +
               ' — ' + fqcEsc(e.mach) + '</option>';
           }).join('')
-        : '<option value="">— no open primary event —</option>';
+        : '<option value="">' + none + '</option>';
+    };
+    var modeEl = document.getElementById('evMode');
+    if (modeEl && /^Retro/.test(modeEl.value)) {
+      /* recorded after the fact: the primaries of THAT date and shift, open
+         or closed - the server accepts no other */
+      var day = (document.getElementById('evDate') || {}).value || '';
+      var sh = (document.getElementById('evShift') || {}).value || '';
+      fill([], '— loading —');
+      fetch('/api/loss_events?date=' + encodeURIComponent(day) + '&shift=' +
+            encodeURIComponent(sh), { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          fill((d.events || []).filter(function (e) { return e.kind === 'P'; }),
+               '— no primary event in that shift —');
+        })['catch'](function () { fill([], '— could not load —'); });
+      return;
     }
+    fill((typeof EVENTS !== 'undefined' ? EVENTS : []).filter(function (e) {
+      return !e.end && e.kind === 'P';
+    }), '— no open primary event —');
   };
 
   window.openEvent = function () {
@@ -15152,6 +15236,7 @@ window.gpSetKind = function(k) {
     var modeEl = document.getElementById('evMode');
     var shiftEl = document.getElementById('loShift');
 
+    var retro = !!(modeEl && /^Retro/.test(modeEl.value));
     var payload = {
       line: lineEl ? lineEl.value : '',
       mach: machEl ? machEl.value : '',
@@ -15160,12 +15245,20 @@ window.gpSetKind = function(k) {
       kind: kind,
       linked_event_id: linkedEventId,
       start: startEl ? startEl.value : '',
-      mode: modeEl ? modeEl.value.split(' — ')[0] : 'Live',
-      date: _localDate(),
-      shift: shiftEl ? shiftEl.value : ''
+      mode: retro ? 'Retro' : 'Live',
+      /* Live: the server takes the date and shift from its clock. Retro: the
+         production date and shift it belongs to, and when it ended. */
+      date: retro ? (document.getElementById('evDate') || {}).value || '' : _shiftDay(),
+      shift: retro ? (document.getElementById('evShift') || {}).value || ''
+                   : (shiftEl ? shiftEl.value : ''),
+      end: retro ? (document.getElementById('evEnd') || {}).value || '' : ''
     };
     if (!payload.line || !payload.mach || !payload.reason || !payload.start) {
       toast('Line, machine, reason and start time are all required.');
+      return;
+    }
+    if (retro && (!payload.date || !payload.shift || !payload.end)) {
+      toast('A Retro event needs its production date, shift and end time.');
       return;
     }
 
@@ -15175,14 +15268,91 @@ window.gpSetKind = function(k) {
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (!d.ok) { toast(d.why || 'Could not open the event.'); return; }
-        toast('Event ' + d.id + ' opened and left running. Close it when the machine restarts ' +
-              '— the duration is derived from the two timestamps, never typed.');
+        if (d.mode === 'Retro') {
+          toast('Event ' + d.id + ' recorded for ' + fmtDay(d.event_date) + ' shift ' +
+                d.shift + ' - ' + d.minutes + ' minutes, from ' + payload.start +
+                ' to ' + d.end + '.');
+          var lf = document.getElementById('loFilterFrom'), lt = document.getElementById('loFilterTo');
+          /* land on the day it was recorded for, so it is in the list */
+          if (lf && lt && (d.event_date < lf.value || d.event_date > lt.value)) {
+            lf.value = d.event_date < lf.value ? d.event_date : lf.value;
+            lt.value = d.event_date > lt.value ? d.event_date : lt.value;
+          }
+        } else {
+          toast('Event ' + d.id + ' opened and left running. Close it when the machine restarts ' +
+                '— the duration is derived from the two timestamps, never typed.');
+        }
         // Back to the landing list, the same way peSave() returns to
         // Production Entry's - loToggleForm(false) refreshes it too.
         window.loToggleForm(false);
       })
       .catch(function () { toast('The server did not answer.'); });
   };
+
+  /* v4's renderLoss() draws Open and Closed events from EVENTS (open rows in
+     EVENTS order, then closed ones). Each row gains the production date and
+     shift the loss belongs to, with when it was typed on hover, and the scrap
+     table says it is not recorded rather than standing empty. Wrapped, not
+     edited: v4 calls renderLoss() by name from its own setup fields. */
+  function loDecorate() {
+    var ev = typeof EVENTS !== 'undefined' ? EVENTS : [];
+    [['openRows', ev.filter(function (e) { return !e.end; })],
+     ['closedRows', ev.filter(function (e) { return e.end; })]].forEach(function (t) {
+      var body = document.getElementById(t[0]);
+      if (!body) return;
+      var head = body.parentNode.querySelector('thead tr');
+      if (head && !head.querySelector('[data-lo-for]')) {
+        var th = document.createElement('th');
+        th.setAttribute('data-lo-for', '1');
+        th.title = 'The production date and shift the loss belongs to';
+        th.textContent = 'Production';
+        head.insertBefore(th, head.cells[1] || null);
+      }
+      /* v4's "Nothing is down right now" row is a message, not an event -
+         the table's row count must not count it */
+      Array.prototype.forEach.call(body.querySelectorAll('.empty-state'), function (m) {
+        var row = m.closest('tr');
+        if (row) row.setAttribute('data-empty', '1');
+      });
+      var h3 = body.closest('.card') && body.closest('.card').querySelector('.card-h h3');
+      if (h3 && t[0] === 'closedRows' && /this shift/i.test(h3.textContent)) {
+        h3.textContent = 'Closed events in these dates';
+      }
+      Array.prototype.forEach.call(body.rows, function (tr, i) {
+        var e = t[1][i];
+        if (!e || !e.event_date || tr.cells.length < 2) {
+          if (tr.cells[0] && tr.cells[0].colSpan > 1) tr.cells[0].colSpan += 1;
+          return;
+        }
+        var td = tr.insertCell(1);
+        td.className = 'mono';
+        td.innerHTML = fqcEsc(fmtDay(e.event_date)) + ' <span class="s' + fqcEsc(e.shift) +
+          '">' + fqcEsc(e.shift) + '</span>';
+        td.title = 'Recorded ' + (e.created_at ? fmtIST(e.created_at) : '—') +
+          (e.recorded_shift ? ' (' + e.recorded_shift + ')' : '') +
+          (e.created_by ? ' by ' + e.created_by : '');
+      });
+    });
+    var scrap = document.getElementById('scrapRows');
+    if (scrap && !scrap.rows.length) {
+      scrap.innerHTML = '<tr data-empty><td colspan="5"><div class="empty-state" ' +
+        'style="padding:16px">Not built yet - in-process scrap is not recorded in ' +
+        'ICON TRACE, so there is nothing to show.</div></td></tr>';
+    }
+    var sumScrap = document.getElementById('sumScrap');
+    if (sumScrap && typeof SCRAP !== 'undefined' && !SCRAP.length) {
+      sumScrap.textContent = '—';
+      sumScrap.title = 'Not recorded yet';
+    }
+  }
+  if (typeof window.renderLoss === 'function' && !window.renderLoss.__lo) {
+    var _v4RenderLoss = window.renderLoss;
+    window.renderLoss = function () {
+      _v4RenderLoss.apply(this, arguments);
+      loDecorate();
+    };
+    window.renderLoss.__lo = true;
+  }
 
   window.closeEvent = function (i) {
     var row = (typeof EVENTS !== 'undefined' ? EVENTS : [])[i];

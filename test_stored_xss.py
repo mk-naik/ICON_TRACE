@@ -123,7 +123,7 @@ def seed():
     b2 = ok(c.post("/api/box/open", json={"grade": "A", "model": MODEL, "capacity": 2}), "box2")
     ok(c.post("/api/box/%d/abandon" % b2["box_id"], json={"reason": X("box.abandon")}), "abandon")
     ok(c.post("/api/loss_event", json={"line": "A", "mach": X("loss.mach"),
-       "reason": "LOP-MACH", "kind": "P", "start": "09:00", "mode": "Live",
+       "reason": "LOP-MACH", "kind": "P", "start": clock.now().strftime("%H:%M"), "mode": "Live",
        "date": today, "shift": "A"}), "loss")
     # the shift RUNNING now, on the factory day (06:00-06:00): a shift that has
     # not started is refused, and "A of today" is exactly that between 00:00 and 06:00

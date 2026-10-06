@@ -513,6 +513,29 @@ def _stamps_from_created(cx):
     cx.commit()
 
 
+def _loss_on_factory_day(cx):
+    """Once: a downtime event's event_date is the FACTORY day (06:00 to
+    06:00) of the shift it belongs to - what every list and the Production
+    Dashboard already counted it on, through its created_at. Opening an event
+    stamped the CALENDAR date, so a C shift stop at 01:00 read the next day
+    the moment anything read event_date itself (6 Oct 2026: the lists and the
+    dashboard now count on event_date, so a Retro event can name its own
+    date). Every existing row - Live, and Retro typed before Retro had a date -
+    is re-stamped from its created_at; the shift already was."""
+    def cols(t):
+        return {r[1] for r in cx.execute("PRAGMA table_info(%s)" % t)}
+    if "k" not in cols("app_config") or not cols("loss_event"):
+        return
+    if cx.execute("SELECT 1 FROM app_config "
+                  "WHERE k='loss.event_date_factory_day'").fetchone():
+        return
+    cx.execute("UPDATE loss_event SET event_date = date(created_at, '-6 hours') "
+               "WHERE created_at IS NOT NULL")
+    cx.execute("INSERT OR REPLACE INTO app_config (k, v) "
+               "VALUES ('loss.event_date_factory_day', '1')")
+    cx.commit()
+
+
 def _seed_defects(cx):
     """Fill defect_master and defect_folder_map from icon_defects.py, once.
 
@@ -560,6 +583,7 @@ def ensure():
                 _migrate(cx, text)
                 _ist_timestamps(cx)
                 _stamps_from_created(cx)
+                _loss_on_factory_day(cx)
                 _seed_defects(cx)
         finally:
             cx.close()

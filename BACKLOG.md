@@ -6202,7 +6202,9 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
 
 ## 4 Oct 2026 - LOP dating: NOT reviewed, skipped on purpose
 
-- [ ] **Loss of Production (LOP) dates need a proper pass before LOP is used for real.**
+- [x] **Loss of Production (LOP) dates need a proper pass before LOP is used for real.**
+  Done 6 Oct 2026 at Mukesh's request - see "LOP: a loss belongs to a production date
+  and shift".
   Mukesh's priority is indent to dispatch; the plant runs the same without LOP, so
   LOP was deliberately left alone. Do not read the green tests as "dates are right".
 - **What is known** (code read, nothing changed): the Production Dashboard and
@@ -6570,8 +6572,9 @@ Kept up to date through the night; each item is ticked with its commit.
 - [x] Production Entry list: show the production date and shift the entry is FOR
       ("for 11-09-2026 B, recorded 12-09-2026 01:12 (C)"), sort and filter by it -
       see the entry below.
-- [ ] LOP: the same - the date and shift a loss belongs to (a Retro event has no
-      date field today, DECISIONS 11 / BACKLOG "LOP dating"), shown and counted.
+- [x] LOP: the same - the date and shift a loss belongs to (a Retro event has no
+      date field today, DECISIONS 11 / BACKLOG "LOP dating"), shown and counted -
+      see the entry below.
 - [ ] Search & Trace: the production incharge(s) of a serial.
 - [x] Admin: the dispatch user (`khedram.yadav`, created as Packing Operator with
       station Dispatch-01) has no permission option - the menu was clipped, see
@@ -6593,6 +6596,11 @@ Kept up to date through the night; each item is ticked with its commit.
 - [ ] BACKLOG: open items; items logged fixed that have since regressed.
 
 **Found on the way**
+- [x] Loss & Breakdown: the in-process scrap table drew v4's five invented rows
+      (and "Shift so far" counted their 31); the setup bar's Shift incharge was
+      v4's demo list; Live's start time defaulted to v4's 14:05 - fixed with LOP.
+- [x] `test_dashboards_ist.py` asserted a loss's CALENDAR date, at whatever time
+      the suite ran; `test_loss.py` / `test_stored_xss.py` used fixed start times.
 - [ ] Every screen reads "no filter" as a value starting "All"/"Both"
       (`renderMgmt` g() and others) - a customer named "Allied ..." is ignored.
 - [ ] Production Dashboard's Customer / Model lists are the whole master, every
@@ -6644,3 +6652,36 @@ Kept up to date through the night; each item is ticked with its commit.
 - **Tests:** `test_production.py` +1 (order, recorded day/shift of a C shift typed at
   01:12 and a B shift typed next morning, facets with a customer / a shift / a period
   picked) - 13/13. Seen in Chromium on a scratch DB.
+
+## 6 Oct 2026 - LOP: a loss belongs to a production date and shift
+
+- **Asked:** "... show for which production date shift it was entered ... This and LOP
+  datetime." (the Production Entry request, for Loss of Production too).
+- **What was wrong:** (1) a Live event stamped `event_date` with the CALENDAR date - a
+  C shift stop at 01:00 on the 18th was dated the 18th while its shift said C (of the
+  17th); the list hid this only because it filtered on `created_at`'s factory day;
+  (2) a Retro event ("recorded after the fact") had no date, shift or end - it was
+  filed under the moment it was typed and left OPEN, to be closed by a later click
+  that stamped "now" as its end, so its minutes were the time until somebody
+  clicked; (3) Live's start defaulted to v4's 14:05 - opened at 09:00 it ran 19 h;
+  (4) the scrap table showed v4's invented rows and the incharge field v4's demo
+  names.
+- **Change:** Live - factory day + shift of the moment it is opened; start must be
+  within 12 h (else Retro); start defaults to now. Retro - production date, shift,
+  start and end on the form (shown only for Retro); the server checks the date as a
+  production entry's (`_prod_when`), both times inside that shift (C: 22:00-06:00
+  across midnight), the end not after the shift's end nor in the future; recorded
+  closed, minutes from the two times. A Retro induced stop links to a primary of the
+  same date + shift (its Caused-by list is fetched for that shift). `/api/loss_events`
+  and the Production Dashboard count on `event_date` + `shift`; the list returns
+  `created_at`, `recorded_shift`, `created_by` and a shift facet. On screen both
+  event tables gain a Production column (date + shift, "Recorded ... (C) by ..." on
+  hover); FROM / TO read "(production date)"; Shift is a facet; scrap says "Not built
+  yet"; the incharge field says it is not recorded. Existing rows: `event_date`
+  moved once to the factory day of `created_at` (what they already counted on).
+- **Tests:** `test_loss.py` 17 (+7: factory day at 01:30, Live 12 h guard, Retro
+  date/shift/minutes and its list, C across midnight, seven Retro refusals, Retro
+  induced link, dashboard + facet; start times now follow the clock),
+  `test_dashboards_ist.py` (pinned clock, factory day), `test_stored_xss.py`.
+  Seen in Chromium: a Retro B shift event of yesterday typed in C shift lands on
+  05-10-2026 B with 40 minutes; the open/closed tables show the Production column.

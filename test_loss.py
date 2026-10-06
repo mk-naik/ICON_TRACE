@@ -15,12 +15,13 @@ THE RULE THIS FILE DEFENDS
 Each test names the rule it defends, so a failure says which decision broke.
 """
 
-import os, shutil, sys, tempfile, traceback
+import datetime, os, shutil, sys, tempfile, traceback
 
 TMP = tempfile.mkdtemp(prefix="icontrace_loss_")
 os.environ["ICON_DB_FILE"] = os.path.join(TMP, "test.db")
 
 import db                                                    # noqa: E402
+import icon_clock as clock                                   # noqa: E402
 import store                                                 # noqa: E402
 import app as APP                                            # noqa: E402
 import auth_test_helper as AUTH
@@ -42,13 +43,20 @@ def setup():
     return c
 
 
+def minutes_ago(n):
+    """HH:MM on the IST clock n minutes ago - a Live event starts about now
+    (one whose start is more than 12 hours back is refused)."""
+    return (clock.now() - datetime.timedelta(minutes=n)).strftime("%H:%M")
+
+
 def open_event(c, line="A", mach="Laminator-2", reason="LOP-MACH",
-              kind="P", start="14:05", mode="Live", linked_event_id=None,
-              date="2026-09-18", shift="B"):
+              kind="P", start=None, mode="Live", linked_event_id=None,
+              date="2026-09-18", shift="B", end=None):
+    start = start or minutes_ago(5)
     return c.post("/api/loss_event", json={
         "line": line, "mach": mach, "reason": reason, "kind": kind,
         "start": start, "mode": mode, "date": date, "shift": shift,
-        "linked_event_id": linked_event_id})
+        "linked_event_id": linked_event_id, "end": end})
 
 
 def opened_at(r, at):
@@ -59,9 +67,11 @@ def opened_at(r, at):
     eid = r.get_json()["event_id"]
     h = int(at[11:13])
     letter = "A" if 6 <= h < 14 else "B" if 14 <= h < 22 else "C"
+    # the factory day: 01:30 on the 18th is C shift of the 17th
+    day = (datetime.datetime.fromisoformat(at) - datetime.timedelta(hours=6)).date().isoformat()
     with store.conn() as (cx, cur):
         cur.execute("UPDATE loss_event SET created_at=%s, event_date=%s, shift=%s "
-                    "WHERE event_id=%s", (at, at[:10], letter, eid))
+                    "WHERE event_id=%s", (at, day, letter, eid))
     return r
 
 
@@ -90,7 +100,7 @@ def t_open_primary():
      "timestamps - never accepts a typed duration")
 def t_close_derives_minutes():
     c = setup()
-    eid = open_event(c, start="09:20").get_json()["event_id"]
+    eid = open_event(c, start=minutes_ago(20)).get_json()["event_id"]
     r = c.post("/api/loss_event/%d/close" % eid, json={})
     assert r.status_code == 200, r.get_json()
     d = r.get_json()
@@ -217,6 +227,133 @@ def t_missing_fields_refused():
     r = c.post("/api/loss_event", json={"reason": "LOP-MACH", "start": "09:00"})
     assert r.status_code == 400, r.get_json()
     assert event_count() == 0
+
+
+import contextlib
+
+
+@contextlib.contextmanager
+def at_clock(iso):
+    """The IST clock reads `iso` for the length of the block."""
+    real = clock.now
+    clock.now = lambda: datetime.datetime.fromisoformat(iso)
+    try:
+        yield
+    finally:
+        clock.now = real
+
+
+@test("a Live stop opened at 01:30 belongs to C shift of the DAY BEFORE - "
+      "the factory day, not the calendar date (it used to be filed next day)")
+def t_live_is_on_the_factory_day():
+    c = setup()
+    with at_clock("2026-09-18T01:30:00"):
+        r = open_event(c, start="01:20")
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()
+    assert (d["event_date"], d["shift"], d["mode"]) == ("2026-09-17", "C", "Live"), d
+    on17 = c.get("/api/loss_events?date=2026-09-17&shift=C").get_json()["events"]
+    assert [e["event_id"] for e in on17] == [d["event_id"]], on17
+    assert on17[0]["recorded_shift"] == "C" and on17[0]["created_at"].startswith("2026-09-18")
+
+
+@test("a Live start more than 12 hours back is refused - that stop is over; "
+      "record it as Retro with its date and shift")
+def t_live_start_long_ago_refused():
+    c = setup()
+    with at_clock("2026-09-18T09:00:00"):
+        r = open_event(c, start="14:05")        # v4's own default, 19 h back
+    assert r.status_code == 400, r.get_json()
+    assert "Retro" in r.get_json()["why"], r.get_json()
+    assert event_count() == 0
+
+
+@test("a Retro event is recorded FOR the production date and shift it names, "
+      "closed at once, minutes from its two times; it is listed on that day "
+      "and shift, with the time it was typed beside it (Mukesh, 6 Oct)")
+def t_retro_for_its_own_shift():
+    c = setup()
+    with at_clock("2026-09-18T09:00:00"):
+        r = open_event(c, mode="Retro", date="2026-09-17", shift="B",
+                       start="15:00", end="15:35")
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()
+    assert (d["event_date"], d["shift"], d["end"], d["minutes"]) == \
+        ("2026-09-17", "B", "15:35", 35), d
+    rows = c.get("/api/loss_events?date=2026-09-17&shift=B").get_json()["events"]
+    assert len(rows) == 1 and rows[0]["mode"] == "Retro" and rows[0]["minutes"] == 35
+    assert rows[0]["created_at"].startswith("2026-09-18T09:00"), rows[0]
+    assert rows[0]["recorded_shift"] == "A"
+    assert c.get("/api/loss_events?date=2026-09-18").get_json()["events"] == []
+    # closing it again is refused - it is already closed
+    assert c.post("/api/loss_event/%d/close" % d["event_id"], json={}).status_code == 400
+
+
+@test("a Retro C shift stop across midnight: 23:40 to 00:20 is 40 minutes of "
+      "C shift on the day it started")
+def t_retro_c_shift_crosses_midnight():
+    c = setup()
+    with at_clock("2026-09-18T09:00:00"):
+        r = open_event(c, mode="Retro", date="2026-09-17", shift="C",
+                       start="23:40", end="00:20")
+    assert r.status_code == 200, r.get_json()
+    assert (r.get_json()["event_date"], r.get_json()["minutes"]) == ("2026-09-17", 40)
+
+
+@test("a Retro event that cannot be true is refused, naming why, and nothing "
+      "is written: outside its shift, ending before it starts, running past "
+      "the shift's end, not over yet, or missing its end")
+def t_retro_refusals():
+    c = setup()
+    cases = (
+        (dict(date="2026-09-17", shift="B", start="09:00", end="09:30"), "outside B shift"),
+        (dict(date="2026-09-17", shift="B", start="15:30", end="15:00"), "not after"),
+        (dict(date="2026-09-17", shift="B", start="21:30", end="22:30"), "record the rest under the next shift"),
+        (dict(date="2026-09-18", shift="A", start="08:00", end="09:30"), "has not come yet"),
+        (dict(date="2026-09-18", shift="B", start="14:30", end="15:00"), "has not started"),
+        (dict(date="2026-09-17", shift="B", start="15:00", end=""), "stopped and the time it restarted"),
+        (dict(date="", shift="B", start="15:00", end="15:30"), "Pick the date"),
+    )
+    with at_clock("2026-09-18T09:00:00"):
+        for kw, expect in cases:
+            r = open_event(c, mode="Retro", **kw)
+            assert r.status_code == 400, (kw, r.get_json())
+            assert expect in r.get_json()["why"], (kw, r.get_json())
+    assert event_count() == 0
+
+
+@test("a Retro induced stop names a primary of the SAME date and shift - open "
+      "or closed - and is refused against any other")
+def t_retro_induced_link():
+    c = setup()
+    with at_clock("2026-09-18T09:00:00"):
+        p = open_event(c, mode="Retro", date="2026-09-17", shift="B",
+                       start="15:00", end="15:40").get_json()
+        other = open_event(c, mode="Retro", date="2026-09-17", shift="A",
+                           start="07:00", end="07:10").get_json()
+        ok = open_event(c, mode="Retro", kind="I", linked_event_id=p["event_id"],
+                        mach="Framing machine-1", date="2026-09-17", shift="B",
+                        start="15:05", end="15:30")
+        bad = open_event(c, mode="Retro", kind="I", linked_event_id=other["event_id"],
+                         mach="Framing machine-1", date="2026-09-17", shift="B",
+                         start="15:05", end="15:30")
+    assert ok.status_code == 200, ok.get_json()
+    assert bad.status_code == 400 and "B shift" in bad.get_json()["why"], bad.get_json()
+
+
+@test("the Production Dashboard counts a loss on its own production date and "
+      "shift, and the list's Shift dropdown offers what the other filters leave")
+def t_dashboard_and_facets():
+    c = setup()
+    with at_clock("2026-09-18T09:00:00"):
+        open_event(c, mode="Retro", date="2026-09-17", shift="B",
+                   start="15:00", end="15:35", mach="Laminator-2")
+    d = c.get("/api/prod/dashboard?from=2026-09-17&to=2026-09-17").get_json()
+    assert [(x["date"], x["shift"], x["minutes"]) for x in d["loss"]] == \
+        [("2026-09-17", 2, 35)], d["loss"]
+    assert c.get("/api/prod/dashboard?from=2026-09-18&to=2026-09-18").get_json()["loss"] == []
+    f = c.get("/api/loss_events?date=2026-09-17&shift=A").get_json()
+    assert f["events"] == [] and f["facets"]["shift"] == ["B"], f
 
 
 if __name__ == "__main__":
