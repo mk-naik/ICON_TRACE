@@ -6524,3 +6524,33 @@ testing server on :8090. Each line: what was wrong, cause, change, test.
   `test_barcode_text.py` (the redirect for every caller, the fragment for Admin
   and Super Admin), `test_role_gates.py` (an Admin still reads the fragment).
 
+
+## 6 Oct 2026 - overnight-filter-work merged into main
+
+- **Asked:** merge the `overnight-filter-work` branch (25 Sep: one shared filter
+  cascade, `_dashCascade` / `_facetSet`, for every dashboard). It forked 82 commits
+  back; two conflicts, both where main had moved past it.
+- **Kept from main:** the FQC Dashboard's customer folding (code or name, any case,
+  one option per customer) and the server's own customer list (read BEFORE the
+  customer filter - a true facet); FQC Recent's defect list from `fqc_defect`.
+- **Defects in the branch, fixed in the merge:** (1) the helper took any value
+  starting "All"/"Both" for the no-filter option, so a customer named "Allied ..."
+  could never stay picked - no filter is now position 0, and each select's own
+  first option (`value=""` ones too) is kept as written; (2) FQC Recent's shift
+  facet read `r.shift`, which `fqc_record` does not have - every shift option
+  vanished; it is the decision's IST shift now (`_shiftOfStamp`); its defect facet
+  read the dead legacy column; (3) Packing Log's status facet read the box's
+  open/closed `state`, the server filters on the challan-derived `status`; customer
+  showed codes; (4) Production Dashboard's line-table "View N" opened FQC
+  inspections of the whole shift under a produced-on-this-line count - removed
+  (the drill-in cannot narrow to a line); the customer table's button now shows the
+  inspected count its list holds; (5) the branch added two `<th>` to v4 - reverted,
+  the one column left is injected from icon_live.js.
+- **New in the helper:** `opts.facet` (values computed without this dropdown's own
+  filter are rebuilt even when narrowed; a pick missing from them stays listed),
+  `opts.label`, numeric sort.
+- **Tests:** `test_dashboard_cascade.js` 15/15 (its fake select now behaves like a
+  real one; +5 cases for the defects above), `test_dashboards_e2e.py` 27/27 (runs on
+  Playwright's own Chromium when the container path is absent; seeds a real defect
+  code). Pre-existing, NOT from the merge (same on main before it): `test_packing.js`
+  18 failing, `test_js.js` a syntax error, `test_fqc_dashboard.js` exits 1 silently.

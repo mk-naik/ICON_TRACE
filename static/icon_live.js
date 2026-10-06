@@ -1590,7 +1590,12 @@
   /* Ask v4 to redraw whatever screen is showing, using its own render
      functions. Calling them by name keeps the arithmetic in v4 where it
      belongs - this layer supplies data, never recomputes it. */
-  
+
+  /* Shared dashboard filter cascade helpers (_dashCascade, _facetSet) are
+     defined further down inside the fqc-dashboard block so its unit test
+     can extract them; function declarations at the top of this IIFE are
+     hoisted and reach every render function on this page. */
+
   function wireDynamicFilters() {
     if (!window.B) return;
     
@@ -1876,6 +1881,9 @@
         (active.length ? 'Filtered by <b>' + active.map(fqcEsc).join('</b>, <b>') +
           '</b>. Clear with Reset.' : '') + dayNote + '</span></div>' : '');
 
+      /* Dynamic cascade - built from every source of truth the page is
+         showing (FQC rows, dispatch stock, prod's own facet lists). One
+         helper, same rules as the FQC Dashboard's cascade. */
       var sSet={}, cSet={}, mSet={}, wSet={}, lSet={};
       if (fqc && fqc.rows) fqc.rows.forEach(function(r){
         if(r.model) mSet[r.model]=1;
@@ -1890,24 +1898,11 @@
       if (prod && prod.customers) prod.customers.forEach(function(c){ cSet[c]=1; });
       if (prod && prod.models) prod.models.forEach(function(m){ mSet[m]=1; });
 
-      var updateSel = function(id, set, def, fVal) {
-        var sel = document.getElementById(id);
-        if (sel && (!fVal || sel.value === def || sel.value.startsWith('All') || sel.value.startsWith('Both'))) {
-          var cur = sel.value;
-          var arr = Object.keys(set).sort();
-          sel.innerHTML = '<option>' + def + '</option>' + arr.map(function(v){
-            return '<option value="' + fqcEsc(v) + '">' + fqcEsc(v) + '</option>';
-          }).join('');
-          sel.value = cur;
-          if(sel.selectedIndex < 0) sel.value = def;
-        }
-      };
-
-      updateSel('mgShift', sSet, 'All shifts', f.shift);
-      updateSel('mgCust', cSet, 'All customers', f.cust);
-      updateSel('mgModel', mSet, 'All models', f.model);
-      updateSel('mgWatt', wSet, 'All', f.watt);
-      updateSel('mgLine', lSet, 'Both lines', f.line);
+      _dashCascade('mgShift', sSet, 'All shifts', f.shift);
+      _dashCascade('mgCust',  cSet, 'All customers', f.cust);
+      _dashCascade('mgModel', mSet, 'All models', f.model);
+      _dashCascade('mgWatt',  wSet, 'All', f.watt);
+      _dashCascade('mgLine',  lSet, 'Both lines', f.line);
       if (window.iconTable) window.iconTable.wireAll();
     });
   }
@@ -1976,6 +1971,13 @@
     return h >= 6 && h < 14 ? 'A' : (h >= 14 && h < 22 ? 'B' : 'C');
   }
   var SHIFT_LETTER = { 1: 'A', 2: 'B', 3: 'C' };
+  /* The shift of a stored stamp ('YYYY-MM-DDTHH:MM:SS', IST wall clock as
+     the server writes it) - read off its hour, never re-zoned. */
+  function _shiftOfStamp(s) {
+    var h = parseInt(String(s || '').substr(11, 2), 10);
+    if (isNaN(h)) return '';
+    return h >= 6 && h < 14 ? 'A' : (h >= 14 && h < 22 ? 'B' : 'C');
+  }
   window.istToday = _localDate;
 
   /* The factory day it is now. What is stored is the calendar date and IST
@@ -2448,36 +2450,30 @@
           if (cardH) cardH.insertAdjacentElement('afterend', cb.firstChild);
         }
 
-        if (window.B && B.customers && document.getElementById('rCust')) {
-          var sel = document.getElementById('rCust');
-          var prev = sel.value;
-          sel.innerHTML = '<option>All customers</option>' + B.customers.map(function(c) {
-            return '<option value="' + fqcEsc(c.name) + '">' + fqcEsc(c.name) + '</option>';
-          }).join('');
-          if (prev) sel.value = prev;
+        /* Dynamic cascade - each dropdown offers what the visible rows
+           hold, through the same helper as every dashboard. The shift is
+           the DECISION's (its IST time), never the serial's: fqc_record
+           has no shift column, and the serial's shift is the barcode's.
+           Defects are read from the labels the record carries (fqc_defect)
+           and the legacy column beside them. A slice with no rejects falls
+           back to the master defect list, so a defect not seen yet can
+           still be picked. */
+        var rShiftSet = _facetSet(rows, function (r) { return _shiftOfStamp(r.at); });
+        var rCustSet = _facetSet(rows, function (r) { return r.customer; });
+        var rWattSet = _facetSet(rows, function (r) { return r.wattage; });
+        var rDefectSet = {};
+        rows.forEach(function (r) {
+          String(r.defects || r.defect || '').split(',').forEach(function (d) {
+            d = d.trim(); if (d) rDefectSet[d] = 1;
+          });
+        });
+        if (!Object.keys(rDefectSet).length && typeof FQC_DEFECTS !== 'undefined') {
+          FQC_DEFECTS.forEach(function (d) { rDefectSet[d] = 1; });
         }
-
-        if (window.B && B.models && document.getElementById('rWatt')) {
-          var sel = document.getElementById('rWatt');
-          var prev = sel.value;
-          var watts = {};
-          B.models.forEach(function(m) { if(m.wattage) watts[m.wattage] = 1; });
-          sel.innerHTML = '<option>All</option>' + Object.keys(watts).sort().map(function(k) {
-            return '<option value="' + fqcEsc(k) + '">' + fqcEsc(k) + 'W</option>';
-          }).join('');
-          if (prev) sel.value = prev;
-        }
-        
-        if (document.getElementById('rDefect')) {
-          var sel = document.getElementById('rDefect');
-          var prev = sel.value;
-          /* the one defect list, unified (icon_defects.py) - the boot
-             payload never carried its own */
-          sel.innerHTML = '<option>All</option>' + FQC_DEFECTS.map(function(d) {
-            return '<option value="' + fqcEsc(d) + '">' + fqcEsc(d) + '</option>';
-          }).join('');
-          if (prev) sel.value = prev;
-        }
+        _dashCascade('rShift', rShiftSet, 'All shifts', shift);
+        _dashCascade('rCust', rCustSet, 'All customers', cust);
+        _dashCascade('rWatt', rWattSet, 'All', watt, { label: function (w) { return w + 'W'; } });
+        _dashCascade('rDefect', rDefectSet, 'All', defect);
 
         var count = document.getElementById('fqcN');
         var overrides = document.getElementById('fqcOv');
@@ -2768,6 +2764,7 @@ function wireFqcAnomalies() {
    * - so a KPI card and a table footer can no longer disagree about what
    * they are both supposed to be counting.
    */
+
   function fqcDashFilters() {
     var g = function (id) { var e = document.getElementById(id); return e ? e.value : ''; };
     var range = (typeof fqcRange === 'function') ?
@@ -2798,6 +2795,90 @@ function wireFqcAnomalies() {
     if (f.result) q.push('result=' + encodeURIComponent(f.result));
     return q.length ? '?' + q.join('&') : '';
   }
+
+  /* ---- Shared dashboard filter cascade ----------------------------------
+   *
+   * "Dynamic filtering" means: after every fetch, each dropdown is
+   * rebuilt from the values actually present in the data, so a customer
+   * who never appears under the current period is not offered as a
+   * filter. Every filter dropdown on this app routes through this one
+   * helper - a change to the rules lands on every screen at once.
+   *
+   * Rules:
+   *   - The first option is the dropdown's own "no filter" option ("All
+   *     shifts", "Both lines", value="" ...) and is kept exactly as the
+   *     screen wrote it. "No filter" is POSITION 0, never a label that
+   *     starts with "All": a customer called "Allied ..." is a real pick.
+   *   - values that are a FACET (opts.facet: computed with this dropdown's
+   *     OWN filter left out, by the server or by _facetRows) are rebuilt
+   *     every time - picking a customer does not hide the other customers.
+   *   - values read off an already-filtered slice are not a facet: a
+   *     dropdown the user has narrowed is then left alone, or it would
+   *     shrink to the one value picked.
+   *   - A pick is never pulled out from under the user: if the new values
+   *     lack it, it stays, listed.
+   *   - A set is sorted (numbers as numbers); an ARRAY keeps the caller's
+   *     order. opts.label(v) names an option (625 -> "625W").
+   *
+   * Placed inside the fqc-dashboard block only because the JS unit test
+   * extracts a slice between "function fqcDashFilters" and the "END fqc
+   * dashboard" marker; function declarations at the top of this IIFE
+   * are hoisted, so every other render function reaches these
+   * regardless of source position. */
+  function _dashCascade(selId, values, defaultLabel, currentFilterValue, opts) {
+    opts = opts || {};
+    var sel = typeof selId === 'string' ? document.getElementById(selId) : selId;
+    if (!sel) return;
+    var narrowed = sel.selectedIndex > 0;
+    if (!opts.facet && currentFilterValue && narrowed) return;
+    var arr = [], i, seen = {};
+    var push = function (v) {
+      if (v === null || v === undefined || v === '') return;
+      v = String(v);
+      if (!seen[v]) { seen[v] = 1; arr.push(v); }
+    };
+    if (Object.prototype.toString.call(values) === '[object Array]') {
+      /* array in - caller's order is kept */
+      for (i = 0; i < values.length; i++) push(values[i]);
+    } else if (values && typeof values === 'object') {
+      /* set in - sorted, numbers as numbers (590 before 1000) */
+      for (var k in values) {
+        if (Object.prototype.hasOwnProperty.call(values, k)) push(k);
+      }
+      arr.sort(function (x, y) {
+        var nx = +x, ny = +y;
+        if (x !== '' && y !== '' && !isNaN(nx) && !isNaN(ny)) return nx - ny;
+        return x < y ? -1 : (x > y ? 1 : 0);
+      });
+    }
+    var prev = narrowed ? sel.value : null;
+    if (prev !== null && !seen[prev]) arr.push(prev);
+    var first = sel.options.length ? sel.options[0].outerHTML
+                                   : '<option>' + fqcEsc(defaultLabel) + '</option>';
+    var html = [first];
+    for (i = 0; i < arr.length; i++) {
+      html.push('<option value="' + fqcEsc(arr[i]) + '">' +
+                fqcEsc(opts.label ? opts.label(arr[i]) : arr[i]) + '</option>');
+    }
+    sel.innerHTML = html.join('');
+    if (prev !== null) sel.value = prev;
+    if (prev === null || sel.selectedIndex < 0) sel.selectedIndex = 0;
+  }
+  window._dashCascade = _dashCascade;
+
+  /* Collect a facet set (a plain object used as a set of unique values)
+     from an array of rows, mapping each row through a picker. A picker
+     that returns null / undefined / '' skips the row. */
+  function _facetSet(rows, pick) {
+    var out = {}, i, v;
+    if (!rows) return out;
+    for (i = 0; i < rows.length; i++) {
+      v = pick(rows[i]);
+      if (v !== null && v !== undefined && v !== '') out[v] = 1;
+    }
+    return out;
+  }
+  window._facetSet = _facetSet;
 
   function wireProdDash() {
     var pd = document.getElementById('v-proddash');
@@ -3041,8 +3122,20 @@ function wireFqcAnomalies() {
           }).join('') : pdEmpty(7, 'Nothing produced under these filters.');
         }
 
-        /* Customer-wise position - v4's table, left empty until now */
+        /* Customer-wise position - v4's table, left empty until now.
+           The View N button opens the FQC drill-in modal for that
+           customer + model within this dashboard's period. N is what that
+           list holds - the modules FQC INSPECTED in the period - not the
+           produced count beside it: a button must open what it names. The
+           Line & shift table has no such button, because the drill-in
+           cannot narrow to a line. Its column is added here, not in v4. */
         var cBody = document.getElementById('pdCustRows');
+        var cHead = cBody && cBody.parentNode.querySelector('thead tr');
+        if (cHead && !cHead.querySelector('[data-pd-view]')) {
+          cHead.insertAdjacentHTML('beforeend',
+            '<th data-pd-view style="width:110px;text-align:center" ' +
+            'title="Modules FQC inspected in this period">Inspected</th>');
+        }
         if (cBody) {
           var bc = d.by_cust || [];
           cBody.innerHTML = bc.length ? bc.map(function (r) {
@@ -3051,6 +3144,11 @@ function wireFqcAnomalies() {
                much of the period's allocation has left */
             var run = r.running || 0, pend = r.c_packed || 0;
             var pc = r.alloc ? (r.alloc_gone || 0) / r.alloc * 100 : 0;
+            var viewArgs = "{title:" + JSON.stringify(r.cust + ' · ' + r.model) +
+              ",customer:" + JSON.stringify(r.cust) + ",model:" + JSON.stringify(r.model) +
+              ",from:" + JSON.stringify(f.from || '') +
+              ",to:" + JSON.stringify(f.to || f.from || '') +
+              (f.shift ? ",shift:'" + fqcEsc(f.shift) + "'" : '') + "}";
             return '<tr><td>' + fqcEsc(r.cust) + '</td><td class="mono">' + fqcEsc(r.model) + '</td>' +
               '<td class="num">' + r.alloc.toLocaleString() + '</td>' +
               '<td class="num">' + r.prod.toLocaleString() + '</td>' +
@@ -3059,8 +3157,13 @@ function wireFqcAnomalies() {
               '<td class="num">' + pend.toLocaleString() + '</td>' +
               '<td class="num" style="color:var(--pass)">' + r.disp.toLocaleString() + '</td>' +
               '<td>' + pdBar(pc, true) + '</td>' +
-              '<td style="text-align:center">' + r.batches + '</td></tr>';
-          }).join('') : pdEmpty(10, 'Nothing happened under these filters.');
+              '<td style="text-align:center">' + r.batches + '</td>' +
+              '<td style="text-align:center">' + (r.fqc ?
+                '<button class="btn btn-ghost btn-sm" title="The modules FQC inspected in ' +
+                'this period" onclick=\'openModules(' + viewArgs.replace(/'/g, '&#39;') +
+                ')\'>View ' + r.fqc.toLocaleString() + '</button>' :
+                '<span style="color:var(--ink3)">—</span>') + '</td></tr>';
+          }).join('') : pdEmpty(11, 'Nothing happened under these filters.');
         }
 
         /* Loss of production and machine downtime, from the real events */
@@ -3119,19 +3222,20 @@ function wireFqcAnomalies() {
             '\')">Show that day</button>.</span></div>' : '';
         }
 
-        var updateSel = function(id, arr, def, fVal) {
-          var sel = document.getElementById(id);
-          if (sel && (!fVal || sel.value === def || sel.value.startsWith('All'))) {
-            var cur = sel.value;
-            sel.innerHTML = '<option>' + def + '</option>' + (arr || []).map(function(v) {
-              return '<option value="' + fqcEsc(v) + '">' + fqcEsc(v) + '</option>';
-            }).join('');
-            sel.value = cur;
-            if (sel.selectedIndex < 0) sel.value = def;
-          }
-        };
-        updateSel('pdCust', d.customers, 'All customers', f.customer);
-        updateSel('pdModel', d.models, 'All', f.model);
+        /* Dynamic cascade - Shift joins Customer and Model now, so the
+           dropdown does not offer a shift the visible slice never held.
+           _dashCascade is the shared helper - same rules as FQC and
+           Management. */
+        var pdShiftSet = _facetSet(d.by_cust || [], function (r) { return null; });
+        (d.lines || []).forEach(function (r) {
+          if (r.shift) pdShiftSet[SHIFT_LETTER[r.shift] || r.shift] = 1;
+        });
+        (d.loss || []).forEach(function (r) {
+          if (r.shift) pdShiftSet[SHIFT_LETTER[r.shift] || r.shift] = 1;
+        });
+        _dashCascade('pdShift', pdShiftSet, 'All shifts', f.shift);
+        _dashCascade('pdCust',  d.customers || [], 'All customers', f.customer);
+        _dashCascade('pdModel', d.models || [], 'All', f.model);
         if (window.iconTable) window.iconTable.wireAll();
       })
       .catch(function (err) {
@@ -3310,6 +3414,25 @@ function wireFqcAnomalies() {
               ], kMods.toString(), 'modules total');
             }
         }
+
+        /* Dynamic cascade - the Packing Log's Shift, Customer, Model,
+           Grade and Status dropdowns show only what the visible boxes
+           actually hold. Same helper and rules as every other
+           dashboard. */
+        /* status is the pallet's progress the server reads off its challan
+           (open / packed / challaned / dispatched) - what the filter matches;
+           the box's own state only ever says open or closed */
+        var pkShiftSet = _facetSet(rows, function (r) { return r.pack_shift; });
+        var pkCustSet = _facetSet(rows, function (r) { return r.customer_name || r.customer; });
+        var pkModelSet = _facetSet(rows, function (r) { return r.model; });
+        var pkGradeSet = _facetSet(rows, function (r) { return r.grade; });
+        var pkStatusSet = _facetSet(rows, function (r) { return r.status; });
+        _dashCascade('pkShift', pkShiftSet, 'All shifts', f.shift);
+        _dashCascade('pkCust',  pkCustSet,  'All customers', f.customer);
+        _dashCascade('pkModel', pkModelSet, 'All', f.model);
+        _dashCascade('pkGrade', pkGradeSet, 'All', f.grade);
+        _dashCascade('pkStatus', pkStatusSet, 'All', f.status, { label: function (v) {
+          return v.charAt(0).toUpperCase() + v.slice(1); } });
       });
   }
   window.packApply = renderLivePackLog;
@@ -3480,66 +3603,37 @@ function wireFqcAnomalies() {
             (waiting ? ' · ' + waiting + ' more not in master yet (counted once planned)' : '');
         }
 
-        // Dynamically update available customers, models, and shifts based on current visible data
-        var custSet = {}, custFold = {}, modelSet = {}, shiftSet = {};
-        rows.forEach(function(r) {
-          if (r.customer) {
-            /* rows hold the customer's code OR its name, in any case
-               ("ICON Stock", "ICON STOCK", "STOCK") - one option per
-               customer, under the master's name; the server's filter
-               (db.customer_match) then finds every spelling */
-            var rc = String(r.customer).trim().toUpperCase();
-            var hit = (B.customers || []).find(function(c) {
-              return String(c.code || '').toUpperCase() === rc ||
-                     String(c.name || '').toUpperCase() === rc; });
-            var label = hit ? hit.name : String(r.customer).trim();
-            if (!custFold[label.toUpperCase()]) {
-              custFold[label.toUpperCase()] = 1;
-              custSet[label] = 1;
-            }
-          }
-          if (r.model) modelSet[r.model] = 1;
-          if (r.shift) {
-            var sm = {1:'A', 2:'B', 3:'C'};
-            shiftSet[sm[r.shift] || r.shift] = 1;
+        /* Dynamic cascade, through the shared helper. Customer: the
+           server's list - every customer inspected in this date/shift range,
+           read BEFORE the customer filter, so choosing one does not hide the
+           others (a true facet); the rows are only a fallback. Rows hold the
+           customer's code OR its name in any case ("ICON Stock", "STOCK") -
+           one option per customer, under the master's name; the server's
+           filter (db.customer_match) then finds every spelling. */
+        var custSet = {}, custFold = {};
+        rows.forEach(function (r) {
+          if (!r.customer) return;
+          var rc = String(r.customer).trim().toUpperCase();
+          var hit = (B.customers || []).find(function (c) {
+            return String(c.code || '').toUpperCase() === rc ||
+                   String(c.name || '').toUpperCase() === rc; });
+          var label = hit ? hit.name : String(r.customer).trim();
+          if (!custFold[label.toUpperCase()]) {
+            custFold[label.toUpperCase()] = 1;
+            custSet[label] = 1;
           }
         });
-        
-        var sSel = document.getElementById('fDashShift');
-        if (sSel && (!f.shift || sSel.value === 'All shifts')) {
-          var sPrev = sSel.value;
-          sSel.innerHTML = '<option>All shifts</option>' + Object.keys(shiftSet).sort().map(function(s) {
-            return '<option value="' + fqcEsc(s) + '">' + fqcEsc(s) + '</option>';
-          }).join('');
-          sSel.value = sPrev;
-          if (sSel.selectedIndex < 0) sSel.value = 'All shifts';
+        var modelSet = _facetSet(rows, function (r) { return r.model; });
+        var shiftSet = _facetSet(rows, function (r) {
+          return r.shift ? (SHIFT_LETTER[r.shift] || r.shift) : null;
+        });
+        _dashCascade('fDashShift', shiftSet, 'All shifts', f.shift);
+        if (d.customers && d.customers.length) {
+          _dashCascade('fDashCust', d.customers, 'All customers', f.customer, { facet: true });
+        } else {
+          _dashCascade('fDashCust', custSet, 'All customers', f.customer);
         }
-
-        
-        var cSel = document.getElementById('fDashCust');
-        if (cSel && (!f.customer || cSel.value === 'All customers')) {
-          var cPrev = cSel.value;
-          /* the server's list (every customer inspected in the range, once
-             each); the rows only as a fallback - they are not grouped by
-             customer, so they no longer name one */
-          var custList = (d.customers && d.customers.length) ? d.customers
-                                                              : Object.keys(custSet).sort();
-          cSel.innerHTML = '<option>All customers</option>' + custList.map(function(c) {
-            return '<option value="' + fqcEsc(c) + '">' + fqcEsc(c) + '</option>';
-          }).join('');
-          cSel.value = cPrev;
-          if (cSel.selectedIndex < 0) cSel.value = 'All customers';
-        }
-        
-        var mSel = document.getElementById('fDashModel');
-        if (mSel && (!f.model || mSel.value === 'All')) {
-          var mPrev = mSel.value;
-          mSel.innerHTML = '<option>All</option>' + Object.keys(modelSet).sort().map(function(m) {
-            return '<option value="' + fqcEsc(m) + '">' + fqcEsc(m) + '</option>';
-          }).join('');
-          mSel.value = mPrev;
-          if (mSel.selectedIndex < 0) mSel.value = 'All';
-        }
+        _dashCascade('fDashModel', modelSet, 'All', f.model);
 
         var note = document.getElementById('fDashNote');
         if (note) {
@@ -13181,28 +13275,15 @@ function wireFqcAnomalies() {
              ], total.toLocaleString(), 'modules packed');
          }
          
-         var cSet={}, mSet={}, gSet={};
-         if (d.table_fg) {
-           d.table_fg.forEach(function(r) {
-             if (r.customer_name || r.customer) cSet[r.customer_name || r.customer] = 1;
-             if (r.model) mSet[r.model] = 1;
-             if (r.grade) gSet[r.grade] = 1;
-           });
-         }
-         var updateSel = function(id, set, def, fVal) {
-           var sel = document.getElementById(id);
-           if (sel && (!fVal || fVal === def || fVal.startsWith('All'))) {
-             var cur = sel.value;
-             sel.innerHTML = '<option>' + def + '</option>' + Object.keys(set).sort().map(function(v){
-               return '<option value="' + fqcEsc(v) + '">' + fqcEsc(v) + '</option>';
-             }).join('');
-             sel.value = cur;
-             if (sel.selectedIndex < 0) sel.value = def;
-           }
-         };
-         updateSel('dpCust', cSet, 'All customers', fCust);
-         updateSel('dpModel', mSet, 'All', fModel);
-         updateSel('dpGrade', gSet, 'All', fGrade);
+         /* Dynamic cascade - the dropdowns show only what the visible
+            finished-goods slice actually holds. Same helper and rules
+            as every other dashboard on this app. */
+         var cSet = _facetSet(d.table_fg || [], function (r) { return r.customer_name || r.customer; });
+         var mSet = _facetSet(d.table_fg || [], function (r) { return r.model; });
+         var gSet = _facetSet(d.table_fg || [], function (r) { return r.grade; });
+         _dashCascade('dpCust',  cSet, 'All customers', fCust !== 'All customers' ? fCust : '');
+         _dashCascade('dpModel', mSet, 'All', fModel !== 'All' ? fModel : '');
+         _dashCascade('dpGrade', gSet, 'All', fGrade !== 'All' ? fGrade : '');
          
       })
       .catch(function(err) {
