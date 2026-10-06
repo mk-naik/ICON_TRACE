@@ -46,6 +46,9 @@ def test(name):
 
 MODEL = "ISEN590-G12R"
 WATT = 590
+# A shift that has run: A shift of yesterday's factory day. A fixed date (it
+# was 2026-09-17) passes the 30-day backdate limit only for a month.
+RAN_ON = (clock.shift_day() - datetime.timedelta(days=1)).isoformat()
 
 
 def setup():
@@ -86,7 +89,7 @@ def t_valid_range_produces():
     with store.conn() as (cx, cur):
         serials = plan_serials(cur, 10)
     r = c.post("/api/prodentry", json={
-        "date": "2026-09-17", "shift": "A", "incharge": "TEST INCHARGE",
+        "date": RAN_ON, "shift": "A", "incharge": "TEST INCHARGE",
         "start_serial": serials[0], "end_serial": serials[4]})
     assert r.status_code == 200, r.get_json()
     d = r.get_json()
@@ -111,7 +114,7 @@ def t_end_serial_not_found():
     with store.conn() as (cx, cur):
         serials = plan_serials(cur, 5)
     r = c.post("/api/prodentry", json={
-        "date": "2026-09-17", "shift": "A", "incharge": "TEST INCHARGE",
+        "date": RAN_ON, "shift": "A", "incharge": "TEST INCHARGE",
         "start_serial": serials[0], "end_serial": "ICON590R1290710099"})
     assert r.status_code == 400, r.get_json()
     assert not r.get_json()["ok"]
@@ -129,11 +132,11 @@ def t_already_produced_in_range_refused():
     # a real prior entry, the only thing that actually marks a serial
     # recorded - not a hand-set state, which FQC can also set on its own
     r0 = c.post("/api/prodentry", json={
-        "date": "2026-09-17", "shift": "A", "incharge": "TEST INCHARGE",
+        "date": RAN_ON, "shift": "A", "incharge": "TEST INCHARGE",
         "start_serial": serials[2], "end_serial": serials[2]})
     assert r0.get_json()["ok"], r0.get_json()
     r = c.post("/api/prodentry", json={
-        "date": "2026-09-17", "shift": "A", "incharge": "TEST INCHARGE",
+        "date": RAN_ON, "shift": "A", "incharge": "TEST INCHARGE",
         "start_serial": serials[0], "end_serial": serials[4]})
     assert r.status_code == 400, r.get_json()
     assert "already recorded" in r.get_json()["why"].lower(), r.get_json()
@@ -165,7 +168,7 @@ def t_fqc_ahead_of_paperwork_does_not_block_or_regress():
         cur.execute("UPDATE serial SET state='rejected' WHERE serial=%s",
                    (serials[2],))
     r = c.post("/api/prodentry", json={
-        "date": "2026-09-17", "shift": "A", "incharge": "TEST INCHARGE",
+        "date": RAN_ON, "shift": "A", "incharge": "TEST INCHARGE",
         "start_serial": serials[0], "end_serial": serials[4]})
     assert r.get_json()["ok"], r.get_json()
     assert r.get_json()["qty"] == 5, r.get_json()
@@ -192,7 +195,7 @@ def t_start_after_end_refused():
     with store.conn() as (cx, cur):
         serials = plan_serials(cur, 5)
     r = c.post("/api/prodentry", json={
-        "date": "2026-09-17", "shift": "A", "incharge": "TEST INCHARGE",
+        "date": RAN_ON, "shift": "A", "incharge": "TEST INCHARGE",
         "start_serial": serials[4], "end_serial": serials[0]})
     assert r.status_code == 400, r.get_json()
     assert entry_count() == 0
@@ -206,7 +209,7 @@ def t_mixed_model_refused():
         a = plan_serials(cur, 2, model=MODEL, watt=WATT, start_seq=1)
         b = plan_serials(cur, 2, model="ISEN625-G12R", watt=625, start_seq=1)
     r = c.post("/api/prodentry", json={
-        "date": "2026-09-17", "shift": "A", "incharge": "TEST INCHARGE",
+        "date": RAN_ON, "shift": "A", "incharge": "TEST INCHARGE",
         "start_serial": a[0], "end_serial": b[0]})
     assert r.status_code == 400, r.get_json()
     assert entry_count() == 0
@@ -222,7 +225,7 @@ def t_list_resolves_customer_from_first_serial():
         cur.execute("UPDATE serial SET customer=%s WHERE serial=%s",
                    ("C0001", serials[0]))
     r = c.post("/api/prodentry", json={
-        "date": "2026-09-17", "shift": "A", "incharge": "TEST INCHARGE",
+        "date": RAN_ON, "shift": "A", "incharge": "TEST INCHARGE",
         "start_serial": serials[0], "end_serial": serials[2]})
     assert r.status_code == 200, r.get_json()
 
@@ -403,6 +406,39 @@ def t_list_by_production_with_facets():
     # the period always applies: the 10th's A shift is outside the 11th-12th
     p = c.get("/api/prodentries?from=2026-09-11&to=2026-09-12&cust=MSEDCL").get_json()
     assert p["facets"]["shift"] == ["C"], p["facets"]
+
+
+@test("Search & Trace names the production of a serial: the Produced step "
+      "(date, shift, incharge, line), the incharge in Build instances and the "
+      "entry in the event log (Mukesh, 6 Oct)")
+def t_trace_shows_the_incharge():
+    c = setup()
+    with store.conn() as (cx, cur):
+        serials = plan_serials(cur, 3)
+    r = c.post("/api/prodentry", json={
+        "date": RAN_ON, "shift": "A", "incharge": "TEST INCHARGE, NIGHT INCHARGE",
+        "line": "B-Line", "start_serial": serials[0], "end_serial": serials[2]})
+    assert r.status_code == 200, r.get_json()
+    d = c.get("/api/trace/serial/" + serials[1]).get_json()
+    day = "-".join(reversed(RAN_ON.split("-")))
+    prod = [j for j in d["journey"] if j["stage"] == "Produced"]
+    assert len(prod) == 1 and prod[0]["done"], d["journey"]
+    assert prod[0]["value"] == day + " · A", prod[0]
+    assert prod[0]["detail"][0] == "Incharge: Test Incharge, Night Incharge", prod[0]
+    assert prod[0]["detail"][1] == "B-Line", prod[0]
+    assert [j["stage"] for j in d["journey"]][:2] == ["Allocated", "Produced"]
+    assert d["instances"][0]["incharge"] == "Test Incharge, Night Incharge", d["instances"]
+    assert d["instances"][0]["built"] == day + " · shift A", d["instances"]
+    assert d["production"]["incharge"] == "Test Incharge, Night Incharge"
+    log = [e for e in d["events"] if e["stage"].startswith("Production")]
+    assert len(log) == 1 and "incharge Test Incharge, Night Incharge" in log[0]["detail"], d["events"]
+    # a serial with no production entry says so - nothing is guessed
+    with store.conn() as (cx, cur):
+        extra = plan_serials(cur, 1, start_seq=50)
+    e = c.get("/api/trace/serial/" + extra[0]).get_json()
+    p2 = [j for j in e["journey"] if j["stage"] == "Produced"][0]
+    assert not p2["done"] and p2["detail"][0] == "no production entry yet", p2
+    assert e["instances"][0]["incharge"] == "—" and e["production"] is None
 
 
 if __name__ == "__main__":

@@ -6443,11 +6443,13 @@ function wireFqcAnomalies() {
       '<div class="ch-r">' + traceTag('key: serial + build_instance') +
       '</div></div>' +
       '<div class="card-b flush"><table><thead><tr><th>Instance</th>' +
-      '<th>Built</th><th>Grade</th><th>Allocation</th><th>Status</th>' +
-      '<th>DCR eligible</th></tr></thead><tbody>' +
+      '<th title="The production date and shift its production entry records">Built</th>' +
+      '<th>Shift incharge</th><th>Grade</th><th>Allocation</th>' +
+      '<th>Status</th><th>DCR eligible</th></tr></thead><tbody>' +
       traceRows(d.instances, [
         { cls: 'mono', get: function (r) { return fqcEsc(r.instance); } },
         { cls: 'mono', get: function (r) { return fqcEsc(r.built); } },
+        { get: function (r) { return fqcEsc(r.incharge || DASH); } },
         { get: function (r) { return r.grade === DASH ? DASH
                  : traceTag(r.grade, 't-pass'); } },
         { cls: 'mono', get: function (r) { return fqcEsc(r.allocation); } },
@@ -6457,7 +6459,7 @@ function wireFqcAnomalies() {
         { get: function (r) { return r.dcr_eligible === DASH ? DASH
                  : traceTag(r.dcr_eligible,
                      r.dcr_eligible === 'Yes' ? 't-pass' : 't-mute'); } }
-      ], 'No build instance recorded.', 6) +
+      ], 'No build instance recorded.', 7) +
       '</tbody></table></div>' +
       '<div class="card-f"><span style="font-size:11.5px;color:var(--ink3)">' +
       'DCR eligibility is <b>derived</b> from grade, allocation and dispatch ' +

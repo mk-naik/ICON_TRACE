@@ -6575,7 +6575,7 @@ Kept up to date through the night; each item is ticked with its commit.
 - [x] LOP: the same - the date and shift a loss belongs to (a Retro event has no
       date field today, DECISIONS 11 / BACKLOG "LOP dating"), shown and counted -
       see the entry below.
-- [ ] Search & Trace: the production incharge(s) of a serial.
+- [x] Search & Trace: the production incharge(s) of a serial - see the entry below.
 - [x] Admin: the dispatch user (`khedram.yadav`, created as Packing Operator with
       station Dispatch-01) has no permission option - the menu was clipped, see
       the entry below. (He is still a Packing Operator by role: if he is meant to
@@ -6599,6 +6599,13 @@ Kept up to date through the night; each item is ticked with its commit.
 - [x] Loss & Breakdown: the in-process scrap table drew v4's five invented rows
       (and "Shift so far" counted their 31); the setup bar's Shift incharge was
       v4's demo list; Live's start time defaulted to v4's 14:05 - fixed with LOP.
+- [ ] `test_change_feed_ui.py`: 2 failing (Packing Log refetch across two
+      browsers; the New Indent form left open) - the same on main before the
+      merge (1be5874), so older than tonight.
+- [x] `test_production.py` posted a fixed 2026-09-17, which the 30-day backdate
+      limit refuses from 17 Oct - now yesterday's A shift.
+- [x] Search & Trace "Built" read the production entry's TYPING time (a C shift
+      filed next morning said "shift A") - now the production date and shift.
 - [x] `test_dashboards_ist.py` asserted a loss's CALENDAR date, at whatever time
       the suite ran; `test_loss.py` / `test_stored_xss.py` used fixed start times.
 - [ ] Every screen reads "no filter" as a value starting "All"/"Both"
@@ -6685,3 +6692,25 @@ Kept up to date through the night; each item is ticked with its commit.
   `test_dashboards_ist.py` (pinned clock, factory day), `test_stored_xss.py`.
   Seen in Chromium: a Retro B shift event of yesterday typed in C shift lands on
   05-10-2026 B with 40 minutes; the open/closed tables show the Production column.
+
+## 6 Oct 2026 - Search & Trace names the production incharge
+
+- **Asked:** "in search and trace when serial number is searched show production
+  incharge name also."
+- **What was there:** the trace read the serial's production entry only for its
+  `created_at` (the "Built" time), so the incharge, line and production date/shift
+  never reached the page - and "Built" was the moment the entry was TYPED: a C shift
+  filed at 07:00 next morning read "built ... shift A".
+- **Change:** the journey gains a **Produced** step after Allocated - production date
+  and shift, "Incharge: A, B" (the master's spellings, joined), the line, and when the
+  entry was recorded; without an entry it says "no production entry yet" (and "counted
+  as produced from its FQC scan" when it has one). Build instances gain a Shift
+  incharge column; Built is the production date and shift of the entry (else the first
+  FQC scan, labelled so). The event log gains "Production · Entry" ("for 05-10-2026
+  shift C · A-Line · incharge Yaman, Rajkumar", by whoever typed it). A cancelled
+  entry is not shown as the production.
+- **Tests:** `test_production.py` +1 (Produced step, incharge, Built, the log row, a
+  serial with no entry) - 14/14; `test_trace.js` 33/33; the trace readers
+  (`test_fqc`, `test_repack`, `test_review`, `test_defect_readers`,
+  `test_cancel_documents`, `test_custom_serials_ui`, `test_search_invoice`) pass.
+  Seen in Chromium.

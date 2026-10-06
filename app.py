@@ -7584,8 +7584,12 @@ def api_trace_serial(serial):
         # is empty for everything decided since Stage 3
         fqc_defects = {r["fqc_id"]: db.defect_labels(cur, r["fqc_id"], r.get("defect"))
                        for r in fqc}
+        # the production entry each build was recorded under: the date and
+        # shift it ran, its line and the shift incharge(s) (Mukesh, 6 Oct 2026:
+        # "when serial number is searched show production incharge name")
         entries = {r["entry_id"]: r for r in store.rows(cur,
-            "SELECT entry_id, created_at FROM production_entry WHERE entry_id IN "
+            "SELECT entry_id, prod_date, shift, shift_incharge, line, created_at, "
+            "created_by, status FROM production_entry WHERE entry_id IN "
             "(SELECT prod_entry_id FROM serial WHERE serial=%s)", (s,))}
         boxes = store.rows(cur, "SELECT b.*, bs.added_at, bs.added_by "
                                 "FROM box_serial bs JOIN box b ON b.box_id=bs.box_id "
@@ -7622,23 +7626,43 @@ def api_trace_serial(serial):
     # ---- build instances ------------------------------------------------
     # DCR eligibility is derived here, never stored - a flag beside the grade
     # is free to drift away from it.
-    # Built is when it was PRODUCED - its production entry, or its first
-    # FQC scan if that came first - never the date printed in the serial.
+    # Built is when it was PRODUCED - the production date and shift its
+    # production entry records, or its first FQC scan when no entry names it -
+    # never the date printed in the serial. It read the entry's created_at, so
+    # a C shift filed at 07:00 next morning said "built ... shift A" (6 Oct).
     def _built(r):
         pe = entries.get(r.get("prod_entry_id"))
+        if pe and (pe.get("status") or "active") != "cancelled" and pe.get("prod_date"):
+            p = str(pe["prod_date"]).split("-")
+            return "%s · shift %s" % ("-".join(reversed(p)), pe["shift"])
         scans = [f["at"] for f in fqc
                  if (f.get("build_instance") or 1) == r["build_instance"] and f.get("at")]
-        seen = [t for t in ([pe["created_at"]] if pe else []) + scans[:1] if t]
-        if not seen:
+        if not scans:
             return "—"
-        return _when_shift(min(seen))
+        return _when_shift(scans[0]) + " (first FQC scan)"
+
+    def _entry(r):
+        pe = entries.get(r.get("prod_entry_id"))
+        return pe if pe and (pe.get("status") or "active") != "cancelled" else None
+
+    def _day(iso):
+        p = str(iso or "")[:10].split("-")
+        return "-".join(reversed(p)) if len(p) == 3 else (iso or "—")
+
+    def _names(v):
+        """the incharge(s) as stored - the master's spellings joined with
+        "," - read as "A, B" """
+        return ", ".join(n.strip() for n in str(v or "").split(",") if n.strip()) or "—"
 
     instances = []
     for r in rows:
         g = r["grade"]
+        pe = _entry(r)
         instances.append({
             "instance": r["build_instance"],
             "built": _built(r),
+            "incharge": _names(pe["shift_incharge"]) if pe else "—",
+            "line": (pe["line"] if pe else None) or "—",
             "grade": g or "—",
             "allocation": bno,
             "status": r["state"],
@@ -7689,6 +7713,27 @@ def api_trace_serial(serial):
         "tone": "t-mute",
     }]
     
+    # Produced: the production entry of the build that stands now (the last
+    # instance) - the shift it ran, and who was incharge of it
+    pe_now = _entry(dict(rows[-1]))
+    if pe_now:
+        journey.append({
+            "stage": "Produced",
+            "value": "%s · %s" % (_day(pe_now["prod_date"]), pe_now["shift"]),
+            "done": True,
+            "detail": ["Incharge: " + _names(pe_now["shift_incharge"]),
+                       pe_now["line"] or "line not recorded"],
+            "tag": "entry recorded " + (_when_shift(pe_now["created_at"])
+                                        if pe_now.get("created_at") else "—"),
+            "tone": "t-mute"})
+    else:
+        scanned = any(f.get("at") for f in fqc)
+        journey.append({
+            "stage": "Produced", "value": "—", "done": False,
+            "detail": ["no production entry yet"] +
+                      (["counted as produced from its FQC scan"] if scanned else []),
+            "tag": "pending", "tone": "t-mute"})
+
     anomaly = ev.find_anomaly(cfg, s)
     if anomaly:
         journey.append({"stage": "Anomaly", "value": "Tester Error", "done": True,
@@ -7816,6 +7861,15 @@ def api_trace_serial(serial):
                           (" · " + f["cancelled_reason"] if f.get("cancelled_reason") else ""))
                          if cancelled else ""),
                     "user": f["decided_by"] or "—"})
+    for pe in entries.values():
+        log.append({"at": pe["created_at"], "stage": "Production · Entry" +
+                    (" (cancelled)" if (pe.get("status") or "") == "cancelled" else ""),
+                    "reference": s,
+                    "detail": "for %s shift %s%s · incharge %s" % (
+                        _day(pe["prod_date"]), pe["shift"],
+                        " · " + pe["line"] if pe.get("line") else "",
+                        _names(pe["shift_incharge"])),
+                    "user": pe["created_by"] or "—"})
     for b in boxes:
         log.append({"at": b["added_at"], "stage": "Packing",
                     "reference": box_label(b),
@@ -7834,6 +7888,10 @@ def api_trace_serial(serial):
         "line_no": (line or {}).get("line_no"),
         "instances": instances, "assignment": assignment,
         "journey": journey, "events": log,
+        "production": ({"date": pe_now["prod_date"], "shift": pe_now["shift"],
+                        "incharge": _names(pe_now["shift_incharge"]), "line": pe_now["line"],
+                        "recorded_at": pe_now["created_at"],
+                        "recorded_by": pe_now["created_by"]} if pe_now else None),
         "materials": [dict(m) for m in materials],
     })
 
