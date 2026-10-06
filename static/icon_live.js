@@ -1684,6 +1684,7 @@
   function wireMgmt() {
     if (window.__mgmtWired) return;
     window.__mgmtWired = true;
+
     
     var flds = ['mgFrom', 'mgTo', 'mgCust', 'mgModel', 'mgWatt', 'mgLine', 'mgShift'];
     flds.forEach(function(id) {
@@ -1711,20 +1712,36 @@
        three dashboard endpoints at once); skip it when landing elsewhere, so a
        refresh onto a non-dashboard does not run the dashboard's query load. */
     if (_bootRenderOnly !== null && _bootRenderOnly !== 'mgmt') return;
-    var g = function(id) { var e = document.getElementById(id); return e ? (e.value === 'All customers' || e.value.startsWith('All') || e.value.startsWith('Both') ? '' : e.value) : ''; };
+    /* Line was never applied to anything - picking A-Line changed nothing.
+       A line is recorded only on a production entry (and the tester's read),
+       not on allocation, packing or dispatch, so most of this screen cannot
+       be split by it. Disabled with the reason, rather than offered. */
+    var ln = document.getElementById('mgLine');
+    if (ln && !ln.disabled) {
+      ln.innerHTML = '<option>Both lines</option>';
+      ln.disabled = true;
+      ln.title = 'Not built yet - a line is recorded only on production entries, ' +
+                 'so this screen cannot be filtered by it.';
+    }
+    var g = function(id) { var e = document.getElementById(id); return e ? e.value : ''; };
+    /* each dropdown's "no filter" is its first option (_selVal); v4's Wattage
+       options read "625W" - the number is what is sent */
     var f = {
       from: g('mgFrom'), to: g('mgTo') || g('mgFrom'),
-      cust: g('mgCust'), model: g('mgModel'),
-      watt: g('mgWatt'), line: g('mgLine'), shift: g('mgShift')
+      cust: _selVal('mgCust'), model: _selVal('mgModel'),
+      watt: String(_selVal('mgWatt')).replace(/W$/i, ''), shift: _selVal('mgShift')
     };
     if (typeof mgPeriod === 'function') mgPeriod({ from: f.from, to: g('mgTo') });
 
-    var qsProd = '?from='+encodeURIComponent(f.from)+'&to='+encodeURIComponent(f.to)+'&shift='+encodeURIComponent(f.shift)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model);
+    /* Wattage reaches all three - it was read and never sent, so picking
+       625W changed nothing on the screen (6 Oct) */
+    var qsW = f.watt ? '&wattage=' + encodeURIComponent(f.watt) : '';
+    var qsProd = '?from='+encodeURIComponent(f.from)+'&to='+encodeURIComponent(f.to)+'&shift='+encodeURIComponent(f.shift)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model) + qsW;
     /* the FQC API reads a letter or a number - send the letter as picked */
-    var qsFqc = '?from='+encodeURIComponent(f.from)+'&to='+encodeURIComponent(f.to)+'&shift='+encodeURIComponent(f.shift)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model);
+    var qsFqc = '?from='+encodeURIComponent(f.from)+'&to='+encodeURIComponent(f.to)+'&shift='+encodeURIComponent(f.shift)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model) + qsW;
     /* the whole period - this used to send only From, so a range showed
        the first day's dispatches */
-    var qsDisp = '?from='+encodeURIComponent(f.from)+'&to='+encodeURIComponent(f.to)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model);
+    var qsDisp = '?from='+encodeURIComponent(f.from)+'&to='+encodeURIComponent(f.to)+'&customer='+encodeURIComponent(f.cust)+'&model='+encodeURIComponent(f.model) + qsW;
 
     var el = function(id, txt) { var e = document.getElementById(id); if(e) e.innerHTML = txt; };
 
@@ -1899,6 +1916,7 @@
       var active = [];
       if (f.cust) active.push(f.cust);
       if (f.model) active.push(f.model);
+      if (f.watt) active.push(f.watt + 'W');
       if (f.shift) active.push('Shift ' + f.shift);
       /* an empty period says so, and which day last had activity */
       var quiet = !(alloc || made || atFqc || packed || shipped);
@@ -1916,7 +1934,7 @@
       /* Dynamic cascade - built from every source of truth the page is
          showing (FQC rows, dispatch stock, prod's own facet lists). One
          helper, same rules as the FQC Dashboard's cascade. */
-      var sSet={}, cSet={}, mSet={}, wSet={}, lSet={};
+      var sSet={}, cSet={}, mSet={}, wSet={};
       if (fqc && fqc.rows) fqc.rows.forEach(function(r){
         if(r.model) mSet[r.model]=1;
         if(r.wattage) wSet[r.wattage]=1;
@@ -1930,11 +1948,16 @@
       if (prod && prod.customers) prod.customers.forEach(function(c){ cSet[c]=1; });
       if (prod && prod.models) prod.models.forEach(function(m){ mSet[m]=1; });
 
-      _dashCascade('mgShift', sSet, 'All shifts', f.shift);
-      _dashCascade('mgCust',  cSet, 'All customers', f.cust);
-      _dashCascade('mgModel', mSet, 'All models', f.model);
-      _dashCascade('mgWatt',  wSet, 'All', f.watt);
-      _dashCascade('mgLine',  lSet, 'Both lines', f.line);
+      /* the Production Dashboard's facets - modules that had anything happen
+         in the period, under every OTHER filter (an older server sends none:
+         then the sets above) */
+      var fc = prod && prod.facets;
+      var W = { label: function (w) { return w + 'W'; } };
+      _dashCascade('mgShift', fc ? fc.shift : sSet, 'All shifts', f.shift, { facet: !!fc });
+      _dashCascade('mgCust',  fc ? fc.customer : cSet, 'All customers', f.cust, { facet: !!fc });
+      _dashCascade('mgModel', fc ? fc.model : mSet, 'All models', f.model, { facet: !!fc });
+      _dashCascade('mgWatt',  fc ? fc.wattage : wSet, 'All', f.watt,
+                   { facet: !!fc, label: W.label });
       if (window.iconTable) window.iconTable.wireAll();
     });
   }
@@ -3039,17 +3062,17 @@ function wireFqcAnomalies() {
     var f = {
       from: g('pdFrom'),
       to: g('pdTo'),
-      shift: g('pdShift'),
-      customer: g('pdCust'),
-      model: g('pdModel')
+      shift: _selVal('pdShift'),
+      customer: _selVal('pdCust'),
+      model: _selVal('pdModel')
     };
 
     var qs = [];
     if (f.from) qs.push('from=' + encodeURIComponent(f.from));
     if (f.to) qs.push('to=' + encodeURIComponent(f.to));
-    if (f.shift && f.shift !== 'All shifts') qs.push('shift=' + encodeURIComponent(f.shift));
-    if (f.customer && f.customer !== 'All customers') qs.push('customer=' + encodeURIComponent(f.customer));
-    if (f.model && f.model !== 'All' && f.model !== 'All models') qs.push('model=' + encodeURIComponent(f.model));
+    if (f.shift) qs.push('shift=' + encodeURIComponent(f.shift));
+    if (f.customer) qs.push('customer=' + encodeURIComponent(f.customer));
+    if (f.model) qs.push('model=' + encodeURIComponent(f.model));
     var query = qs.length ? '?' + qs.join('&') : '';
 
     fetch('/api/prod/dashboard' + query, { cache: 'no-store' })
@@ -3271,9 +3294,13 @@ function wireFqcAnomalies() {
         (d.loss || []).forEach(function (r) {
           if (r.shift) pdShiftSet[SHIFT_LETTER[r.shift] || r.shift] = 1;
         });
-        _dashCascade('pdShift', pdShiftSet, 'All shifts', f.shift);
-        _dashCascade('pdCust',  d.customers || [], 'All customers', f.customer);
-        _dashCascade('pdModel', d.models || [], 'All', f.model);
+        /* the server's facets: what the period holds under every OTHER
+           filter (an older server sends none - then the lists above) */
+        var fc = d.facets;
+        _dashCascade('pdShift', fc ? fc.shift : pdShiftSet, 'All shifts', f.shift, { facet: !!fc });
+        _dashCascade('pdCust',  fc ? fc.customer : (d.customers || []), 'All customers',
+                     f.customer, { facet: !!fc });
+        _dashCascade('pdModel', fc ? fc.model : (d.models || []), 'All', f.model, { facet: !!fc });
         if (window.iconTable) window.iconTable.wireAll();
       })
       .catch(function (err) {

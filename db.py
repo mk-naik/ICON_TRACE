@@ -2529,7 +2529,7 @@ def trace_serial(cur, serial):
     return out
 
 def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
-                   d_from=None, d_to=None):
+                   d_from=None, d_to=None, wattage=None):
     if not cur: return {}
     import icon_customers as customers
 
@@ -2553,6 +2553,14 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
     if grade:
         bx_conds.append('b.grade = %s')
         bx_params.append(grade)
+    if wattage:
+        # Management Overview's Wattage: a pallet of modules of that wattage
+        # (its modules' own, read off the serial master)
+        bx_conds.append('b.box_id IN (SELECT bs.box_id FROM box_serial bs '
+                        'JOIN serial s ON s.serial = bs.serial '
+                        'AND s.build_instance = COALESCE(bs.build_instance, 1) '
+                        'WHERE s.wattage = %s)')
+        bx_params.append(wattage)
     
     bx_where = ' AND '.join(bx_conds) if bx_conds else '1=1'
     

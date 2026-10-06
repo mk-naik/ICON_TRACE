@@ -5585,7 +5585,71 @@ _PE_RAN = ("(CASE WHEN pe.status = 'cancelled' THEN NULL ELSE pe.prod_date || "
            "ELSE 'T22:00:00' END END)")
 
 
-def _module_events(cur, customer="", model=""):
+def _int_or_none(v):
+    """A whole number from a query value ("625", "625W", 625), else None."""
+    try:
+        return int(str(v).strip().upper().rstrip("W"))
+    except (TypeError, ValueError):
+        return None
+
+
+_EV_COLS = ("alloc_at", "prod_at", "fqc_at", "packed_at", "disp_at")
+
+
+def _module_facets(cur, frm, to, shift_no, customer, model, wattage):
+    """The Production Dashboard's (and Management Overview's) dropdowns, as
+    facets: the customers, models, wattages and shifts of modules that had
+    something HAPPEN in the period - allocated, produced, inspected, packed or
+    dispatched - each read with every other filter applied and its own left
+    out (Mukesh, 6 Oct 2026)."""
+    _module_events(cur, table="module_all")
+
+    def happened(col, with_shift=True):
+        c = ["%s IS NOT NULL" % col]
+        if frm:
+            c.append("%s >= '%s'" % (clock.shift_day_sql(col), frm))
+        if to:
+            c.append("%s <= '%s'" % (clock.shift_day_sql(col), to))
+        if with_shift and shift_no:
+            c.append("%s = %d" % (clock.shift_sql(col), shift_no))
+        return "(" + " AND ".join(c) + ")"
+
+    dims = {}
+    if customer and customer.lower() != "all customers":
+        c_sql, c_args = db.customer_match("cust", customer)
+        dims["customer"] = (c_sql, tuple(c_args))
+    if model and model.lower() not in ("all", "all models"):
+        dims["model"] = ("model = %s", (model,))
+    if _int_or_none(wattage):
+        dims["wattage"] = ("wattage = %s", (_int_or_none(wattage),))
+
+    def others(own):
+        keep = [v for k, v in dims.items() if k != own]
+        return ("".join(" AND " + x[0] for x in keep),
+                tuple(a for x in keep for a in x[1]))
+
+    any_ev = "(" + " OR ".join(happened(c) for c in _EV_COLS) + ")"
+    out = {}
+    for dim, col in (("customer", "cust"), ("model", "model"), ("wattage", "wattage")):
+        w, a = others(dim)
+        out[dim] = [r["v"] for r in store.rows(cur,
+            "SELECT DISTINCT %s AS v FROM module_all WHERE %s%s AND %s IS NOT NULL"
+            % (col, any_ev, w, col), a)]
+    w, a = others(None)
+    shifts = set()
+    for col in _EV_COLS:
+        for r in store.rows(cur, "SELECT DISTINCT %s AS v FROM module_all WHERE %s%s"
+                                 % (clock.shift_sql(col), happened(col, False), w), a):
+            shifts.add(r["v"])
+    cur.execute("DROP TABLE IF EXISTS temp.module_all")
+    out["customer"] = db.customer_options(out["customer"])
+    out["model"] = sorted(out["model"])
+    out["wattage"] = sorted(int(v) for v in out["wattage"] if _int_or_none(v))
+    out["shift"] = [clock.SHIFT_LETTER[n] for n in sorted(x for x in shifts if x)]
+    return out
+
+
+def _module_events(cur, customer="", model="", wattage="", table="module_ev"):
     """Every serial with the moment each thing happened to it, as a temp
     table for this connection - what both dashboards count from.
 
@@ -5612,9 +5676,12 @@ def _module_events(cur, customer="", model=""):
     if model and model.lower() not in ("all", "all models"):
         where.append("s.model = ?")
         args.append(model)
-    cur.execute("DROP TABLE IF EXISTS temp.module_ev")
+    if _int_or_none(wattage):
+        where.append("s.wattage = ?")
+        args.append(_int_or_none(wattage))
+    cur.execute("DROP TABLE IF EXISTS temp.%s" % table)
     cur.execute("""
-        CREATE TEMP TABLE module_ev AS
+        CREATE TEMP TABLE """ + table + """ AS
         WITH ff AS (SELECT serial, MIN(at) AS first_at
                     FROM fqc_record GROUP BY serial),
              fl AS (SELECT serial, MAX(fqc_id) AS fqc_id FROM fqc_record
@@ -5627,7 +5694,7 @@ def _module_events(cur, customer="", model=""):
                     FROM challan_serial cs
                     JOIN challan c ON c.challan_id = cs.challan_id
                     WHERE c.status = 'issued' GROUP BY cs.serial)
-        SELECT s.serial, s.alloc_id, s.state, s.model,
+        SELECT s.serial, s.alloc_id, s.state, s.model, s.wattage,
                COALESCE(s.customer, 'ICON STOCK') AS cust,
                -- FQC can now grade a module before Planning has its serial
                -- (Round 36), and that path never runs the Production screen
@@ -5678,6 +5745,7 @@ def api_prod_dashboard():
     shift_no = clock.shift_number(shift)
     customer = (request.args.get("customer") or "").strip()
     model = (request.args.get("model") or "").strip()
+    wattage = (request.args.get("wattage") or "").strip()
 
     def inp(col):
         """col happened inside the chosen days and shift"""
@@ -5726,7 +5794,7 @@ def api_prod_dashboard():
             "c_unproduced", "batches")
 
     with store.conn() as (cx, cur):
-        _module_events(cur, customer, model)
+        _module_events(cur, customer, model, wattage)
         kpi_row = store.one(cur, "SELECT " + counts + " FROM module_ev")
 
         # produced by the line its production entry names and the shift it
@@ -5778,6 +5846,7 @@ def api_prod_dashboard():
             "SELECT COUNT(*) AS n, MIN(created_at) AS oldest "
             "FROM loss_event WHERE end_time IS NULL AND status<>'cancelled'")
         cur.execute("DROP TABLE IF EXISTS temp.module_ev")
+        facets = _module_facets(cur, frm, to, shift_no, customer, model, wattage)
 
     kpi = {k: ((kpi_row or {}).get(k) or 0) for k in keys}
     kpi["hold"] = hold or 0
@@ -5843,7 +5912,8 @@ def api_prod_dashboard():
         # the factory day it is now, 06:00 to 06:00
         "today": clock.shift_day().isoformat(),
         "customers": db.customer_options(r["customer"] for r in customers_rows),
-        "models": [r["model"] for r in models_rows]
+        "models": [r["model"] for r in models_rows],
+        "facets": facets
     })
 
 
@@ -10167,6 +10237,7 @@ def api_fqc_dashboard():
     customer = (request.args.get("customer") or "").strip()
     model = (request.args.get("model") or "").strip()
     result = (request.args.get("result") or "").strip().lower()
+    wattage = _int_or_none(request.args.get("wattage"))
 
     # counted on the OUTCOME, not the grade: a reject has no grade until
     # Quality calls it, and counting grades would drop it from both
@@ -10197,6 +10268,8 @@ def api_fqc_dashboard():
         where.append(sql); args.extend(a)
     if model:
         where.append("s.model = %s"); args.append(model)
+    if wattage:
+        where.append("s.wattage = %s"); args.append(wattage)
     if result in ("pass", "reject"):
         where.append("f.outcome = %s"); args.append(result)
         decision_only.append("f.outcome = %s"); decision_args.append(result)
@@ -10243,6 +10316,8 @@ def api_fqc_dashboard():
             fcl.append(("customer", c_sql, tuple(c_args)))
         if model:
             fcl.append(("model", "s.model = %s", (model,)))
+        if wattage:
+            fcl.append((None, "s.wattage = %s", (wattage,)))
         if result in ("pass", "reject"):
             fcl.append((None, "f.outcome = %s", (result,)))
         facets = _facets(cur, "FROM fqc_record f JOIN serial s ON s.serial=f.serial", fcl,
@@ -10776,10 +10851,12 @@ def api_stock_dispatch():
     # a period, for Management Overview; `date` alone is one day, as before
     d_from = request.args.get("from", "").strip() or None
     d_to = request.args.get("to", "").strip() or d_from
+    # Management Overview's Wattage
+    watt = _int_or_none(request.args.get("wattage"))
 
     with store.conn() as (cx, cur):
         data = db.stock_dispatch(cur, d_date, customer, model, grade,
-                                 d_from=d_from, d_to=d_to)
+                                 d_from=d_from, d_to=d_to, wattage=watt)
     return jsonify(data)
 
 @app.errorhandler(413)

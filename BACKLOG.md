@@ -6608,8 +6608,11 @@ Kept up to date through the night; each item is ticked with its commit.
       was TYPED (`module_ev.prod_at` = `pe.created_at`): a C shift filed next
       morning was the next day's A shift - missed by the 26 Sep fix. Now the
       shift it ran. See the entry below.
-- [ ] Management Overview: its Wattage and Line filters are read and never
-      sent - picking one changes nothing.
+- [x] Management Overview: its Wattage and Line filters are read and never
+      sent - picking one changes nothing. Wattage now filters all three sources;
+      Line is disabled with the reason (see below).
+- [x] `wireMgmt()` is never called - dead code (its Reset is v4's mgReset,
+      patched by wireDateResets); left alone, noted here.
 - [x] Challan EDIT leaves a removed pallet stuck: the superseded original still
       "reserves" it - never offered again, refused on a new challan ("already on
       IS-..."), and Stock & Dispatch counts both versions. See the entry below.
@@ -6773,3 +6776,23 @@ Kept up to date through the night; each item is ticked with its commit.
   new challan, counted once, and its journey says where it was) - 69/69;
   `test_loading`, `test_packing`, `test_search_invoice`, `test_cancel_documents`,
   `test_repack` pass.
+
+## 6 Oct 2026 - Production Dashboard and Management Overview: facets, and Wattage that works
+
+- **Production Dashboard:** its Customer and Model lists were every customer / model
+  ever in the serial master, whatever the period; Shift was built from two tables.
+  `/api/prod/dashboard` now returns `facets` (`_module_facets`): the customers,
+  models, wattages and shifts of modules that had anything happen in the period
+  (allocated, produced, inspected, packed, dispatched), each read under every other
+  filter and its own left out. The page reads its filters with `_selVal()`.
+- **Management Overview:** Wattage and Line were read and NEVER SENT - picking 625W
+  or A-Line changed nothing while looking applied. Wattage now goes to all three
+  sources (`/api/prod/dashboard` and `/api/fqc/dashboard`: `s.wattage`;
+  `/api/stock_dispatch`: pallets whose modules are of that wattage) and shows in
+  "Filtered by". Line is disabled with "Not built yet - a line is recorded only on
+  production entries" (DECISIONS 8, open: whether he wants it on production alone).
+  Its four other dropdowns take the Production Dashboard's facets.
+- **Tests:** `test_customer_filters.py` +1 (facets with nothing / a customer picked,
+  wattage on all three sources) - 14/14. Seen in Chromium: 625W narrows customers
+  and models and the produced KPI goes 30 -> 12; Line disabled; MSEDCL on the
+  Production Dashboard keeps every customer and narrows the models.

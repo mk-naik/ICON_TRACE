@@ -298,6 +298,39 @@ def t_fqc_dashboard_browser():
         assert not pg.errors, pg.errors
 
 
+@test("dashboard dropdowns are facets - each offers what the period holds under "
+      "every OTHER filter, its own left out - and Wattage reaches the numbers on "
+      "all three Management Overview sources (Mukesh, 6 Oct)")
+def t_dashboard_facets_and_wattage():
+    c = seed()
+    with store.conn() as (cx, cur):
+        # one 590 W module for the other customer, inspected the same day
+        store.insert(cur, "serial", {
+            "serial": "ICON590G12924100099", "build_instance": 1, "model": "ISEN590-G2X",
+            "wattage": 590, "customer": OTHER, "dcr": "NDCR", "format_version": 2,
+            "date_produced": DAY, "shift": 1, "sequence": 99, "state": "graded",
+            "grade": "A"})
+        store.insert(cur, "fqc_record", {
+            "serial": "ICON590G12924100099", "outcome": "pass", "grade": "A",
+            "mode": "confirmed", "decided_by": "t", "at": AT % 40})
+    q = "?from=%s&to=%s" % (DAY, DAY)
+    pd = c.get("/api/prod/dashboard" + q).get_json()["facets"]
+    assert pd["wattage"] == [590, 625] and pd["shift"] == ["A"], pd
+    assert pd["customer"] == sorted([STOCK_NAME, OTHER], key=str.upper), pd
+    # one customer picked: still every customer; models and wattages narrow
+    one = c.get("/api/prod/dashboard" + q + "&customer=" + STOCK_NAME).get_json()["facets"]
+    assert len(one["customer"]) == 2 and one["wattage"] == [625], one
+    assert one["model"] == [MODEL], one
+    # wattage reaches the numbers - prod, FQC and stock
+    w = c.get("/api/prod/dashboard" + q + "&wattage=590").get_json()
+    assert w["kpi"]["fqc"] == 1 and w["facets"]["customer"] == [OTHER], w["facets"]
+    f = c.get("/api/fqc/dashboard" + q + "&wattage=590").get_json()
+    assert f["totals"]["inspected"] == 1, f["totals"]
+    assert f["facets"]["model"] == ["ISEN590-G2X"], f["facets"]
+    assert c.get("/api/fqc/dashboard" + q + "&wattage=625").get_json()["totals"]["inspected"] == 7
+    assert c.get("/api/stock_dispatch" + q + "&wattage=590").status_code == 200
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     only = [a for a in sys.argv[1:] if not a.startswith("-")]
