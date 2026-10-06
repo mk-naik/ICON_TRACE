@@ -2463,16 +2463,12 @@
     var result = '';
 
     if (window.fqcRecentApply && window.fqcRecentApply.__live) {
-      var sEl = document.getElementById('rShift');
-      if (sEl) shift = sEl.value === 'All shifts' ? '' : sEl.value;
-      var cEl = document.getElementById('rCust');
-      if (cEl) cust = cEl.value === 'All customers' ? '' : cEl.value;
-      var wEl = document.getElementById('rWatt');
-      if (wEl) watt = wEl.value === 'All' ? '' : wEl.value;
-      var dEl = document.getElementById('rDefect');
-      if (dEl) defect = dEl.value === 'All' ? '' : dEl.value;
-      var rEl = document.getElementById('rResult');
-      if (rEl) result = rEl.value === 'All' ? '' : rEl.value;
+      /* "no filter" is each dropdown's first option (_selVal) */
+      shift = _selVal('rShift');
+      cust = _selVal('rCust');
+      watt = _selVal('rWatt');
+      defect = _selVal('rDefect');
+      result = _selVal('rResult');
     }
 
     var qs = '?limit=1000';
@@ -2505,30 +2501,20 @@
           if (cardH) cardH.insertAdjacentElement('afterend', cb.firstChild);
         }
 
-        /* Dynamic cascade - each dropdown offers what the visible rows
-           hold, through the same helper as every dashboard. The shift is
-           the DECISION's (its IST time), never the serial's: fqc_record
-           has no shift column, and the serial's shift is the barcode's.
-           Defects are read from the labels the record carries (fqc_defect)
-           and the legacy column beside them. A slice with no rejects falls
-           back to the master defect list, so a defect not seen yet can
-           still be picked. */
-        var rShiftSet = _facetSet(rows, function (r) { return _shiftOfStamp(r.at); });
-        var rCustSet = _facetSet(rows, function (r) { return r.customer; });
-        var rWattSet = _facetSet(rows, function (r) { return r.wattage; });
-        var rDefectSet = {};
-        rows.forEach(function (r) {
-          String(r.defects || r.defect || '').split(',').forEach(function (d) {
-            d = d.trim(); if (d) rDefectSet[d] = 1;
-          });
-        });
-        if (!Object.keys(rDefectSet).length && typeof FQC_DEFECTS !== 'undefined') {
-          FQC_DEFECTS.forEach(function (d) { rDefectSet[d] = 1; });
-        }
-        _dashCascade('rShift', rShiftSet, 'All shifts', shift);
-        _dashCascade('rCust', rCustSet, 'All customers', cust);
-        _dashCascade('rWatt', rWattSet, 'All', watt, { label: function (w) { return w + 'W'; } });
-        _dashCascade('rDefect', rDefectSet, 'All', defect);
+        /* Dynamic: the server's facets over EVERY live decision under the
+           other filters - the rows are only the newest 100, and an older
+           customer was not offered at all. The shift is the DECISION's (its
+           IST time), never the serial's. A defect list that comes back empty
+           falls back to the master list, so a defect not seen yet can still
+           be picked. */
+        var fc = data.facets || {};
+        var defects = (fc.defect && fc.defect.length) ? fc.defect
+          : (typeof FQC_DEFECTS !== 'undefined' ? FQC_DEFECTS : []);
+        _dashCascade('rShift', fc.shift || [], 'All shifts', shift, { facet: true });
+        _dashCascade('rCust', fc.customer || [], 'All customers', cust, { facet: true });
+        _dashCascade('rWatt', fc.wattage || [], 'All', watt,
+                     { facet: true, label: function (w) { return w + 'W'; } });
+        _dashCascade('rDefect', defects, 'All', defect, { facet: true });
 
         var count = document.getElementById('fqcN');
         var overrides = document.getElementById('fqcOv');
@@ -3366,20 +3352,20 @@ function wireFqcAnomalies() {
     var g = function(id) { var e = document.getElementById(id); return e ? e.value : ''; };
     var f = {
       from: g('plFrom') || g('pkDate'), // handle whatever ID it got
-      shift: g('pkShift'),
-      customer: g('pkCust'),
-      model: g('pkModel'),
-      grade: g('pkGrade'),
-      status: g('pkStatus')
+      shift: _selVal('pkShift'),
+      customer: _selVal('pkCust'),
+      model: _selVal('pkModel'),
+      grade: _selVal('pkGrade'),
+      status: _selVal('pkStatus')
     };
     
     var qs = [];
     if (f.from) qs.push('from=' + encodeURIComponent(f.from));
-    if (f.shift && f.shift !== 'All shifts') qs.push('shift=' + encodeURIComponent(f.shift));
-    if (f.customer && f.customer !== 'All customers') qs.push('customer=' + encodeURIComponent(f.customer));
-    if (f.model && f.model !== 'All' && f.model !== 'All models') qs.push('model=' + encodeURIComponent(f.model));
-    if (f.grade && f.grade !== 'All') qs.push('grade=' + encodeURIComponent(f.grade));
-    if (f.status && f.status !== 'All') qs.push('status=' + encodeURIComponent(f.status));
+    if (f.shift) qs.push('shift=' + encodeURIComponent(f.shift));
+    if (f.customer) qs.push('customer=' + encodeURIComponent(f.customer));
+    if (f.model) qs.push('model=' + encodeURIComponent(f.model));
+    if (f.grade) qs.push('grade=' + encodeURIComponent(f.grade));
+    if (f.status) qs.push('status=' + encodeURIComponent(f.status));
     var query = qs.length ? '?' + qs.join('&') : '';
     
     fetch('/api/packing/log' + query, { cache: 'no-store' })
@@ -3484,20 +3470,16 @@ function wireFqcAnomalies() {
            Grade and Status dropdowns show only what the visible boxes
            actually hold. Same helper and rules as every other
            dashboard. */
-        /* status is the pallet's progress the server reads off its challan
-           (open / packed / challaned / dispatched) - what the filter matches;
-           the box's own state only ever says open or closed */
-        var pkShiftSet = _facetSet(rows, function (r) { return r.pack_shift; });
-        var pkCustSet = _facetSet(rows, function (r) { return r.customer_name || r.customer; });
-        var pkModelSet = _facetSet(rows, function (r) { return r.model; });
-        var pkGradeSet = _facetSet(rows, function (r) { return r.grade; });
-        var pkStatusSet = _facetSet(rows, function (r) { return r.status; });
-        _dashCascade('pkShift', pkShiftSet, 'All shifts', f.shift);
-        _dashCascade('pkCust',  pkCustSet,  'All customers', f.customer);
-        _dashCascade('pkModel', pkModelSet, 'All', f.model);
-        _dashCascade('pkGrade', pkGradeSet, 'All', f.grade);
-        _dashCascade('pkStatus', pkStatusSet, 'All', f.status, { label: function (v) {
-          return v.charAt(0).toUpperCase() + v.slice(1); } });
+        /* Dynamic: the server's facets - what the period holds under every
+           OTHER filter. Status is the pallet's progress read off its challan
+           (open / packed / challaned / dispatched), what the filter matches. */
+        var fc = d.facets || {};
+        var cap = function (v) { return v.charAt(0).toUpperCase() + v.slice(1); };
+        _dashCascade('pkShift', fc.shift || [], 'All shifts', f.shift, { facet: true });
+        _dashCascade('pkCust',  fc.customer || [], 'All customers', f.customer, { facet: true });
+        _dashCascade('pkModel', fc.model || [], 'All', f.model, { facet: true });
+        _dashCascade('pkGrade', fc.grade || [], 'All', f.grade, { facet: true });
+        _dashCascade('pkStatus', fc.status || [], 'All', f.status, { facet: true, label: cap });
       });
   }
   window.packApply = renderLivePackLog;
@@ -13235,18 +13217,9 @@ function wireFqcAnomalies() {
     var dateInput = vDisp.querySelector('input[type="date"]');
     if (dateInput) fDate = dateInput.value || '';
     
-    var fCust = 'All customers';
-    var cInput = document.getElementById('dpCust');
-    if (cInput) fCust = cInput.value || 'All customers';
-    
-    var fModel = 'All';
-    var mInput = document.getElementById('dpModel');
-    if (mInput) fModel = mInput.value || 'All';
-    
-    var fGrade = 'All';
-    var gInput = document.getElementById('dpGrade');
-    if (gInput) fGrade = gInput.value || 'All';
-    
+    /* "no filter" is each dropdown's first option (_selVal) */
+    var fCust = _selVal('dpCust'), fModel = _selVal('dpModel'), fGrade = _selVal('dpGrade');
+
     var qs = '?date=' + encodeURIComponent(fDate) + 
              '&customer=' + encodeURIComponent(fCust) + 
              '&model=' + encodeURIComponent(fModel) + 
@@ -13349,9 +13322,13 @@ function wireFqcAnomalies() {
          var cSet = _facetSet(d.table_fg || [], function (r) { return r.customer_name || r.customer; });
          var mSet = _facetSet(d.table_fg || [], function (r) { return r.model; });
          var gSet = _facetSet(d.table_fg || [], function (r) { return r.grade; });
-         _dashCascade('dpCust',  cSet, 'All customers', fCust !== 'All customers' ? fCust : '');
-         _dashCascade('dpModel', mSet, 'All', fModel !== 'All' ? fModel : '');
-         _dashCascade('dpGrade', gSet, 'All', fGrade !== 'All' ? fGrade : '');
+         /* the server's facets when it sends them: the pallets this screen
+            is about (ready, on a draft challan, dispatched on the day), each
+            dropdown under the OTHER filters */
+         var fc = d.facets;
+         _dashCascade('dpCust',  fc ? fc.customer : cSet, 'All customers', _selVal('dpCust'), { facet: !!fc });
+         _dashCascade('dpModel', fc ? fc.model : mSet, 'All', _selVal('dpModel'), { facet: !!fc });
+         _dashCascade('dpGrade', fc ? fc.grade : gSet, 'All', _selVal('dpGrade'), { facet: !!fc });
          
       })
       .catch(function(err) {

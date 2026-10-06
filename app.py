@@ -5934,29 +5934,16 @@ def api_packing_log():
     # By when the box was opened - its created_at, on the factory day
     # (06:00 to 06:00) and the shift on the clock then. Not the date in the
     # box number (fixed at opening, and choosable) and not the shift the
-    # opening screen sent.
+    # opening screen sent. The period is the only filter the query applies:
+    # every dropdown is then a predicate on the rows, so each one's options
+    # can be read under the OTHER filters (Mukesh, 6 Oct 2026 - dynamic
+    # filters); a pallet's status is only known after the query anyway.
     if frm:
         where.append(clock.shift_day_sql("b.created_at") + " >= ?")
         args.append(frm)
     if to:
         where.append(clock.shift_day_sql("b.created_at") + " <= ?")
         args.append(to)
-    if clock.shift_number(shift):
-        where.append(clock.shift_sql("b.created_at") + " = ?")
-        args.append(clock.shift_number(shift))
-    if customer and customer.lower() != "all customers":
-        # without case, and by name or code: a box stores the CODE, the
-        # dropdown offers the NAME (db.customer_match)
-        g2g = customer == "G2G (M10R) — General stock"
-        sql, a = db.customer_match("b.customer", "STOCK" if g2g else customer)
-        where.append("(b.customer IS NULL OR %s)" % sql if g2g else sql)
-        args.extend(a)
-    if model and model.lower() != "all" and model.lower() != "all models":
-        where.append("b.model = ?")
-        args.append(model)
-    if grade and grade.lower() != "all":
-        where.append("b.grade = ?")
-        args.append(grade)
     clause = " AND ".join(where)
 
     with store.conn() as (cx, cur):
@@ -6001,10 +5988,54 @@ def api_packing_log():
                 int(str(r["created_at"])[11:13] or 0)) - 1]
         cr = customers.get(r["customer"]) if r["customer"] else None
         r["customer_name"] = cr["name"] if cr else r["customer"]
-    if status and status.lower() != "all":
-        rows = [r for r in rows if r["status"] == status.lower()]
 
-    return jsonify({"rows": rows})
+    # the filters, one predicate each
+    preds = {}
+    n = clock.shift_number(shift)
+    if n:
+        preds["shift"] = lambda r, L=clock.SHIFT_LETTER[n]: r.get("pack_shift") == L
+    if customer and customer.lower() != "all customers":
+        # without case, and by name or code: a box stores the CODE, the
+        # dropdown offers the NAME. v4's "G2G (M10R) - General stock" is
+        # stock, and so is a box with no customer.
+        g2g = customer == "G2G (M10R) — General stock"
+        want = (customers.get("STOCK") if g2g else
+                (customers.get(customer) or customers.resolve(customer)))
+        forms = {customer.strip().upper()}
+        if want:
+            forms |= {(want.get("customer_code") or "").upper(),
+                      (want.get("name") or "").upper()}
+        forms.discard("")
+        preds["customer"] = (lambda r, F=forms, G=g2g:
+                             (G and not r.get("customer")) or
+                             str(r.get("customer") or "").strip().upper() in F or
+                             str(r.get("customer_name") or "").strip().upper() in F)
+    if model and model.lower() not in ("all", "all models"):
+        preds["model"] = lambda r, M=model: r.get("model") == M
+    if grade and grade.lower() != "all":
+        preds["grade"] = lambda r, G=grade: r.get("grade") == G
+    if status and status.lower() != "all":
+        preds["status"] = lambda r, S=status.lower(): r.get("status") == S
+
+    def keep(r, but=None):
+        return all(p(r) for k, p in preds.items() if k != but)
+
+    # each dropdown: what the period holds under every OTHER filter
+    def facet(dim, val):
+        return sorted({val(r) for r in rows if keep(r, dim) and val(r)},
+                      key=lambda v: str(v).upper())
+    facets = {
+        "shift": facet("shift", lambda r: r.get("pack_shift")),
+        "customer": db.customer_options(r.get("customer_name") or r.get("customer")
+                                        for r in rows if keep(r, "customer")
+                                        and (r.get("customer_name") or r.get("customer"))),
+        "model": facet("model", lambda r: r.get("model")),
+        "grade": facet("grade", lambda r: r.get("grade")),
+        "status": [st for st in ("open", "packed", "challaned", "dispatched")
+                   if any(r.get("status") == st for r in rows if keep(r, "status"))],
+    }
+    rows = [r for r in rows if keep(r)]
+    return jsonify({"rows": rows, "facets": facets})
 
 
 def _read_refusal(screens=(), roles=()):
@@ -10145,13 +10176,50 @@ def api_fqc_recent():
     }
     with store.conn() as (cx, cur):
         rows = [dict(r) for r in db.fqc_recent(cur, limit, filters=filters)]
+        facets = _fqc_recent_facets(cur, filters)
     # resolve customer codes to display names — the Recent Gradings table
     # needs them for filtering and for the column itself
     for r in rows:
         cr = customers.get(r.get("customer"))
         if cr:
             r["customer"] = cr["name"]
-    return jsonify({"rows": rows})
+    return jsonify({"rows": rows, "facets": facets})
+
+
+def _fqc_recent_facets(cur, filters):
+    """Recent Gradings' dropdowns as facets over EVERY live decision - the
+    list shows the newest 100, and the dropdowns were read off those, so an
+    older customer could not be picked at all. Same predicates as
+    db.fqc_recent, each dropdown's own left out (Mukesh, 6 Oct 2026)."""
+    shift_expr = clock.shift_sql("f.at")
+    cl = [(None, "f.superseded_by IS NULL", ()), (None, "f.status<>'cancelled'", ())]
+    n = clock.shift_number(filters.get("shift"))
+    if n:
+        cl.append(("shift", shift_expr + " = %s", (n,)))
+    if filters.get("customer"):
+        c_sql, c_args = db.customer_match("s.customer", filters["customer"])
+        cl.append(("customer", c_sql, tuple(c_args)))
+    if filters.get("model"):
+        cl.append(("model", "s.model = %s", (filters["model"],)))
+    if _int_or_none(filters.get("wattage")):
+        cl.append(("wattage", "s.wattage = %s", (_int_or_none(filters["wattage"]),)))
+    if filters.get("defect"):
+        cl.append(("defect", "EXISTS (SELECT 1 FROM fqc_defect fd JOIN defect_master dm "
+                             "ON dm.code=fd.defect_code WHERE fd.fqc_id=f.fqc_id AND "
+                             "(fd.defect_code=%s OR dm.label=%s COLLATE NOCASE))",
+                   (filters["defect"], filters["defect"])))
+    if (filters.get("result") or "").lower() in ("pass", "reject"):
+        cl.append(("result", "f.outcome = %s", (filters["result"].lower(),)))
+    base = ("FROM fqc_record f LEFT JOIN serial s ON s.serial = f.serial "
+            "AND s.build_instance = COALESCE(f.build_instance, 1)")
+    out = _facets(cur, base, cl, {"shift": shift_expr, "customer": "s.customer",
+                                  "wattage": "s.wattage"})
+    out.update(_facets(cur, base + " JOIN fqc_defect fdx ON fdx.fqc_id = f.fqc_id "
+                       "JOIN defect_master dmx ON dmx.code = fdx.defect_code",
+                       cl, {"defect": "dmx.label"}))
+    out["shift"] = [clock.SHIFT_LETTER.get(int(v), str(v)) for v in out["shift"]]
+    out["customer"] = db.customer_options(out["customer"])
+    return out
 
 
 @app.route("/api/fqc/defects")

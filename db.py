@@ -2543,16 +2543,20 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
     
     bx_conds = []
     bx_params = []
+    dim_conds = {}          # the screen's dropdowns, for the facets below
     if customer:
         sql, a = customer_match("b.customer", customer)   # a box stores the code
         bx_conds.append(sql)
         bx_params.extend(a)
+        dim_conds["customer"] = (sql, list(a))
     if model:
         bx_conds.append('b.model = %s')
         bx_params.append(model)
+        dim_conds["model"] = ('b.model = %s', [model])
     if grade:
         bx_conds.append('b.grade = %s')
         bx_params.append(grade)
+        dim_conds["grade"] = ('b.grade = %s', [grade])
     if wattage:
         # Management Overview's Wattage: a pallet of modules of that wattage
         # (its modules' own, read off the serial master)
@@ -2758,6 +2762,37 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
         daily.append({"day": day, "modules": r.get("modules") or 0,
                       "kw": r.get("kw") or 0})
 
+    # The dropdowns, as facets (Mukesh, 6 Oct 2026): the customers, models and
+    # grades of the pallets this screen is about - ready to ship, on a draft
+    # challan, or dispatched in the period - each read under every OTHER
+    # filter, its own left out.
+    live_boxes = ("SELECT bs.box_id FROM box_serial bs "
+                  "JOIN challan_serial cs ON cs.serial = bs.serial "
+                  "JOIN challan c ON c.challan_id = cs.challan_id WHERE ")
+    scope = ["b.box_id NOT IN (" + live_boxes +
+             "c.status NOT IN ('cancelled', 'superseded'))",
+             "b.box_id IN (" + live_boxes + "c.status = 'draft')"]
+    scope_params = []
+    if d_from or d_to or d_date:
+        per = []
+        if d_from or d_to:
+            if d_from:
+                per.append(issued_day + " >= %s"); scope_params.append(d_from)
+            if d_to:
+                per.append(issued_day + " <= %s"); scope_params.append(d_to)
+        else:
+            per.append(issued_day + " = %s"); scope_params.append(d_date)
+        scope.append("b.box_id IN (" + live_boxes + "c.status = 'issued' AND " +
+                     " AND ".join(per) + ")")
+    facets = {}
+    for dim, col in (("customer", "b.customer"), ("model", "b.model"), ("grade", "b.grade")):
+        others = [v for k, v in dim_conds.items() if k != dim]
+        sql_f = ("SELECT DISTINCT %s AS v FROM box b WHERE b.state = 'closed' AND (%s)%s"
+                 % (col, " OR ".join(scope), "".join(" AND " + o[0] for o in others)))
+        cur.execute(sql_f, tuple(scope_params + [a for o in others for a in o[1]]))
+        facets[dim] = sorted({r["v"] for r in cur.fetchall() if r["v"]})
+    facets["customer"] = customer_options(facets["customer"])
+
     return {
         "fg_ready": fg_ready,
         "rev_stock": rev_stock,
@@ -2765,5 +2800,6 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
         "disp_today": disp_today,
         "daily": daily,
         "table_fg": table_data,
-        "recent": recent
+        "recent": recent,
+        "facets": facets
     }

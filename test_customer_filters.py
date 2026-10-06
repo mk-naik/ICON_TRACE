@@ -186,6 +186,59 @@ def t_packing_log():
     assert len(rows) == 3, [r.get("customer") for r in rows]     # + the box with none
 
 
+@test("Packing Log's dropdowns are facets: a customer picked leaves every "
+      "customer on offer, grade and status show what that customer's pallets "
+      "hold, and the stock spellings are ONE option (6 Oct)")
+def t_packing_log_facets():
+    c = seed()
+    boxes()
+    with store.conn() as (cx, cur):
+        store.insert(cur, "box", {"pack_date": DAY, "seq": 9, "model": MODEL, "grade": "GY",
+                                  "customer": "C0002", "state": "open",
+                                  "created_by": "t", "created_at": AT % 9})
+    q = "/api/packing/log?from=%s&to=%s" % (DAY, DAY)
+    d = c.get(q).get_json()
+    c2 = customers.get("C0002")["name"]
+    assert d["facets"]["customer"] == sorted([STOCK_NAME, c2], key=str.upper), d["facets"]
+    assert d["facets"]["grade"] == ["A", "GY"] and d["facets"]["status"] == ["open", "packed"], d["facets"]
+    one = c.get(q + "&customer=" + c2).get_json()
+    assert len(one["rows"]) == 2, [r["customer"] for r in one["rows"]]
+    assert len(one["facets"]["customer"]) == 2, one["facets"]
+    st = c.get(q + "&status=packed").get_json()
+    assert st["facets"]["grade"] == ["A"] and st["facets"]["status"] == ["open", "packed"], st["facets"]
+
+
+@test("Stock & Dispatch's dropdowns are facets over the pallets it is about - a "
+      "customer picked leaves every customer on offer (6 Oct)")
+def t_stock_dispatch_facets():
+    c = seed()
+    boxes()
+    with store.conn() as (cx, cur):
+        store.insert(cur, "box", {"pack_date": DAY, "seq": 9, "model": "ISEN590-G2X",
+                                  "grade": "GY", "customer": "C0002", "state": "closed",
+                                  "created_by": "t", "created_at": AT % 9})
+    d = c.get("/api/stock_dispatch").get_json()["facets"]
+    c2 = customers.get("C0002")["name"]
+    assert d["customer"] == sorted([STOCK_NAME, c2], key=str.upper), d
+    assert d["model"] == sorted([MODEL, "ISEN590-G2X"]) and d["grade"] == ["A", "GY"], d
+    one = c.get("/api/stock_dispatch?customer=" + STOCK_NAME).get_json()["facets"]
+    assert len(one["customer"]) == 2 and one["model"] == [MODEL] and one["grade"] == ["A"], one
+
+
+@test("Recent gradings' dropdowns are facets over every live decision, not the "
+      "newest rows on screen (6 Oct)")
+def t_fqc_recent_facets():
+    c = seed()
+    d = c.get("/api/fqc/recent?limit=2").get_json()
+    assert len(d["rows"]) == 2
+    assert d["facets"]["customer"] == sorted([STOCK_NAME, OTHER], key=str.upper), d["facets"]
+    assert d["facets"]["shift"] == ["A"] and d["facets"]["wattage"] == [WATT], d["facets"]
+    one = c.get("/api/fqc/recent?customer=" + OTHER).get_json()
+    assert len(one["rows"]) == 1 and len(one["facets"]["customer"]) == 2, one["facets"]
+    none = c.get("/api/fqc/recent?result=reject").get_json()
+    assert none["rows"] == [] and none["facets"]["customer"] == [], none["facets"]
+
+
 @test("Stock & Dispatch: the same answer whichever spelling of the customer is "
       "chosen - and not the answer for someone else")
 def t_stock_dispatch():

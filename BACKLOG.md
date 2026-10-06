@@ -6624,8 +6624,9 @@ Kept up to date through the night; each item is ticked with its commit.
       (`renderMgmt` g() and others) - a customer named "Allied ..." is ignored.
 - [ ] Production Dashboard's Customer / Model lists are the whole master, every
       serial ever, not what the period holds.
-- [ ] FQC Recent: the client asks 1000 rows, the server caps at 100, so its
-      dropdowns only know the newest 100 decisions.
+- [x] FQC Recent: the client asks 1000 rows, the server caps at 100, so its
+      dropdowns only know the newest 100 decisions - facets now read every live
+      decision (the list itself still shows the newest 100).
 - [ ] `wireDynamicFilters` fills dashboard dropdowns from the whole master at
       sign-in, ahead of each screen's own dynamic list.
 - [ ] Dead code: the first `window.renderPackLog` (replaced by
@@ -6796,3 +6797,23 @@ Kept up to date through the night; each item is ticked with its commit.
   wattage on all three sources) - 14/14. Seen in Chromium: 625W narrows customers
   and models and the produced KPI goes 30 -> 12; Line disabled; MSEDCL on the
   Production Dashboard keeps every customer and narrows the models.
+
+## 6 Oct 2026 - Packing Log, Stock & Dispatch, Recent gradings: dynamic filters
+
+- **Packing Log:** the query applies only the period; each dropdown is a predicate on
+  the rows (a pallet's status is only known after the query), and `facets` gives each
+  one's options under the OTHER filters. Status is the challan-derived progress the
+  filter matches (open / packed / challaned / dispatched). The page reads its filters
+  with `_selVal()`.
+- **Stock & Dispatch:** `db.stock_dispatch` returns facets for customer, model and
+  grade over the pallets the screen is about - ready to ship, on a draft challan, or
+  dispatched in the period - each under the other filters.
+- **Recent gradings (FQC Entry):** its dropdowns were read off the newest 100 rows on
+  screen, so an older customer, wattage or defect could not be picked at all.
+  `/api/fqc/recent` returns facets over every live decision (`_fqc_recent_facets`,
+  the same predicates as `db.fqc_recent`); an empty defect facet falls back to the
+  master list.
+- **Tests:** `test_customer_filters.py` +3 (Packing Log, Stock & Dispatch, Recent
+  gradings facets) - 17/17; `test_dashboards_e2e` 27/27, `test_fqc_screen` 15/15,
+  `test_dashboards_ist`, `test_bad_input`, `test_dashrath_case`,
+  `test_print_and_favicon` pass.
