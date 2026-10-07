@@ -10802,7 +10802,8 @@ def api_fqc_dashboard_modules():
         rows = store.rows(cur,
             "SELECT s.serial, s.model, s.customer, s.wattage, "
             + fqc_shift + " AS shift, " + fqc_day + " AS day, "
-            "pe.created_at AS entry_at, f.fqc_id, f.at, f.outcome, "
+            "pe.created_at AS entry_at, pe.prod_date AS prod_date, "
+            "pe.shift AS prod_shift, f.fqc_id, f.at, f.outcome, "
             "f.quality_grade, COALESCE((SELECT dm.label FROM fqc_defect fd "
             "JOIN defect_master dm ON dm.code = fd.defect_code WHERE "
             "fd.fqc_id = f.fqc_id ORDER BY fd.seq LIMIT 1), f.defect) AS defect, "

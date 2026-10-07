@@ -1635,7 +1635,7 @@
     var custSelects = ['fDashCust', 'mgCust', 'pdCust', 'pkCust'];
     custSelects.forEach(function(id) {
       var sel = document.getElementById(id);
-      if (!sel) return;
+      if (!sel || sel.__faceted) return;   /* its screen's facets drive it */
       var prev = sel.value;
       sel.innerHTML = '<option>All customers</option>' + (B.customers || []).map(function(c) {
         return '<option value="' + fqcEsc(c.name) + '">' + fqcEsc(c.name) + '</option>';
@@ -1653,7 +1653,7 @@
     var modelSelects = ['fDashModel', 'mgModel', 'pdModel', 'pkModel'];
     modelSelects.forEach(function(id) {
       var sel = document.getElementById(id);
-      if (!sel) return;
+      if (!sel || sel.__faceted) return;   /* its screen's facets drive it */
       var prev = sel.value;
       sel.innerHTML = '<option>All</option>' + models.map(function(m) {
         return '<option value="' + fqcEsc(m) + '">' + fqcEsc(m) + '</option>';
@@ -1669,7 +1669,7 @@
     var shiftSelects = ['fDashShift', 'pkShift'];
     shiftSelects.forEach(function(id) {
       var sel = document.getElementById(id);
-      if (!sel) return;
+      if (!sel || sel.__faceted) return;   /* its screen's facets drive it */
       var prev = sel.value;
       sel.innerHTML = '<option>All shifts</option>' + shifts.map(function(s) {
         return '<option value="' + sMap[s] + '">' + sMap[s] + '</option>';
@@ -2769,6 +2769,7 @@ function wireFqcAnomalies() {
     opts = opts || {};
     var sel = typeof selId === 'string' ? document.getElementById(selId) : selId;
     if (!sel) return;
+    sel.__faceted = true;      /* wireDynamicFilters leaves it alone from now */
     var narrowed = sel.selectedIndex > 0;
     if (!opts.facet && currentFilterValue && narrowed) return;
     var arr = [], i, seen = {};
@@ -3847,7 +3848,12 @@ function wireFqcAnomalies() {
       for (i = 0; i < rows.length; i++) {
         m = rows[i]; fc = mdlFacets(m);
         var pass = m.outcome === 'pass';
-        var made = m.entry_at ? 'Production entry recorded ' +
+        /* produced: the date and shift its production entry records (when
+           the entry was typed is beside it) */
+        var made = m.prod_date ? 'Produced ' + fmtDay(m.prod_date) + ' shift ' +
+          (m.prod_shift || '?') + ' (entry recorded ' +
+          (typeof fmtIST === 'function' ? fmtIST(m.entry_at) : m.entry_at) + ')' :
+          m.entry_at ? 'Production entry recorded ' +
           (typeof fmtIST === 'function' ? fmtIST(m.entry_at) : m.entry_at) :
           'No production entry yet - counted as produced from this scan';
         var serial = fqcEsc(m.serial);
@@ -6311,11 +6317,16 @@ function wireFqcAnomalies() {
       serialRows + '</tbody></table></div></div>' : '');
   }
 
+  /* the journey's steps that name a document open it in Search: the batch,
+     the pallet, the challan (BACKLOG 2: "every title clickable, linking into
+     Search") */
+  var JOURNEY_LINKS = { 'Allocated': /^BAT-/, 'Packed': /^ISPL/, 'Challan': /^IS-/ };
   function traceSerialHtml(d) {
     var journey = d.journey.map(function (j) {
+      var v = j.value || DASH, re = JOURNEY_LINKS[j.stage];
       return '<div class="node' + (j.done ? ' done' : '') + '">' +
         '<label>' + fqcEsc(j.stage) + '</label>' +
-        '<div class="nv">' + fqcEsc(j.value || DASH) + '</div>' +
+        '<div class="nv">' + (re && re.test(v) ? qlink(v) : fqcEsc(v)) + '</div>' +
         '<div class="nd">' + (j.detail || []).map(fqcEsc).join('<br>') + '</div>' +
         '<div class="ns">' + traceTag(j.tag || '', j.tone) + '</div></div>';
     }).join('');

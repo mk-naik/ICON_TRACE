@@ -462,6 +462,24 @@ def t_dashboard_counts_the_shift_that_ran():
     assert other["kpi"]["prod"] == 0, other["kpi"]
 
 
+@test("the FQC drill-in's modules carry the production date and shift their "
+      "entry records (its tooltip said only when the entry was typed)")
+def t_drill_in_has_the_production():
+    c = setup()
+    with store.conn() as (cx, cur):
+        serials = plan_serials(cur, 2)
+    assert c.post("/api/prodentry", json={"date": RAN_ON, "shift": "B", "incharge": "X",
+        "start_serial": serials[0], "end_serial": serials[1]}).status_code == 200
+    with store.conn() as (cx, cur):
+        store.insert(cur, "fqc_record", {"serial": serials[0], "outcome": "pass", "grade": "A",
+            "mode": "confirmed", "decided_by": "t",
+            "at": clock.now().isoformat(timespec="seconds")})
+    day = clock.shift_day().isoformat()
+    rows = c.get("/api/fqc/dashboard/modules?from=%s&to=%s" % (day, day)).get_json()
+    got = [(r["serial"], r["prod_date"], r["prod_shift"]) for r in rows]
+    assert got == [(serials[0], RAN_ON, "B")], got
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0

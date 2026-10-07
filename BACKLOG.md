@@ -214,7 +214,9 @@ A new screen gets both for free.
       **Not built:** a repacking-list *number* - the system has none; a repack
       retires the source pallets and mints new ISPL numbers, and the pallet
       view shows that trail both ways.
-- [ ] Box / Serial Journey — every title clickable, linking into Search.
+- [x] Box / Serial Journey — every title clickable, linking into Search. *(7 Oct:
+      the module journey's batch, pallet and challan open in Search; the box,
+      challan and invoice views already linked theirs)*
 - [x] Reassignment history — only the original allocation is shown, because
       nothing else is recorded yet. Needs a customer-assignment table before
       the panel can say more. *(checked 7 Oct: built - Customer assignment
@@ -6643,8 +6645,9 @@ Kept up to date through the night; each item is ticked with its commit.
 - [x] FQC Recent: the client asks 1000 rows, the server caps at 100, so its
       dropdowns only know the newest 100 decisions - facets now read every live
       decision (the list itself still shows the newest 100).
-- [ ] `wireDynamicFilters` fills dashboard dropdowns from the whole master at
-      sign-in, ahead of each screen's own dynamic list.
+- [x] `wireDynamicFilters` fills dashboard dropdowns from the whole master at
+      sign-in, ahead of each screen's own dynamic list - it now leaves alone any
+      dropdown its screen's facets have filled (it ran again on every rerender).
 - [x] Dead code: the first `window.renderPackLog` (replaced by
       `renderLivePackLog` a few hundred lines later) - it was not quite dead:
       initUI() called it at every sign-in. Removed (entry below).
@@ -6974,3 +6977,19 @@ Kept up to date through the night; each item is ticked with its commit.
   checks (409) and cancel request/approve; Materials cannot be deleted (deliberate);
   the Quality downgrade of a pass (decided, its screen undecided); Box / Serial journey
   titles clickable - done in the next commit.
+
+## 7 Oct 2026 - Journey titles link into Search; the drill-in names the production; the sign-in fill stops overwriting facets
+
+- **Module journey:** the batch (BAT-...), pallet (ISPL...) and challan (IS-...) on
+  the journey open in Search (`qlink`, as the box / challan / invoice views already
+  did). Seen in Chromium: the challan step opens IS-07.10.2026/0001.
+- **FQC drill-in:** the shift cell's tooltip said "Production entry recorded <when it
+  was typed>"; `/api/fqc/dashboard/modules` now returns the entry's `prod_date` and
+  `shift`, and the tooltip reads "Produced 05-10-2026 shift C (entry recorded ...)".
+- **`wireDynamicFilters`** (sign-in, and every rerender) refilled the dashboards'
+  Customer / Model / Shift dropdowns from the whole master, over the facets each
+  screen had just set; `_dashCascade` marks a dropdown it has filled and the fill
+  leaves it alone.
+- **Tests:** `test_production.py` +1 (the drill-in rows carry the production date and
+  shift) - 16/16; `test_trace.js` 33/33, `test_fqc_dashboard.js` 24/24,
+  `test_dashboard_cascade.js` 15/15.
