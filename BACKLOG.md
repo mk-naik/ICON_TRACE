@@ -6596,7 +6596,7 @@ Kept up to date through the night; each item is ticked with its commit.
       after a recovery sign-in. NOT done overnight: it opens a new way into an
       Admin account, so it waits for your explicit yes (the session's safety
       check stopped it too).
-- [ ] Admin: parts that are still v4 dummies.
+- [x] Admin: parts that are still v4 dummies - see the entry below.
 - [ ] BACKLOG: open items; items logged fixed that have since regressed.
 
 **Found on the way**
@@ -6897,3 +6897,47 @@ Kept up to date through the night; each item is ticked with its commit.
 - **Tests:** `test_change_feed_ui.py` 8/8 (watches `/api/packing/log`),
   `test_dashboards_e2e` 27/27, `test_screens.js` 17/17, `test_packing.js` 26/26,
   `test_fqc_dashboard.js` 24/24, `test_dashrath_case`, `test_print_and_favicon`.
+
+## 7 Oct 2026 - Admin: the tabs that were v4 sample data now read the database
+
+- **Asked:** "Admin screen remaining things which just for dummy".
+- **What each tab showed (Chromium, scratch DB):** Audit trail and Document & print log
+  - v4's invented rows (21-08-2026, Dasrath Pal, CHN-455...); Reason codes - codes
+  nothing uses (CN-VEH, RP-SPLIT...) with invented "used this month" counts; Grade
+  rules - Pmax bands proposing A/GY/BGY that FQC has never applied and that contradict
+  DECISIONS 5; Access review - dashes and an empty table; Open questions - a fixed list
+  from August, mostly answered, and a "Build order" saying FQC and Packing were held;
+  Machines - counts edited in the page, lost on refresh. And nothing recorded a print
+  at all (`box_print` exists, nothing writes it).
+- **Change:**
+  - Every document opened to print and every export is audited (`_log_print`): challan
+    v1, challan v2 Excel, FTR, gate pass, packing list, serial barcodes (sheet and
+    Excel), traceability report, the CSV exports - who, which document, which
+    template. Copies are NOT claimed: the browser's print dialog chooses them.
+  - `/api/admin/audit` (Admin / Super Admin): the audit table, newest first, 500 at a
+    time, dates / user / entity / action / search, every dropdown a facet. Audit trail
+    and Document & print log both read it (`kind=docs` = prints and exports).
+  - Access review (`/api/admin/access-review`): accounts the Users screen manages with
+    no sign-in for 60 days (or never), and every Admin; Deactivate goes through the
+    real Users action; **Sign off review is real** - an `access.review` audit row
+    (who, when, who was listed), which "Last review" shows.
+  - Reason codes: what is really recorded this month - the LOP codes on downtime
+    events, any code on an FQC decision, cancellations by document (each with a typed,
+    mandatory reason - DECISIONS 1). "+ Add code" disabled: coded cancel reasons are
+    not built.
+  - Grade rules -> **FQC rules**: the rules as built (DECISIONS 5), the version in force
+    (`FQC_RULE_VERSION`) and live decisions counted by the version that judged them.
+    "+ New version" disabled with why.
+  - Open questions: DECISIONS.md's `[open]` items and its decided-but-not-built ones,
+    read from the file each time (so the two cannot disagree).
+  - Machines: counts saved in `app_config` (`/api/machines` - Super Admin writes, 0-50
+    per line, audited; everyone reads), applied at sign-in, so Loss & Breakdown and the
+    Production Dashboard's modules-lost arithmetic use them. Non-Super-Admins see them
+    read-only. "+ Add type" stays disabled.
+- **Tests:** `test_admin_tabs.py` (new, 9: prints logged, audit facets, access review
+  and sign-off, reason usage, FQC rule versions, open questions from the file, machine
+  counts and their gate, operator refused, browser), `test_demo_claims.py` updated (Sign
+  off review is real; + New version says why) 3/3, `test_anonymous_routes` 3/3,
+  `test_screens.js`, `test_hash_route`, `test_users_screen`, `test_permission_editor`,
+  `test_barcode_text_ui`, `test_gatepass_print`, `test_trace_export`, `test_box_number`,
+  `test_role_gates`, `test_loss`, `test_dashboards_ist` pass.

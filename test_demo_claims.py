@@ -38,8 +38,11 @@ LIVE_CLAIMS = [("plan", "New plan", "Save as draft"),
                ("prodentry", "New production entry", "Save as draft"),
                ("loss", "Record downtime event", "Submit shift")]
 # ("cancel", "Cancel document") is real since Round 34 (direct cancellation)
-ADMIN_CLAIMS = [("access", "Sign off review"), ("mach", "+ Add type")]
-ADMIN_HONEST = [("grade", "+ New version"), ("defects", "+ Add code")]
+# 7 Oct 2026: "Sign off review" is real once its tab opens (it records the
+# review - test_admin_tabs.py); Grade rules' "+ New version" is disabled with
+# why (the FQC rules are code + DECISIONS 5, not a table)
+ADMIN_CLAIMS = [("mach", "+ Add type")]
+ADMIN_HONEST = [("defects", "+ Add code")]
 CLAIM_WORDS = ["Draft saved.", "Materials copied from", "Shift events submitted",
                "Access review recorded", "Document cancelled.", "Add-machine form opens here."]
 
@@ -119,8 +122,9 @@ def t_operator_forms():
         assert pg.errors == [], pg.errors
 
 
-@test("on the Admin screen, Cancel document, Sign off review and + Add type "
-     "are disabled with the reason; the two explanatory buttons still explain")
+@test("on the Admin screen, + Add type is disabled with the reason, Defect "
+     "codes' button still explains, + New version says why it is not built, and "
+     "Sign off review records the review once its tab is open")
 def t_admin_buttons():
     store.wipe(); AUTH.ensure_auth_schema()
     with H.browser() as b:
@@ -135,7 +139,15 @@ def t_admin_buttons():
             btn = pg.locator("#ad-%s button" % pane, has_text=label).first
             assert btn.is_enabled(), (pane, label)
             btn.click(); pg.wait_for_timeout(200)
-        assert len(pg.toasts) == 2, pg.toasts
+        assert len(pg.toasts) == 1, pg.toasts
+        admin_tab(pg, "grade"); pg.wait_for_timeout(600)
+        nv = pg.locator("#ad-grade button", has_text="+ New version").first
+        assert nv.is_disabled() and (nv.get_attribute("title") or "").startswith("Not built yet"),             nv.get_attribute("title")
+        admin_tab(pg, "access"); pg.wait_for_timeout(600)
+        so = pg.locator("#ad-access button", has_text="Sign off review").first
+        assert so.is_enabled(), "Sign off review is real once its tab is open"
+        so.click(); pg.wait_for_timeout(1000)
+        assert any("signed off" in t for t in pg.toasts), pg.toasts
         assert not [t for t in pg.toasts if any(w in t for w in CLAIM_WORDS)], pg.toasts
         print("      explanatory toasts still shown: %s" % [t[:40] for t in pg.toasts])
 

@@ -6813,6 +6813,9 @@ function wireFqcAnomalies() {
     if (_origSignIn) _origSignIn.apply(this, arguments);   /* go(landing) */
     applyBoot();
     _bootRenderOnly = null;
+    /* saved machine counts (Admin > Machines) - Loss & Breakdown's and the
+       Production Dashboard's arithmetic read them */
+    if (window.adMachinesBoot) window.adMachinesBoot();
     if (ROLES[USER.role]) ROLES[USER.role].home = _origHome;   /* restore */
     _loadViewableScreens();
     addScreens();
@@ -15278,5 +15281,482 @@ window.gpSetKind = function(k) {
       _applyDateLimit(e.target);
     }
   }, true);
+
+  /* ==== ADMIN: the tabs that were v4 sample data (7 Oct 2026) ===========
+   *
+   * Mukesh: "Admin screen remaining things which just for dummy". Audit
+   * trail and Document & print log showed v4's invented rows from 21 Aug;
+   * Reason codes listed codes nothing uses, with invented "used this month"
+   * counts; Grade rules showed Pmax bands FQC has never applied (FQC does
+   * not grade - DECISIONS 5); Access review was dashes; Open questions was a
+   * fixed list from August; machine counts were edited in the page and lost
+   * on refresh. Each tab now reads the server when it is opened, or says
+   * plainly what is not built.
+   */
+  function adWhen(s) { return s ? fmtIST(String(s).replace(' ', 'T')) : '—'; }
+  function adDay(off) {
+    var d = new Date(Date.now() - 6 * 3600000 - (off || 0) * 86400000);
+    return _localDate(d);
+  }
+  function adBusy(tbodyId, cols, text) {
+    var tb = document.getElementById(tbodyId);
+    if (tb) tb.innerHTML = '<tr data-empty><td colspan="' + cols + '" style="padding:16px;' +
+      'color:var(--ink3);text-align:center">' + fqcEsc(text || 'Loading…') + '</td></tr>';
+  }
+  function adNote(paneId, html) {
+    var n = document.querySelector('#' + paneId + ' > .note');
+    if (n && html) n.innerHTML = html;
+  }
+  /* a v4 button that only toasted, made a real one (or left honest) */
+  function adButton(btn, fn) {
+    if (!btn) return;
+    btn.disabled = false;
+    btn.removeAttribute('data-demo-claim');
+    btn.classList.remove('ro-locked');
+    btn.removeAttribute('title');
+    btn.removeAttribute('onclick');
+    btn.onclick = fn;
+  }
+  function adNotBuilt(btn, why) {
+    if (!btn) return;
+    btn.removeAttribute('onclick');
+    btn.onclick = null;
+    btn.disabled = true;
+    btn.classList.add('ro-locked');
+    btn.title = 'Not built yet - ' + why;
+  }
+  function adDetail(d) {
+    if (d == null || d === '') return '—';
+    if (typeof d !== 'object') return String(d);
+    return Object.keys(d).filter(function (k) { return k !== 'reason'; }).map(function (k) {
+      var v = d[k];
+      if (v && typeof v === 'object') v = JSON.stringify(v);
+      return k.replace(/_/g, ' ') + ': ' + v;
+    }).join(' · ');
+  }
+
+  /* ---- Audit trail and Document & print log: one reader, two views ---- */
+  var AD_DOC = {
+    'print.challan': ['Challan (v1)', 'Opened to print'],
+    'export.challan_excel': ['Challan (v2, Excel)', 'Exported'],
+    'print.ftr': ['Flash Test Report', 'Opened to print'],
+    'print.gatepass': ['Gate pass', 'Opened to print'],
+    'print.packing_list': ['Packing list', 'Opened to print'],
+    'print.barcodes': ['Serial barcodes', 'Opened to print'],
+    'export.barcodes_excel': ['Serial barcodes (Excel)', 'Exported'],
+    'export.traceability': ['Traceability report', 'Exported'],
+    'export.serials': ['Serials (CSV)', 'Exported'],
+    'export.fqc': ['FQC records (CSV)', 'Exported'],
+    'export.indents': ['Indents (CSV)', 'Exported'],
+    'export.gatepass': ['Gate passes (CSV)', 'Exported']
+  };
+
+  function adLogBar(pane, pre, kind) {
+    var card = document.querySelector('#' + pane + ' .card');
+    if (!card || document.getElementById(pre + 'From')) return;
+    var old = card.querySelector('.mfil');
+    if (old) old.remove();
+    var bar = document.createElement('div');
+    bar.className = 'filters';
+    bar.style.cssText = 'padding:12px 16px;border-bottom:1px solid var(--line2);margin:0';
+    bar.innerHTML =
+      '<div class="fld"><label>From</label><input type="date" id="' + pre + 'From"></div>' +
+      '<div class="fld"><label>To</label><input type="date" id="' + pre + 'To"></div>' +
+      '<div class="fld"><label>User</label><select id="' + pre + 'Actor">' +
+        '<option value="">All users</option></select></div>' +
+      (kind === 'docs' ? '' :
+        '<div class="fld"><label>Entity</label><select id="' + pre + 'Entity">' +
+          '<option value="">All</option></select></div>') +
+      '<div class="fld"><label>' + (kind === 'docs' ? 'Document' : 'Action') + '</label>' +
+        '<select id="' + pre + 'Action"><option value="">All</option></select></div>' +
+      '<div class="fld"><label>Search</label><input id="' + pre + 'Q" placeholder="reference / detail"></div>' +
+      '<div class="fld"><label>&nbsp;</label><span class="tag t-mute" id="' + pre + 'Count"></span></div>';
+    card.insertBefore(bar, card.querySelector('.card-b'));
+    document.getElementById(pre + 'From').value = adDay(6);
+    document.getElementById(pre + 'To').value = adDay(0);
+    var reload = function () { (kind === 'docs' ? adDocsLoad : adAuditLoad)(); };
+    bar.querySelectorAll('input,select').forEach(function (el) {
+      el.addEventListener(el.tagName === 'INPUT' && el.type !== 'date' ? 'change' : 'change', reload);
+    });
+  }
+
+  function adLogQuery(pre, kind) {
+    var v = function (id) { var e = document.getElementById(pre + id); return e ? e.value : ''; };
+    var q = ['limit=500', 'from=' + encodeURIComponent(v('From')), 'to=' + encodeURIComponent(v('To'))];
+    if (kind) q.push('kind=' + kind);
+    if (_selVal(pre + 'Actor')) q.push('actor=' + encodeURIComponent(_selVal(pre + 'Actor')));
+    if (_selVal(pre + 'Entity')) q.push('entity=' + encodeURIComponent(_selVal(pre + 'Entity')));
+    if (_selVal(pre + 'Action')) q.push('action=' + encodeURIComponent(_selVal(pre + 'Action')));
+    if (v('Q')) q.push('q=' + encodeURIComponent(v('Q')));
+    return '?' + q.join('&');
+  }
+
+  function adAuditLoad() {
+    adLogBar('ad-audit', 'au', '');
+    var head = document.querySelector('#ad-audit thead tr');
+    if (head) head.innerHTML = '<th>Timestamp</th><th>User</th><th>Action</th><th>Entity</th>' +
+      '<th>Reference</th><th>Detail</th><th>Reason</th>';
+    adNote('ad-audit', '<span>ⓘ</span><span>Every save, cancel and print, as the server ' +
+      'recorded it - who, when, what, and the detail it kept. Newest first; the newest 500 of ' +
+      'the dates are shown - narrow them, or search.</span>');
+    adBusy('auditRows', 7);
+    fetch('/api/admin/audit' + adLogQuery('au', ''), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.rows) { adBusy('auditRows', 7, (d && d.why) || 'Could not load.'); return; }
+        var fc = d.facets || {};
+        _dashCascade('auActor', fc.actor || [], 'All users', _selVal('auActor'), { facet: true });
+        _dashCascade('auEntity', fc.entity || [], 'All', _selVal('auEntity'), { facet: true });
+        _dashCascade('auAction', fc.action || [], 'All', _selVal('auAction'), { facet: true });
+        var c = document.getElementById('auCount');
+        if (c) c.textContent = d.rows.length + (d.rows.length >= d.limit ? '+ rows' : ' rows');
+        var tb = document.getElementById('auditRows');
+        if (!tb) return;
+        tb.innerHTML = d.rows.length ? d.rows.map(function (a) {
+          var act = String(a.action || '');
+          var tone = /cancel/.test(act) ? 't-fail' : /^print|^export/.test(act) ? 't-mute' : 't-info';
+          return '<tr><td class="mono">' + fqcEsc(adWhen(a.at)) + '</td>' +
+            '<td>' + fqcEsc(a.actor || '—') + '</td>' +
+            '<td><span class="tag ' + tone + '">' + fqcEsc(act) + '</span></td>' +
+            '<td>' + fqcEsc(a.entity || '—') + '</td>' +
+            '<td class="mono">' + fqcEsc(a.entity_id || '—') + '</td>' +
+            '<td style="font-size:11.5px;color:var(--ink2);max-width:520px">' +
+              fqcEsc(adDetail(a.detail)) + '</td>' +
+            '<td>' + fqcEsc(a.reason || '—') + '</td></tr>';
+        }).join('') : '<tr data-empty><td colspan="7"><div class="empty-state">' +
+          'Nothing recorded in these dates under these filters.</div></td></tr>';
+      })
+      ['catch'](function () { adBusy('auditRows', 7, 'Could not load the audit trail.'); });
+  }
+
+  function adDocsLoad() {
+    adLogBar('ad-docs', 'dl', 'docs');
+    var head = document.querySelector('#ad-docs thead tr');
+    if (head) head.innerHTML = '<th>Timestamp</th><th>Document</th><th>Reference</th>' +
+      '<th>Action</th><th>Template</th><th>User</th>';
+    adNote('ad-docs', '<span>⚑</span><span>Printed paper leaves the system, so every time a ' +
+      'document is opened to print, or exported, it is recorded here - who, when, which ' +
+      'document and template. <b>Copies are not shown</b>: they are chosen in the browser\'s own ' +
+      'print dialog, which the server never sees. Recorded from 7 Oct 2026; nothing before ' +
+      'that was kept.</span>');
+    adBusy('docRows', 6);
+    fetch('/api/admin/audit' + adLogQuery('dl', 'docs'), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.rows) { adBusy('docRows', 6, (d && d.why) || 'Could not load.'); return; }
+        var fc = d.facets || {};
+        _dashCascade('dlActor', fc.actor || [], 'All users', _selVal('dlActor'), { facet: true });
+        _dashCascade('dlAction', fc.action || [], 'All', _selVal('dlAction'), { facet: true,
+          label: function (v) { return (AD_DOC[v] || [v])[0]; } });
+        var c = document.getElementById('dlCount');
+        if (c) c.textContent = d.rows.length + (d.rows.length >= d.limit ? '+ rows' : ' rows');
+        var tb = document.getElementById('docRows');
+        if (!tb) return;
+        tb.innerHTML = d.rows.length ? d.rows.map(function (a) {
+          var m = AD_DOC[a.action] || [a.action, /^export/.test(a.action) ? 'Exported' : 'Opened to print'];
+          var det = a.detail && typeof a.detail === 'object' ? a.detail : {};
+          return '<tr><td class="mono">' + fqcEsc(adWhen(a.at)) + '</td>' +
+            '<td>' + fqcEsc(m[0]) + '</td>' +
+            '<td class="mono">' + fqcEsc(a.entity_id || '—') + '</td>' +
+            '<td><span class="tag ' + (m[1] === 'Exported' ? 't-mute' : 't-info') + '">' +
+              fqcEsc(m[1]) + '</span></td>' +
+            '<td>' + fqcEsc(det.template || det.format || '—') + '</td>' +
+            '<td>' + fqcEsc(a.actor || '—') + '</td></tr>';
+        }).join('') : '<tr data-empty><td colspan="6"><div class="empty-state">' +
+          'Nothing printed or exported in these dates.</div></td></tr>';
+      })
+      ['catch'](function () { adBusy('docRows', 6, 'Could not load the print log.'); });
+  }
+
+  /* ---- Reason codes: what is really recorded, counted ------------------ */
+  function adReasonsLoad() {
+    var pane = document.getElementById('ad-reasons');
+    if (!pane) return;
+    adNotBuilt(pane.querySelector('.card-h .btn'),
+      'a cancel takes a typed, mandatory reason (DECISIONS 1), not a code.');
+    var head = pane.querySelector('thead tr');
+    if (head) head.innerHTML = '<th>Code</th><th>Applies to</th><th>Description</th>' +
+      '<th style="text-align:right">Used this month</th>';
+    adNote('ad-reasons', '<span>ⓘ</span><span>The reasons ICON TRACE actually records, counted ' +
+      'for this month. Downtime carries an LOP code. A cancellation carries a <b>reason typed by ' +
+      'the person</b> - mandatory, never a default and never a code (DECISIONS 1) - so it is ' +
+      'counted here by document. Coded cancel reasons are not built.</span>');
+    adBusy('reasonRows', 4);
+    fetch('/api/admin/reason-usage', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var tb = document.getElementById('reasonRows');
+        if (!tb || !d || !d.loss) return;
+        var rows = [];
+        var ev = document.getElementById('evReason');
+        var lop = ev ? Array.prototype.map.call(ev.options, function (o) {
+          var p = o.text.split(' — '); return [p[0], p[1] || ''];
+        }) : [];
+        Object.keys(d.loss).forEach(function (k) {
+          if (!lop.some(function (x) { return x[0] === k; })) lop.push([k, '']);
+        });
+        lop.forEach(function (x) {
+          rows.push([x[0], 'Downtime (LOP)', x[1], d.loss[x[0]] || 0]);
+        });
+        Object.keys(d.fqc || {}).sort().forEach(function (k) {
+          rows.push([k, 'FQC decision', 'recorded on the decision', d.fqc[k]]);
+        });
+        Object.keys(d.cancels || {}).sort().forEach(function (k) {
+          var doc = k.replace(/\.cancel$/, '').replace(/_/g, ' ');
+          rows.push(['— typed —', 'Cancel ' + doc, 'the reason the person typed', d.cancels[k]]);
+        });
+        var head2 = pane.querySelector('thead th:last-child');
+        if (head2) head2.textContent = 'Used since ' + fmtDay(d.since);
+        tb.innerHTML = rows.map(function (r) {
+          return '<tr><td class="mono" style="font-weight:700">' + fqcEsc(r[0]) + '</td>' +
+            '<td>' + fqcEsc(r[1]) + '</td><td>' + fqcEsc(r[2]) + '</td>' +
+            '<td class="num">' + r[3] + '</td></tr>';
+        }).join('');
+      })
+      ['catch'](function () { adBusy('reasonRows', 4, 'Could not load.'); });
+  }
+
+  /* ---- FQC rules (was "Grade rules") ----------------------------------- */
+  var _adRules = null;
+  function adRulesPaint() {
+    var pane = document.getElementById('ad-grade');
+    if (!pane || !_adRules) return;
+    var h3 = pane.querySelector('.card-h h3');
+    if (h3) h3.textContent = 'FQC rules';
+    var ver = document.getElementById('grVer');
+    if (ver) ver.textContent = _adRules.in_force + ' in force';
+    adNotBuilt(pane.querySelector('.card-h .btn'),
+      'the rules are code, versioned by FQC_RULE_VERSION and written down in DECISIONS 5.');
+    adNote('ad-grade', '<span>ⓘ</span><span><b>FQC does not grade.</b> It records PASS or ' +
+      'REJECT from the evidence the server reads; a rejected module goes to Quality, who assign ' +
+      'A, GY or BGY. Every decision is stamped with the rule version that judged it, so a rule ' +
+      'change cannot restate an older decision. (v4\'s Pmax bands proposing A / GY / BGY were ' +
+      'never applied.)</span>');
+    var head = pane.querySelector('thead tr');
+    if (head) head.innerHTML = '<th>Rule</th><th>Effect</th><th>Version</th>';
+    var R = [
+      ['A pass needs Pmax at or above the module\'s nameplate wattage, read from the Sun Simulator', 'below it: never a pass'],
+      ['A pass needs a clean EL; an EL-only objection can be passed after looking at the image', 'the defect is kept on the record'],
+      ['Tester BAD (probe, polarity, junction box) - tested and unreadable', 'blocks a pass; a reject is allowed'],
+      ['Tester NC (source unreachable)', 'a pass is provisional: held, unpackable, until the reading arrives and agrees'],
+      ['A confirmed pass', 'grade A'],
+      ['A reject', 'no grade until Quality decides (A, GY or BGY)']
+    ];
+    var tb = document.getElementById('gradeRows');
+    if (!tb) return;
+    tb.innerHTML = R.map(function (r) {
+      return '<tr><td>' + fqcEsc(r[0]) + '</td><td>' + fqcEsc(r[1]) + '</td>' +
+        '<td class="mono">' + fqcEsc(_adRules.in_force) + '</td></tr>';
+    }).join('') + '<tr data-empty><td colspan="3" style="background:var(--card-alt);' +
+      'font-weight:700;padding:10px 12px">Live decisions by the version that judged them</td></tr>' +
+      (_adRules.versions || []).map(function (v) {
+        return '<tr data-empty><td class="mono">' + fqcEsc(v.version) +
+          (v.version === _adRules.in_force ? ' <span class="tag t-pass">in force</span>' :
+            ' <span class="tag t-mute">earlier</span>') + '</td>' +
+          '<td>' + Number(v.n).toLocaleString() + ' decisions</td>' +
+          '<td class="mono" style="font-size:11px">' + fqcEsc(adWhen(v.first_at)) +
+          ' to ' + fqcEsc(adWhen(v.last_at)) + '</td></tr>';
+      }).join('');
+    var foot = pane.querySelector('.card-f span');
+    if (foot) foot.textContent = 'Earlier versions are never deleted - every decision keeps the ' +
+      'version that judged it.';
+  }
+  function adRulesLoad() {
+    adBusy('gradeRows', 3);
+    fetch('/api/admin/fqc-rules', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (d && d.in_force) { _adRules = d; adRulesPaint(); } })
+      ['catch'](function () { adBusy('gradeRows', 3, 'Could not load.'); });
+  }
+
+  /* ---- Access review --------------------------------------------------- */
+  function adAccessPaint(d) {
+    var set = function (id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
+    set('arActive', d.active);
+    set('arDormant', d.dormant);
+    set('arAdmin', d.admins);
+    var kpis = document.querySelectorAll('#ad-access .kpi');
+    if (kpis[0]) { var d0 = kpis[0].querySelector('.d'); if (d0) d0.textContent = 'across ' + d.roles + ' role' + (d.roles === 1 ? '' : 's'); }
+    if (kpis[3]) {
+      var v3 = kpis[3].querySelector('.v'), d3 = kpis[3].querySelector('.d');
+      if (v3) v3.textContent = d.last_review ? fmtDay(String(d.last_review.at).slice(0, 10)) : '—';
+      if (d3) d3.textContent = d.last_review ? 'signed off by ' + d.last_review.actor : 'never run';
+    }
+    var viewer = (typeof USER !== 'undefined' && USER) ? USER.role : '';
+    var tb = document.getElementById('arRows');
+    if (!tb) return;
+    tb.innerHTML = d.rows.length ? d.rows.map(function (u) {
+      var act = (typeof _canAct === 'function' && _canAct(viewer, u.role, u.login_id) &&
+                 !_isMe(u.login_id)) ?
+        '<button class="btn btn-danger btn-sm" onclick="adDeactivate(\'' + fqcEsc(u.login_id) +
+        '\')">Deactivate</button>' : '<span class="sp hint">View only</span>';
+      return '<tr><td class="mono">' + fqcEsc(u.login_id) + '</td><td>' + fqcEsc(u.name) + '</td>' +
+        '<td><span class="tag ' + (u.role === 'Admin' ? 't-fail' : 't-info') + '">' +
+          fqcEsc(u.role) + '</span></td>' +
+        '<td>' + fqcEsc(u.why) + '</td>' +
+        '<td class="mono" style="font-size:11px">' + fqcEsc(u.last_sign_in ? adWhen(u.last_sign_in) : 'never') + '</td>' +
+        '<td>' + act + '</td></tr>';
+    }).join('') : '<tr data-empty><td colspan="6"><div class="empty-state"><p>Nothing needs a ' +
+      'decision.</p></div></td></tr>';
+  }
+  window.adDeactivate = function (id) {
+    if (typeof window.usrDeactivate === 'function') window.usrDeactivate(id);
+    setTimeout(adAccessLoad, 1500);
+  };
+  function adAccessLoad() {
+    var pane = document.getElementById('ad-access');
+    if (!pane) return;
+    adNote('ad-access', '<span>⚑</span><span>An <b>access review</b> is proof that everyone who ' +
+      'can reach the system still needs to. Listed for a decision: accounts with no sign-in for ' +
+      '60 days, and every Admin. Super Admin accounts are managed with icon_auth_cli.py and are ' +
+      'not listed, as on Users. Signing off records who reviewed, when, and who was on the list.' +
+      '</span>');
+    adButton(pane.querySelector('.card-h .btn-primary'), function () {
+      var btn = this;
+      btn.disabled = true;
+      fetch('/api/admin/access-review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          btn.disabled = false;
+          if (!d || !d.ok) { toast((d && d.why) || 'Not recorded.'); return; }
+          adAccessPaint(d);
+          toast('Access review signed off - recorded against ' + (USER && USER.name || 'you') + '.');
+        })['catch'](function () { btn.disabled = false; toast('The server did not answer.'); });
+    });
+    adBusy('arRows', 6);
+    fetch('/api/admin/access-review', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (d && d.rows) adAccessPaint(d); else adBusy('arRows', 6, (d && d.why) || 'Could not load.'); })
+      ['catch'](function () { adBusy('arRows', 6, 'Could not load.'); });
+  }
+
+  /* ---- Open questions: DECISIONS.md, read live -------------------------- */
+  function adOpenLoad() {
+    adNote('ad-open', '<span>&#9873;</span><span>Read from <b>DECISIONS.md</b> each time this ' +
+      'opens - the questions still waiting for Mukesh (<span class="mono">[open]</span>) and what ' +
+      'is decided but not built - so this list and the file cannot disagree.</span>');
+    var cards = document.querySelectorAll('#ad-open .card');
+    var bo = cards[1];
+    if (bo) {
+      var h = bo.querySelector('.card-h h3'); if (h) h.textContent = 'Decided, not built yet';
+      var th = bo.querySelector('thead tr'); if (th) th.innerHTML = '<th>Section</th><th>Decision</th>';
+      var f = bo.querySelector('.card-f span'); if (f) f.textContent = 'Agreed and recorded; the code does not do it yet.';
+    }
+    var th1 = document.querySelector('#ad-open .card thead tr');
+    if (th1) th1.innerHTML = '<th style="width:34px">#</th><th>Question</th><th>Section</th>';
+    adBusy('oqRows', 3);
+    fetch('/api/admin/open-questions', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok) { adBusy('oqRows', 3, (d && d.why) || 'Could not load.'); return; }
+        var strip = function (t) { return String(t).replace(/\*\*/g, '').replace(/`/g, ''); };
+        var cnt = document.getElementById('oqCount');
+        if (cnt) cnt.textContent = d.open.length + ' open';
+        document.getElementById('oqRows').innerHTML = d.open.map(function (o, i) {
+          return '<tr><td class="num">' + (i + 1) + '</td><td style="font-size:12px">' +
+            fqcEsc(strip(o.text)) + '</td><td style="font-size:11.5px;color:var(--ink3)">' +
+            fqcEsc(o.section) + '</td></tr>';
+        }).join('') || '<tr data-empty><td colspan="3">Nothing open.</td></tr>';
+        var bt = document.getElementById('boRows');
+        if (bt) bt.innerHTML = (d.decided || []).map(function (o) {
+          return '<tr><td style="font-size:11.5px;color:var(--ink3);white-space:nowrap">' +
+            fqcEsc(o.section) + '</td><td style="font-size:12px">' + fqcEsc(strip(o.text)) + '</td></tr>';
+        }).join('') || '<tr data-empty><td colspan="2">Nothing.</td></tr>';
+      })
+      ['catch'](function () { adBusy('oqRows', 3, 'Could not load.'); });
+  }
+
+  /* ---- Machines: counts saved, Super Admin writes ----------------------- */
+  function adApplyMachines(saved) {
+    if (!saved || typeof MACHINES === 'undefined') return;
+    saved.forEach(function (m) {
+      MACHINES.forEach(function (g) {
+        if (g.type === m.type) { g.a = m.a; g.b = m.b; }
+      });
+    });
+  }
+  window.adMachinesBoot = function () {
+    fetch('/api/machines', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.machines) return;
+        adApplyMachines(d.machines);
+        try { if (typeof renderMach === 'function') renderMach(); } catch (e) {}
+        try { if (typeof renderLoss === 'function') renderLoss(); } catch (e) {}
+      })['catch'](function () {});
+  };
+  function adMachSave() {
+    fetch('/api/machines', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ machines: MACHINES.map(function (g) {
+        return { type: g.type, a: g.a, b: g.b }; }) }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok) { toast((d && d.why) || 'Not saved.'); window.adMachinesBoot(); return; }
+        toast('Machine counts saved - Loss & Breakdown uses them from now.');
+      })['catch'](function () { toast('The server did not answer - not saved.'); });
+  }
+  if (typeof window.renderMach === 'function' && !window.renderMach.__live) {
+    var _v4RenderMach = window.renderMach;
+    window.renderMach = function () {
+      _v4RenderMach.apply(this, arguments);
+      var sa = typeof USER !== 'undefined' && USER && USER.role === 'Super Admin';
+      Array.prototype.forEach.call(document.querySelectorAll('#machRows tr'), function (tr, i) {
+        Array.prototype.forEach.call(tr.querySelectorAll('input.cnt-in'), function (inp, k) {
+          if (!sa) {
+            inp.disabled = true;
+            inp.title = 'Machine counts are master data - a Super Admin changes them.';
+            return;
+          }
+          inp.onchange = function () {
+            var n = Math.max(0, Math.min(50, parseInt(this.value, 10) || 0));
+            MACHINES[i][k === 0 ? 'a' : 'b'] = n;
+            window.renderMach();
+            try { if (typeof renderLoss === 'function') renderLoss(); } catch (e) {}
+            adMachSave();
+          };
+        });
+      });
+      adNote('ad-mach', '<span>ⓘ</span><span>Machine counts drive the breakdown percentage on ' +
+        'Loss &amp; Breakdown. A Super Admin changes a count here and it is <b>saved</b> - every ' +
+        'screen uses it from then on. <b>ATW is the stringer vendor</b>, so ATW-1 and Stringer-1 ' +
+        'are the same machine and appear once.</span>');
+    };
+    window.renderMach.__live = true;
+  }
+
+  /* v4 painted the sample rows at load; these keep them off the page, and
+     each tab fills itself when it is opened */
+  window.renderDocs = function () {
+    adBusy('docRows', 8, 'Open this tab to load the print log.');
+    adBusy('auditRows', 8, 'Open this tab to load the audit trail.');
+  };
+  window.renderReasons = function () { adBusy('reasonRows', 6, 'Open this tab to load.'); };
+  if (typeof window.renderStations === 'function' && !window.renderStations.__live) {
+    var _v4RenderStations = window.renderStations;
+    window.renderStations = function () {
+      _v4RenderStations.apply(this, arguments);
+      if (_adRules) adRulesPaint(); else adBusy('gradeRows', 5, 'Open this tab to load.');
+    };
+    window.renderStations.__live = true;
+  }
+  try { window.renderDocs(); window.renderReasons(); } catch (e) {}
+  try { if (typeof renderStations === 'function') window.renderStations(); } catch (e) {}
+
+  var AD_LOADERS = { audit: adAuditLoad, docs: adDocsLoad, reasons: adReasonsLoad,
+                     grade: adRulesLoad, access: adAccessLoad, open: adOpenLoad,
+                     mach: function () { window.adMachinesBoot(); } };
+  if (typeof window.adTab === 'function' && !window.adTab.__loaders) {
+    var _adTabPrev = window.adTab;
+    window.adTab = function (btn, p) {
+      var r = _adTabPrev.apply(this, arguments);
+      if (AD_LOADERS[p] && typeof can === 'function' && can('admin')) {
+        try { AD_LOADERS[p](); } catch (e) {}
+      }
+      return r;
+    };
+    window.adTab.__loaders = true;
+    window.adTab.__hashWrapped = true;
+  }
+
 
 })();

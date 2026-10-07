@@ -320,6 +320,13 @@ no one signs twice. [enforcement unverified]
   are role-gated, never per-user; master-data changes are Super Admin only.
 - Per-screen flags cannot express a per-action rule, so action limits use an
   inline role check (`_require_role`). "Cancel a challan" is one of them.
+- **Admin's audit, print log, access review and machine counts are real** (7 Oct):
+  every document opened to print and every export is recorded (who, which document,
+  which template - never a copy count, which only the browser's print dialog knows);
+  the Audit trail and Document & print log read the server's record; an access
+  review sign-off is recorded; machine counts are master data - Super Admin saves
+  them, everyone's Loss arithmetic reads them. Grade rules show FQC's real rules and
+  version; Open questions are read from this file. [built]
 - **`/settings` is not an app of its own.** Evidence Sources is a tab of Admin
   (Stations & sources); `/settings` (GET) redirects to `/#admin/stations`, signed
   in or not - it shows nothing itself, and the fragment it lands on is gated

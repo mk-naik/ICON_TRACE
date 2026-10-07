@@ -907,6 +907,16 @@ def enrol():
                            qr=bc.qr_svg(started["url"], module=5))
 
 
+def _log_print(what, entity, ref, **detail):
+    """A document opened to print, or a file exported - who, when, which
+    document, which template (7 Oct 2026: Admin's Document & print log was v4's
+    sample rows; nothing was recorded). Copies are chosen in the browser's own
+    print dialog, which the server never sees, so none are claimed. Its own
+    connection: the routes it is called from have closed theirs."""
+    with store.conn() as (cx, cur):
+        db.audit(cur, actor(), what, entity, ref, detail or None)
+
+
 def _locked_minutes(locked_until, now=None):
     """Minutes left on a lock, rounded up so it reads "1 min left" until the
     lock is genuinely over. 0 when not locked. The raw epoch never reaches
@@ -1173,6 +1183,263 @@ def api_users_perms_set(login_id):
                  {"view": sorted(s for s, p in saved.items() if p["view"]),
                   "write": sorted(s for s, p in saved.items() if p["write"])})
     return jsonify({"ok": True, "login_id": login_id, "perms": saved})
+
+
+# --------------------------------------------------------------------------
+# Admin's tabs that were v4 sample data (7 Oct 2026: "Admin screen remaining
+# things which just for dummy"). Each now reads the database, or says what is
+# not built - never a plausible table of invented rows.
+# --------------------------------------------------------------------------
+
+@app.route("/api/admin/audit")
+@require_role(*_R_ADMIN)
+def api_admin_audit():
+    """The audit trail (dispatch_audit), newest first. kind=docs is the
+    Document & print log: the prints and exports _log_print records. Every
+    dropdown is a facet (Mukesh, 6 Oct: dynamic filters)."""
+    kind = (request.args.get("kind") or "").strip()
+    frm = (request.args.get("from") or "").strip()
+    to = (request.args.get("to") or "").strip()
+    who = (request.args.get("actor") or "").strip()
+    entity = (request.args.get("entity") or "").strip()
+    action = (request.args.get("action") or "").strip()
+    q = (request.args.get("q") or "").strip()
+    limit = min(5000, max(1, _int_arg("limit", 500)))
+    day = clock.shift_day_sql("a.at")
+    cl = []
+    if kind == "docs":
+        cl.append((None, "a.action LIKE 'print.%' OR a.action LIKE 'export.%'", ()))
+    if frm:
+        cl.append((None, day + " >= %s", (frm,)))
+    if to:
+        cl.append((None, day + " <= %s", (to,)))
+    if who:
+        cl.append(("actor", "a.actor = %s", (who,)))
+    if entity:
+        cl.append(("entity", "a.entity = %s", (entity,)))
+    if action:
+        cl.append(("action", "a.action = %s", (action,)))
+    if q:
+        cl.append((None, "a.entity_id LIKE %s OR a.detail LIKE %s OR a.action LIKE %s",
+                   ("%" + q + "%",) * 3))
+    where = (" WHERE " + " AND ".join("(%s)" % c[1] for c in cl)) if cl else ""
+    args = tuple(a for c in cl for a in c[2])
+    with store.conn() as (cx, cur):
+        rows = store.rows(cur, "SELECT a.* FROM dispatch_audit a" + where +
+                          " ORDER BY a.audit_id DESC LIMIT %s", args + (limit,))
+        facets = _facets(cur, "FROM dispatch_audit a", cl,
+                         {"actor": "a.actor", "entity": "a.entity", "action": "a.action"})
+    out = []
+    for r in rows:
+        r = dict(r)
+        try:
+            det = json.loads(r.get("detail") or "null")
+        except ValueError:
+            det = r.get("detail")
+        r["detail"] = det
+        r["reason"] = det.get("reason") if isinstance(det, dict) else None
+        out.append(r)
+    return jsonify({"rows": out, "facets": facets, "limit": limit})
+
+
+_DORMANT_DAYS = 60
+
+
+def _access_review(cur):
+    """The access review's figures: every account the Users screen manages
+    (Super Admin accounts live in icon_auth_cli.py and are not listed there
+    either), when each last signed in (auth_event), and which need a decision -
+    no sign-in for 60 days, or holding Admin."""
+    now = int(time.time())
+    users = [dict(u) for u in store.rows(cur,
+        "SELECT login_id, display_name, role, active, created_at FROM app_user "
+        "WHERE role <> 'Super Admin' ORDER BY login_id")]
+    last = {r["login_id"]: r["at"] for r in store.rows(cur,
+        "SELECT login_id, MAX(at) AS at FROM auth_event WHERE event='login_ok' "
+        "GROUP BY login_id")}
+    rows, active = [], [u for u in users if u["active"]]
+    for u in active:
+        seen = last.get(u["login_id"])
+        made = int(u.get("created_at") or 0)
+        why = []
+        if seen:
+            days = max(0, (now - int(seen)) // 86400)
+            if days > _DORMANT_DAYS:
+                why.append("No sign-in for %d days" % days)
+        elif not made:
+            why.append("Never signed in")          # no creation time on file
+        elif (now - made) // 86400 > _DORMANT_DAYS:
+            why.append("Never signed in - created %d days ago" % ((now - made) // 86400))
+        if u["role"] == "Admin":
+            why.append("Holds Admin - the highest privilege on this screen")
+        if why:
+            rows.append({"login_id": u["login_id"], "name": u["display_name"],
+                         "role": u["role"], "why": "; ".join(why),
+                         "last_sign_in": (datetime.datetime.fromtimestamp(
+                             seen, clock.IST).replace(tzinfo=None)
+                             .isoformat(timespec="seconds") if seen else None)})
+    review = store.one(cur, "SELECT at, actor, detail FROM dispatch_audit "
+                            "WHERE action='access.review' ORDER BY audit_id DESC LIMIT 1")
+    return {"active": len(active),
+            "roles": len({u["role"] for u in active}),
+            "dormant": sum(1 for r in rows if not r["why"].startswith("Holds")),
+            "dormant_days": _DORMANT_DAYS,
+            "admins": sum(1 for u in active if u["role"] == "Admin"),
+            "last_review": dict(review) if review else None,
+            "rows": rows}
+
+
+@app.route("/api/admin/access-review")
+@require_role(*_R_ADMIN)
+def api_access_review():
+    with store.conn() as (cx, cur):
+        return jsonify(_access_review(cur))
+
+
+@app.route("/api/admin/access-review", methods=["POST"])
+@require_role(*_R_ADMIN)
+@_sync_guard
+def api_access_review_signoff():
+    """Sign off the review: who, when, and which accounts were on it - an
+    audit row, the same as every other decision here."""
+    with store.conn() as (cx, cur):
+        rv = _access_review(cur)
+        db.audit(cur, actor(), "access.review", "app_user", None,
+                 {"active": rv["active"], "listed": [r["login_id"] for r in rv["rows"]]})
+        rv = _access_review(cur)
+    return jsonify(dict(rv, ok=True))
+
+
+@app.route("/api/admin/reason-usage")
+@require_role(*_R_ADMIN)
+def api_reason_usage():
+    """Reasons as they are really recorded, counted for this month (the factory
+    days of the current calendar month): the LOP codes on downtime events, any
+    code on an FQC decision, and cancellations by document - whose reason is
+    typed by the person, mandatory, never a code (DECISIONS 1)."""
+    first = clock.shift_day().replace(day=1).isoformat()
+    with store.conn() as (cx, cur):
+        loss = store.rows(cur, "SELECT reason AS code, COUNT(*) AS n FROM loss_event "
+                               "WHERE status<>'cancelled' AND event_date >= %s "
+                               "GROUP BY reason", (first,))
+        fqc = store.rows(cur, "SELECT reason AS code, COUNT(*) AS n FROM fqc_record "
+                              "WHERE reason IS NOT NULL AND reason <> '' AND "
+                              + clock.shift_day_sql("at") + " >= %s GROUP BY reason",
+                         (first,))
+        cancels = store.rows(cur, "SELECT action, COUNT(*) AS n FROM dispatch_audit "
+                                  "WHERE action LIKE '%.cancel' AND "
+                                  + clock.shift_day_sql("at") + " >= %s GROUP BY action",
+                             (first,))
+    return jsonify({"since": first,
+                    "loss": {r["code"]: r["n"] for r in loss},
+                    "fqc": {r["code"]: r["n"] for r in fqc},
+                    "cancels": {r["action"]: r["n"] for r in cancels}})
+
+
+@app.route("/api/admin/fqc-rules")
+@require_role(*_R_ADMIN)
+def api_fqc_rules():
+    """The FQC rule version in force and how many live decisions each version
+    judged - what replaces v4's sample grade-rule bands (FQC does not grade:
+    DECISIONS 5)."""
+    with store.conn() as (cx, cur):
+        vers = store.rows(cur, "SELECT COALESCE(NULLIF(rule_version, ''), '(before versions)') "
+                               "AS version, COUNT(*) AS n, MIN(at) AS first_at, "
+                               "MAX(at) AS last_at FROM fqc_record WHERE "
+                               "superseded_by IS NULL AND status<>'cancelled' "
+                               "GROUP BY 1 ORDER BY MAX(at) DESC")
+    return jsonify({"in_force": db.FQC_RULE_VERSION, "versions": [dict(v) for v in vers]})
+
+
+def _decision_items(tag_re):
+    """Bullets in DECISIONS.md whose text matches tag_re, with their section -
+    read from the file each time, so the screen and the file cannot disagree."""
+    import re as _re
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "DECISIONS.md")
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return None
+    out, section, cur_item = [], "", None
+
+    def flush():
+        if cur_item and _re.search(tag_re, cur_item):
+            item = _re.sub(r"\s+", " ", cur_item).strip()
+            out.append({"section": section, "text": item})
+    for line in text.splitlines():
+        if line.startswith("## "):
+            flush(); cur_item = None
+            section = line[3:].strip()
+        elif line.startswith("- "):
+            flush(); cur_item = line[2:]
+        elif cur_item is not None and line.strip():
+            cur_item += " " + line.strip()
+        else:
+            flush(); cur_item = None
+    flush()
+    return out
+
+
+@app.route("/api/admin/open-questions")
+@require_role(*_R_ADMIN)
+def api_open_questions():
+    """Admin's Open questions: the [open] items of DECISIONS.md, and its
+    decided-but-not-built ones - v4 showed a fixed list from August, most of
+    it answered long ago."""
+    opens = _decision_items(r"\[open\]")
+    todo = _decision_items(r"\[decided\]|NOT BUILT|NOT ENFORCED")
+    if opens is None:
+        return jsonify({"ok": False, "why": "DECISIONS.md is not beside the app."}), 404
+    return jsonify({"ok": True, "open": opens, "decided": todo})
+
+
+_MACHINE_COUNT_MAX = 50
+
+
+@app.route("/api/machines")
+@require_role(*_R_EVERY)
+def api_machines():
+    """The machine counts Loss & Breakdown's arithmetic uses (a share of the
+    line's capacity per machine). Saved by Admin > Machines; none saved means
+    v4's counts, which the page already has."""
+    with store.conn() as (cx, cur):
+        raw = db.get_config(cur).get("machines")
+    try:
+        saved = json.loads(raw) if raw else None
+    except ValueError:
+        saved = None
+    return jsonify({"machines": saved})
+
+
+@app.route("/api/machines", methods=["POST"])
+@require_role(*_R_MASTER)
+@_sync_guard
+def api_machines_save():
+    """Super Admin only, like every master change (DECISIONS 9). Counts per
+    line, whole numbers 0-50; refused whole, never half-saved."""
+    body = request.get_json(force=True) or {}
+    items = body.get("machines")
+    if not isinstance(items, list) or not items:
+        return jsonify({"ok": False, "why": "Send the machine list."}), 400
+    clean = []
+    for it in items:
+        t = str((it or {}).get("type") or "").strip()
+        if not t or len(t) > 40:
+            return jsonify({"ok": False, "why": "A machine type needs a name."}), 400
+        try:
+            a, b = int((it or {}).get("a")), int((it or {}).get("b"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "why": "%s: counts are whole numbers." % t}), 400
+        if not (0 <= a <= _MACHINE_COUNT_MAX and 0 <= b <= _MACHINE_COUNT_MAX):
+            return jsonify({"ok": False, "why": "%s: a count is 0 to %d per line."
+                            % (t, _MACHINE_COUNT_MAX)}), 400
+        clean.append({"type": t, "a": a, "b": b})
+    with store.conn() as (cx, cur):
+        before = db.get_config(cur).get("machines")
+        db.set_config(cur, {"machines": json.dumps(clean)})
+        db.audit(cur, actor(), "config.machines", "app_config", "machines",
+                 {"before": json.loads(before) if before else None, "after": clean})
+    return jsonify({"ok": True, "machines": clean})
 
 
 # --------------------------------------------------------------------------
@@ -2307,6 +2574,7 @@ def pallet_sheet(box_id):
             for i in range(len(left))]
     qr = bc.qr_svg(bc.box_qr_payload(box_no, b["model"], b["grade"],
                                      len(serials), b["pack_date"]))
+    _log_print("print.packing_list", "box", box_no, modules=len(serials))
     return render_template("pallet_sheet.html", box_no=box_no, L=L,
                            rows=rows, qr=qr, bc_text=bc.text_style(cfg))
 
@@ -4204,6 +4472,7 @@ def challan_print(fy, seq):
         ch, b["boxes"], goods_rows, inv, no,
         bc.qr_svg(bc.challan_qr_payload(no), module=5, quiet=4),
         style=style, switch_url="?" + urlencode(other))
+    _log_print("print.challan", "challan", no, template="challan v1 " + style)
     return render_template("challan_v1_%s.html" % style, **ctx)
 
 
@@ -4231,6 +4500,7 @@ def challan_excel(fy, seq):
     ch, sers = b["challan"], b["serials"]
     d = datetime.date.fromisoformat(ch["challan_date"])
     no = db.render_challan_no(d, ch["seq"], ch["suffix"])
+    _log_print("export.challan_excel", "challan", no, template="challan v2 (Excel) + FTR")
 
     head = Font(bold=True, color="FFFFFF")
     fill = PatternFill("solid", fgColor="1B4D7A")
@@ -4345,6 +4615,7 @@ def gatepass_print(gp_no):
     ctx = gpform.print_context(
         gp, items, bc.qr_svg(bc.gp_qr_payload(gp_no), module=5, quiet=4),
         style=style, switch_url="?" + urlencode(other))
+    _log_print("print.gatepass", "gatepass", gp_no, template="gate pass " + style)
     return render_template("gatepass_print_%s.html" % style, **ctx)
 
 
@@ -4359,6 +4630,8 @@ def challan_ftr_print(fy, seq):
     ch = b["challan"]
     f = ftr.build(cfg, [s["serial"] for s in b["serials"]])
     d = datetime.date.fromisoformat(ch["challan_date"])
+    _log_print("print.ftr", "challan",
+               db.render_challan_no(d, ch["seq"], ch["suffix"]), template="FTR")
     return render_template("ftr_print.html",
                            no=db.render_challan_no(d, ch["seq"], ch["suffix"]),
                            date=ch["challan_date"], model=ch["model"],
@@ -4695,6 +4968,7 @@ def export_traceability():
                 rows.append(dict(base, start=first, end=last, qty=g["n"], customer=who,
                                  rework=bool(g["rework"]), bom=bom_of(g["alloc_id"])))
     data = TX.build(rows, catalog, MM.MAT_CATS, models.BY_CODE, dfrom, dto)
+    _log_print("export.traceability", "production_entry", "%s to %s" % (dfrom, dto))
     return Response(data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="%s"' % TX.filename(dfrom, dto)})
@@ -7057,6 +7331,7 @@ def allocation_barcodes(alloc_id):
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
+    _log_print("export.barcodes_excel", "allocation", batch_no(a), serials=len(serials))
     return Response(buf.read(),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition":
@@ -7080,6 +7355,7 @@ def allocation_barcodes_print(alloc_id):
     per = 1000
     cols = [serials[i:i + per] for i in range(0, len(serials), per)] or [[]]
     depth = max(len(c) for c in cols)
+    _log_print("print.barcodes", "allocation", batch_no(a), serials=len(serials))
     return render_template("barcode_sheet.html", a=a, serials=serials,
                            cust=cr["name"] if cr else a["customer"],
                            cols=cols, depth=depth, per=per)
@@ -10872,6 +11148,7 @@ def export_csv(what):
                              "party", "description", "qty", "expected_return")])
         else:
             abort(404)
+    _log_print("export." + what, what, None, format="csv")
     return Response(
         buf.getvalue(), mimetype="text/csv",
         headers={"Content-Disposition":
