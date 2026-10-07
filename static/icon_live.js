@@ -2812,7 +2812,7 @@ function wireFqcAnomalies() {
       fqcRange() : { from: g('fFrom'), to: g('fTo') || g('fFrom') };
     var customer = _selVal('fDashCust');
     var model = _selVal('fDashModel');
-    var shift = { A: 1, B: 2, C: 3 }[_selVal('fDashShift')] || '';
+    var shift = { A: 1, B: 2, C: 3, 1: 1, 2: 2, 3: 3 }[_selVal('fDashShift')] || '';
     var resultSel = g('fDashResult');
     var result = resultSel === 'Passed only' ? 'pass' :
                  resultSel === 'Rejected only' ? 'reject' : '';
@@ -3671,7 +3671,9 @@ function wireFqcAnomalies() {
         });
         var modelSet = _facetSet(rows, function (r) { return r.model; });
         var shiftSet = _facetSet(rows, function (r) {
-          return r.shift ? (SHIFT_LETTER[r.shift] || r.shift) : null;
+          /* inline, not SHIFT_LETTER: this block is lifted on its own by
+             test_fqc_dashboard.js, which has no SHIFT_LETTER */
+          return r.shift ? ({ 1: 'A', 2: 'B', 3: 'C' }[r.shift] || r.shift) : null;
         });
         /* the server's facets (each read with every OTHER filter applied);
            an older server sends none - then the visible rows */

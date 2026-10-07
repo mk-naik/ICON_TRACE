@@ -6636,9 +6636,11 @@ Kept up to date through the night; each item is ticked with its commit.
       sign-in, ahead of each screen's own dynamic list.
 - [ ] Dead code: the first `window.renderPackLog` (replaced by
       `renderLivePackLog` a few hundred lines later).
-- [ ] Stale tests on main: `test_packing.js` 18 failing (`packHold is not
+- [x] Stale tests on main: `test_packing.js` 18 failing (`packHold is not
       defined`), `test_js.js` a syntax error, `test_fqc_dashboard.js` exits 1
-      without output.
+      without output. The two harnesses fixed (entry below); `test_js.js` left
+      for Mukesh - BACKLOG (12 Sep review) already says it is v4's page script
+      pasted in, not a test, and asks him to decide on deleting it.
 
 ## 6 Oct 2026 - Users: the last account's menu was cut off ("permission option is missing")
 
@@ -6856,3 +6858,24 @@ Kept up to date through the night; each item is ticked with its commit.
   nothing for a search with no match) - 70/70; `test_loading` 15/15, the four
   `test_gatepass*.py`, `test_customer_filters` 17/17, and the JS harnesses
   (`test_gatepass`, `test_gatepass_landing`, `test_loading`, `test_challan`) pass.
+
+## 7 Oct 2026 - Two JS test harnesses that had been failing silently
+
+- **`test_fqc_dashboard.js` exited 1 with no output at all.** Its WSH shim declared
+  `var console = {...}` inside an `if (typeof console === 'undefined')`. A `var` is
+  hoisted to the whole file, so under node `console` WAS undefined, the branch ran,
+  and every PASS / FAIL line went to the silent stub. Now set on the global object
+  only under WSH. With its output back it showed 4 real failures: the stub's
+  `<select>` was a bare value string (no options, no selectedIndex), which the
+  shared "no filter = first option" reader cannot read - it is a real select now;
+  a shift sent as a number was dropped (the reader takes 1/2/3 as well as A/B/C);
+  and the FQC Dashboard block used `SHIFT_LETTER`, defined outside the block the
+  test lifts - every render in the test died before the "Filtered by" note
+  (inlined). **24/24.**
+- **`test_packing.js` 18 failing.** `packHold` is v4's own global (`var cap=36,
+  filled=0, grade='A', packHold=null, packed=[]`); the harness never declared it.
+  Then 14 more: the harness declared v4's stand-ins (`packLookup`, `savePallet`,
+  `pullSlot`, `setCap`, `resetPallet`) as functions - module-scoped under node -
+  while `wirePacking()` replaces them on `window`, so every scan reached the stub.
+  They are on the global object now, as in the browser. **26/26.** The app itself
+  was never affected (v4 declares all of them globally).

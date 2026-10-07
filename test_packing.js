@@ -298,6 +298,12 @@ var document = {
   createElement: function (tag) { return new El(tag); }
 };
 
+/* v4's own packing globals (icon_trace.html: `var cap=36, filled=0,
+   grade='A', packHold=null, packed=[]`) - the live layer's packLookup and
+   packCommit read and write packHold, the pending scan. Without it every
+   test that scanned threw "packHold is not defined" (18 of 26). */
+var packHold = null;
+
 /* ---- fetch/api stub: routed by URL, answered from what the test set --- */
 var CALLS, ROUTES, toasts;
 function route(pattern, body, status) {
@@ -368,13 +374,18 @@ function fqcEsc(v) {
 
 /* ---- v4 stand-ins: the inline functions icon_live.js patches over ----- */
 var packed, cap, grade, filled, buildCalls, addSlotCalls, resetCalls;
-function packLookup() {}                 // v4's own; wirePacking replaces it
-function savePallet() {}
-function pullSlot() {}
-function setCap() {}
+/* On the GLOBAL object, as v4's are in the browser: wirePacking() replaces
+   them with window.packLookup = ..., and a function declared here would be a
+   module-scoped binding under node that every call below kept reaching -
+   the scan never reached the live code (14 of 26 failed). */
+var GLOBAL_ = (typeof global !== 'undefined') ? global : this;
+GLOBAL_.packLookup = function () {};     // v4's own; wirePacking replaces it
+GLOBAL_.savePallet = function () {};
+GLOBAL_.pullSlot = function () {};
+GLOBAL_.setCap = function () {};
 var paintCountCalls;
 function paintCount() { paintCountCalls++; }
-function resetPallet() { resetCalls++; buildSlots(); }  // v4's own: buildSlots()
+GLOBAL_.resetPallet = function () { resetCalls++; buildSlots(); };  // v4's own: buildSlots()
 function buildSlots() { buildCalls++; packed = []; filled = 0; }
 function addSlot(s) { addSlotCalls.push(s); packed.push(s); filled++; return true; }
 var window = (typeof global !== 'undefined') ? global : this;

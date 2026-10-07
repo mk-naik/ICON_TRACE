@@ -74,9 +74,13 @@ if (!Date.prototype.toISOString) Date.prototype.toISOString = function () {
 var WSH = (typeof WScript !== 'undefined');
 function echo(s) { if (WSH) WScript.Echo(s); else console.log(s); }
 /* Windows Script Host has no console; the code under test logs through
-   it. A silent one, so a log line cannot fail a test. */
-if (typeof console === 'undefined') {
-  var console = { log: function () {}, warn: function () {}, error: function () {} };
+   it. A silent one, so a log line cannot fail a test. Set on the global
+   object, never with `var console`: a var is hoisted to the whole file, so
+   under node it made `console` undefined everywhere, this branch ran, and
+   every PASS / FAIL line went to the silent stub - the file exited 1 with no
+   output at all (found 7 Oct 2026). */
+if (WSH) {
+  this.console = { log: function () {}, warn: function () {}, error: function () {} };
 }
 function here() {
   if (WSH) {
@@ -103,8 +107,52 @@ function ClassList(el) {
   this.add = function (c) {
     if (!this.contains(c)) el.className = (el.className ? el.className + ' ' : '') + c; };
 }
+/* A <select> as the browser has one: innerHTML is its options, value follows
+   the selected option, selectedIndex can be read and set. The screens read
+   "no filter" as option 0 (_selVal), so a select that was only a value
+   string could not answer them. One liberty: setting a value no option
+   carries adds that option, as if the server had offered it - the tests
+   pick customers and models without first faking a fetch that lists them. */
+function decodeEnt(s) {
+  return String(s).replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+function makeSelect(el) {
+  var opts = [], idx = -1;
+  Object.defineProperty(el, 'options', { get: function () { return opts; } });
+  Object.defineProperty(el, 'innerHTML', {
+    get: function () { return opts.map(function (o) { return o.outerHTML; }).join(''); },
+    set: function (h) {
+      opts = [];
+      var re = /<option(\s[^>]*)?>([^<]*)<\/option>/g, m;
+      while ((m = re.exec(String(h))) !== null) {
+        var v = /value="([^"]*)"/.exec(m[1] || '');
+        opts.push({ outerHTML: m[0], text: decodeEnt(m[2]),
+                    value: decodeEnt(v ? v[1] : m[2]) });
+      }
+      idx = opts.length ? 0 : -1;
+    }
+  });
+  Object.defineProperty(el, 'value', {
+    get: function () { return idx >= 0 ? opts[idx].value : ''; },
+    set: function (v) {
+      v = String(v);
+      idx = -1;
+      for (var i = 0; i < opts.length; i++) if (opts[i].value === v) { idx = i; break; }
+      if (idx < 0 && v !== '') {
+        opts.push({ outerHTML: '<option>' + v + '</option>', text: v, value: v });
+        idx = opts.length - 1;
+      }
+    }
+  });
+  Object.defineProperty(el, 'selectedIndex', {
+    get: function () { return idx; },
+    set: function (i) { idx = i; }
+  });
+}
 function El(tag, className) {
   this.tag = (tag || 'div').toLowerCase();
+  if (this.tag === 'select') makeSelect(this);
   this.className = className || '';
   this.children = [];
   this.parentNode = null;
