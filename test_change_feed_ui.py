@@ -189,13 +189,15 @@ def t_acceptance():
                 pg.wait_for_timeout(1200)
             assert pgB.evaluate("(document.querySelector('.view.on')||{}).id") == "v-packdash"
             # Count B's own reloads by watching the endpoint its load path
-            # uses. The Packing Log's filters decide which ROWS it shows -
-            # what this test is about is whether it went and asked again,
-            # by itself, through that same path.
+            # uses - /api/packing/log, renderLivePackLog's (it was /api/boxes,
+            # the replaced first renderPackLog's, which nothing calls: the
+            # test waited on a door the screen no longer uses). The Packing
+            # Log's filters decide which ROWS it shows - what this test is
+            # about is whether it went and asked again, by itself.
             pgB.evaluate("""() => { window.__loads = 0;
                 var real = window.fetch;
                 window.fetch = function (u) {
-                  if (String(u).indexOf('/api/boxes') >= 0) window.__loads++;
+                  if (String(u).indexOf('/api/packing/log') >= 0) window.__loads++;
                   return real.apply(this, arguments); }; }""")
             loads_before = pgB.evaluate("window.__loads")
 

@@ -2618,119 +2618,10 @@ function wireFqcAnomalies() {
   }
   window.wireFqcAnomalies = wireFqcAnomalies;
 
-  window.renderPackLog = function() {
-    if (!can('packdash')) return;   /* Round 28: the server would refuse it */
-    fetch('/api/boxes', {cache: 'no-store'})
-      .then(function (r) { return r.json(); })
-      .then(function (rows) {
-        var host = document.getElementById('pkBoxRows');
-        if (!host) return;
-
-        var fDateEl = document.querySelector('#v-packdash input[type=date]');
-        var fDate = fDateEl ? fDateEl.value : '';
-        var fShift = (document.getElementById('pkShift') || {}).value;
-        var fCust = (document.getElementById('pkCust') || {}).value;
-        var fModel = (document.getElementById('pkModel') || {}).value;
-        var fGrade = (document.getElementById('pkGrade') || {}).value;
-        var fStatus = (document.getElementById('pkStatus') || {}).value;
-
-        // Ensure Date filter matches reality
-        if (!fDateEl.__wired) {
-          fDate = fDateEl ? fDateEl.value : '';
-          fDateEl.__wired = true;
-        }
-
-        var shown = rows.filter(function(b) {
-          var ok = true;
-          if (fDate && b.pack_date && b.pack_date.indexOf(fDate) !== 0) ok = false;
-          if (fShift && fShift !== 'All shifts' && b.pack_shift !== fShift) ok = false;
-          /* any case, by name or by code - the box stores the code, the
-             dropdown offers the name, and old rows spell it either way */
-          if (fCust && fCust !== 'All customers') {
-            var fc = String(fCust).trim().toUpperCase();
-            if (String(b.customer_name || '').trim().toUpperCase() !== fc &&
-                String(b.customer || '').trim().toUpperCase() !== fc) ok = false;
-          }
-          if (fModel && fModel !== 'All' && b.model !== fModel) ok = false;
-          if (fGrade && fGrade !== 'All' && b.grade !== fGrade) ok = false;
-          if (fStatus && fStatus !== 'All' && b.state !== fStatus.toLowerCase()) ok = false;
-          return ok;
-        });
-
-        var sSet={}, cSet={}, mSet={}, gSet={}, stSet={};
-        rows.forEach(function(b) {
-          if (b.pack_shift) sSet[b.pack_shift]=1;
-          if (b.customer_name || b.customer) cSet[b.customer_name || b.customer]=1;
-          if (b.model) mSet[b.model]=1;
-          if (b.grade) gSet[b.grade]=1;
-          if (b.state) stSet[b.state]=1;
-        });
-        var updateSel = function(id, set, def, fVal) {
-          var sel = document.getElementById(id);
-          if (sel && (!fVal || fVal === def || fVal.startsWith('All'))) {
-            var cur = sel.value;
-            sel.innerHTML = '<option>' + def + '</option>' + Object.keys(set).sort().map(function(v){
-              var disp = v;
-              if (id === 'pkStatus') disp = v.charAt(0).toUpperCase() + v.slice(1);
-              return '<option value="' + fqcEsc(v) + '">' + fqcEsc(disp) + '</option>';
-            }).join('');
-            sel.value = cur;
-            if (sel.selectedIndex < 0) sel.value = def;
-          }
-        };
-        updateSel('pkShift', sSet, 'All shifts', fShift);
-        updateSel('pkCust', cSet, 'All customers', fCust);
-        updateSel('pkModel', mSet, 'All', fModel);
-        updateSel('pkGrade', gSet, 'All', fGrade);
-        updateSel('pkStatus', stSet, 'All', fStatus);
-
-        // Update KPIs
-        var kpis = document.querySelectorAll('#v-packdash .kpi .v');
-        if (kpis.length >= 4) {
-           kpis[0].textContent = shown.length;
-           var mods = 0, aMods = 0, gyMods = 0;
-           var awaitingMods = 0;
-           shown.forEach(function(b) {
-             mods += (b.qty || 0);
-             if (b.grade === 'A') aMods += (b.qty || 0);
-             else gyMods += (b.qty || 0);
-             if (b.state !== 'dispatched' && b.state !== 'challaned') awaitingMods += (b.qty || 0);
-           });
-           kpis[1].textContent = mods.toLocaleString();
-           var d1 = document.querySelectorAll('#v-packdash .kpi .d');
-           if (d1.length >= 2) d1[1].textContent = aMods + ' A · ' + gyMods + ' Other';
-           kpis[2].textContent = shown.filter(function(b) { return b.origin && b.origin.indexOf('RPK') >= 0; }).length;
-           kpis[3].textContent = shown.filter(function(b) { return b.state !== 'dispatched' && b.state !== 'challaned'; }).length;
-           if (d1.length >= 4) d1[3].textContent = awaitingMods + ' modules';
-        }
-
-        host.innerHTML = shown.length ? shown.map(function(b) {
-          var state = b.state || 'open';
-          var stTag = state === 'packed' ? '<span class="tag t-info">Packed</span>'
-                    : state === 'dispatched' ? '<span class="tag t-solar">Dispatched</span>'
-                    : state === 'repacked' ? '<span class="tag t-mute">Repacked</span>'
-                    : '<span class="tag">' + fqcEsc(state) + '</span>';
-          var gTag = b.grade === 'A' ? '<span class="tag t-pass">A</span>'
-                   : '<span class="tag t-rev">' + fqcEsc(b.grade || '—') + '</span>';
-          var actBtn = state === 'repacked' 
-            ? '<button class="btn btn-ghost btn-sm" onclick="qTry(\'' + fqcEsc(b.label || b.seq) + '\')">History</button>'
-            : '<button class="btn btn-ghost btn-sm" onclick="iconPrint(\'/box/' + Number(b.box_id) + '/sheet\')">Print</button>';
-          return '<tr>' +
-            '<td><button class="lnk" onclick="qTry(\'' + fqcEsc(b.label || b.seq) + '\')">' + fqcEsc(b.label || b.seq) + '</button></td>' +
-            '<td class="mono">' + (b.bin_no ? 'BIN-' + b.bin_no : '—') + '</td>' +
-            '<td>' + fqcEsc(b.customer_name || b.customer || '—') + '</td>' +
-            '<td class="mono">' + fqcEsc(b.model || '—') + '</td>' +
-            '<td>' + gTag + '</td><td class="num">' + (b.qty || 0) + '</td>' +
-            '<td class="mono">' + (typeof fmtIST === 'function' ? fmtIST(b.pack_date).slice(0, 10) : fqcEsc(b.pack_date)) + '</td>' +
-            '<td class="s' + fqcEsc(b.pack_shift||'') + '">' + fqcEsc(b.pack_shift || '—') + '</td>' +
-            '<td>' + stTag + '</td>' +
-            '<td class="mono" style="font-size:10.5px;color:var(--ink3)">' + fqcEsc(b.origin || 'system') + '</td>' +
-            '<td>' + actBtn + '</td>' +
-            '</tr>';
-        }).join('') : '<tr><td colspan="11"><div class="empty-state">No boxes found matching these filters.</div></td></tr>';
-      });
-  };
-  window.packApply = window.renderPackLog;
+  /* The Packing Log is drawn by renderLivePackLog (below, from
+     /api/packing/log). A first renderPackLog that read /api/boxes - every
+     pallet ever - stood here, replaced further down but still called once
+     at every sign-in by initUI(), on whatever screen was open (7 Oct). */
   
   // Default dates for Stock & Dispatch and Packing Log and DOM patches
   (function initUI() {
@@ -2785,8 +2676,10 @@ function wireFqcAnomalies() {
        Management Overview. go()'s own per-view hook already calls
        wireDisp() (the real, reassigned version, no toast) the moment
        Stock & Dispatch is actually visited, so pre-calling it here from
-       a hidden view was never necessary for the screen to work. */
-    if (typeof window.packApply === 'function') window.packApply();
+       a hidden view was never necessary for the screen to work. The same
+       holds for the Packing Log: its screen hook draws it when visited -
+       window.packApply here was the replaced /api/boxes renderer, fetched
+       at every sign-in (removed 7 Oct). */
   })();
 
   /* ---- FQC Dashboard: one real, filtered picture, everywhere on the page

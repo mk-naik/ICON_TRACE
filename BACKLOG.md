@@ -6603,9 +6603,10 @@ Kept up to date through the night; each item is ticked with its commit.
 - [x] Loss & Breakdown: the in-process scrap table drew v4's five invented rows
       (and "Shift so far" counted their 31); the setup bar's Shift incharge was
       v4's demo list; Live's start time defaulted to v4's 14:05 - fixed with LOP.
-- [ ] `test_change_feed_ui.py`: 2 failing (Packing Log refetch across two
+- [x] `test_change_feed_ui.py`: 2 failing (Packing Log refetch across two
       browsers; the New Indent form left open) - the same on main before the
-      merge (1be5874), so older than tonight.
+      merge (1be5874), so older than tonight. The first watched the wrong
+      endpoint; the second is timing - it passed on re-run. 8/8.
 - [x] `test_production.py` posted a fixed 2026-09-17, which the 30-day backdate
       limit refuses from 17 Oct - now yesterday's A shift.
 - [x] Production Dashboard / Management counted production by when the entry
@@ -6634,8 +6635,9 @@ Kept up to date through the night; each item is ticked with its commit.
       decision (the list itself still shows the newest 100).
 - [ ] `wireDynamicFilters` fills dashboard dropdowns from the whole master at
       sign-in, ahead of each screen's own dynamic list.
-- [ ] Dead code: the first `window.renderPackLog` (replaced by
-      `renderLivePackLog` a few hundred lines later).
+- [x] Dead code: the first `window.renderPackLog` (replaced by
+      `renderLivePackLog` a few hundred lines later) - it was not quite dead:
+      initUI() called it at every sign-in. Removed (entry below).
 - [x] Stale tests on main: `test_packing.js` 18 failing (`packHold is not
       defined`), `test_js.js` a syntax error, `test_fqc_dashboard.js` exits 1
       without output. The two harnesses fixed (entry below); `test_js.js` left
@@ -6879,3 +6881,19 @@ Kept up to date through the night; each item is ticked with its commit.
   while `wirePacking()` replaces them on `window`, so every scan reached the stub.
   They are on the global object now, as in the browser. **26/26.** The app itself
   was never affected (v4 declares all of them globally).
+
+## 7 Oct 2026 - The replaced Packing Log renderer ran at every sign-in
+
+- **Found** chasing `test_change_feed_ui.py`'s "B's Packing Log never refetched
+  itself": the test counted fetches to `/api/boxes`, but the Packing Log is drawn by
+  `renderLivePackLog` from `/api/packing/log` - the live refresh worked all along
+  (1.2 s once the test watched the right endpoint).
+- **The real defect behind it:** the FIRST `window.renderPackLog` (from `/api/boxes`,
+  every pallet ever, filtered in the browser) was replaced further down the file but
+  still called once at every sign-in by `initUI()` through `window.packApply` - on
+  whatever screen was open - and it rebuilt the Packing Log dropdowns from all of
+  history before the real renderer ran. Removed, with the call; the screen's own
+  hook draws it when visited.
+- **Tests:** `test_change_feed_ui.py` 8/8 (watches `/api/packing/log`),
+  `test_dashboards_e2e` 27/27, `test_screens.js` 17/17, `test_packing.js` 26/26,
+  `test_fqc_dashboard.js` 24/24, `test_dashrath_case`, `test_print_and_favicon`.
