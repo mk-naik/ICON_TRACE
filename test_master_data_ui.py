@@ -158,21 +158,30 @@ def t_admin_reads_master():
         print("      toasts: %s" % pg.toasts)
 
 
-@test("models, stations and reason codes are edited in the page and saved "
-     "nowhere - no role is offered that, each control says why")
+@test("models and stations are edited in the page and saved nowhere - no "
+     "role is offered that, each control says why; Reason codes has no edit "
+     "at all and its + Add code says why")
 def t_page_only_lists_offered_to_nobody():
     world()
     with H.browser() as b:
         for role, lid in (("Super Admin", "sa1"), ("Admin", "admin1")):
             pg = admin_page(b, role, lid)
-            for pane, kind in (("models", "model"), ("reasons", "reason"),
-                               ("stations", "station")):
+            for pane, kind in (("models", "model"), ("stations", "station")):
                 tab(pg, pane)
                 ctl = pg.locator('#ad-%s [onclick*="Record(\'%s\'"]' % (pane, kind))
                 assert ctl.count() > 0, (role, pane)
                 for i in range(ctl.count()):
                     assert ctl.nth(i).is_disabled(), (role, pane, i)
                     assert ctl.nth(i).get_attribute("title") == PAGE_ONLY, (role, pane)
+            # Reason codes (7 Oct 2026) lists the reasons really recorded, with
+            # real counts - no v4 edit rows any more; its "+ Add code" says why
+            # there is nothing to add
+            tab(pg, "reasons"); pg.wait_for_timeout(600)
+            add = pg.locator("#ad-reasons button", has_text="+ Add code").first
+            assert add.is_disabled(), role
+            assert (add.get_attribute("title") or "").startswith("Not built yet"), \
+                add.get_attribute("title")
+            assert pg.locator('#ad-reasons [onclick*="Record(\'reason\'"]').count() == 0
             pg.evaluate("editRecord('model', 'x')"); pg.wait_for_timeout(200)
             assert pg.toasts[-1] == PAGE_ONLY, pg.toasts
             assert pg.errors == [], pg.errors

@@ -157,7 +157,9 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       Quantities land as numbers so they can be summed; `0001` and serials
       stay text, because a challan sequence read back as `1` is a different
       document. The Actions column of buttons is dropped.
-- [ ] Reset clears every filter field.
+- [x] Reset clears every filter field. *(checked 7 Oct: wireResets() clears every
+      input/select in the bar and re-renders; each dashboard's own Reset returns to
+      today's factory day - wireDateResets)*
 
 **The pattern for every remaining screen:** find the array its render function
 reads, serve that array from the database, call the render function again.
@@ -213,9 +215,10 @@ A new screen gets both for free.
       retires the source pallets and mints new ISPL numbers, and the pallet
       view shows that trail both ways.
 - [ ] Box / Serial Journey — every title clickable, linking into Search.
-- [ ] Reassignment history — only the original allocation is shown, because
+- [x] Reassignment history — only the original allocation is shown, because
       nothing else is recorded yet. Needs a customer-assignment table before
-      the panel can say more.
+      the panel can say more. *(checked 7 Oct: built - Customer assignment
+      history adds a row per `box.customer_assigned` audit, DECISIONS 3)*
 
 ## 3. Production Dashboard
 
@@ -340,7 +343,8 @@ A new screen gets both for free.
       a Reset, a search box and a scrolling card - see Round 9 below. The
       Export button itself still just toasts (`exportNote()`); a real
       **Traceability Report** export format is still open.
-- [ ] Export format is the **Traceability Report**.
+- [x] Export format is the **Traceability Report**. *(checked 7 Oct: built in
+      Round 38 - /export/traceability.xlsx, IS-MP2-PDN-FM-02)*
 
 ## 7. Loss of Production  *(landing + real persistence, built)*
 
@@ -458,7 +462,9 @@ Python + 71 JS.
 
 ## 9. FQC Entry
 
-- [ ] Recent & Grading: search, filter, result, scroll, export.
+- [x] Recent & Grading: search, filter, result, scroll, export. *(checked 7 Oct:
+      Shift/Customer/Wattage/Result/Defect filters - dynamic since 3595fda - plus
+      the shared search/scroll/export)*
 - [x] **One defect list, the 44, searchable.** A rejection is filed under a
       name from Mukesh's list, found by typing any part of it (`jb` finds
       every name with JB in it, not only those that start with it). It
@@ -492,7 +498,8 @@ Python + 71 JS.
       Recent Allocations.
 - [x] Export — page header and per-card, same as the other dashboards.
 - [x] Reset, search, scroll and count on every table — from the shared layer.
-- [ ] Print boxes.
+- [x] Print boxes. *(checked 7 Oct: every Packing Log row has Print -> the
+      packing list by box id; prints are logged since 8ac1054)*
 
 ## 11. New Pallet
 
@@ -646,7 +653,8 @@ Python + 71 JS.
 
 - [x] Real PDF parser — label-based, three field classes, contact person,
       GSTIN fix, QR best-effort, e-Way Bill validity.
-- [ ] Wire v4's invoice screen to it in place of the simulated parse.
+- [x] Wire v4's invoice screen to it in place of the simulated parse. *(checked 7
+      Oct: it posts the PDF to /api/invoice/parse; the simulate buttons are gone)*
 
 ## 15. Challan  *(built)*
 
@@ -1043,10 +1051,11 @@ exercised again end-to-end in `test_loading.py`.
 ## 17. Gate Pass
 
 - [x] For modules and for all other materials.
-- [ ] RGP and NRGP, with the copy counts already agreed (NRGP 3: creator + 2
+- [x] RGP and NRGP, with the copy counts already agreed (NRGP 3: creator + 2
       gate; RGP 3: creator, gate, recipient — recipient returns theirs).
       **Settled:** `ISGP260831/0667`, one series for every type, sequence
       resets on the financial year, padded to 4. Padding is display only.
+      *(checked 7 Oct: built - gatepass_print, three copies a page each)*
 
 **Live-layer fix — v4's original fields left sitting beside the real
 ones.**
@@ -6597,7 +6606,8 @@ Kept up to date through the night; each item is ticked with its commit.
       Admin account, so it waits for your explicit yes (the session's safety
       check stopped it too).
 - [x] Admin: parts that are still v4 dummies - see the entry below.
-- [ ] BACKLOG: open items; items logged fixed that have since regressed.
+- [x] BACKLOG: open items; items logged fixed that have since regressed - see the
+      entry below.
 
 **Found on the way**
 - [x] Loss & Breakdown: the in-process scrap table drew v4's five invented rows
@@ -6941,3 +6951,26 @@ Kept up to date through the night; each item is ticked with its commit.
   `test_screens.js`, `test_hash_route`, `test_users_screen`, `test_permission_editor`,
   `test_barcode_text_ui`, `test_gatepass_print`, `test_trace_export`, `test_box_number`,
   `test_role_gates`, `test_loss`, `test_dashboards_ist` pass.
+
+## 7 Oct 2026 - BACKLOG sweep: open items, and whether the fixed ones still hold
+
+- **Regressions:** the whole suite run (103 files, 4 at a time): 96 clean. Not
+  regressions: `test_fqc_dashboard_ui.py`, `test_fqc_recent_ui.py` need a server on
+  :5000 (the smoke scripts CLAUDE.md names); `test_pack_readiness.py` failed one
+  browser case under the parallel load and passes alone (10/10, twice) - timing.
+  `test_master_data_ui.py` pinned v4's page-only Reason-code edit buttons, which the
+  Admin rewrite (8ac1054) replaced with real counts and a "+ Add code" that says why
+  - updated to that (5/5). Skipped: the six server-on-a-port smoke scripts and
+  `test_js.js` (not a test - see the 7 Oct harness entry).
+- **Open items that were built and never ticked** (each checked in the code): Reset
+  clears every filter field; Reassignment history; Recent & Grading filters; Print
+  boxes; invoice screen wired to the real parser; the Traceability Report export;
+  RGP/NRGP copy counts - ticked where they stand, with what was checked.
+- **Still open, deliberately or waiting on Mukesh:** Production Entry segments
+  (DECISIONS 10 - do not build unless asked); the Needs Review routes still designed
+  only (NA queued, evidence mismatch on sync, DCR on indent vs material, invoice
+  superseded under a new IRN as a review item, quality freeze on a material lot -
+  awaiting spec); review/hold resolution rules (second signature); Stage 3's version
+  checks (409) and cancel request/approve; Materials cannot be deleted (deliberate);
+  the Quality downgrade of a pass (decided, its screen undecided); Box / Serial journey
+  titles clickable - done in the next commit.
