@@ -363,7 +363,11 @@ def t_fqc_shift_is_inspection():
     assert [m["serial"] for m in mods] == [run[0]], mods
     m = mods[0]
     assert (m["shift"], m["day"], m["decided_by"]) == (1, "2026-09-25", "Suryansh Verma"), m
-    assert "prod_date" not in m and "prod_shift" not in m, m
+    # The production's own date and shift ride beside the inspection's since
+    # 7 Oct (the drill-in tooltip names the production) - separate fields,
+    # blank here because no production entry records this module, and never
+    # borrowed from the inspection.
+    assert m["prod_date"] is None and m["prod_shift"] is None, m
 
 
 @test("Recent gradings' shift filter, sent as a letter, finds that shift")

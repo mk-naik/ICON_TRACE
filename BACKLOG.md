@@ -6993,3 +6993,24 @@ Kept up to date through the night; each item is ticked with its commit.
 - **Tests:** `test_production.py` +1 (the drill-in rows carry the production date and
   shift) - 16/16; `test_trace.js` 33/33, `test_fqc_dashboard.js` 24/24,
   `test_dashboard_cascade.js` 15/15.
+
+## 9 Oct 2026 - Overnight audit: indent to gate pass, every option, in a browser
+
+Asked by Mukesh (8 Oct, night): audit everything from indent to gate pass in a real
+browser - every option (create, draft, save, fetch, edit, cancel, discard, reset
+filters, export, print) and every decision in DECISIONS.md - fix what needs no
+approval, log everything, and list the doubts for the morning. Loss & Breakdown is
+out of scope. The evidence, scripts and the full report are in
+`D:\GITHub\ICON_TRACE_audit_20261009\` (outside the repo). Each fix below is its own
+commit.
+
+### Baseline: the whole suite, run at 00:05 IST
+- 100 files (as on 7 Oct: the seven smoke scripts that need a fixed port, and
+  `test_js.js`, skipped): 98 clean, 2 not.
+- `test_dashboards_ist.py` 12/13 - a stale test, not a defect: it asserted the FQC
+  drill-in rows carry no `prod_date` / `prod_shift`; a2a2031 (7 Oct) added both on
+  purpose and ran `test_production.py`, not this file. It now asserts they are
+  separate fields, blank when no production entry records the module, never
+  borrowed from the inspection. 13/13.
+- `test_dashboards_e2e.py` 26/27 - a real defect that shows only after midnight;
+  see the next entry.
