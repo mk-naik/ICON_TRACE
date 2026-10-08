@@ -278,6 +278,7 @@ python test_material_defaults.py   5 tests · a material's default make; Barcode
 python test_incharge_master.py     9 tests · shift incharge master: individuals, several per entry joined with ',' (Chromium)
 python test_challan_cancel_ui.py   2 tests · Cancel button: Admin only, asks reason + authenticator code
 python test_anonymous_routes.py   3 tests · every /api route answers 401 with no session (allow-list: /api/session)
+python test_factory_day_defaults_ui.py 3 tests · after midnight the counting screens open on the factory day (Chromium, pinned clock)
 ```
 
 The JS tests read their functions out of `icon_live.js`, so they test what

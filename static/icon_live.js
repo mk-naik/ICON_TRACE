@@ -2100,14 +2100,23 @@
      without noticing was filed a month back. Any date field still
      showing one of v4's demo days, untouched since the page drew it,
      opens on today instead - once per field, so a day someone picks is
-     never replaced. */
+     never replaced.
+     "Today" on a screen that COUNTS is the factory day (DECISIONS 8): at
+     01:00 it is still C shift of yesterday. This runs before the FQC and
+     Production Dashboards wire their own From / To, and those only replace
+     a blank or a demo day - so the calendar date put here stayed, and both
+     opened after midnight on a day nothing counts towards until 06:00
+     (empty), while their Reset went back to the factory day. A document's
+     own date (the challan's) stays the calendar date. */
   var V4_DEMO_DATES = { '2026-08-01': 1, '2026-08-19': 1, '2026-08-21': 1 };
+  var COUNTING_VIEWS = '#v-dash, #v-proddash, #v-mgmt, #v-packdash, #v-disp';
   function replaceDemoDates() {
-    var today = _localDate();
+    var today = _localDate(), factoryDay = _shiftDay();
     document.querySelectorAll('input[type="date"]').forEach(function (el) {
       if (el.__demoSwept) return;
       el.__demoSwept = true;
-      if (V4_DEMO_DATES[el.value] && el.value === el.defaultValue) el.value = today;
+      if (V4_DEMO_DATES[el.value] && el.value === el.defaultValue)
+        el.value = el.closest(COUNTING_VIEWS) ? factoryDay : today;
     });
   }
 

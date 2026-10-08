@@ -7014,3 +7014,26 @@ commit.
   borrowed from the inspection. 13/13.
 - `test_dashboards_e2e.py` 26/27 - a real defect that shows only after midnight;
   see the next entry.
+
+### FQC and Production Dashboards opened on the wrong day after midnight
+- **Found:** `test_dashboards_e2e.py` failed when the suite ran at 00:05 (Production
+  Dashboard: no View buttons). Seen in Chromium at 00:27 IST on 9 Oct: Management
+  Overview, Packing Log and Stock & Dispatch opened on 08-10 (C shift of the 8th,
+  right - DECISIONS 8); the **FQC Dashboard and the Production Dashboard opened on
+  09-10**, a factory day nothing counts towards until 06:00. Both read empty for the
+  second half of every C shift, while their own Reset went back to 08-10.
+- **Cause:** `replaceDemoDates()` (every rerender, before the dashboards wire their
+  dates) swaps v4's demo days for the CALENDAR date; `wireFqcDash()` /
+  `wireProdDash()` then set the factory day only over a blank or a demo day, so the
+  calendar date stayed. By day the two are the same date, which is why no daytime
+  run saw it.
+- **Change:** `replaceDemoDates()` uses the factory day for a field on a counting
+  screen (FQC Dashboard, Production Dashboard, Management Overview, Packing Log,
+  Stock & Dispatch) and the calendar date elsewhere (a challan's own date).
+- **Test:** `test_factory_day_defaults_ui.py` (new, 3, the browser clock pinned to
+  01:00 and 11:00 IST): every counting screen opens on the factory day and both
+  dashboards ask the server for it; the challan date stays the calendar day. Fails
+  before the change (FQC Dashboard on 09-10), passes after. `test_dashboards_e2e`
+  27/27, `test_dashboards_ist` 13/13, `test_fqc_dashboard.js` 24/24,
+  `test_dashboard_cascade.js` 15/15, `test_screens.js`, `test_trace.js`,
+  `test_production.py`.
