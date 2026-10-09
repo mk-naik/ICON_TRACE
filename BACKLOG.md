@@ -7079,3 +7079,14 @@ commit.
 - **Change:** both count live gate passes.
 - **Test:** `test_challan.py` +1 (and A5's `test_gatepass.py` case, next commits).
   From `audit/A4-invoice-challan` d3fa85d.
+
+### An invoice whose only challans are superseded or cancelled could never be cancelled
+- **Found** by A4: edit a challan (MA), cancel MA - the invoice was refused cancel
+  ("1 challan(s) reconcile against this invoice") because of the superseded original,
+  while Create Challan already offered the same invoice as free.
+- **Cause:** the cancel check counted every challan not `cancelled`.
+- **Change:** only a live challan (draft / issued) locks it - the line the picker and
+  `challans_against_irn` already draw. Not a looser rule: a superseded original is
+  history, not a reconciliation (DECISIONS 1, "returns when that challan is cancelled").
+- **Test:** `test_cancel_documents.py` +1 (a live draft still locks it).
+  From `audit/A4-invoice-challan` 6357c43.

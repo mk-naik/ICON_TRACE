@@ -869,6 +869,42 @@ def t_cancelled_invoice_refused_at_challan_precheck():
           "(E-CANCELLED)")
 
 
+@test("an invoice whose challans are only superseded or cancelled can be "
+     "cancelled - a superseded original does not reconcile against it, and the "
+     "challan picker already offers it again (audit 9 Oct)")
+def t_invoice_cancel_ignores_superseded_challan():
+    admin, secret, op = accounts()
+    with store.conn() as (cx, cur):
+        inv = store.insert(cur, "invoice", {"invoice_no": "INV-SUPCAN-1",
+            "pdf_path": "x.pdf", "pdf_sha256": "h2", "created_by": "t",
+            "declared_qty": 1})
+        seq = nxt()
+        orig = store.insert(cur, "challan", {"fy": 2026, "seq": seq,
+            "challan_date": "2026-09-09", "qty": 1, "status": "superseded",
+            "invoice_id": inv, "created_by": "t"})
+        store.insert(cur, "challan", {"fy": 2026, "seq": seq, "suffix": "MA",
+            "challan_date": "2026-09-09", "qty": 1, "status": "cancelled",
+            "invoice_id": inv, "created_by": "t"})
+    assert any(i["id"] == inv for i in admin.get(
+        "/api/invoices?for_challan=1").get_json()["invoices"]),         "the picker should offer an invoice with no live challan"
+    r = admin.post("/api/invoice/%d/cancel" % inv,
+                   json={"reason": "re-issued by HO", "totp_code": code(secret)})
+    assert r.status_code == 200, r.get_json()
+    with store.conn() as (cx, cur):
+        assert store.one(cur, "SELECT status FROM invoice WHERE invoice_id=%s",
+                         (inv,))["status"] == "cancelled"
+        cur.execute("UPDATE challan SET status='issued' WHERE challan_id=%s",
+                    (orig,))
+        inv2 = store.insert(cur, "invoice", {"invoice_no": "INV-SUPCAN-2",
+            "pdf_path": "x.pdf", "pdf_sha256": "h3", "created_by": "t"})
+        store.insert(cur, "challan", {"fy": 2026, "seq": nxt(),
+            "challan_date": "2026-09-09", "qty": 1, "status": "draft",
+            "invoice_id": inv2, "created_by": "t"})
+    r = admin.post("/api/invoice/%d/cancel" % inv2,
+                   json={"reason": "x", "totp_code": fresh_code("sa.cancel", secret)})
+    assert r.status_code == 400, "a live DRAFT must still lock its invoice"
+
+
 @test("a cancelled loss event drops out of the Production Dashboard's own "
      "downtime totals and its 'still open, needs a decision' count - not "
      "only the Loss screen's own list")

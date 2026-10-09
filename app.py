@@ -3784,9 +3784,13 @@ def api_invoice_cancel_real(invoice_id):
             return jsonify({"ok": False, "why": "No such invoice."}), 404
         if row["status"] == "cancelled":
             return jsonify({"ok": False, "why": "Invoice is already cancelled."}), 400
+        # a LIVE challan (draft or issued) locks the invoice - the same line
+        # the Create Challan picker draws (/api/invoices?for_challan=1). An
+        # edit's superseded original is history, not a reconciliation: once
+        # its live replacement is cancelled the invoice is free.
         used = store.one(cur,
             "SELECT COUNT(*) AS n FROM challan WHERE invoice_id=%s "
-            "AND status<>'cancelled'", (invoice_id,))["n"]
+            "AND status NOT IN ('cancelled', 'superseded')", (invoice_id,))["n"]
         if used:
             return jsonify({"ok": False, "why":
                 "%d challan(s) reconcile against this invoice. It is locked "
