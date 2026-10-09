@@ -2109,6 +2109,15 @@ def api_box_remove(box_id):
         b = store.box_row(cur, box_id)
         if not b or b["state"] != "open":
             return jsonify({"ok": False, "why": "That box is not open."}), 400
+        # Only a module this box holds comes out of it. The state below was
+        # set for ANY serial named: a held, rejected, cancelled, dispatched or
+        # other pallet's module read 'graded' afterwards (a stale second tab
+        # on the same pallet is enough), and Quality's and Hold's queues lost it.
+        if not store.one(cur, "SELECT 1 AS x FROM box_serial WHERE box_id=%s "
+                              "AND serial=%s", (box_id, serial)):
+            return jsonify({"ok": False, "why":
+                "%s is not in box %s - nothing was taken out."
+                % (serial or "That serial", _box_label(b))}), 400
         store.remove_from_box(cur, box_id, serial)
         db.set_serial(cur, serial, state="graded")
         db.audit(cur, actor(), "box.remove", "box", box_id, {"serial": serial})

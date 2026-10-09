@@ -252,6 +252,29 @@ def t_remove():
                   json={"serial": serial(1)}).status_code == 200
 
 
+@test("remove takes out only a module THIS box holds - any other serial is "
+      "refused and its state is left alone (audit 9 Oct: a rejected, held, "
+      "packed-elsewhere or dispatched module read 'graded' afterwards)")
+def t_remove_only_own():
+    c = setup()
+    for i in (0, 1):
+        pass_fqc(c, i)
+    reject_fqc(c, 2)                      # waiting on Quality
+    other = open_box(c, capacity=1)
+    c.post("/api/box/%d/scan" % other["box_id"], json={"serial": serial(0)})
+    c.post("/api/box/%d/close" % other["box_id"], json={})
+    b = open_box(c)
+    c.post("/api/box/%d/scan" % b["box_id"], json={"serial": serial(1)})
+    for i, was in ((0, "packed"), (2, "rejected"), (3, "planned")):
+        r = c.post("/api/box/%d/remove" % b["box_id"], json={"serial": serial(i)})
+        d = r.get_json()
+        assert r.status_code == 400 and "is not in box ISPL" in d["why"], (i, d)
+        assert state_of(serial(i)) == was, (i, state_of(serial(i)))
+    with store.conn() as (cx, cur):
+        assert dict(store.box_row(cur, b["box_id"]))["qty"] == 1
+        assert dict(store.box_row(cur, other["box_id"]))["qty"] == 1
+
+
 @test("an open box survives a refresh, with everything scanned into it")
 def t_survives_refresh():
     c = setup()
