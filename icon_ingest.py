@@ -298,6 +298,9 @@ def scan_ftr_anomalies(cfg, line=None):
     return out
 
 
+_ONE_OPEN_PER_MODULE = ("ftr_failed", "looked_up_no_decision")
+
+
 def _raw_id(kind, line, serial, at):
     return "%s|%s|%s|%s" % (kind, line or "", serial, at or "")
 
@@ -379,6 +382,13 @@ def apply(cur, db, coll):
                         ("ftr", "ftr_scan"), ("malformed", "ss_ingest")):
         for e in coll[key]:
             k = e["kind"]
+            # A failed reading and an undecided lookup are about a MODULE, not
+            # a row: a module that failed at 23:30 and again at 23:50, or was
+            # looked up three times, is one thing to look at. Keyed on the
+            # event's time alone they came back as two or three open items.
+            if k in _ONE_OPEN_PER_MODULE and db.review_item_open_for(
+                    cur, k, e["serial"], e.get("line")):
+                continue
             rid = _raw_id(k, e.get("line"), e["serial"], e.get("at"))
             if db.ingest_review_item(cur, k, e["serial"], rid, source,
                                      line=e.get("line"), event_at=e.get("at")):

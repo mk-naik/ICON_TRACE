@@ -1094,6 +1094,18 @@ def ingest_review_item(cur, item_type, serial, raw_id, source, line=None,
     return True
 
 
+def review_item_open_for(cur, item_type, serial, line=None):
+    """Is an item of this type already OPEN for this module (on this line)?
+    For the scan events that are about a module rather than one tester row
+    (icon_ingest._ONE_OPEN_PER_MODULE)."""
+    if cur is None:
+        return False
+    return bool(_store.one(cur, "SELECT 1 FROM review_item WHERE type=%s AND "
+                                "serial=%s AND status='open' AND "
+                                "COALESCE(line,'')=COALESCE(%s,'')",
+                           (item_type, serial, line)))
+
+
 def upsert_unplanned_item(cur, serial, source, line=None, event_at=None,
                           created_by="system"):
     """One item per SERIAL for a module the testers have read and the master

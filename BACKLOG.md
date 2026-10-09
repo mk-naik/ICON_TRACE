@@ -7275,3 +7275,8 @@ commit.
 - **Found** by A2: a pass decided 23:40 on 8 Oct (C) with the Sun Simulator unreachable, confirmed at 06:09 on 9 Oct, moved on the FQC Dashboard from 8 Oct C to 9 Oct A (DECISIONS 8: counted by when the decision happened).
 - **Cause/Change:** the reconcile's confirming record was stamped with the reconcile time; `record_fqc` now takes the decision's time for a record the system writes on a person's behalf.
 - **Test:** `test_fqc.py` +1. From `audit/A2-fqc-quality` 544882f.
+
+### Needs Review: a module failing again, or looked up again, became a second open item
+- **Found** by A2 on the live poller: a module that failed at 23:30 and again at 23:50 was two open "FTR anomaly - failed reading" items; each lookup of an undecided module its own "Looked up, no decision" (production: 258 + 101 open).
+- **Change:** while an item of that type is open for the module on that line, the event is not raised again; once acknowledged, a new failure raises a new item.
+- **Test:** `test_icon_ingest.py` +1. From `audit/A2-fqc-quality` e21c415.

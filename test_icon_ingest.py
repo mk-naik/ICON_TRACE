@@ -309,6 +309,31 @@ def t_looked_up_no_decision():
     assert counts.get("looked_up_no_decision") == 1, counts
 
 
+@test("a module whose reading fails again, or that is looked up again, is still "
+      "ONE open item - not one per failed row or per lookup")
+def t_one_open_item_per_module():
+    c = setup()
+    dead = "ICON625R1290220777"
+    rows = [ss_row(IN_MASTER, "2026-09-29 10:00:00", "628.4")]
+    write_ss(rows + [["2026-09-29 11:00:00", dead, "0.0055", "nan", "-0.898"] + ["1"] * 10])
+    with store.conn() as (cx, cur):
+        run_ingest(cur)
+    write_ss(rows + [["2026-09-29 11:00:00", dead, "0.0055", "nan", "-0.898"] + ["1"] * 10,
+                     ["2026-09-29 11:20:00", dead, "0.0061", "nan", "-0.902"] + ["1"] * 10])
+    c.get("/api/fqc/lookup?serial=" + IN_MASTER)
+    c.get("/api/fqc/lookup?serial=" + IN_MASTER)
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE fqc_lookup_log SET at=%s WHERE serial=%s",
+                    (_two_hours_ago(), IN_MASTER))
+        run_ingest(cur)
+        failed = store.rows(cur, "SELECT 1 FROM review_item WHERE type='ftr_failed' "
+                                 "AND serial=%s AND status='open'", (dead,))
+        looked = store.rows(cur, "SELECT 1 FROM review_item WHERE "
+                                 "type='looked_up_no_decision' AND serial=%s", (IN_MASTER,))
+    assert len(failed) == 1, "%d open failed-reading items for one module" % len(failed)
+    assert len(looked) == 1, "%d looked-up items for one module" % len(looked)
+
+
 @test("a lookup followed by a decision is not flagged")
 def t_looked_up_then_decided():
     c = setup()
