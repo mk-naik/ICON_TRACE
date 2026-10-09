@@ -7057,3 +7057,14 @@ commit.
   before `quality_at` existed).
 - **Test:** `test_fqc.py` journey test backdates the FQC decision and asserts the step
   carries `quality_at` (fails before; 54 passed after). From `audit/A7-golden-volume` e7615f1.
+
+### A superseded challan could be "discarded" into cancelled
+- **Found** by audit agent A4 (API on its server): `POST /api/challan/<id>/discard` on
+  an edit's SUPERSEDED original answered 200 and rewrote it `cancelled` with the
+  reason "draft discarded" - open to anyone with Challan write (DECISIONS 1 / 3:
+  never silently rewritten).
+- **Cause:** the route checked only `cancelled` and `issued`; every other status took
+  the draft branch.
+- **Change:** only a draft is discarded; anything else but issued is refused, naming
+  its status.
+- **Test:** `test_challan.py` +1. From `audit/A4-invoice-challan` 0166f21.

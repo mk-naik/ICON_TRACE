@@ -617,6 +617,24 @@ def t_discard_only_draft():
     assert challan_row(chid)["status"] == "issued"
 
 
+@test("a SUPERSEDED challan cannot be discarded: it stays superseded, never "
+      "rewritten 'cancelled' (audit 9 Oct)")
+def t_discard_refuses_superseded():
+    c = setup()
+    b1 = packed_box(c, [140, 141])
+    b2 = packed_box(c, [142, 143])
+    inv = make_invoice(qty=2, invoice_no="INV-DISCSUP")
+    chid = make_issued_challan(c, [b1], inv)
+    r = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": [b2], "invoice_id": inv})
+    assert r.status_code == 200, r.get_json()
+    r2 = c.post("/api/challan/%d/discard" % chid, json={})
+    assert r2.status_code == 400, r2.get_json()
+    row = challan_row(chid)
+    assert row["status"] == "superseded", row["status"]
+    assert row["cancelled_reason"] is None, row["cancelled_reason"]
+
+
 # --------------------------------------------------------------------------
 # customer, and General Stock
 # --------------------------------------------------------------------------

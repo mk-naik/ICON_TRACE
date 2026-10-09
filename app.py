@@ -3403,12 +3403,23 @@ def api_challan_discard(challan_id):
             err = _cancel_issued_challan(cur, challan_id, body)
             return err if err else jsonify({"ok": True})
 
+        # Only a DRAFT is discarded here. A superseded challan is the record of
+        # what an edit replaced (DECISIONS 3) and stays exactly as it is - it
+        # used to fall through to this branch and be rewritten 'cancelled' with
+        # the reason "draft discarded", by anyone with Challan write.
+        if ch["status"] != "draft":
+            return jsonify({"ok": False, "why":
+                "Only a draft can be discarded - this challan is %s, and a "
+                "%s challan is kept exactly as it is." % (ch["status"],
+                                                         ch["status"])}), 400
+
         cur.execute(
             "UPDATE challan SET status='cancelled', cancelled_reason=%s, "
             "cancelled_by=%s, cancelled_at=%s WHERE challan_id=%s",
             (reason_msg, actor(),
              clock.now().isoformat(timespec="seconds"), challan_id))
-        db.audit(cur, actor(), "challan.cancel" if ch["status"] == "issued" else "challan.discard", "challan", challan_id, {"reason": reason_msg})
+        db.audit(cur, actor(), "challan.discard", "challan", challan_id,
+                 {"reason": reason_msg})
     return jsonify({"ok": True})
 
 
