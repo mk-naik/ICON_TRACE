@@ -13097,9 +13097,22 @@ function wireFqcAnomalies() {
 
 
   // e-Way Bill Date fix monkey-patch
-  /* When the parse found no quantity, v4 compared the typed one with
+  /* v4's invCheck() reads the e-Way Bill date as DD-MM-YYYY only and calls a
+     bill expired from the START of its last valid day - so a bill valid until
+     today could not be attached, though the server (expired = valid-until <
+     today) takes it. It is handed the day AFTER the last valid day, in the
+     form it reads, whatever form the date was parsed or typed in (ISO,
+     DD-MM-YYYY, DD/MM/YYYY, DD.MM.YYYY); the field shows what was there.
+     And when the parse found no quantity, v4 compared the typed one with
      INV_SCANNED = null and threw on null.toLocaleString() at every keystroke:
      the quantity typed in is then the only figure there is. */
+  function invEwbParts(v) {
+    var t = String(v || '').trim();
+    var m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return [+m[1], +m[2], +m[3]];
+    m = t.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})$/);
+    return m ? [+m[3], +m[2], +m[1]] : null;
+  }
   if (typeof window.invCheck === 'function' && !window.__invCheckPatched) {
     var originalInvCheck = window.invCheck;
     window.invCheck = function() {
@@ -13109,14 +13122,19 @@ function wireFqcAnomalies() {
                                  .replace(/,/g, ''), 10);
             window.INV_SCANNED = isNaN(typed) ? 0 : typed;
         }
-        if (window.INV_STATE && window.INV_STATE.fields && window.INV_STATE.fields.ewb_valid_upto && window.INV_STATE.fields.ewb_valid_upto.value) {
-            var origDate = window.INV_STATE.fields.ewb_valid_upto.value;
-            var p = String(origDate).split('-');
-            if (p.length === 3 && p[0].length === 4) { 
-                window.INV_STATE.fields.ewb_valid_upto.value = p[2] + '-' + p[1] + '-' + p[0];
+        var f = st && st.fields && st.fields.ewb_valid_upto;
+        if (f && f.value) {
+            var origDate = f.value, p = invEwbParts(origDate);
+            if (p) {
+                var after = new Date(p[0], p[1] - 1, p[2] + 1);
+                f.value = ('0' + after.getDate()).slice(-2) + '-' +
+                          ('0' + (after.getMonth() + 1)).slice(-2) + '-' +
+                          after.getFullYear();
             }
-            originalInvCheck.apply(this, arguments);
-            window.INV_STATE.fields.ewb_valid_upto.value = origDate;
+            try { originalInvCheck.apply(this, arguments); }
+            finally { f.value = origDate; }
+            var shown = document.getElementById('invEwb');
+            if (shown) shown.textContent = origDate;
         } else {
             originalInvCheck.apply(this, arguments);
         }

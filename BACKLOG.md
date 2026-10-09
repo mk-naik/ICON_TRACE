@@ -7245,3 +7245,13 @@ commit.
 - **Change:** the parse records `qtyParsed`; when false the typed quantity is compared.
   The synthetic PDF builder is shared as `invoice_pdf_fixture.py`.
 - **Test:** `test_invoice_screen_ui.py` (new, Chromium). From `audit/A4-invoice-challan` f24bb2a.
+
+### The invoice screen called an e-Way Bill valid until today "expired"
+- **Found** by A4 (Chromium): valid upto 9-Oct-2026, on 9 Oct - "e-Way Bill is expired.
+  Dispatch is blocked", Attach off; the server accepts it (a bill is valid through its
+  last day). A date typed 08/10/2026 was not read at all.
+- **Cause:** v4's `invCheck` compares the START of the last valid day and reads
+  DD-MM-YYYY only.
+- **Change:** the live layer's `invCheck` patch reads ISO / DD-MM-YYYY / DD/MM/YYYY /
+  DD.MM.YYYY and hands v4 the day after the last valid day - one rule with the server.
+- **Test:** `test_invoice_screen_ui.py` +1. From `audit/A4-invoice-challan` 5fd2e2f.

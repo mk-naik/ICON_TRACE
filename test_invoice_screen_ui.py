@@ -6,7 +6,9 @@ a real browser.
 
 What the operator sees has to agree with what the server enforces:
 
-  1. when the parser finds no quantity, the operator types it (v4: "The
+  1. an e-Way Bill valid until TODAY can be attached (the server's rule:
+     expired = valid-until < today); one that ended yesterday cannot;
+  2. when the parser finds no quantity, the operator types it (v4: "The
      parser did not find this. Type it rather than trust a guess.") - no page
      error, Attach enables, and the typed figure is stored, marked edited.
 
@@ -45,6 +47,32 @@ def stored(invoice_no):
     with store.conn() as (cx, cur):
         return store.one(cur, "SELECT * FROM invoice WHERE irn=%s",
                          (irn_of(invoice_no),))
+
+
+@test("an e-Way Bill valid until today can be attached; one that ended "
+      "yesterday cannot (the server's rule, on the screen too)")
+def t_ewb_valid_today():
+    store.wipe()
+    today = clock.today()
+    with H.browser() as b:
+        pg = H.open_page(b, role="Dispatch Operator", login_id="disp.ui1")
+        load(pg, make_pdf(H.TMP, "UINV/26-27/001", 36,
+                          ewb_upto=today.strftime("%d-%b-%Y")))
+        assert pg.is_enabled("#invSubmit"), pg.inner_text("#invStatus")
+        assert "expired" not in pg.inner_text("#invStatus").lower()
+        pg.click("#invSubmit")
+        pg.wait_for_timeout(1200)
+        assert stored("UINV/26-27/001"), "valid-today invoice was not stored"
+        yday = today - datetime.timedelta(days=1)
+        load(pg, make_pdf(H.TMP, "UINV/26-27/002", 36,
+                          ewb_upto=yday.strftime("%d-%b-%Y")))
+        assert not pg.is_enabled("#invSubmit")
+        assert "expired" in pg.inner_text("#invStatus").lower()
+        # typed by hand as DD/MM/YYYY - v4 alone never saw this as a date
+        pg.fill("#f_ewb_valid_upto", yday.strftime("%d/%m/%Y"))
+        pg.wait_for_timeout(200)
+        assert not pg.is_enabled("#invSubmit"), "a typed expired date was let through"
+        assert not pg.errors, pg.errors
 
 
 @test("no quantity on the invoice: no page error, the typed quantity enables "
