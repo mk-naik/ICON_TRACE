@@ -7379,3 +7379,8 @@ commit.
 - **Found** by A3: POST /api/box/<id>/remove set the named serial `graded` whether or not that pallet held it - a module waiting on Quality, on hold, packed elsewhere, dispatched or cancelled read graded afterwards (API, or a stale second tab).
 - **Change:** a serial the pallet does not hold is refused, naming the pallet, before anything is written.
 - **Test:** `test_packing.py` +1. From `audit/A3-pack` 41b2cf3.
+
+### Packing Log: Awaiting challan read 26,130 kW for 418 modules; Repack sessions always 0
+- **Found** by A3: the tile took the wattage from the MODEL's digits (ISEN625-G12R -> 62512 W); Repack sessions counted a state no pallet has.
+- **Change:** /api/packing/log gives each row its kW (its modules' wattage, summed / 1000) and a repack summary for the period.
+- **Test:** `test_packlog.py` (new). From `audit/A3-pack` 553b45f.

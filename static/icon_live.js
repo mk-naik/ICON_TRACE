@@ -3288,10 +3288,6 @@ function wireFqcAnomalies() {
               kMods += (r.qty || 0);
               if (r.grade === 'A') kA += (r.qty || 0);
               if (r.grade === 'GY' || r.grade === 'BGY') kGy += (r.qty || 0);
-              if (r.state === 'repacked') {
-                kRepacks++;
-                kCRe++;
-              }
               if (r.status === 'packed') {
                 kWaitBoxes++;
                 kWaitMods += (r.qty || 0);
@@ -3304,8 +3300,10 @@ function wireFqcAnomalies() {
               var sClass = r.status === 'dispatched' ? 't-solar'
                          : r.status === 'open' ? 't-rev' : 't-info';
               
-              var modelW = parseInt((r.model||'').replace(/\D/g, '')) || 0;
-              if (r.status === 'packed') kWaitKw += (r.qty * modelW / 1000);
+              /* the server's kW - its modules' own wattage, summed. The
+                 model's digits were read as the wattage: ISEN625-G12R made
+                 62512 W a module, a hundred times too much. */
+              if (r.status === 'packed') kWaitKw += (r.kw || 0);
               
               /* the pallet number (ISPL...) names the row; the bare sequence
                  repeats every day and printed the wrong pallet. Print opens
@@ -3328,6 +3326,12 @@ function wireFqcAnomalies() {
         
         var countEl = document.getElementById('pkCount');
         if (countEl) countEl.textContent = kLists + ' boxes';
+        /* repacks in the period, counted by the server: a retired pallet is
+           not a row here, so counting rows in a 'repacked' state - one no
+           pallet ever has - always said 0 */
+        var rp = d.repack || {};
+        kRepacks = rp.sessions || 0;
+        kCRe = rp.closed || 0;
         
         var grid = document.querySelector('#v-packdash .grid.g4');
         if (grid) {
@@ -3339,7 +3343,8 @@ function wireFqcAnomalies() {
             kpis[1].querySelector('.d').textContent = kA.toLocaleString() + ' A \u2014 ' + kGy.toLocaleString() + ' GY';
             
             kpis[2].querySelector('.v').textContent = kRepacks.toLocaleString();
-            kpis[2].querySelector('.d').textContent = kCRe + ' boxes closed';
+            kpis[2].querySelector('.d').textContent = kCRe + ' boxes closed → ' +
+              (rp.created || 0) + ' created';
             
             kpis[3].querySelector('.v').textContent = kWaitBoxes.toLocaleString();
             kpis[3].querySelector('.d').textContent = kWaitMods.toLocaleString() + ' modules \u2014 ' + kWaitKw.toFixed(1) + ' KW';

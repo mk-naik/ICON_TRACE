@@ -6382,16 +6382,46 @@ def api_packing_log():
     clause = " AND ".join(where)
 
     with store.conn() as (cx, cur):
+        # watts: the wattage of the modules in the pallet, summed - what its
+        # kW is (DECISIONS 3: sum of qty x wattage / 1000, never typed). The
+        # screen read the wattage out of the MODEL's digits, and
+        # ISEN625-G12R gave 62512 W a module.
         rows = store.rows(cur, f"""
             SELECT b.box_id, b.pack_date, b.pack_shift, b.model, b.grade,
                    b.qty, b.capacity, b.customer, b.bin_no, b.state,
                    b.seq, b.code_map_version, b.created_at,
                    b.created_by AS packed_by,
-                   COALESCE(b.legacy_box_no, b.seq) AS ident
+                   COALESCE(b.legacy_box_no, b.seq) AS ident,
+                   (SELECT COALESCE(SUM(s.wattage), 0) FROM box_serial bs
+                    JOIN serial s ON s.serial = bs.serial
+                    AND s.build_instance = COALESCE(bs.build_instance, 1)
+                    WHERE bs.box_id = b.box_id) AS watts
             FROM box b
             WHERE {clause}
             ORDER BY b.pack_date DESC, b.box_id DESC
         """, args)
+        # Repacks in the period, for the "Repack sessions" figure: a retired
+        # pallet is not a row of this log, so the screen, which counted rows
+        # in a 'repacked' state no pallet ever has, always said 0. A session
+        # is one save - its sources are retired together, by one person.
+        # By the period only: a repack is not a pallet with a status.
+        rp_where, rp_args = [], []
+        for col, op, v in (("b.retired_at", ">=", frm), ("b.retired_at", "<=", to)):
+            if v:
+                rp_where.append(clock.shift_day_sql(col) + " " + op + " ?")
+                rp_args.append(v)
+        parents = store.rows(cur,
+            "SELECT b.box_id, b.retired_at, b.retired_by FROM box b "
+            "WHERE b.state='retired' AND b.box_id IN "
+            "(SELECT parent_box_id FROM box_lineage)"
+            + "".join(" AND " + w for w in rp_where), rp_args)
+        kid_where = [w.replace("b.retired_at", "k.created_at") for w in rp_where]
+        children = store.one(cur,
+            "SELECT COUNT(DISTINCT k.box_id) AS n FROM box_lineage l "
+            "JOIN box k ON k.box_id = l.child_box_id WHERE 1=1"
+            + "".join(" AND " + w for w in kid_where), rp_args)["n"]
+        repack = {"sessions": len({(p["retired_at"], p["retired_by"]) for p in parents}),
+                  "closed": len(parents), "created": children}
         # how far each closed pallet has got: on a live (draft or issued)
         # challan, and whether that challan has a live gate pass (loaded)
         reach = {r["box_id"]: r["lvl"] for r in store.rows(
@@ -6423,6 +6453,7 @@ def api_packing_log():
                 int(str(r["created_at"])[11:13] or 0)) - 1]
         cr = customers.get(r["customer"]) if r["customer"] else None
         r["customer_name"] = cr["name"] if cr else r["customer"]
+        r["kw"] = (r.pop("watts") or 0) / 1000.0
 
     # the filters, one predicate each
     preds = {}
@@ -6470,7 +6501,7 @@ def api_packing_log():
                    if any(r.get("status") == st for r in rows if keep(r, "status"))],
     }
     rows = [r for r in rows if keep(r)]
-    return jsonify({"rows": rows, "facets": facets})
+    return jsonify({"rows": rows, "facets": facets, "repack": repack})
 
 
 def _read_refusal(screens=(), roles=()):
