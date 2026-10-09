@@ -2632,6 +2632,43 @@ def api_loading_box():
 # design pass.
 # --------------------------------------------------------------------------
 
+def _loading_not_live(cur, ch):
+    """Why this challan cannot be loaded, or None. Only an ISSUED challan is:
+    a draft was never issued, a cancelled one is void, and a superseded
+    original was replaced by an edit - its pallet list is the old one, and
+    Team 3 rescans on the new version (DECISIONS 4: no swap). A session left
+    open on the original while Team 2 edited the challan went on confirming
+    and submitting it, and wrote a gate pass for the superseded document; a
+    direct call did the same for a draft and a cancelled challan."""
+    if ch["status"] == "issued":
+        return None
+
+    def no_of(c):
+        try:
+            return db.render_challan_no(datetime.date.fromisoformat(c["challan_date"]),
+                                        c["seq"], c.get("suffix"))
+        except (TypeError, ValueError):
+            return "challan #%s" % c["challan_id"]
+
+    if ch["status"] == "superseded":
+        live, seen = ch, set()
+        while live and live["status"] == "superseded" and live.get("superseded_by") \
+                and live["challan_id"] not in seen:
+            seen.add(live["challan_id"])
+            live = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
+                             (live["superseded_by"],))
+        if live and live["status"] == "issued":
+            return ("%s was replaced by an edit - load %s instead (open it from "
+                    "the Loading Verification list)." % (no_of(ch), no_of(live)))
+        return "%s was replaced by an edit; it is not loaded." % no_of(ch)
+    if ch["status"] == "draft":
+        return ("%s is still a draft - it has not been issued, so there is "
+                "nothing to load yet." % no_of(ch))
+    if ch["status"] == "cancelled":
+        return "%s was cancelled - its pallets are not going on a vehicle." % no_of(ch)
+    return "%s is %s - only an issued challan is loaded." % (no_of(ch), ch["status"])
+
+
 def _loading_agg_status(n_total, n_saved, n_loaded):
     if n_total and n_loaded == n_total:
         return "loaded"
@@ -2740,19 +2777,30 @@ def api_loading_confirm(challan_id):
     This IS the save - there is no separate save step, because every
     confirm already persists immediately."""
     d = request.get_json(force=True) or {}
-    box_no = (d.get("box_no") or "").strip().upper()
+    # str(): a number sent as the pallet number was a 500, not a refusal
+    box_no = str(d.get("box_no") or "").strip().upper()
     if not box_no:
         return jsonify({"ok": False, "why": "Scan or type a pallet number."}), 400
     with store.conn() as (cx, cur):
-        ch = store.one(cur, "SELECT challan_id FROM challan WHERE challan_id=%s",
+        ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
                        (challan_id,))
         if not ch:
             return jsonify({"ok": False, "why": "No such challan."}), 404
+        why = _loading_not_live(cur, ch)
+        if why:
+            return jsonify({"ok": False, "why": why}), 400
         row = store.one(cur, "SELECT * FROM challan_box WHERE challan_id=%s "
                              "AND box_no=%s", (challan_id, box_no))
         if not row:
             return jsonify({"ok": False, "why":
                 "%s is not on this challan." % box_no}), 400
+        # Submitted is final: a confirm from a session still open on another
+        # screen used to put a loaded pallet back to 'saved' (and overwrite
+        # who confirmed it), and the challan then refused to print.
+        if row["loading_status"] == "loaded":
+            return jsonify({"ok": False, "why":
+                "%s is already loaded - this challan's loading was submitted. "
+                "Nothing to confirm." % box_no}), 400
         at = clock.now().isoformat(timespec="seconds")
         cur.execute("UPDATE challan_box SET loading_status='saved', "
                     "loading_scanned_at=%s, loading_scanned_by=%s "
@@ -2785,6 +2833,9 @@ def api_loading_submit(challan_id):
                        (challan_id,))
         if not ch:
             return jsonify({"ok": False, "why": "No such challan."}), 404
+        why = _loading_not_live(cur, ch)
+        if why:
+            return jsonify({"ok": False, "why": why}), 400
         boxes = store.rows(cur, "SELECT box_no, loading_status FROM "
                                 "challan_box WHERE challan_id=%s "
                                 "ORDER BY load_order", (challan_id,))

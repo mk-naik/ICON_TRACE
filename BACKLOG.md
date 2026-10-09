@@ -7113,3 +7113,16 @@ commit.
   year's invoice supersede last year's - as in the original design. Do they repeat?
 - **Test:** `test_invoice_confirm.py` (new, 5, synthetic PDFs; all fail before).
   From `audit/A4-invoice-challan` 5f57376.
+
+### Loading Verification confirmed and submitted challans that are not issued
+- **Found** by A5 (Chromium, then API): a session left open while Team 2 edited the
+  challan (MA) went on confirming and submitting the SUPERSEDED original and wrote a
+  module gate pass for it; a direct call did the same for a draft (serials never
+  dispatched) and a cancelled challan. A confirm on an already loaded pallet (a second
+  screen still open) put it back to `saved` and the challan then refused to print. A
+  pallet number sent as a number was a 500.
+- **Cause:** confirm read only that the challan exists; submit only the pallet statuses.
+- **Change:** `_loading_not_live()` refuses anything but an issued challan before
+  either route writes - a superseded original names the live version to load instead
+  (DECISIONS 4: no swap, rescan the new version); confirm refuses a loaded pallet.
+- **Test:** `test_loading.py` +4. From `audit/A5-load-gatepass-print` 1b89366.

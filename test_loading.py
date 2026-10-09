@@ -560,6 +560,84 @@ def t_landing_excludes_cancelled_and_superseded():
         "the LIVE replacement was missing from the landing list"
 
 
+@test("a session left open on the original while the challan is edited (MA) "
+      "can neither confirm nor submit it: the refusal names the live version "
+      "and no gate pass is written for the superseded document")
+def t_superseded_original_cannot_be_loaded():
+    c = setup()
+    b1 = packed_box(c, [80, 81])
+    b2 = packed_box(c, [82, 83])
+    inv = make_invoice(qty=2, invoice_no="INV-LOAD-OLDSESSION")
+    chid = make_issued_challan(c, [b1], inv)
+    old_box = box_no_of(chid)
+    r = c.post("/api/challan/%d/edit-save" % chid, json={"boxes": [b2], "invoice_id": inv})
+    assert r.status_code == 200, r.get_json()
+    ma = r.get_json()
+
+    r1 = c.post("/api/loading/%d/confirm" % chid, json={"box_no": old_box})
+    assert r1.status_code == 400, r1.get_json()
+    assert ma["no"] in r1.get_json()["why"], r1.get_json()
+    assert statuses_of(chid)[old_box] == "pending", statuses_of(chid)
+    r2 = c.post("/api/loading/%d/submit" % chid, json={})
+    assert r2.status_code == 400 and ma["no"] in r2.get_json()["why"], r2.get_json()
+    assert gatepasses_for(chid) == [], gatepasses_for(chid)
+
+
+@test("a draft and a cancelled challan cannot be loaded - confirm and submit "
+      "refuse with the reason, and no gate pass is written")
+def t_draft_and_cancelled_cannot_be_loaded():
+    c = setup()
+    b1 = packed_box(c, [84, 85])
+    b2 = packed_box(c, [86, 87])
+    inv1 = make_invoice(qty=2, invoice_no="INV-LOAD-DRAFT")
+    inv2 = make_invoice(qty=2, invoice_no="INV-LOAD-CANC")
+    r = c.post("/api/challan", json={"action": "draft", "boxes": [b1], "invoice_id": inv1})
+    assert r.status_code == 200, r.get_json()
+    draft = r.get_json()["challan_id"]
+    cancelled = make_issued_challan(c, [b2], inv2)
+    assert c.post("/api/challan/%d/cancel" % cancelled, json={
+        "reason": "test cancel", "totp_code": AUTH.totp_code(_TOTP_SECRET)}).status_code == 200
+    for chid, word in ((draft, "draft"), (cancelled, "cancelled")):
+        r1 = c.post("/api/loading/%d/confirm" % chid, json={"box_no": box_no_of(chid)})
+        assert r1.status_code == 400 and word in r1.get_json()["why"], r1.get_json()
+        r2 = c.post("/api/loading/%d/submit" % chid, json={})
+        assert r2.status_code == 400 and word in r2.get_json()["why"], r2.get_json()
+        assert gatepasses_for(chid) == [], (word, gatepasses_for(chid))
+        assert set(statuses_of(chid).values()) == {"pending"}, statuses_of(chid)
+
+
+@test("a confirm on a pallet already LOADED changes nothing - it stays loaded "
+      "with who and when, and the challan still prints")
+def t_confirm_on_loaded_changes_nothing():
+    c = setup()
+    b = packed_box(c, [88, 89])
+    inv = make_invoice(qty=2, invoice_no="INV-LOAD-STALE")
+    chid = make_issued_challan(c, [b], inv)
+    box_no = box_no_of(chid)
+    c.post("/api/loading/%d/confirm" % chid, json={"box_no": box_no})
+    assert c.post("/api/loading/%d/submit" % chid, json={}).status_code == 200
+    with store.conn() as (cx, cur):
+        before = dict(store.one(cur, "SELECT * FROM challan_box WHERE challan_id=%s", (chid,)))
+        row = store.one(cur, "SELECT fy, seq FROM challan WHERE challan_id=%s", (chid,))
+    r = c.post("/api/loading/%d/confirm" % chid, json={"box_no": box_no})
+    assert r.status_code == 400 and "already loaded" in r.get_json()["why"], r.get_json()
+    with store.conn() as (cx, cur):
+        after = dict(store.one(cur, "SELECT * FROM challan_box WHERE challan_id=%s", (chid,)))
+    assert after == before, (before, after)
+    assert c.get("/challan/%d/%d/print" % (row["fy"], row["seq"])).status_code == 200
+
+
+@test("a pallet number that is not text is refused with a reason, not a 500")
+def t_confirm_non_text_box_no():
+    c = setup()
+    b = packed_box(c, [90, 91])
+    inv = make_invoice(qty=2, invoice_no="INV-LOAD-INT")
+    chid = make_issued_challan(c, [b], inv)
+    r = c.post("/api/loading/%d/confirm" % chid, json={"box_no": 5})
+    assert r.status_code == 400, r.status_code
+    assert "not on this challan" in r.get_json()["why"], r.get_json()
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0
