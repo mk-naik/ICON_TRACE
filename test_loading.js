@@ -89,6 +89,10 @@ function El(tag) {
 }
 El.prototype.addEventListener = function (ev, fn) { this._listeners[ev] = fn; };
 El.prototype.focus = function () {};
+El.prototype.insertAdjacentHTML = function (where, html) {
+  if (where === 'afterbegin') this.innerHTML = html + this.innerHTML;
+  else this.innerHTML = this.innerHTML + html;
+};
 El.prototype.fire = function (ev, evt) {
   if (this._listeners[ev]) this._listeners[ev](evt);
 };

@@ -12315,11 +12315,15 @@ function wireFqcAnomalies() {
   // back on its own. Prepending this once, right after loadView() drops the
   // fragment in, is what makes "Verify one pallet's contents" a real screen
   // instead of a one-way door out of the SPA.
+  // Put in FRONT of what is there, never by re-assigning innerHTML: that
+  // re-built every element after the fragment's own script had wired them,
+  // so the module scan's Enter (lvScan's keydown listener) was lost and no
+  // scanned module was ever matched.
   function ldInjectPalletCheckClose(el) {
     if (!el || el.innerHTML.indexOf('id="ldPalletCheckClose"') !== -1) return;
-    el.innerHTML = '<div class="pg-act"><button class="btn btn-ghost btn-sm" ' +
+    el.insertAdjacentHTML('afterbegin', '<div class="pg-act"><button class="btn btn-ghost btn-sm" ' +
       'id="ldPalletCheckClose" onclick="go(\'loading-list\')">' +
-      '← Back to Loading Verification</button></div>' + el.innerHTML;
+      '← Back to Loading Verification</button></div>');
   }
 
   function ldInjectView() {

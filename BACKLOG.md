@@ -7135,3 +7135,11 @@ commit.
   page `ldPalletNo`).
 - **Test:** `test_loading.py`, `test_loading.js`; Chromium on the audit server.
   From `audit/A5-load-gatepass-print` 89caa24.
+
+### "Verify one pallet's contents" matched nothing
+- **Found** by A5 (Chromium): a module scanned + Enter did nothing - 0 matched,
+  0 unexpected - so the not-opened-since-packing check could not be done.
+- **Cause:** the "Back" bar was put in front by re-assigning the section's innerHTML
+  after the fragment's script had wired it, which dropped the scan field's listener.
+- **Change:** `insertAdjacentHTML('afterbegin', ...)`.
+- **Test:** `test_loading_ui.py` (new, Chromium). From `audit/A5-load-gatepass-print` e13cdad.
