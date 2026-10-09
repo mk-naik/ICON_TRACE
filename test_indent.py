@@ -170,6 +170,54 @@ def t_two_items_two_rows():
     assert n == 1, "there should be one indent behind those two rows, not %d" % n
 
 
+# --------------------------------------------------------------------------
+# a cancelled item stays cancelled
+# --------------------------------------------------------------------------
+
+@test("editing an indent after one of its items was cancelled neither shows "
+      "that item nor brings it back: its row, number and reason are kept")
+def t_cancelled_item_survives_edit():
+    c = setup()
+    if len(ITEMS) < 2:
+        return
+    make(c, items=[{"item_code": ITEMS[0], "qty": 100},
+                   {"item_code": ITEMS[1], "qty": 200}])
+    info = AUTH.test_login(c, role="Admin", login_id="adm.cancel")
+    secret = AUTH.provision_totp(info["login_id"])
+    with store.conn() as (cx, cur):
+        lid = store.one(cur, "SELECT indent_line_id FROM indent_line WHERE line_no=2")
+    r = c.post("/api/indent/line/%d/cancel" % lid["indent_line_id"],
+               json={"reason": "customer dropped item 2",
+                     "totp_code": AUTH.totp_code(secret)})
+    assert r.get_json().get("ok"), r.get_json()
+    AUTH.test_login(c)                       # back to the Super Admin
+    got = c.get("/api/indent/SEP-09%2F2026").get_json()
+    assert [x["item_code"] for x in got["items"]] == [ITEMS[0]], \
+        "the Edit form was handed the cancelled item: %r" % got["items"]
+    # the form posts what it shows - one item, its quantity changed
+    r = c.put("/api/indent/SEP-09%2F2026",
+              json={"items": [{"item_code": ITEMS[0], "qty": 150}]})
+    assert r.get_json().get("ok"), r.get_json()
+    with store.conn() as (cx, cur):
+        ls = store.rows(cur, "SELECT line_no, qty, status, cancelled_reason "
+                             "FROM indent_line ORDER BY line_no")
+    assert [(l["line_no"], l["status"]) for l in ls] == \
+        [(1, "active"), (2, "cancelled")], ls
+    assert ls[0]["qty"] == 150 and ls[1]["cancelled_reason"] == \
+        "customer dropped item 2", ls
+    assert [x["line_no"] for x in rows(c) if x["indent_no"] == "SEP-09/2026"] == [1], \
+        "the cancelled item is back on the list"
+    # an item added later takes a number of its own, never the cancelled one's
+    r = c.put("/api/indent/SEP-09%2F2026",
+              json={"items": [{"item_code": ITEMS[0], "qty": 150},
+                              {"item_code": ITEMS[1], "qty": 36}]})
+    assert r.get_json().get("ok"), r.get_json()
+    with store.conn() as (cx, cur):
+        ls = store.rows(cur, "SELECT line_no, status FROM indent_line ORDER BY line_no")
+    assert [(l["line_no"], l["status"]) for l in ls] == \
+        [(1, "active"), (2, "cancelled"), (3, "active")], ls
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0

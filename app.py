@@ -8607,8 +8607,11 @@ def api_indent_get(indent_no):
         i = store.one(cur, "SELECT * FROM indent WHERE indent_no=%s", (indent_no,))
         if not i:
             return jsonify({"error": "Indent %s not found." % indent_no})
+        # The live items only: this feeds the Edit form, and a cancelled item
+        # shown there came back to life on Save (the form posts every row).
         lines = store.rows(cur, "SELECT * FROM indent_line WHERE indent_id=%s "
-                                "ORDER BY line_no", (i["indent_id"],))
+                                "AND status<>'cancelled' ORDER BY line_no",
+                           (i["indent_id"],))
         # Items are fixed once serials exist against them: the instruction has
         # been acted on, so the quantity is history rather than a plan.
         used = store.one(cur, "SELECT COUNT(*) AS n FROM serial WHERE "
@@ -8713,9 +8716,20 @@ def api_indent_update(indent_no):
                      {"indent_no": indent_no, "note": "items locked, %d "
                       "serial(s) already allocated" % used})
         else:
-            cur.execute("DELETE FROM indent_line WHERE indent_id=%s",
-                        (i["indent_id"],))
-            for n, ln in enumerate(lines, start=1):
+            # A cancelled item is a record - who cancelled it, when, why - and
+            # keeps its row and its number. Only the live items are replaced
+            # by the form's; deleting them all wiped the cancel and re-made the
+            # item as a live one (DECISIONS 1: never deleted or rewritten).
+            taken = {r["line_no"] for r in store.rows(
+                cur, "SELECT line_no FROM indent_line WHERE indent_id=%s "
+                     "AND status='cancelled'", (i["indent_id"],))}
+            cur.execute("DELETE FROM indent_line WHERE indent_id=%s "
+                        "AND status<>'cancelled'", (i["indent_id"],))
+            n = 0
+            for ln in lines:
+                n += 1
+                while n in taken:
+                    n += 1
                 ln["line_no"] = n
                 ln["indent_id"] = i["indent_id"]
                 store.insert(cur, "indent_line", ln)

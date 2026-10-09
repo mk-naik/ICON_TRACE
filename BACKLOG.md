@@ -7358,3 +7358,9 @@ commit.
   module measured, or that the tester could not read it.
 - **Test:** `test_fqc.py` +1, and the short-module case asserts the measured 620.5 W
   (both fail before; 58 passed after). `test_review.py`, `test_fqc_unplanned.py`.
+
+### Editing an indent brought a cancelled item back to life
+- **Found** by A1 (browser): after Admin > Cancel document cancelled one item, the indent's Edit showed it as an ordinary row and Save deleted every item row - the cancelled one with its who / when / why - and re-created them all live; the item returned to the list and to Planning (DECISIONS 1: cancelled, never deleted or silently rewritten).
+- **Cause:** GET /api/indent/<no> returned cancelled items; PUT deleted every indent_line before re-inserting.
+- **Change:** Edit carries live items only; the PUT deletes and re-numbers live items only - a cancelled item keeps its row, number and reason, and a new item never takes its number.
+- **Test:** `test_indent.py` +1. From `audit/A1-plan-produce` 60be4f1.
