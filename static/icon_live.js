@@ -2564,16 +2564,16 @@
   window.wireFqcRecent = wireFqcRecent;
 
   function renderAnomalies() {
-    var lineMatch = (document.getElementById('fqcStation') || {}).textContent || '';
-    var line = 'A';
-    if (lineMatch.indexOf('B-Line') >= 0) line = 'B';
-    
+    /* Both lines: the FQC Dashboard's Anomaly count scans every tester, so
+       the list behind its View does too. It used to send the line of the FQC
+       Entry station label - Line A for anyone without one - and listed one
+       module under a card that counted four. Each row says its line. */
     var f = fqcDashFilters();
-    var q = '?line=' + line;
-    if (f.from) q += '&from=' + encodeURIComponent(f.from);
-    if (f.to) q += '&to=' + encodeURIComponent(f.to);
+    var q = [];
+    if (f.from) q.push('from=' + encodeURIComponent(f.from));
+    if (f.to) q.push('to=' + encodeURIComponent(f.to));
 
-    fetch('/api/fqc/anomalies' + q, {cache: 'no-store'})
+    fetch('/api/fqc/anomalies' + (q.length ? '?' + q.join('&') : ''), {cache: 'no-store'})
       .then(function (r) { return r.json(); })
       .then(function (anomalies) {
         var existing = document.getElementById('fqcAnomaliesModal');
@@ -2589,18 +2589,18 @@
         
         if (anomalies.junk && anomalies.junk.length > 0) {
           html += '<p style="margin-bottom:10px"><b>' + anomalies.junk.length + ' row(s) under a hand-typed ID.</b> The barcode would not scan, so the operator entered something to let the test run. The module exists; its result is filed under nothing.</p>';
-          html += '<div class="scroll" style="max-height:180px;margin-bottom:20px"><table><thead><tr><th>Time</th><th>ID as typed</th><th>Pmax</th></tr></thead><tbody>';
+          html += '<div class="scroll" style="max-height:180px;margin-bottom:20px"><table><thead><tr><th>Time</th><th>Line</th><th>ID as typed</th><th>Pmax</th></tr></thead><tbody>';
           anomalies.junk.forEach(function(j) {
-            html += '<tr><td>' + (j.at || '') + '</td><td class="mono"><span class="tag t-fail">' + ctlVisible(j.id) + '</span></td><td class="mono">' + (j.pmax || '') + '</td></tr>';
+            html += '<tr><td>' + fqcEsc(j.at || '') + '</td><td>' + fqcEsc(j.line || '') + '</td><td class="mono"><span class="tag t-fail">' + ctlVisible(j.id) + '</span></td><td class="mono">' + fqcEsc(j.pmax || '') + '</td></tr>';
           });
           html += '</tbody></table></div>';
         }
         
         if (anomalies.failed && anomalies.failed.length > 0) {
           html += '<p style="margin-bottom:10px"><b>' + anomalies.failed.length + ' module(s) tested and never read.</b> Probe or Zig at the JB connector, polarity, or soldering.</p>';
-          html += '<div class="scroll" style="max-height:180px"><table><thead><tr><th>Serial</th><th>Attempts</th><th>Last try</th><th>Why</th></tr></thead><tbody>';
+          html += '<div class="scroll" style="max-height:180px"><table><thead><tr><th>Serial</th><th>Line</th><th>Attempts</th><th>Last try</th><th>Why</th></tr></thead><tbody>';
           anomalies.failed.forEach(function(f) {
-            html += '<tr><td class="mono">' + fqcEsc(f.serial) + '</td><td style="text-align:right">' + f.attempts + '</td><td>' + (f.at || '') + '</td><td class="hint">' + fqcEsc(f.why) + '</td></tr>';
+            html += '<tr><td class="mono">' + fqcEsc(f.serial) + '</td><td>' + fqcEsc(f.line || '') + '</td><td style="text-align:right">' + f.attempts + '</td><td>' + fqcEsc(f.at || '') + '</td><td class="hint">' + fqcEsc(f.why) + '</td></tr>';
           });
           html += '</tbody></table></div>';
         }

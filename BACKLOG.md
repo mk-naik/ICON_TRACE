@@ -7280,3 +7280,8 @@ commit.
 - **Found** by A2 on the live poller: a module that failed at 23:30 and again at 23:50 was two open "FTR anomaly - failed reading" items; each lookup of an undecided module its own "Looked up, no decision" (production: 258 + 101 open).
 - **Change:** while an item of that type is open for the module on that line, the event is not raised again; once acknowledged, a new failure raises a new item.
 - **Test:** `test_icon_ingest.py` +1. From `audit/A2-fqc-quality` e21c415.
+
+### FQC Dashboard: "View anomalies" listed Line A only
+- **Found** by A2: the Anomaly count read 4 across both lines, its View listed Line A's one - the request sent the FQC Entry station's line (A by default) on a plant-wide screen.
+- **Change:** both testers are read; a Line column; tester text escaped.
+- **Test:** `test_fqc_screen.py` +1 (Chromium). From `audit/A2-fqc-quality` 033632d.

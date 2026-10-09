@@ -413,6 +413,38 @@ def t_duplicate_scan_toast():
         assert not pg.errors, pg.errors
 
 
+@test("the FQC Dashboard's 'View anomalies' lists BOTH lines, as its Anomaly count "
+      "does, and says which line each row came from")
+def t_dashboard_anomalies_both_lines():
+    import icon_clock
+    base()
+    d = icon_clock.shift_day().strftime("%Y/%m/%d")
+    ss_b = os.path.join(TMP, "ss_b.csv")
+    with open(SS, "a", newline="", encoding="utf-8") as fh:
+        csv.writer(fh).writerow(ss_row("ICON625R12A0830906-", d + " 07:00:00", "630.0"))
+    with open(ss_b, "w", newline="", encoding="utf-8") as fh:
+        csv.writer(fh).writerows([
+            [d + " 07:10:00", "ICON625R12A0830910", "0.0055", "nan", "-0.898"] + ["1"] * 10])
+    with store.conn() as (cx, cur):
+        db.set_config(cur, {"ss_a_csv_path": SS, "ss_b_csv_path": ss_b})
+    try:
+        with H.browser() as b:
+            pg = H.open_page(b, "dash")
+            pg.wait_for_selector("#btnFqcAnomalies")
+            pg.click("#btnFqcAnomalies")
+            pg.wait_for_selector("#fqcAnomaliesModal")
+            text = pg.inner_text("#fqcAnomaliesModal")
+            assert "ICON625R12A0830906-" in text, text           # Line A's junk ID
+            assert "ICON625R12A0830910" in text, text            # Line B's failed module
+            lines = pg.eval_on_selector_all(
+                "#fqcAnomaliesModal tbody tr", "rs => rs.map(r => r.cells[1].textContent)")
+            assert sorted(lines) == ["A", "B"], lines
+            assert not pg.errors, pg.errors
+    finally:
+        with store.conn() as (cx, cur):
+            db.set_config(cur, {"ss_a_csv_path": "", "ss_b_csv_path": ""})
+
+
 @test("a module with a defective EL: Space does nothing - it is a button, "
       "not a key, even though the defect can never block the pass")
 def t_space_disabled_when_el_not_clean():
