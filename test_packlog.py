@@ -10,6 +10,8 @@ THE RULES THIS FILE DEFENDS
      wattage out of the MODEL's digits - ISEN625-G12R gave 62512 W a module.
   2. "Repack sessions" counts the repacks in the period. It counted rows in a
      'repacked' state no pallet ever has, so it always said 0.
+  3. Both donuts are painted from the rows. Two colours v4's palette does not
+     have made the gradient invalid, and v4's demo picture stayed.
 
 ui_harness is imported FIRST: it fixes the throwaway database path.
 """
@@ -112,6 +114,21 @@ def t_screen():
         # 625 W pallet packed (1.875 kW) + the 620 W repack child (1.24 kW)
         assert kp[3][0] == "2" and "5 modules" in kp[3][1] and "3.1 KW" in kp[3][1], kp
         assert kp[2][0] == "1" and kp[2][1].startswith("1 boxes closed"), kp
+        assert not pg.errors, pg.errors
+
+
+@test("in the browser: both donuts are painted from the real rows - not v4's "
+      "demo picture left under a legend of real numbers")
+def t_donuts():
+    c, boxes = seed()
+    with H.browser() as b:
+        pg = H.open_page(b, "packdash", wait_ms=1200)
+        box = pg.evaluate("() => document.getElementById('pkDonut').style.background")
+        grd = pg.evaluate("() => document.getElementById('pkGDonut').style.background")
+        # two pallets, both packed (amber), every module grade A (green)
+        assert "rgb(224, 138, 30) 0%, rgb(224, 138, 30) 100%" in box, box
+        assert "rgb(23, 122, 71) 0%, rgb(23, 122, 71) 100%" in grd, grd
+        assert "98.611%" not in grd and "60.714%" not in box, (box, grd)
         assert not pg.errors, pg.errors
 
 

@@ -3359,17 +3359,21 @@ function wireFqcAnomalies() {
                 gMap[g] = (gMap[g] || 0) + (r.qty || 0);
               });
               
+              /* v4's palette (C) has no 'mute' or 'fail': an undefined
+                 colour made the whole conic-gradient invalid, so both donuts
+                 kept v4's demo picture beside a legend of real numbers.
+                 Packed and Challaned were also one colour. */
               drawDonut('pkDonut', 'pkLegend', [
-                {n:'Open', v:pMap.open, c:C.mute},
+                {n:'Open', v:pMap.open, c:C.grey},
                 {n:'Packed', v:pMap.packed, c:C.amber},
-                {n:'Challaned', v:pMap.challaned, c:C.amber},
+                {n:'Challaned', v:pMap.challaned, c:C.blue},
                 {n:'Dispatched', v:pMap.dispatched, c:C.green}
               ], kLists.toString(), 'boxes total');
-              
+
               drawDonut('pkGDonut', 'pkGLegend', [
                 {n:'A Grade', v:gMap['A'], c:C.green},
                 {n:'GY', v:gMap['GY'], c:C.amber},
-                {n:'BGY', v:gMap['BGY'], c:C.fail}
+                {n:'BGY', v:gMap['BGY'], c:C.red}
               ], kMods.toString(), 'modules total');
             }
         }

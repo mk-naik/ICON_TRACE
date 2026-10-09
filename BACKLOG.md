@@ -7384,3 +7384,9 @@ commit.
 - **Found** by A3: the tile took the wattage from the MODEL's digits (ISEN625-G12R -> 62512 W); Repack sessions counted a state no pallet has.
 - **Change:** /api/packing/log gives each row its kW (its modules' wattage, summed / 1000) and a repack summary for the period.
 - **Test:** `test_packlog.py` (new). From `audit/A3-pack` 553b45f.
+
+### Packing Log: both donuts showed v4's demo picture
+- **Found** by A3: Box and Grade composition kept v4's sample proportions beside a legend of the real numbers.
+- **Cause:** colours C.mute / C.fail do not exist in v4's palette - the conic-gradient carried "undefined" and the browser kept the old background.
+- **Change:** real palette colours (Stock & Dispatch's BGY red).
+- **Test:** `test_packlog.py` +1 (Chromium). From `audit/A3-pack` db8fa80.
