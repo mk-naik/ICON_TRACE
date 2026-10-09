@@ -8939,24 +8939,11 @@ def api_invoices_list():
     except ValueError:
         exclude_id = None
     with store.conn() as (cx, cur):
-        invoices = db.search_invoices(cur, q=q, date_from=from_d, date_to=to_d)
-        # Round 34: a cancelled invoice leaves the working list and the challan
-        # picker - it cannot be reconciled against, and stays only for history.
-        invoices = [i for i in invoices if (i["status"] or "active") != "cancelled"]
-        if for_challan:
-            # Build set of invoice_ids already claimed by a live challan,
-            # excluding any challan we are explicitly editing (so it can
-            # keep its own invoice selected while the drop-down reloads).
-            sql = ("SELECT DISTINCT invoice_id FROM challan "
-                   "WHERE status NOT IN ('cancelled', 'superseded') "
-                   "AND invoice_id IS NOT NULL")
-            params = []
-            if exclude_id:
-                sql += " AND challan_id != %s"
-                params.append(exclude_id)
-            cur.execute(sql, params)
-            claimed = {r["invoice_id"] for r in cur.fetchall()}
-            invoices = [i for i in invoices if i["id"] not in claimed]
+        # cancelled invoices, and for the picker the ones a live challan
+        # holds, are filtered in the query before its limit (db.search_invoices)
+        invoices = db.search_invoices(cur, q=q, date_from=from_d, date_to=to_d,
+                                      unclaimed=for_challan,
+                                      exclude_challan_id=exclude_id)
     return jsonify({"invoices": invoices})
 
 @app.route("/api/invoice/<int:invoice_id>")

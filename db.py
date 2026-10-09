@@ -260,14 +260,24 @@ def get_invoice_by_id(cur, invoice_id):
     cur.execute("SELECT * FROM invoice WHERE invoice_id = ?", (invoice_id,))
     return cur.fetchone()
 
-def search_invoices(cur, q=None, date_from=None, date_to=None):
+def search_invoices(cur, q=None, date_from=None, date_to=None, n=100,
+                    unclaimed=False, exclude_challan_id=None):
+    """The Tax Invoice list and, with unclaimed=True, the Create Challan picker.
+
+    Every filter runs in the query, BEFORE the limit: a cancelled invoice
+    (Round 34) and, for the picker, one a live challan already holds used to
+    be dropped after the newest 100 were taken, so an older invoice still
+    waiting for its challan never reached the picker at all.
+
+    `challan` names the LIVE challans (draft or issued) against each invoice
+    by their numbers - a cancelled or superseded one reconciles nothing (it
+    used to be listed as "2026/1", fy/seq, cancelled ones included)."""
     if cur is None: return []
     sql = """
         SELECT i.invoice_id as id, i.invoice_no, i.invoice_date, i.buyer_name, i.buyer_gstin,
-               i.declared_qty, i.superseded_by, i.status,
-               (SELECT group_concat(c.fy || '/' || c.seq, ', ') FROM challan c WHERE c.invoice_id = i.invoice_id AND c.status != 'CANCELLED') as challan
+               i.declared_qty, i.superseded_by, i.status
         FROM invoice i
-        WHERE 1=1
+        WHERE COALESCE(i.status, 'active') <> 'cancelled'
     """
     params = []
     if q:
@@ -280,10 +290,37 @@ def search_invoices(cur, q=None, date_from=None, date_to=None):
     if date_to:
         sql += " AND i.invoice_date <= ?"
         params.append(date_to)
-    
-    sql += " ORDER BY i.invoice_id DESC LIMIT 100"
+    if unclaimed:
+        # held by a live challan - except the one being edited, which keeps
+        # its own invoice selectable while the drop-down reloads
+        sql += (" AND NOT EXISTS (SELECT 1 FROM challan c WHERE "
+                "c.invoice_id = i.invoice_id "
+                "AND c.status NOT IN ('cancelled', 'superseded')")
+        if exclude_challan_id:
+            sql += " AND c.challan_id <> ?"
+            params.append(exclude_challan_id)
+        sql += ")"
+    sql += " ORDER BY i.invoice_id DESC LIMIT ?"
+    params.append(n)
     cur.execute(sql, params)
-    return cur.fetchall()
+    rows = [dict(r) for r in cur.fetchall()]
+    ids = [r["id"] for r in rows]
+    live = {}
+    if ids:
+        for c in _store.rows(cur, "SELECT invoice_id, challan_date, seq, suffix "
+                                  "FROM challan WHERE invoice_id IN (%s) AND "
+                                  "status NOT IN ('cancelled', 'superseded') "
+                                  "ORDER BY challan_id" % ",".join(["?"] * len(ids)),
+                             ids):
+            try:
+                no = render_challan_no(datetime.date.fromisoformat(c["challan_date"]),
+                                       c["seq"], c["suffix"])
+            except (TypeError, ValueError):
+                no = str(c["seq"])
+            live.setdefault(c["invoice_id"], []).append(no)
+    for r in rows:
+        r["challan"] = ", ".join(live.get(r["id"], [])) or None
+    return rows
 
 def recent_invoices(cur, n=20):
     if cur is None:

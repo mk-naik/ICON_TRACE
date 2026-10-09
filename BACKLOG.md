@@ -7223,3 +7223,15 @@ commit.
   (DECISIONS 1: no fake success).
 - **Change:** a duplicate-scan answer toasts the server's own sentence.
 - **Test:** `test_fqc_screen.py` +1 (Chromium). From `audit/A2-fqc-quality` 31d969f.
+
+### Tax Invoice list named dead challans; the Create Challan picker lost invoices older than the newest 100
+- **Found** by A4: an invoice whose challans were cancelled / superseded read "Challan
+  2026/1, 2026/1, 2026/1, 2026/2" (fy/seq, dead ones included) and lost its action
+  button; with 101 claimed invoices newer than one still waiting, the waiting one never
+  reached the picker.
+- **Cause:** `c.status != 'CANCELLED'` (upper case - everything matched; superseded not
+  excluded); `/api/invoices` dropped claimed and cancelled invoices AFTER
+  `search_invoices`' LIMIT 100.
+- **Change:** both filters run in the query before the limit; the column names the live
+  challans by number.
+- **Test:** `test_challan.py` +2. From `audit/A4-invoice-challan` eedbcc5.

@@ -617,6 +617,46 @@ def t_discard_only_draft():
     assert challan_row(chid)["status"] == "issued"
 
 
+@test("the Create Challan picker reaches an invoice older than the newest 100 "
+      "(the 'already on a live challan' filter runs before the limit; audit 9 Oct)")
+def t_picker_reaches_old_invoice():
+    c = setup()
+    old = make_invoice(qty=2, invoice_no="INV-OLD-WAITING")
+    for k in range(101):
+        iid = make_invoice(qty=1, invoice_no="INV-HELD-%03d" % k)
+        with store.conn() as (cx, cur):
+            store.insert(cur, "challan", {"fy": 2026, "seq": 1000 + k,
+                "challan_date": "2026-09-09", "qty": 1, "status": "issued",
+                "invoice_id": iid, "created_by": "t"})
+    ids = [i["id"] for i in
+           c.get("/api/invoices?for_challan=1").get_json()["invoices"]]
+    assert old in ids, "an unclaimed invoice behind 100 claimed ones was dropped"
+    assert len(ids) == 1, ids
+
+
+@test("the invoice list names the LIVE challans against an invoice by number - "
+      "a cancelled or superseded one is not listed (audit 9 Oct)")
+def t_invoice_list_names_live_challans():
+    c = setup()
+    b1 = packed_box(c, [160, 161])
+    b2 = packed_box(c, [162, 163])
+    inv = make_invoice(qty=2, invoice_no="INV-LISTCOL")
+
+    def col():
+        return [i for i in c.get("/api/invoices").get_json()["invoices"]
+                if i["id"] == inv][0]["challan"]
+    chid = make_issued_challan(c, [b1], inv)
+    no = c.get("/api/challan/%d" % chid).get_json()["challan"]["challan_no"]
+    assert col() == no, (col(), no)
+    r = c.post("/api/challan/%d/edit-save" % chid, json={"boxes": [b2], "invoice_id": inv})
+    assert r.status_code == 200, r.get_json()
+    assert col() == r.get_json()["no"], col()
+    r = c.post("/api/challan/%d/cancel" % r.get_json()["challan_id"],
+               json=_cancel_body())
+    assert r.status_code == 200, r.get_json()
+    assert col() is None, col()
+
+
 @test("a SUPERSEDED challan cannot be discarded: it stays superseded, never "
       "rewritten 'cancelled' (audit 9 Oct)")
 def t_discard_refuses_superseded():
