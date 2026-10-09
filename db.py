@@ -693,7 +693,10 @@ def indent_progress(cur, indent_no=None):
         sql += (" WHERE status<>'cancelled' AND (indent_line_id IS NULL "
                 "OR indent_line_id NOT IN (SELECT indent_line_id FROM "
                 "indent_line WHERE status='cancelled'))")
-    cur.execute(sql + " ORDER BY indent_date DESC, line_no", args)
+    # one indent's items together: two indents dated the same day were
+    # interleaved item by item (A1, B1, A2, B2) when line_no came straight
+    # after the date
+    cur.execute(sql + " ORDER BY indent_date DESC, indent_id DESC, line_no", args)
     return cur.fetchall()
 
 

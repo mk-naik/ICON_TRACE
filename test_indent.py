@@ -217,6 +217,18 @@ def t_cancelled_item_survives_edit():
     assert [(l["line_no"], l["status"]) for l in ls] == \
         [(1, "active"), (2, "cancelled"), (3, "active")], ls
 
+@test("two indents dated the same day are listed one after the other, each "
+      "with its own items together - never interleaved item by item")
+def t_same_day_items_together():
+    c = setup()
+    if len(ITEMS) < 2:
+        return
+    two = [{"item_code": ITEMS[0], "qty": 10}, {"item_code": ITEMS[1], "qty": 20}]
+    make(c, no="OCT-09/A", items=two)
+    make(c, no="OCT-09/B", items=two)
+    got = [(x["indent_no"], x["line_no"]) for x in rows(c)]
+    assert got == [("OCT-09/B", 1), ("OCT-09/B", 2), ("OCT-09/A", 1), ("OCT-09/A", 2)], got
+
 
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)

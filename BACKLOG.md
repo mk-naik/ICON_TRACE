@@ -7364,3 +7364,8 @@ commit.
 - **Cause:** GET /api/indent/<no> returned cancelled items; PUT deleted every indent_line before re-inserting.
 - **Change:** Edit carries live items only; the PUT deletes and re-numbers live items only - a cancelled item keeps its row, number and reason, and a new item never takes its number.
 - **Test:** `test_indent.py` +1. From `audit/A1-plan-produce` 60be4f1.
+
+### Indent list interleaved two indents of the same date
+- **Found** by A1: OCT-09/A item 1, OCT-09/B item 1, OCT-09/A item 2 ... on the list and its export.
+- **Change:** ordered by date, then indent, then item.
+- **Test:** `test_indent.py` +1. From `audit/A1-plan-produce` 852300c.
