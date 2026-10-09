@@ -3227,6 +3227,26 @@ function wireFqcAnomalies() {
     [fFrom, fShift, fCust, fModel, fGrade, fStatus].forEach(function(el) {
       if (el) el.onchange = function() { window.packApply(); };
     });
+
+    /* Reset goes back to where the log opens - today's factory day, every
+       dropdown on its first option - and draws once. The generic
+       wireResets() blanked the date (every pallet there has ever been) and
+       drew; v4's packLogReset() drew again; two answers to two questions,
+       whichever came back last on screen. Claimed here, before wireResets()
+       runs in the same pass, the way the Production Dashboard's is. */
+    var rst = pd.querySelector('.filters [onclick^="packLogReset"]');
+    if (rst && !rst.__plReset) {
+      rst.__plReset = true;
+      rst.__reset = true;
+      rst.onclick = function (e) {
+        if (e) e.preventDefault();
+        fFrom.value = _shiftDay();
+        [fShift, fCust, fModel, fGrade, fStatus].forEach(function (s) {
+          if (s) s.selectedIndex = 0;
+        });
+        renderLivePackLog();
+      };
+    }
     
     if (B.customers && fCust && fCust.options.length <= 1) {
       fCust.innerHTML = '<option>All customers</option>' + B.customers.map(function(c) {

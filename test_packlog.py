@@ -132,6 +132,32 @@ def t_donuts():
         assert not pg.errors, pg.errors
 
 
+@test("in the browser: Reset puts the date back to today's factory day and every "
+      "dropdown on its first option, and asks the server once - it blanked the "
+      "date (every pallet ever) and drew twice")
+def t_reset():
+    c, boxes = seed()
+    with H.browser() as b:
+        pg = H.open_page(b, "packdash", wait_ms=1200)
+        date = "#v-packdash .filters input[type=date]"
+        pg.fill(date, "2026-01-01")
+        pg.dispatch_event(date, "change")
+        pg.wait_for_timeout(800)
+        assert pg.eval_on_selector("#pkBoxRows", "t => t.innerText").find("Nothing found") >= 0
+        calls = []
+        pg.on("request", lambda r: calls.append(r.url) if "/api/packing/log" in r.url else None)
+        pg.click("#v-packdash .filters button:has-text('Reset')")
+        pg.wait_for_timeout(1200)
+        vals = pg.eval_on_selector_all("#v-packdash .filters select, #v-packdash .filters input",
+                                       "els => els.map(e => e.value)")
+        assert vals[0] == clock.shift_day().isoformat(), vals
+        assert vals[1:] == ["All shifts", "All customers", "All", "All", "All"], vals
+        assert len(calls) == 1 and "from=" + clock.shift_day().isoformat() in calls[0], calls
+        n = pg.eval_on_selector_all("#pkBoxRows tr", "t => t.length")
+        assert n == 2, n
+        assert not pg.errors, pg.errors
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     only = [a for a in sys.argv[1:] if not a.startswith("-")]

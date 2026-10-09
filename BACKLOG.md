@@ -7390,3 +7390,8 @@ commit.
 - **Cause:** colours C.mute / C.fail do not exist in v4's palette - the conic-gradient carried "undefined" and the browser kept the old background.
 - **Change:** real palette colours (Stock & Dispatch's BGY red).
 - **Test:** `test_packlog.py` +1 (Chromium). From `audit/A3-pack` db8fa80.
+
+### Packing Log: Reset blanked the date and drew twice
+- **Found** by A3: Reset listed every pallet ever (blank date) and sent two requests with different dates.
+- **Change:** its own Reset - the factory day, every dropdown to its first option, one draw (as the Production Dashboard's).
+- **Test:** `test_packlog.py` +1 (Chromium). From `audit/A3-pack` 3810b83.
