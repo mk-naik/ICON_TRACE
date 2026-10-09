@@ -7342,3 +7342,19 @@ commit.
   controls, whatever screen called it.
 - **Change:** it starts from them only when the FQC Dashboard is the screen on view.
 - **Test:** `test_dashboards_e2e.py` +1 (28). From `audit/A7-golden-volume` 23230cd.
+
+### Quality could not return a reject to A once the shift's CSV was cut
+- **Found** by two audit agents independently (A2 from the code, A7 at volume: 31 of 31
+  "A" attempts refused): a full-power reject waiting for Quality was refused "the reading
+  is unavailable" once its live CSV row had been cut and pasted away - although FQC had
+  judged, and kept, that very reading. And a module that measured short (610 W) was
+  refused with the same "the reading is unavailable" instead of what it measured.
+- **Cause:** `_grade_quality` re-read the live source only (`ev.gather`), not the reading
+  every decision keeps (`_keep_reading` -> `ftr_reading`), which FQC's own lookup falls
+  back to (`_fqc_payload`); and it quoted `e.get("why")`, which `gather()` never sets.
+- **Change:** with the tester reachable and the row gone (NA) the kept reading is the
+  measurement, as in FQC's lookup; an unreachable tester (NC) changes nothing. The rule
+  is unchanged - A still needs Pmax at or above the nameplate. The refusal says what the
+  module measured, or that the tester could not read it.
+- **Test:** `test_fqc.py` +1, and the short-module case asserts the measured 620.5 W
+  (both fail before; 58 passed after). `test_review.py`, `test_fqc_unplanned.py`.

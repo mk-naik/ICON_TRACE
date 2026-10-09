@@ -397,6 +397,28 @@ def t_quality_cannot_pass_short():
                                      "note": "looks fine to me"})
     assert r.status_code == 400, "a module below its wattage was made an A by review"
     assert "retest" in (r.get_json().get("why") or "").lower(), r.get_json()
+    assert "620.5" in r.get_json()["why"], \
+        "the refusal does not say what the module measured: %s" % r.get_json()
+    assert serial_row(SHORT)["state"] == "rejected"
+
+
+@test("once the shift's CSV is cut, Quality is judged on the reading FQC kept: "
+      "a full-power reject still goes back to A, a short one is still refused")
+def t_quality_reads_kept_reading():
+    c = setup()
+    c.post("/api/fqc", json={"serial": CRACKED, "outcome": "reject"})
+    c.post("/api/fqc", json={"serial": SHORT, "outcome": "reject",
+                             "defect": "No Power"})
+    write_ss([r for r in ROWS if r[1] not in (CRACKED, SHORT)])   # cut and pasted away
+    r = c.post("/api/quality", json={"serial": CRACKED, "grade": "A",
+                                     "note": "a handling mark, not a crack"})
+    assert r.status_code == 200, \
+        "a module that measured 631 W was refused A once its CSV row was cut: %s" \
+        % r.get_json()
+    assert serial_row(CRACKED)["grade"] == "A"
+    r = c.post("/api/quality", json={"serial": SHORT, "grade": "A",
+                                     "note": "looks fine to me"})
+    assert r.status_code == 400 and "620.5" in r.get_json()["why"], r.get_json()
     assert serial_row(SHORT)["state"] == "rejected"
 
 

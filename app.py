@@ -10384,13 +10384,33 @@ def _grade_quality(cur, serial, grade, note, decided_by):
     if grade == "A":
         cfg = db.get_config(cur)
         e = ev.gather(cfg, serial, rec.get("wattage") or 0)
+        # The live CSV is cut every shift and a reject can wait days for
+        # Quality. With the tester reachable and its row gone (NA), the
+        # measurement is the reading FQC judged - kept for every decision
+        # (_keep_reading) - exactly as FQC's own lookup reads it
+        # (_fqc_payload). Quality used to be told "the reading is
+        # unavailable" for a module that had measured 631 W (audit, 9 Oct).
+        if e.get("ss_state") == ev.NA:
+            kept = db.get_ftr_reading(cur, serial)
+            if kept and (kept.get("reading") or {}).get("pmax") is not None:
+                e = dict(e, ss_state=ev.OK, pmax=kept["reading"]["pmax"])
         pmax, want = e.get("pmax"), (rec.get("wattage") or 0)
-        if pmax is None or pmax < want:
+        if e.get("ss_state") != ev.OK or pmax is None:
             raise _Refuse(
-                "%s cannot be passed: %s A means Pmax at or above the "
+                "%s cannot be passed: %s. A means Pmax at or above the "
                 "wattage, which is measured, not judged — retest it in "
                 "the Sun Simulator."
-                % (serial, e.get("why") or "the reading is unavailable."))
+                % (serial, "the tester could not read it (probe, polarity or "
+                   "junction box)" if e.get("ss_state") == ev.BAD
+                   else "the Sun Simulator reading is unavailable"))
+        if pmax < want:
+            # gather() sets no "why" - the refusal used to say "the reading
+            # is unavailable" for a module that read, say, 610 W
+            raise _Refuse(
+                "%s cannot be passed: it measured %s W, below its %d W "
+                "nameplate. A means Pmax at or above the wattage, which is "
+                "measured, not judged — retest it in the Sun Simulator."
+                % (serial, ("%.2f" % pmax).rstrip("0").rstrip("."), want))
 
     saved = db.record_quality(cur, serial, grade, decided_by, note)
     db.audit(cur, decided_by, "quality.grade", "serial", serial,
