@@ -218,6 +218,16 @@ test('a pallet found in this session arms the confirm', function () {
   assert(ldHold && ldHold.ok && ldHold.box_no === 'ISPL260916/K001', ldHold);
 });
 
+test('the packing list QR (ICONTRACE|BOX|<number>|...) finds its pallet - '
+    + 'DECISIONS 4: type or scan a pallet number or its QR', function () {
+  reset([pallet('ISPL260916/K001')]);
+  el('ldSessionScan').value = 'ICONTRACE|BOX|ISPL260916/K001|ISEN630-G12R|A|36|2026-09-16';
+  ldLookup();
+  assert(ldHold && ldHold.ok && ldHold.box_no === 'ISPL260916/K001', JSON.stringify(ldHold));
+  assert(el('ldSessionMsg').innerHTML.indexOf('not on this challan') === -1,
+        el('ldSessionMsg').innerHTML);
+});
+
 test('a found pallet renders the same .pending/.lookup/.gate card New '
     + 'Pallet\'s own scan-confirm uses - model, grade and quantity shown, '
     + 'not a single line of coloured text', function () {

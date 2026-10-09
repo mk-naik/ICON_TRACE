@@ -7126,3 +7126,12 @@ commit.
   either route writes - a superseded original names the live version to load instead
   (DECISIONS 4: no swap, rescan the new version); confirm refuses a loaded pallet.
 - **Test:** `test_loading.py` +4. From `audit/A5-load-gatepass-print` 1b89366.
+
+### Loading Verification refused the pallet's QR
+- **Found** by A5: scanning the packing list's QR (`ICONTRACE|BOX|<number>|...`) into a
+  session was refused "not on this challan"; the contents check said "not a pallet
+  number". DECISIONS 4: type or scan a pallet number OR its QR.
+- **Change:** one helper takes the number out of the QR (server `_pallet_no_from_scan`,
+  page `ldPalletNo`).
+- **Test:** `test_loading.py`, `test_loading.js`; Chromium on the audit server.
+  From `audit/A5-load-gatepass-print` 89caa24.

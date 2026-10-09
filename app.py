@@ -2585,6 +2585,18 @@ def loading():
     return render_template("loading.html")
 
 
+def _pallet_no_from_scan(raw):
+    """The pallet number in what was typed or scanned: the number itself, or
+    the packing list's QR (ICONTRACE|BOX|<number>|...). DECISIONS 4: Team 3
+    types or scans a pallet number or its QR - the QR used to be compared
+    whole and refused as "not on this challan". str(): a number sent as the
+    pallet number was a 500, not a refusal."""
+    s = str(raw or "").strip().upper()
+    if s.startswith("ICONTRACE|BOX|"):
+        s = s.split("|")[2].strip()
+    return s
+
+
 @app.route("/api/loading/box")
 @require_screen_view("loadver")
 def api_loading_box():
@@ -2594,7 +2606,7 @@ def api_loading_box():
     if this screen could write, the record could be made to agree with the
     pallet and the check would prove nothing.
     """
-    no = (request.args.get("no") or "").strip().upper()
+    no = _pallet_no_from_scan(request.args.get("no"))
     if not no:
         return jsonify({"error": "Scan or type a pallet number."})
     try:
@@ -2777,8 +2789,7 @@ def api_loading_confirm(challan_id):
     This IS the save - there is no separate save step, because every
     confirm already persists immediately."""
     d = request.get_json(force=True) or {}
-    # str(): a number sent as the pallet number was a 500, not a refusal
-    box_no = str(d.get("box_no") or "").strip().upper()
+    box_no = _pallet_no_from_scan(d.get("box_no"))
     if not box_no:
         return jsonify({"ok": False, "why": "Scan or type a pallet number."}), 400
     with store.conn() as (cx, cur):

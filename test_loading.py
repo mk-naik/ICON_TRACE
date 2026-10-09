@@ -638,6 +638,24 @@ def t_confirm_non_text_box_no():
     assert "not on this challan" in r.get_json()["why"], r.get_json()
 
 
+@test("a pallet is confirmed by scanning its packing-list QR (ICONTRACE|BOX|"
+      "<number>|...), and the pallet-contents check finds it by the QR too - "
+      "DECISIONS 4: type or scan a pallet number or its QR")
+def t_pallet_qr_scans():
+    c = setup()
+    b = packed_box(c, [92, 93])
+    inv = make_invoice(qty=2, invoice_no="INV-LOAD-QR")
+    chid = make_issued_challan(c, [b], inv)
+    box_no = box_no_of(chid)
+    qr = "ICONTRACE|BOX|%s|%s|A|2|2026-10-09" % (box_no.lower(), MODEL)
+    r = c.post("/api/loading/%d/confirm" % chid, json={"box_no": qr})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["box_no"] == box_no, r.get_json()
+    assert statuses_of(chid)[box_no] == "saved", statuses_of(chid)
+    found = c.get("/api/loading/box", query_string={"no": qr}).get_json()
+    assert found.get("box_no") == box_no and len(found.get("serials") or []) == 2, found
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0

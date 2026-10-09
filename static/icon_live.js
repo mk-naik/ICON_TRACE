@@ -12658,9 +12658,18 @@ function wireFqcAnomalies() {
         '<span class="gate ' + gateCls + '">' + fqcEsc(gateText) + '</span></div></div>';
   }
 
+  /* A pallet is typed or scanned by its number, or by the packing list's QR
+     (ICONTRACE|BOX|<number>|...) - DECISIONS 4. The QR used to be compared
+     whole against the pallet numbers and refused as "not on this challan". */
+  function ldPalletNo(raw) {
+    var s = String(raw || '').trim().toUpperCase();
+    if (s.indexOf('ICONTRACE|BOX|') === 0) s = (s.split('|')[2] || '').trim();
+    return s;
+  }
+
   window.ldLookup = function () {
     var input = ldEl('ldSessionScan');
-    var no = (input && input.value || '').trim().toUpperCase();
+    var no = ldPalletNo(input && input.value);
     if (input) input.value = '';
     if (!no || !ldSession) return;
     var row = (ldSession.boxes || []).filter(function (b) {
