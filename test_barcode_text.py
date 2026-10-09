@@ -220,6 +220,34 @@ def t_bar_settings_overflow_refused():
     assert stored()["bc_text_size"] == "12" and stored()["bc_bar_quiet"] == "25"
 
 
+@test("the older /settings form is held to the same limits (audit 9 Oct: it stored "
+      "a 104 mm barcode unchecked), and a pallet ceiling that is not a whole "
+      "number of at least 1 is refused on both routes - 'abc' made every New "
+      "Pallet open a 500")
+def t_form_route_and_ceiling_held():
+    c, _ = packed_box()
+    before = stored()
+    r = c.post("/settings", data={"bc_bar_width": "0.40", "bc_bar_quiet": "25"})
+    assert r.status_code == 400 and "quiet zones included" in r.get_data(as_text=True), r.status_code
+    assert stored() == before, "the form stored a barcode the cell cannot hold"
+    r = c.post("/settings", data={"bc_bar_height": "21"})
+    assert r.status_code == 400 and stored() == before
+    with store.conn() as (cx, cur):
+        ceiling = db.get_config(cur)["pallet_ceiling"]
+    for bad in ("abc", "0", "-3", "12.5", ""):
+        r = c.post("/api/settings", json={"pallet_ceiling": bad})
+        assert r.status_code == 400 and "Pallet ceiling" in r.get_json()["why"], (bad, r.get_json())
+        r = c.post("/settings", data={"pallet_ceiling": bad})
+        assert r.status_code == 400, (bad, r.status_code)
+        with store.conn() as (cx, cur):
+            assert db.get_config(cur)["pallet_ceiling"] == ceiling, bad
+    r = c.post("/api/box/open", json={"grade": "A", "model": MODEL, "capacity": 5})
+    assert r.status_code == 200, r.status_code
+    # a good save on the form route still saves
+    r = c.post("/settings", data={"pallet_ceiling": " 36 ", "bc_text_size": "11"})
+    assert r.status_code == 200 and stored()["bc_text_size"] == "11", r.status_code
+
+
 @test("the Settings screen shows the stored values and a preview of the widest serial")
 def t_settings_fragment():
     c, _ = packed_box()

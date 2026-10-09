@@ -7400,3 +7400,8 @@ commit.
 - **Found** by A3: "26 rows" beside 24 listed; a day with none counted its "Nothing found" line.
 - **Change:** the empty line is marked and the table layer recounts after every draw.
 - **Test:** `test_packlog.py` +1 (Chromium). From `audit/A3-pack` 44063ed.
+
+### Settings: the /settings form skipped the barcode limits; a pallet ceiling of 'abc' broke New Pallet
+- **Found** by A3: the older /settings form stored a 104 mm barcode in an 84 mm room (DECISIONS 7: the server refuses it) and an unknown print format; neither route checked the pallet ceiling - 'abc' made every New Pallet open a 500, '0' made every pallet impossible.
+- **Change:** one `_settings_clean()` behind both routes (print format, barcode with the overflow check, pallet ceiling a whole number >= 1); a refused form stores nothing (400).
+- **Test:** `test_barcode_text.py` +1. From `audit/A3-pack` f54fc9f.

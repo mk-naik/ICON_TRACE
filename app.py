@@ -6755,29 +6755,52 @@ def _bars_overflow(cfg):
             % (w, PACKING_LIST_BARCODE_ROOM_MM))
 
 
+def _settings_clean(cur, d):
+    """(what to store, None) or (None, why) for a save of DEFAULT_CONFIG keys.
+    One check for both routes that write them - /api/settings and the older
+    /settings form - so neither is a way round the other's limits (the form
+    stored a 104 mm barcode and a pallet ceiling of 'abc', which made every
+    New Pallet open a 500)."""
+    d = dict(d)
+    if "print_style" in d:
+        d["print_style"] = str(d["print_style"]).strip().lower()
+        if d["print_style"] not in cform.STYLES:
+            return None, ("Printed documents format must be one of: %s."
+                          % ", ".join(cform.STYLES))
+    if "pallet_ceiling" in d:
+        # what a pallet's frame takes: every capacity check does int() on it
+        raw = str(d["pallet_ceiling"] if d["pallet_ceiling"] is not None else "").strip()
+        try:
+            n = int(raw)
+        except ValueError:
+            n = 0
+        if n < 1:
+            return None, ("Pallet ceiling must be a whole number of modules, "
+                          "at least 1 - not %r." % raw)
+        d["pallet_ceiling"] = str(n)
+    clean, why = bc.clean_settings(d)
+    if why:
+        return None, why
+    d.update(clean)
+    if any(k in clean for k in bc.BAR_DEFAULTS):
+        # bars have an exact width, so unlike the text this is checked here
+        # too: the stored bar values with this save laid over them
+        why = _bars_overflow(dict(db.get_config(cur), **clean))
+        if why:
+            return None, why
+    return {k: str(v) for k, v in d.items() if k in db.DEFAULT_CONFIG}, None
+
+
 @app.route("/api/settings", methods=["POST"])
 @require_role(*_R_MASTER)
 def api_settings():
     d = request.get_json(force=True)
-    if "print_style" in d and str(d["print_style"]).strip().lower() not in cform.STYLES:
-        return jsonify({"ok": False, "why": "Printed documents format must be one of: %s."
-                                            % ", ".join(cform.STYLES)}), 400
-    if "print_style" in d:
-        d["print_style"] = str(d["print_style"]).strip().lower()
-    clean, why = bc.clean_settings(d)
-    if why:
-        return jsonify({"ok": False, "why": why}), 400
-    d.update(clean)
     with store.conn() as (cx, cur):
-        if any(k in clean for k in bc.BAR_DEFAULTS):
-            # bars have an exact width, so unlike the text this is checked here
-            # too: the stored bar values with this save laid over them
-            why = _bars_overflow(dict(db.get_config(cur), **clean))
-            if why:
-                return jsonify({"ok": False, "why": why}), 400
-        db.set_config(cur, {k: str(v) for k, v in d.items()
-                            if k in db.DEFAULT_CONFIG})
-        db.audit(cur, actor(), "config.update", "config", None, d)
+        clean, why = _settings_clean(cur, d)
+        if why:
+            return jsonify({"ok": False, "why": why}), 400
+        db.set_config(cur, clean)
+        db.audit(cur, actor(), "config.update", "config", None, dict(d, **clean))
     return jsonify({"ok": True})
 
 
@@ -11493,7 +11516,7 @@ def settings_landing():
 @app.route("/settings", methods=["POST"])
 @require_role(*_R_ADMIN)
 def settings():
-    refused = None
+    refused = invalid = None
     with db.conn() as (cx, cur):
         if request.method == "POST":
             # This form writes the same DEFAULT_CONFIG keys /api/settings
@@ -11516,6 +11539,10 @@ def settings():
             sent = {} if refused else {
                 k: (request.form.get(k) or "").strip()
                 for k in db.DEFAULT_CONFIG if k in request.form}
+            # the same limits /api/settings holds them to - the barcode's
+            # room on the packing list, the pallet ceiling, the print format
+            if sent:
+                sent, invalid = _settings_clean(cur, sent)
             if sent:
                 db.set_config(cur, sent)
                 db.audit(cur, actor(), "config.update", "config", None,
@@ -11525,6 +11552,9 @@ def settings():
     if refused:
         flash(refused, "fail")
         return render_template("settings.html", **_settings_context(cfg)), 403
+    if invalid:
+        flash(invalid, "fail")
+        return render_template("settings.html", **_settings_context(cfg)), 400
     return render_template("settings.html", **_settings_context(cfg))
 
 
