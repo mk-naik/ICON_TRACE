@@ -901,6 +901,25 @@ def t_reconcile_agree():
     assert hold(c)["confirmed_this_month"] == 1
 
 
+@test("a held pass is counted on the shift it was DECIDED, not the one in which "
+      "the reading turned up - decided 23:40 (C shift), confirmed next morning")
+def t_reconcile_keeps_decision_time():
+    import datetime, icon_clock
+    c = setup(ss_path=GONE)
+    c.post("/api/fqc", json={"serial": FULL, "outcome": "pass"})
+    day_before = (icon_clock.now() - datetime.timedelta(days=2)).date()
+    decided = "%sT23:40:00" % day_before.isoformat()
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE fqc_record SET at=%s WHERE serial=%s", (decided, FULL))
+    tester_back()
+    assert hold(c)["reconciled"]["confirmed"] == 1
+    recs = live_records(FULL)
+    assert recs[-1]["at"] == decided and recs[-1]["decided_by"] == "system", recs
+    assert recs[0]["superseded_at"] != decided, "superseded_at must say when it was superseded"
+    q = "/api/fqc/dashboard?from=%s&to=%s&shift=C" % (day_before, day_before)
+    assert c.get(q).get_json()["totals"]["inspected"] == 1, c.get(q).get_json()["totals"]
+
+
 @test("while the tester is still away nothing moves: the hold stays and "
       "nothing is confirmed or flagged")
 def t_reconcile_waits():

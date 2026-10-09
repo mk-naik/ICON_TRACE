@@ -872,7 +872,7 @@ def fqc_defects_for(cur, fqc_id, source=None):
 
 def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
                defect=None, note=None, supersede=True, update_serial=True,
-               build_instance=1, hold=False):
+               build_instance=1, hold=False, at=None):
     """Snapshot the evidence onto the record. A later re-import must never
     be able to rewrite why a module was judged.
 
@@ -904,6 +904,11 @@ def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
     `reason` is accepted and ignored - the override-reason mechanism it
     served is gone, and the column it used to fill is history only now.
 
+    `at` is when the decision was MADE, for a record the system writes on a
+    person's behalf (the reading that confirms a held decision): everything
+    counts by when the FQC decision happened, so a pass decided on C shift and
+    confirmed after 06:00 stays C shift's inspection. Default: now.
+
     `defect` is the OPERATOR's defect code(s) - already resolved and
     validated by the caller (defect_code_for_text), never raw text: a
     single code, a list of codes, or None. The EL verdict is never taken
@@ -932,7 +937,8 @@ def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
            "rule_version": FQC_RULE_VERSION,
            "note": note,
            "decided_by": decided_by, "build_instance": build_instance,
-           "at": clock.now().isoformat(timespec="seconds")}
+           "at": at or clock.now().isoformat(timespec="seconds")}
+    now = clock.now().isoformat(timespec="seconds")
     if cur is None:
         rec["defect"] = op_codes[0] if op_codes else None
         _demo["fqc"].append(rec)
@@ -964,7 +970,7 @@ def record_fqc(cur, serial, outcome, evidence, decided_by, mode, reason=None,
         if supersede:
             cur.execute("UPDATE fqc_record SET superseded_by=%s, superseded_at=%s "
                         "WHERE serial=%s AND fqc_id<>%s AND superseded_by IS NULL",
-                        (new_id, rec["at"], serial, new_id))
+                        (new_id, now, serial, new_id))
         rec["fqc_id"] = new_id
         record_revision(cur, decided_by, "fqc_record", new_id, "create",
                         None, rec)

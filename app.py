@@ -9792,9 +9792,12 @@ def _reconcile_provisional(cur):
         op_defects = [r["defect_code"] for r in
                      db.fqc_defects_for(cur, f["fqc_id"], source="fqc")]
         if agrees:
+            # the inspection happened when the operator decided, not when
+            # the reading turned up: it is counted on THAT shift
             db.record_fqc(cur, f["serial"], f["outcome"], e, "system",
                           "confirmed", defect=op_defects, note=f.get("note"),
-                          build_instance=f.get("build_instance") or 1)
+                          build_instance=f.get("build_instance") or 1,
+                          at=f["at"])
             db.audit(cur, "system", "fqc.reconciled", "serial", f["serial"],
                      {"outcome": f["outcome"], "provisional_fqc_id": f["fqc_id"]})
             out["confirmed"] += 1
@@ -9802,7 +9805,8 @@ def _reconcile_provisional(cur):
         outcome_now = "pass" if would_pass else "reject"
         snap = db.record_fqc(cur, f["serial"], outcome_now, e, "system",
                              "confirmed", supersede=False, update_serial=False,
-                             build_instance=f.get("build_instance") or 1)
+                             build_instance=f.get("build_instance") or 1,
+                             at=f["at"])
         # held for Quality, not a second live decision (the FQC Dashboard
         # counted the module twice, once per record)
         db.supersede_fqc(cur, snap["fqc_id"], f["fqc_id"])

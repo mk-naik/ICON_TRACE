@@ -7270,3 +7270,8 @@ commit.
 - **Found** by A4: the hidden file input kept its value, so no change event fired.
 - **Change:** cleared once read; the second pick is read and says "already on file".
 - **Test:** `test_invoice_screen_ui.py` +1. From `audit/A4-invoice-challan` 40e5b86.
+
+### Hold & Deviation: a confirmed held pass moved to the shift the reading arrived in
+- **Found** by A2: a pass decided 23:40 on 8 Oct (C) with the Sun Simulator unreachable, confirmed at 06:09 on 9 Oct, moved on the FQC Dashboard from 8 Oct C to 9 Oct A (DECISIONS 8: counted by when the decision happened).
+- **Cause/Change:** the reconcile's confirming record was stamped with the reconcile time; `record_fqc` now takes the decision's time for a record the system writes on a person's behalf.
+- **Test:** `test_fqc.py` +1. From `audit/A2-fqc-quality` 544882f.
