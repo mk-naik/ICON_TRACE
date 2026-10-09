@@ -7143,3 +7143,9 @@ commit.
   after the fragment's script had wired it, which dropped the scan field's listener.
 - **Change:** `insertAdjacentHTML('afterbegin', ...)`.
 - **Test:** `test_loading_ui.py` (new, Chromium). From `audit/A5-load-gatepass-print` e13cdad.
+
+### "Verify one pallet's contents": a scanned pallet waited for a click
+- **Found** by A5: the pallet field had no Enter handler, so a scan (which ends with
+  Enter) loaded nothing until "Load its serials" was clicked.
+- **Change:** Enter in the pallet field loads it, as the button does.
+- **Test:** `test_loading_ui.py` +1. From `audit/A5-load-gatepass-print` d155c15.

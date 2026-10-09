@@ -94,6 +94,14 @@
     }
   }
 
+  // A scanner ends what it reads with Enter: the pallet loads on it, as on
+  // the button - it used to wait for a click after every pallet scanned.
+  document.getElementById('lvBox').addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    lvLoad();
+  });
+
   document.getElementById('lvScan').addEventListener('keydown', function (e) {
     if (e.key !== 'Enter') return;
     e.preventDefault();

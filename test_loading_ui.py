@@ -59,6 +59,23 @@ def t_contents_check_scan():
         assert not pg.errors, pg.errors
 
 
+@test("the pallet-contents check loads a pallet on Enter - what a scanner sends "
+      "after the pallet's QR - not only on the button")
+def t_contents_check_enter():
+    c = T.setup()
+    chid = issued(c, [0, 1], "INV-UI-ENTER")
+    box_no = T.box_no_of(chid)
+    with H.browser() as b:
+        pg = H.open_page(b, role="Dispatch Operator")
+        pg.evaluate("go('loadver')")
+        pg.wait_for_selector("#lvBox", timeout=10000)
+        pg.fill("#lvBox", "ICONTRACE|BOX|%s|%s|A|2|2026-10-09" % (box_no, T.MODEL))
+        pg.press("#lvBox", "Enter")
+        pg.wait_for_selector("#lvCard", state="visible", timeout=5000)
+        assert "2 modules" in pg.inner_text("#lvInfo"), pg.inner_text("#lvInfo")
+        assert not pg.errors, pg.errors
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0
