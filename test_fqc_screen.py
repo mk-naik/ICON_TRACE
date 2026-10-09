@@ -383,6 +383,36 @@ def t_space_is_pass_when_clean():
         assert posted and posted[0]["outcome"] == "pass", posted
 
 
+@test("a rescan of a PACKED module says what happened - confirmed, or sent to "
+      "Needs Review - never 'passed, ready to pack' or 'Quality decides'")
+def t_duplicate_scan_toast():
+    c = base()
+    assert c.post("/api/fqc", json={"serial": GOOD, "outcome": "pass"}).status_code == 200
+    b_ = c.post("/api/box/open", json={"grade": "A", "model": "ISEN625-G12R",
+                                       "capacity": 1, "customer": CUSTOMER_CODE}).get_json()
+    assert c.post("/api/box/%d/scan" % b_["box_id"], json={"serial": GOOD}).status_code == 200
+    with H.browser() as b:
+        pg = H.open_page(b, "fqc")
+        said = []
+        for outcome in ("pass", "reject"):
+            pg.fill("#fqcScan", GOOD)
+            pg.click("text=Look up")
+            pg.wait_for_selector("#fqcPending .pending")
+            pg.evaluate("document.getElementById('toast').textContent=''")
+            if outcome == "pass":
+                pg.click("text=Pass — grade A")
+            else:
+                pg.click("text=Reject…")
+                pg.fill("#fqcLiveDefect", "Frame Dent")
+                pg.click("text=Record rejection")
+            pg.wait_for_function("document.getElementById('toast').textContent.indexOf('%s') >= 0" % GOOD)
+            said.append(pg.evaluate("document.getElementById('toast').textContent"))
+            pg.evaluate("document.getElementById('toast').style.display='none'")
+        assert "no change made" in said[0], said
+        assert "Needs Review" in said[1] and "Quality decides" not in said[1], said
+        assert not pg.errors, pg.errors
+
+
 @test("a module with a defective EL: Space does nothing - it is a button, "
       "not a key, even though the defect can never block the pass")
 def t_space_disabled_when_el_not_clean():

@@ -4200,7 +4200,14 @@ function wireFqcAnomalies() {
       evidence_token: liveFqcHold.evidence_token
     })}).then(function (d) {
       if (!d.ok) { toast(d.why); return; }
-      if (d.unplanned && d.note) {
+      if (d.duplicate_scan) {
+        /* Already packed or dispatched: nothing was graded here. The server
+           says whether the rescan confirmed the record on file or went to
+           Needs Review - it used to read "passed — grade A, ready to pack"
+           for a module already in a box, and "rejected — Quality decides"
+           for one that had been flagged to the Incharge. */
+        toast(d.why);
+      } else if (d.unplanned && d.note) {
         toast(d.note);
       } else toast(d.serial + (d.held
         ? ' passed provisionally — held in Hold & Deviation until the ' +

@@ -7215,3 +7215,11 @@ commit.
 - **Change:** a decision whose snapshotted `ss_state` was OK waits for nothing. Items
   already raised this way stay for Quality (keep the decision).
 - **Test:** `test_fqc.py` +1. From `audit/A2-fqc-quality` a68f18b.
+
+### FQC Entry told a rescan of a packed module "ready to pack" / "Quality decides"
+- **Found** by A2 (Chromium): after a Pass or Reject on a packed module the toast said
+  "passed - grade A, ready to pack" (a rescan that only confirmed the record) or
+  "rejected - Quality decides GY or BGY" (one flagged to the Incharge) - neither true
+  (DECISIONS 1: no fake success).
+- **Change:** a duplicate-scan answer toasts the server's own sentence.
+- **Test:** `test_fqc_screen.py` +1 (Chromium). From `audit/A2-fqc-quality` 31d969f.
