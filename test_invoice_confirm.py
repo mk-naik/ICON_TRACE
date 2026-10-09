@@ -12,12 +12,12 @@ THE RULES THIS FILE DEFENDS (DECISIONS 1 and 3)
     08/10/2026) - an unread date used to pass every expiry check, and an
     expired e-Way Bill must block.
 
-The invoice PDFs are synthetic, built here with PyMuPDF and laid out so the
-parser reads them by label, the way it reads HO's Tally print. No real
-invoice is opened.
+The invoice PDFs are synthetic (invoice_pdf_fixture.py, PyMuPDF), laid out
+so the parser reads them by label, the way it reads HO's Tally print. No
+real invoice is opened.
 """
 
-import datetime, hashlib, os, shutil, sys, tempfile, traceback
+import datetime, os, shutil, sys, tempfile, traceback
 
 TMP = tempfile.mkdtemp(prefix="icontrace_invconfirm_")
 os.environ["ICON_DB_FILE"] = os.path.join(TMP, "test.db")
@@ -28,10 +28,7 @@ import app as APP                                            # noqa: E402
 import auth_test_helper as AUTH                              # noqa: E402
 import icon_clock as clock                                   # noqa: E402
 
-try:
-    import pymupdf
-except ImportError:                                          # pragma: no cover
-    import fitz as pymupdf
+from invoice_pdf_fixture import irn_of, make_pdf as _make_pdf     # noqa: E402
 
 _results = []
 
@@ -43,57 +40,8 @@ def test(name):
     return deco
 
 
-def irn_of(seed):
-    return hashlib.sha256(("TEST-IRN-" + seed).encode()).hexdigest()
-
-
 def make_pdf(invoice_no, qty, irn_seed=None, ewb_upto=None):
-    """A two-page invoice the parser reads by label (page 2: the e-Way Bill)."""
-    if ewb_upto is None:
-        ewb_upto = (clock.today() + datetime.timedelta(days=10)).strftime("%d-%b-%Y")
-    path = os.path.join(TMP, "%s.pdf" % hashlib.md5(
-        (invoice_no + (irn_seed or "")).encode()).hexdigest()[:10])
-    doc = pymupdf.open()
-    p = doc.new_page(width=595, height=842)
-
-    def t(x, y, s, fs=7):
-        p.insert_text((x, y), s, fontsize=fs, fontname="helv")
-    t(30, 46, "IRN : " + irn_of(irn_seed or invoice_no), 6.5)
-    t(30, 58, "Ack No. : 132600001111")
-    t(30, 70, "Ack Date : 8-Oct-26")
-    y = 90
-    p.draw_line((305, y - 2), (585, y - 2), width=0.5)
-    for l1, v1, l2, v2 in (("Invoice No.", invoice_no, "Dated", "8-Oct-26"),
-                           ("Dispatched through", "ALL INDIA TRANSPORT",
-                            "Destination", "Aizawl"),
-                           ("Bill of Lading/LR-RR No.", "2678",
-                            "Motor Vehicle No.", "CG04MP1466"),
-                           ("e-Way Bill No.", "331004512789", "", "")):
-        t(310, y + 8, l1)
-        t(310, y + 18, v1, 7.5)
-        if l2:
-            t(450, y + 8, l2)
-            t(450, y + 18, v2, 7.5)
-        y += 24
-        p.draw_line((305, y - 2), (585, y - 2), width=0.5)
-    for y0, label in ((160, "Consignee (Ship to)"), (250, "Buyer (Bill to)")):
-        t(30, y0, label)
-        t(30, y0 + 10, "AGNI GREEN POWER LIMITED (MZ)", 7.5)
-        t(30, y0 + 19, "Sairang Road, Aizawl, Mizoram 796001")
-        t(30, y0 + 28, "GSTIN/UIN : 15AACCA2122Q1ZT")
-        t(30, y0 + 37, "State Name : Mizoram, Code : 15")
-    t(30, 400, "Sl Description of Goods")
-    t(330, 400, "HSN/SAC")
-    p.draw_line((25, 404), (585, 404), width=0.5)
-    t(30, 416, "1 SOLAR PV MODULE-ISEN630-G12R", 7.5)
-    t(330, 416, "85414300", 7.5)
-    t(400, 416, "{:,}.000 pcs".format(qty), 7.5)
-    p2 = doc.new_page(width=595, height=842)
-    p2.insert_text((30, 75), "Valid Upto : " + ewb_upto, fontsize=8,
-                   fontname="helv")
-    doc.save(path)
-    doc.close()
-    return path
+    return _make_pdf(TMP, invoice_no, qty, irn_seed=irn_seed, ewb_upto=ewb_upto)
 
 
 def setup():

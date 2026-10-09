@@ -7235,3 +7235,13 @@ commit.
 - **Change:** both filters run in the query before the limit; the column names the live
   challans by number.
 - **Test:** `test_challan.py` +2. From `audit/A4-invoice-challan` eedbcc5.
+
+### An invoice the parser found no quantity on could never be attached
+- **Found** by A4 (Chromium): "Cannot read properties of null (reading 'toLocaleString')"
+  on load and on every keystroke; Attach never enabled; the rail kept the previous
+  invoice's status.
+- **Cause:** the live layer set `INV_SCANNED = null` and v4's `invCheck` calls
+  `INV_SCANNED.toLocaleString()`.
+- **Change:** the parse records `qtyParsed`; when false the typed quantity is compared.
+  The synthetic PDF builder is shared as `invoice_pdf_fixture.py`.
+- **Test:** `test_invoice_screen_ui.py` (new, Chromium). From `audit/A4-invoice-challan` f24bb2a.

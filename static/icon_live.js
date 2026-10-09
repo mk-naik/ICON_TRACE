@@ -8233,7 +8233,11 @@ function wireFqcAnomalies() {
     window.INV_STATE = {
       loaded: true, file: filename, bad: false, fields: fields, edited: {},
       qr: d.qr, checks: d.checks,
-      declared: (d.compare_only && d.compare_only.quantity || {}).value
+      declared: (d.compare_only && d.compare_only.quantity || {}).value,
+      /* false: the parse found no quantity, so the one typed in is compared
+         with itself (see the invCheck patch) instead of with null */
+      qtyParsed: !!(d.compare_only && d.compare_only.quantity &&
+                    d.compare_only.quantity.found)
     };
     if (typeof INV_SCANNED !== 'undefined' && d.compare_only &&
         d.compare_only.quantity) {
@@ -13093,9 +13097,18 @@ function wireFqcAnomalies() {
 
 
   // e-Way Bill Date fix monkey-patch
+  /* When the parse found no quantity, v4 compared the typed one with
+     INV_SCANNED = null and threw on null.toLocaleString() at every keystroke:
+     the quantity typed in is then the only figure there is. */
   if (typeof window.invCheck === 'function' && !window.__invCheckPatched) {
     var originalInvCheck = window.invCheck;
     window.invCheck = function() {
+        var st = window.INV_STATE;
+        if (st && st.qtyParsed === false && st.fields) {
+            var typed = parseInt(String((st.fields.quantity || {}).value || '')
+                                 .replace(/,/g, ''), 10);
+            window.INV_SCANNED = isNaN(typed) ? 0 : typed;
+        }
         if (window.INV_STATE && window.INV_STATE.fields && window.INV_STATE.fields.ewb_valid_upto && window.INV_STATE.fields.ewb_valid_upto.value) {
             var origDate = window.INV_STATE.fields.ewb_valid_upto.value;
             var p = String(origDate).split('-');
