@@ -48,6 +48,7 @@ import icon_gatepass_form as gpform
 from urllib.parse import urlencode
 import icon_ftr as ftr
 import icon_clock as clock
+import icon_defects
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 STORE = os.path.join(BASE, "storage", "invoices")
@@ -9956,6 +9957,24 @@ def api_hold():
                     "confirmed_this_month": confirmed})
 
 
+def _reject_needs_defect(evidence, outcome, defect_code):
+    """A rejection has to leave a defect on file. The EL's verdict counts only
+    when db.record_fqc will actually attach it - its folder name has to be one
+    the defect list knows (icon_defects.FOLDER_MAP). A folder the share never
+    used before ("Corner Chip", a stray "New folder") is a verdict that files
+    nothing: it used to satisfy this check, and the rejection reached Quality
+    with no defect at all. Returns the sentence to show, or None."""
+    if outcome != "reject" or defect_code:
+        return None
+    el = (evidence.get("el") or "").strip()
+    if el and el.lower() not in ev.EL_CLEAN:
+        if icon_defects.FOLDER_MAP.get(icon_defects.normalize(el)):
+            return None
+        return ("A rejection needs a defect - the EL folder “%s” is not a "
+                "defect on the list, so pick one." % el)
+    return "A rejection needs a defect - the EL read clean, so pick one."
+
+
 def _other_needs_note(defect, note):
     """"Other" on the defect list says nothing on its own - the note is what
     was actually wrong. Same rule, and same wording, as a coded reason of
@@ -10074,14 +10093,11 @@ def api_fqc_grade():
             hold = route == "provisional"
 
         # A rejection needs at least one defect on file - the EL's own
-        # verdict satisfies it when EL read something other than clean; if
-        # EL read OK, an operator defect is compulsory.
-        el_verdict = (evidence.get("el") or "").strip()
-        el_has_defect = bool(el_verdict) and el_verdict.lower() not in ev.EL_CLEAN
-        if outcome == "reject" and not defect_code and not el_has_defect:
-            return jsonify({"ok": False, "why":
-                "A rejection needs a defect - the EL read clean, so pick "
-                "one."}), 400
+        # verdict satisfies it when it files one onto the record; if EL read
+        # OK, an operator defect is compulsory.
+        refusal = _reject_needs_defect(evidence, outcome, defect_code)
+        if refusal:
+            return jsonify({"ok": False, "why": refusal}), 400
 
         # confirmed or provisional is a property of the evidence, not a field
         # anyone gets to set: a decision made with the tester unreachable is

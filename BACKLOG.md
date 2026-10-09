@@ -7164,3 +7164,13 @@ commit.
 - **Change:** it opens that challan's session (`ldOpenSession`), offered only to an
   account that can view Loading Verification.
 - **Test:** `test_loading_ui.py` +1 (Chromium). From `audit/A5-load-gatepass-print` e1dc88c.
+
+### A reject could reach Quality with no defect on file
+- **Found** by A2 in the browser (ICON625R12A0830032): the EL image was filed under
+  "Corner Chip", a folder the defect list does not know; the operator cleared the
+  prefilled box and the reject was saved with no defect (`fqc_defect` empty).
+- **Cause:** the route asked "is the EL verdict not clean?", while `db.record_fqc`
+  attaches the EL defect only through `icon_defects.FOLDER_MAP` - two questions.
+- **Change:** `_reject_needs_defect()` asks what `record_fqc` asks; an unmapped folder
+  needs an operator defect and the refusal names the folder.
+- **Test:** `test_fqc.py` +1. From `audit/A2-fqc-quality` 76e96d8.

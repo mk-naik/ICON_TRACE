@@ -261,6 +261,33 @@ def t_defect_from_el():
     assert defect_codes(rec["fqc_id"], "el") == ["DF-CELLCRACK"]
 
 
+@test("an EL folder the defect list does not know files no defect, so it cannot "
+      "stand in for one: the rejection is refused until a defect is picked")
+def t_el_folder_not_on_list_needs_a_defect():
+    odd = "ICON625R1290220487"                    # filed under 'Corner Chip'
+    c = setup(ss_rows=ROWS + [row(odd, "2026-09-07 10:15:00", "630.0")])
+    folder = os.path.join(EL_ROOT, "Corner Chip")
+    os.makedirs(folder, exist_ok=True)
+    open(os.path.join(folder, odd + ".jpg"), "w").close()
+    try:
+        with store.conn() as (cx, cur):
+            store.insert(cur, "serial", {
+                "serial": odd, "build_instance": 1, "model": "ISEN625-G12R",
+                "wattage": WATT, "customer": "STOCK", "dcr": "DCR",
+                "format_version": 2, "date_produced": "2026-09-07",
+                "shift": 1, "sequence": 487, "state": "planned"})
+        r = c.post("/api/fqc", json={"serial": odd, "outcome": "reject"})
+        assert r.status_code == 400, "rejected with no defect on file: %s" % r.get_json()
+        assert "Corner Chip" in r.get_json()["why"], r.get_json()
+        assert fqc_row(odd) is None
+        r = c.post("/api/fqc", json={"serial": odd, "outcome": "reject",
+                                     "defect": "Corner Chip"})
+        assert r.status_code == 200, r.get_json()
+        assert defect_codes(fqc_row(odd)["fqc_id"]) == ["DF-CORNERCHIP"]
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
 @test("a named defect is recorded alongside the EL's, not instead of it")
 def t_defect_named_plus_el():
     c = setup()
