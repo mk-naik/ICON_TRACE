@@ -8140,11 +8140,28 @@ def api_trace_serial(serial):
         boxes = store.rows(cur, "SELECT b.*, bs.added_at, bs.added_by "
                                 "FROM box_serial bs JOIN box b ON b.box_id=bs.box_id "
                                 "WHERE bs.serial=%s ORDER BY bs.added_at", (s,))
+        # every version of every challan the module was on, with the pallet it
+        # travelled in and that pallet's Loading Verification - the dispatch
+        # half of the history (DECISIONS 1: the module journey shows it)
         chal = store.rows(cur, "SELECT c.challan_id, c.fy, c.seq, c.suffix, "
                                "c.challan_date, c.vehicle_no, c.status, "
-                               "c.created_by FROM challan_serial cs "
+                               "c.created_by, c.created_at, c.issued_at, "
+                               "c.superseded_at, c.superseded_by_user, "
+                               "c.cancelled_at, c.cancelled_by, c.cancelled_reason, "
+                               "cb.box_no AS ld_box, cb.loading_status AS ld_status, "
+                               "cb.loading_scanned_at AS ld_at, "
+                               "cb.loading_scanned_by AS ld_by "
+                               "FROM challan_serial cs "
                                "JOIN challan c ON c.challan_id=cs.challan_id "
+                               "LEFT JOIN challan_box cb "
+                               "ON cb.challan_box_id=cs.challan_box_id "
                                "WHERE cs.serial=%s ORDER BY c.challan_id", (s,))
+        gps = store.rows(
+            cur, "SELECT gp_no, challan_id, status, created_at, created_by, "
+                 "cancelled_at, cancelled_by, cancelled_reason FROM gatepass "
+                 "WHERE challan_id IN (%s) ORDER BY gp_id"
+                 % ",".join("%s" for _ in chal),
+            tuple(c["challan_id"] for c in chal)) if chal else []
         events = store.rows(cur, "SELECT * FROM dispatch_audit WHERE "
                                  "(entity='serial' AND entity_id=%s) OR "
                                  "(entity='allocation' AND entity_id=%s) "
@@ -8374,8 +8391,18 @@ def api_trace_serial(serial):
     live_chal = [c for c in chal if c["status"] not in ("cancelled", "superseded")]
     if live_chal:
         c = live_chal[-1]
+        detail = [c["vehicle_no"] or "—", c["status"] or ""]
+        if c.get("created_by"):
+            detail.append("by " + c["created_by"])
+        if c.get("issued_at"):
+            detail.append("issued " + _when_shift(c["issued_at"]))
+        # an edited challan names the version(s) it replaced
+        olds = [o for o in chal if o["status"] == "superseded"
+                and o["fy"] == c["fy"] and o["seq"] == c["seq"]]
+        if olds:
+            detail.append("replaces " + ", ".join(_chno(o) for o in olds))
         journey.append({"stage": "Challan", "value": _chno(c), "done": True,
-                        "detail": [c["vehicle_no"] or "—", c["status"] or ""],
+                        "detail": detail,
                         "tag": c["challan_date"] or "", "tone": "t-solar"})
     elif chal:
         c = chal[-1]
@@ -8385,6 +8412,33 @@ def api_trace_serial(serial):
                         "tag": "pending", "tone": "t-mute"})
     else:
         journey.append({"stage": "Challan", "value": "—", "done": False,
+                        "detail": ["not dispatched"], "tag": "pending",
+                        "tone": "t-mute"})
+
+    # The gate pass the live challan left the gate on, and who confirmed this
+    # module's pallet at Loading Verification. The journey used to stop at
+    # the challan: an issued challan still waiting for loading and one whose
+    # truck had left read the same.
+    gp_live = None
+    if live_chal:
+        gp_live = next((g for g in gps if g["challan_id"] == live_chal[-1]["challan_id"]
+                        and (g["status"] or "active") != "cancelled"), None)
+    if gp_live:
+        c = live_chal[-1]
+        journey.append({"stage": "Gate pass", "value": gp_live["gp_no"], "done": True,
+                        "detail": ["pallet %s loaded · %s" % (c.get("ld_box") or "—",
+                                                              c.get("ld_by") or "—"),
+                                   "by " + (gp_live["created_by"] or "—")],
+                        "tag": gp_live["created_at"] or "", "tone": "t-solar"})
+    elif live_chal and live_chal[-1]["status"] == "issued":
+        c = live_chal[-1]
+        journey.append({"stage": "Gate pass", "value": "—", "done": False,
+                        "detail": ["awaiting Loading Verification",
+                                   "pallet %s %s" % (c.get("ld_box") or "—",
+                                                     c.get("ld_status") or "pending")],
+                        "tag": "pending", "tone": "t-mute"})
+    else:
+        journey.append({"stage": "Gate pass", "value": "—", "done": False,
                         "detail": ["not dispatched"], "tag": "pending",
                         "tone": "t-mute"})
 
@@ -8437,6 +8491,43 @@ def api_trace_serial(serial):
                     "reference": box_label(b),
                     "detail": "Added to %s" % (b["bin_no"] or "box"),
                     "user": b["added_by"] or "—"})
+    # the dispatch documents: each challan version (issued, edited,
+    # superseded, cancelled), the pallet's loading confirmation and the gate
+    # pass - they are audited against the challan, never the serial, so the
+    # serial's own audit rows above never carried them
+    chno_of = {c["challan_id"]: _chno(c) for c in chal}
+    for c in chal:
+        no = chno_of[c["challan_id"]]
+        if c.get("suffix") and c.get("created_at"):
+            log.append({"at": c["created_at"], "stage": "Challan · Edited",
+                        "reference": no, "detail": "in pallet %s" % (c.get("ld_box") or "—"),
+                        "user": c.get("created_by") or "—"})
+        elif c.get("issued_at") or c.get("created_at"):
+            log.append({"at": c.get("issued_at") or c["created_at"],
+                        "stage": "Challan · Issued" if c.get("issued_at") else "Challan · Draft",
+                        "reference": no, "detail": "in pallet %s" % (c.get("ld_box") or "—"),
+                        "user": c.get("created_by") or "—"})
+        if c.get("ld_at"):
+            log.append({"at": c["ld_at"], "stage": "Loading · Confirmed",
+                        "reference": c.get("ld_box") or "—", "detail": "on %s" % no,
+                        "user": c.get("ld_by") or "—"})
+        if c.get("superseded_at"):
+            log.append({"at": c["superseded_at"], "stage": "Challan · Superseded",
+                        "reference": no, "detail": "replaced by an edit",
+                        "user": c.get("superseded_by_user") or "—"})
+        if c.get("cancelled_at"):
+            log.append({"at": c["cancelled_at"], "stage": "Challan · Cancelled",
+                        "reference": no, "detail": c.get("cancelled_reason") or "",
+                        "user": c.get("cancelled_by") or "—"})
+    for g in gps:
+        log.append({"at": g["created_at"], "stage": "Gate pass · Created",
+                    "reference": g["gp_no"],
+                    "detail": "against %s" % chno_of.get(g["challan_id"], "—"),
+                    "user": g["created_by"] or "—"})
+        if g.get("cancelled_at"):
+            log.append({"at": g["cancelled_at"], "stage": "Gate pass · Cancelled",
+                        "reference": g["gp_no"], "detail": g.get("cancelled_reason") or "",
+                        "user": g.get("cancelled_by") or "—"})
     log.sort(key=lambda r: str(r["at"] or ""))
 
     return jsonify({

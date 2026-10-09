@@ -7316,3 +7316,8 @@ commit.
 - **Found** by A5: the FTR of an edited original printed (Print / Excel refused it); a cancelled challan whose pallets had been loaded printed, exported and reported as a live Dispatch Challan cum Gate Pass.
 - **Change:** `_refuse_not_produced()` (superseded: names the live number; cancelled: says when and why) first in print, Excel and FTR. The FTR stays outside the loading gate (DECISIONS gates v1 / v2 only).
 - **Test:** `test_loading.py` +2. From `audit/A5-load-gatepass-print` a186e4b.
+
+### Search & Trace: a dispatched module's journey stopped at the challan number
+- **Found** on the A7 golden path: no word of the version it replaced, who issued it and when, who loaded the pallet, or the gate pass; the event log had no dispatch row (DECISIONS 1: the module journey shows the history).
+- **Change:** the Challan step names who / when / the version replaced; a Gate pass step (or "awaiting Loading Verification"); the event log adds challan, loading and gate pass events.
+- **Test:** `test_loading.py` +1. From `audit/A7-golden-volume` 5aa1b57.

@@ -292,6 +292,43 @@ def t_submit_creates_gatepass():
     assert gp["challan_id"] == chid, gp
 
 
+@test("Search & Trace: a module's journey names its challan's version history, "
+      "who loaded its pallet and the gate pass it left on - and the event log "
+      "carries the issue, the edit, the loading and the gate pass")
+def t_journey_shows_dispatch():
+    c = setup()
+    b1 = packed_box(c, [80, 81])
+    inv = make_invoice(qty=2, invoice_no="INV-LOAD-TRACE")
+    chid = make_issued_challan(c, [b1], inv)
+
+    def journey(s):
+        d = c.get("/api/trace/serial/" + s).get_json()
+        return {j["stage"]: j for j in d["journey"]}, [e["stage"] for e in d["events"]]
+
+    j, ev = journey(serial(80))
+    assert j["Gate pass"]["done"] is False and \
+        "awaiting Loading Verification" in j["Gate pass"]["detail"], j["Gate pass"]
+    assert "Challan · Issued" in ev, ev
+
+    # an edit before loading (the vehicle changed): the module stays on MA
+    r = c.post("/api/challan/%d/edit-save" % chid, json={"boxes": [b1], "invoice_id": inv,
+                                                          "vehicle_no": "CG04ZZ0001"})
+    assert r.status_code == 200, r.get_json()
+    new_id = r.get_json()["challan_id"]
+    c.post("/api/loading/%d/confirm" % new_id, json={"box_no": box_no_of(new_id)})
+    assert c.post("/api/loading/%d/submit" % new_id, json={}).status_code == 200
+    gp = gatepasses_for(new_id)[0]
+
+    j, ev = journey(serial(80))
+    assert j["Challan"]["value"].endswith("(MA)"), j["Challan"]
+    assert any(x.startswith("replaces ") for x in j["Challan"]["detail"]), j["Challan"]
+    assert j["Gate pass"]["value"] == gp["gp_no"] and j["Gate pass"]["done"], j["Gate pass"]
+    assert any("loaded" in x for x in j["Gate pass"]["detail"]), j["Gate pass"]
+    for want in ("Challan · Issued", "Challan · Superseded", "Challan · Edited",
+                 "Loading · Confirmed", "Gate pass · Created"):
+        assert want in ev, (want, ev)
+
+
 @test("submitting an already-submitted challan again does not create a "
      "second gatepass row - safe to call at most once per challan")
 def t_resubmit_does_not_duplicate_gatepass():
