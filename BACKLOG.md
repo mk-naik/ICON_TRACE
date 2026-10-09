@@ -7149,3 +7149,9 @@ commit.
   Enter) loaded nothing until "Load its serials" was clicked.
 - **Change:** Enter in the pallet field loads it, as the button does.
 - **Test:** `test_loading_ui.py` +1. From `audit/A5-load-gatepass-print` d155c15.
+
+### (test) A cancelled module gate pass releases its challan on screen too
+- A5 found and fixed the same defect as A4's d3fa85d above, independently; its code
+  change is already in. Its test is kept: `test_gatepass.py` +1 (after the module gate
+  pass is cancelled, list and detail read gp_count 0, not locked, and edit opens).
+  From `audit/A5-load-gatepass-print` 46d4de8 (test only).

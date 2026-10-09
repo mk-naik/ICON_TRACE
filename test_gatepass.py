@@ -328,6 +328,30 @@ def t_challan_detail_exposes_loading_agg():
     assert d2["challan"]["loading_why"] is None, d2["challan"]
 
 
+@test("cancelling the module gate pass releases the challan on screen too: the "
+      "list and the detail count only LIVE gate passes, the same count the "
+      "server's edit / cancel lock reads - not 'locked' with no Edit or Cancel")
+def t_cancelled_gatepass_releases_challan_on_screen():
+    c = setup()
+    b1 = packed_box(c, [40, 41])
+    inv = make_invoice(qty=2, invoice_no="INV-GP-UNLOCK")
+    chid = issue(c, [b1], inv)
+    load_all(c, chid)
+    d = c.get("/api/challan/%d" % chid).get_json()
+    assert d["gp_count"] == 1 and d["challan"]["locked"], d["challan"].get("locked")
+    with store.conn() as (cx, cur):
+        gid = store.one(cur, "SELECT gp_id FROM gatepass WHERE challan_id=%s", (chid,))["gp_id"]
+    r = c.post("/api/gatepass/%d/cancel" % gid, json={
+        "reason": "vehicle changed", "totp_code": AUTH.totp_code(_TOTP_SECRET)})
+    assert r.status_code == 200, r.get_json()
+    d = c.get("/api/challan/%d" % chid).get_json()
+    assert d["gp_count"] == 0 and not d["challan"]["locked"], (d["gp_count"], d["challan"]["locked"])
+    row = [x for x in c.get("/api/challans").get_json()["challans"] if x["challan_id"] == chid][0]
+    assert row["gp_count"] == 0, row
+    # and the server agrees: the challan can now be opened for an edit
+    assert c.post("/api/challan/%d/edit-draft" % chid, json={}).get_json()["ok"]
+
+
 @test("the gate pass print route's QR resolves back to the real record - "
      "identity only, the same minimal shape every other printed QR uses")
 def t_print_qr_resolves_to_real_record():
