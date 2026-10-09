@@ -287,6 +287,46 @@ def t_rescan_pass_obeys_the_floor():
     assert (serial_row(s)["state"], serial_row(s)["grade"]) == ("packed", "GY")
 
 
+@test("while a rescan conflict is open the packed record is the module's ONE live "
+      "decision - counted once - and a second rescan waits for the first to be "
+      "resolved instead of being compared with it")
+def t_open_conflict_one_live_decision():
+    c = setup()
+    pass_and_pack(c, 7)
+    s = serial(7)
+    r = c.post("/api/fqc", json={"serial": s, "outcome": "reject", "defect": "Frame Dent"},
+               headers=as_role(c, "FQC Operator"))
+    assert r.status_code == 200 and r.get_json()["agree"] is False, r.get_json()
+    rid = r.get_json()["review_id"]
+    with store.conn() as (cx, cur):
+        live = store.rows(cur, "SELECT outcome FROM fqc_record WHERE serial=%s "
+                               "AND superseded_by IS NULL", (s,))
+        dash_n = store.one(cur, "SELECT COUNT(*) AS n FROM fqc_record WHERE serial=%s "
+                                "AND superseded_by IS NULL AND status<>'cancelled'", (s,))["n"]
+    assert [x["outcome"] for x in live] == ["pass"], live
+    assert dash_n == 1
+    r = c.post("/api/fqc", json={"serial": s, "outcome": "reject", "defect": "Frame Dent"})
+    assert r.status_code == 400 and "#%d" % rid in r.get_json()["why"], r.get_json()
+    # an item raised before this rule (rescan still live) is put right at start-up
+    with store.conn() as (cx, cur):
+        new_id = db.review_item_get(cur, rid)["new_fqc_id"]
+        db.reinstate_fqc(cur, new_id)
+        assert db.settle_held_for_review(cur) == 1
+        assert db.settle_held_for_review(cur) == 0
+        assert store.one(cur, "SELECT superseded_by FROM fqc_record WHERE fqc_id=%s",
+                         (new_id,))["superseded_by"] is not None
+    # kept, the rescan becomes the live decision and the packed one is history
+    r = c.post("/api/review/resolve", json={"type": "duplicate_scan", "id": rid,
+               "resolution": "keep_rescanned", "reason": "dent confirmed"},
+               headers=as_role(c, "Production Incharge"))
+    assert r.status_code == 200, r.get_json()
+    with store.conn() as (cx, cur):
+        live = store.rows(cur, "SELECT outcome FROM fqc_record WHERE serial=%s "
+                               "AND superseded_by IS NULL", (s,))
+    assert [x["outcome"] for x in live] == ["reject"], live
+    assert serial_row(s)["state"] == "rejected"
+
+
 @test("a rescan REJECT needs a defect, exactly as a first rejection does")
 def t_rescan_reject_needs_a_defect():
     c = setup()

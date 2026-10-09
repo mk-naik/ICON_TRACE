@@ -930,6 +930,12 @@ def t_reconcile_disagree():
                            "type='provisional_mismatch'")["n"]
     assert n == 1, "%d review items for one module" % n
 
+    # while Quality decides, the decision made is the ONE live record: the
+    # reading that disagreed is held beside it, not counted as a second
+    # inspection on the FQC Dashboard
+    assert sum(1 for x in live_records(SHORT) if x["superseded_by"] is None) == 1
+    assert c.get("/api/fqc/dashboard").get_json()["totals"]["inspected"] == 1
+
     items = [i for i in c.get("/api/review").get_json() if i["type"] == "provisional_mismatch"]
     assert len(items) == 1 and items[0]["serial"] == SHORT, items
     assert items[0]["evidence"]["original"]["outcome"] == "pass"

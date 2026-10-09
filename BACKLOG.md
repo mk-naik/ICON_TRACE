@@ -7187,3 +7187,20 @@ commit.
   rescan pass carries no grade and, kept, puts the module on hold like any held pass.
   `test_review.py`'s rescan rejects now name a defect, as every rejection must.
 - **Test:** `test_review.py` +3. From `audit/A2-fqc-quality` e7c7388.
+
+### Needs Review: a held rescan / disagreeing reading was a second live decision
+- **Found** by A2: until resolved, a duplicate-scan rescan and the reading that disagreed
+  with a provisional decision were LIVE `fqc_record`s beside the decision they disagree
+  with - the FQC Dashboard counted 16 inspected for 13 modules, Recent gradings listed
+  them twice, FQC Entry showed the rescan as "Existing decision", a SECOND rescan was
+  compared with the first rescan ("confirms the reject already on file" for a module
+  packed as a pass), and an FQC cancel could leave the other record live.
+- **Change:** the held record is born superseded by the decision it disagrees with and is
+  reinstated when a person keeps it (`db.reinstate_fqc`); a rescan while a conflict is
+  already open is refused, naming the item (one conflict at a time). `serve.py` runs
+  `db.settle_held_for_review` at start for items raised before this: it supersedes the
+  held record of each OPEN duplicate-scan / provisional-mismatch item (two columns,
+  nothing deleted). **On production that is the one open provisional mismatch, at the
+  next restart on this code.**
+- **Test:** `test_review.py` +1, `test_fqc.py` mismatch case (one live record,
+  inspected == 1). From `audit/A2-fqc-quality` 9f98e70.

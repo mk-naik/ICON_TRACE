@@ -969,6 +969,35 @@ def supersede_fqc(cur, fqc_id, by_id):
     return at
 
 
+def reinstate_fqc(cur, fqc_id):
+    """The other direction of supersede_fqc(): the record a person has just
+    chosen is the live decision again. A rescan of a packed module, and the
+    reading that disagreed with a provisional decision, are born superseded by
+    the decision they disagree with - evidence held for review, not a second
+    live decision - so the one a person keeps is put back here."""
+    if cur is not None:
+        cur.execute("UPDATE fqc_record SET superseded_by=NULL, superseded_at=NULL "
+                    "WHERE fqc_id=%s", (fqc_id,))
+
+
+def settle_held_for_review(cur):
+    """An open duplicate-scan or provisional-mismatch item whose second record
+    is still LIVE (raised before those records were born superseded): put it
+    under the decision it disagrees with, so the module has one live decision
+    until a person picks. Run once at server start; writes nothing when
+    nothing needs it. Returns how many records it settled."""
+    if cur is None:
+        return 0
+    rows = _store.rows(cur,
+        "SELECT r.fqc_id, r.new_fqc_id FROM review_item r JOIN fqc_record n "
+        "ON n.fqc_id = r.new_fqc_id WHERE r.status='open' AND r.type IN "
+        "('duplicate_scan', 'provisional_mismatch') AND n.superseded_by IS NULL "
+        "AND r.fqc_id IS NOT NULL")
+    for r in rows:
+        supersede_fqc(cur, r["new_fqc_id"], r["fqc_id"])
+    return len(rows)
+
+
 def create_review_item(cur, item_type, serial, fqc_id=None, new_fqc_id=None,
                        dispatched=False, created_by=None):
     """One row, one type column - Needs Review's whole point is not to grow

@@ -9662,6 +9662,18 @@ def _handle_duplicate_scan(cur, rec, evidence, serial, outcome,
     if refusal:
         return jsonify({"ok": False, "why": refusal}), 400
 
+    # One conflict at a time: a second rescan while the first is still open
+    # would raise a second item about the same packed decision, and the two
+    # could be resolved opposite ways.
+    open_item = store.one(cur, "SELECT review_id FROM review_item WHERE "
+                               "serial=%s AND status='open' AND "
+                               "type='duplicate_scan'", (serial,))
+    if open_item:
+        return jsonify({"ok": False, "why":
+            "%s is already in Needs Review (#%d): a rescan disagreed with the "
+            "record it was %s on. An Incharge resolves that first."
+            % (serial, open_item["review_id"], rec.get("state"))}), 400
+
     original = store.one(cur, "SELECT * FROM fqc_record WHERE serial=%s "
                               "AND superseded_by IS NULL "
                               "ORDER BY fqc_id DESC LIMIT 1", (serial,))
@@ -9688,6 +9700,10 @@ def _handle_duplicate_scan(cur, rec, evidence, serial, outcome,
     new_rec = db.record_fqc(cur, serial, outcome, evidence, actor(), mode,
                             defect=defect_code, note=note,
                             supersede=False, update_serial=False, hold=hold)
+    # Until a person picks, the record packing acted on stays the ONE live
+    # decision: the rescan is evidence held for review. Left live, the module
+    # was counted twice on the FQC Dashboard and in Recent gradings.
+    db.supersede_fqc(cur, new_rec["fqc_id"], original["fqc_id"])
     review_id = db.create_review_item(
         cur, "duplicate_scan", serial, fqc_id=original["fqc_id"],
         new_fqc_id=new_rec["fqc_id"],
@@ -9800,6 +9816,9 @@ def _reconcile_provisional(cur):
         snap = db.record_fqc(cur, f["serial"], outcome_now, e, "system",
                              "confirmed", supersede=False, update_serial=False,
                              build_instance=f.get("build_instance") or 1)
+        # held for Quality, not a second live decision (the FQC Dashboard
+        # counted the module twice, once per record)
+        db.supersede_fqc(cur, snap["fqc_id"], f["fqc_id"])
         rid = db.create_review_item(
             cur, "provisional_mismatch", f["serial"], fqc_id=f["fqc_id"],
             new_fqc_id=snap["fqc_id"], created_by="system")
@@ -9831,6 +9850,7 @@ def _resolve_provisional_mismatch(cur, review_id, resolution, reason):
     else:
         winner, loser = item["new_fqc_id"], item["fqc_id"]
     db.supersede_fqc(cur, loser, winner)
+    db.reinstate_fqc(cur, winner)       # the reading was held superseded
     rec = store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s", (winner,))
     passed = rec["outcome"] == "pass"
     if passed and not rec.get("grade"):
@@ -10504,6 +10524,7 @@ def _resolve_duplicate_scan(cur, review_id, resolution, reason):
             new_rec = store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s",
                                 (item["new_fqc_id"],))
             db.supersede_fqc(cur, item["fqc_id"], item["new_fqc_id"])
+            db.reinstate_fqc(cur, item["new_fqc_id"])   # born superseded
             # a rescan passed while the Sun Simulator was unreachable carries
             # no grade: kept, the module is held until the reading arrives,
             # exactly like any other provisional pass

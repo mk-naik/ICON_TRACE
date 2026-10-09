@@ -92,7 +92,12 @@ if __name__ == "__main__":
     # rows without the hand-off): carried on now, before anyone packs.
     import store
     with store.conn() as (cx, cur):
+        # first: a record held for review is not a live decision to carry on
+        held = db.settle_held_for_review(cur)
         settled = db.settle_standing_fqc(cur)
+    if held:
+        log.info("Records held for review put under the decision they "
+                 "disagree with: %d", held)
     if sum(settled.values()):
         log.info("FQC decisions carried on to modules that missed them: %s",
                  settled)
