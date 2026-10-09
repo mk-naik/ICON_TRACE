@@ -11618,6 +11618,31 @@ def _validate_gp_items(raw):
     return items, None
 
 
+def _gp_kind_and_return(body, default_kind="NRGP"):
+    """(kind, expected_return, why) for a gate pass being created or edited -
+    one rule for both routes. DECISIONS 4: RGP or NRGP. Only an RGP has an
+    expected return, and it is a real date from the gate pass's own day on
+    (its picker offers nothing earlier). Anything else was stored as sent - a
+    kind "XYZ" printed as a returnable pass, an expected return "not-a-date",
+    and an NRGP kept a return date."""
+    kind = str(body.get("kind") or default_kind or "NRGP").strip().upper()
+    if kind not in ("NRGP", "RGP"):
+        return None, None, "Type must be NRGP or RGP, not %r." % body.get("kind")
+    if kind != "RGP":
+        return kind, None, None
+    raw = str(body.get("expected_return") or "").strip()
+    if not raw:
+        return kind, None, None
+    try:
+        day = datetime.date.fromisoformat(raw[:10])
+    except ValueError:
+        return None, None, "Expected return %r is not a date." % raw
+    if day < clock.today():
+        return None, None, ("Expected return %s is before today - a returnable "
+                            "pass is expected back after it goes out." % day.isoformat())
+    return kind, day.isoformat(), None
+
+
 def _clamp_gp_date_range():
     """Neither end of the range may be later than today - a real
     constraint, not a convention the picker merely suggests: the <input
@@ -11689,6 +11714,18 @@ def api_gatepass():
         items, why = _validate_gp_items(body.get("items"))
         if why:
             return jsonify({"ok": False, "why": why}), 400
+    kind, expected_return, why = _gp_kind_and_return(body)
+    if why:
+        return jsonify({"ok": False, "why": why}), 400
+    # A standalone pass needs what an edit already needs (PUT): who it goes
+    # to, and something on it - items, or the one description an old-style
+    # pass carries. An empty pass with no party was issued and numbered.
+    if not ch_id:
+        if not str(body.get("party") or "").strip():
+            return jsonify({"ok": False, "why":
+                "Party / destination is required."}), 400
+        if not items and not str(body.get("description") or "").strip():
+            return jsonify({"ok": False, "why": "Add at least one item."}), 400
 
     with store.conn() as (cx, cur):
         # Keyed on ch_id being present - a fact resolved against the real
@@ -11732,8 +11769,12 @@ def api_gatepass():
 
         seq = db.draw_gp_seq(cur, d)
         no = db.render_gp_no(d, seq)
-        ch_no = str(body.get("challan_no") or "").strip()
-        if ch_id and not ch_no and ch_row:
+        # The challan a pass names is the one it is linked to, read from that
+        # row - never a number the browser sends: a standalone pass took any
+        # "challan_no" it was given and printed "Against challan ..." for a
+        # challan it has nothing to do with.
+        ch_no = ""
+        if ch_id and ch_row:
             try:
                 cdate = datetime.date.fromisoformat(ch_row["challan_date"])
                 ch_no = db.render_challan_no(cdate, ch_row["seq"], ch_row.get("suffix"))
@@ -11742,7 +11783,7 @@ def api_gatepass():
 
         rec = {
             "gp_no": no, "gp_date": d.isoformat(),
-            "kind": str(body.get("kind") or "NRGP").strip(),
+            "kind": kind,
             "party": str(body.get("party") or "").strip(),
             "delivery_address": str(body.get("delivery_address") or "").strip(),
             "vehicle_no": str(body.get("vehicle_no") or "").strip(),
@@ -11752,7 +11793,7 @@ def api_gatepass():
             # lines actually printed.
             "description": None if items else str(body.get("description") or "").strip(),
             "qty": None if items else (body.get("qty") or None),
-            "expected_return": body.get("expected_return") or None,
+            "expected_return": expected_return,
             "challan_no": ch_no or None,
             "challan_id": ch_id
         }
@@ -11806,7 +11847,9 @@ def api_gatepass_update(gatepass_id):
                 "At least one item is required."}), 400
 
         before = dict(gp)
-        kind = str(body.get("kind") or gp["kind"] or "NRGP").strip()
+        kind, expected_return, why = _gp_kind_and_return(body, gp["kind"])
+        if why:
+            return jsonify({"ok": False, "why": why}), 400
         fields = {
             "kind": kind,
             "party": str(body.get("party") or "").strip(),
@@ -11814,7 +11857,7 @@ def api_gatepass_update(gatepass_id):
             "vehicle_no": str(body.get("vehicle_no") or "").strip(),
             "description": None,
             "qty": None,
-            "expected_return": body.get("expected_return") or None if kind == "RGP" else None,
+            "expected_return": expected_return,
         }
         if not fields["party"]:
             return jsonify({"ok": False, "why":

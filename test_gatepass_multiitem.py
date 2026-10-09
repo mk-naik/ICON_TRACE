@@ -347,6 +347,78 @@ def t_print_multiitem_shows_every_row():
     assert ">53<" in body, body   # 1 + 50 + 2
 
 
+# --------------------------------------------------------------------------
+# 7 - create holds the same rules as edit (DECISIONS 4: RGP or NRGP)
+# --------------------------------------------------------------------------
+
+def _row(gp_no):
+    with store.conn() as (cx, cur):
+        return dict(store.one(cur, "SELECT * FROM gatepass WHERE gp_no=%s", (gp_no,)))
+
+
+@test("the type is NRGP or RGP - anything else is refused on create and on edit, "
+      "and a lower-case one is stored as the type it names")
+def t_kind_is_nrgp_or_rgp():
+    c = setup()
+    r = c.post("/api/gatepass", json={"kind": "XYZ", "party": "P", "items": THREE_ITEMS})
+    assert r.status_code == 400 and "NRGP or RGP" in r.get_json()["why"], r.get_json()
+    gp = standalone_gatepass(c)
+    r = c.put("/api/gatepass/%d" % gp["gatepass_id"],
+              json={"kind": "XYZ", "party": "P", "items": THREE_ITEMS})
+    assert r.status_code == 400, r.get_json()
+    assert _row(gp["gp_no"])["kind"] == "NRGP"
+    r = c.post("/api/gatepass", json={"kind": "rgp", "party": "P", "items": THREE_ITEMS})
+    assert r.status_code == 200 and _row(r.get_json()["gp_no"])["kind"] == "RGP", r.get_json()
+
+
+@test("a new standalone pass needs a party and something on it, as an edit does - "
+      "an empty pass with no party was issued and numbered")
+def t_create_needs_party_and_item():
+    c = setup()
+    for body in ({"kind": "NRGP"}, {"kind": "NRGP", "items": THREE_ITEMS},
+                 {"kind": "NRGP", "party": "  ", "items": THREE_ITEMS},
+                 {"kind": "NRGP", "party": "P", "items": []}):
+        r = c.post("/api/gatepass", json=body)
+        assert r.status_code == 400, (body, r.get_json())
+    with store.conn() as (cx, cur):
+        assert store.one(cur, "SELECT COUNT(*) AS n FROM gatepass")["n"] == 0
+    # an old-style single-description pass is still a pass
+    r = c.post("/api/gatepass", json={"kind": "NRGP", "party": "P",
+                                      "description": "Test equipment", "qty": 1})
+    assert r.status_code == 200, r.get_json()
+
+
+@test("a standalone pass names no challan the browser sends it")
+def t_standalone_takes_no_challan_no():
+    c = setup()
+    r = c.post("/api/gatepass", json={"kind": "NRGP", "party": "P", "items": THREE_ITEMS,
+                                      "challan_no": "IS-09.10.2026/0001"})
+    assert r.status_code == 200, r.get_json()
+    assert _row(r.get_json()["gp_no"])["challan_no"] is None
+
+
+@test("only an RGP has an expected return, and it is a real date from today on: "
+      "a non-date and a past date are refused, an NRGP keeps none")
+def t_expected_return_rules():
+    c = setup()
+    today = datetime.date.today()
+    for bad in ("not-a-date", (today - datetime.timedelta(days=1)).isoformat()):
+        r = c.post("/api/gatepass", json={"kind": "RGP", "party": "P", "items": THREE_ITEMS,
+                                          "expected_return": bad})
+        assert r.status_code == 400, (bad, r.get_json())
+    later = (today + datetime.timedelta(days=9)).isoformat()
+    r = c.post("/api/gatepass", json={"kind": "RGP", "party": "P", "items": THREE_ITEMS,
+                                      "expected_return": later})
+    assert r.status_code == 200 and _row(r.get_json()["gp_no"])["expected_return"] == later
+    r = c.post("/api/gatepass", json={"kind": "NRGP", "party": "P", "items": THREE_ITEMS,
+                                      "expected_return": later})
+    assert r.status_code == 200 and _row(r.get_json()["gp_no"])["expected_return"] is None
+    gp = r.get_json()
+    r = c.put("/api/gatepass/%d" % gp["gatepass_id"],
+              json={"kind": "RGP", "party": "P", "items": THREE_ITEMS, "expected_return": "x"})
+    assert r.status_code == 400, r.get_json()
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0

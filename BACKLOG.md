@@ -7321,3 +7321,15 @@ commit.
 - **Found** on the A7 golden path: no word of the version it replaced, who issued it and when, who loaded the pallet, or the gate pass; the event log had no dispatch row (DECISIONS 1: the module journey shows the history).
 - **Change:** the Challan step names who / when / the version replaced; a Gate pass step (or "awaiting Loading Verification"); the event log adds challan, loading and gate pass events.
 - **Test:** `test_loading.py` +1. From `audit/A7-golden-volume` 5aa1b57.
+
+### Gate Pass: a new pass holds the edit's rules
+- **Found** by A5: POST /api/gatepass stored type "XYZ" (printed as RGP in classic), an
+  empty numbered pass with no party or item, an expected return "not-a-date" or in the
+  past, an NRGP with a return date, and a browser-sent challan_no ("Against challan ..."
+  on a standalone pass).
+- **Cause:** create validated only item rows; type and return date were never checked;
+  the challan no. came from the body.
+- **Change:** `_gp_kind_and_return()` for create and edit (NRGP / RGP; a return date on an
+  RGP only, a real date not before today); a standalone pass needs a party and items (or
+  the old single description); the challan no. only from the linked row.
+- **Test:** `test_gatepass_multiitem.py` +4. From `audit/A5-load-gatepass-print` daba643.
