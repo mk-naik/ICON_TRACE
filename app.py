@@ -4519,6 +4519,20 @@ def _loading_incomplete(boxes):
             % (done, total))
 
 
+def _challan_goods_rows(cur, challan_id):
+    """What is really on the truck, one line per model: counted from the
+    challan's own serials against the serial master, so a mixed load prints
+    each model with its own wattage and a DCR item says DCR. The ONE query
+    both the printed challan (v1) and its Excel copy (v2) read."""
+    return store.rows(
+        cur, "SELECT s.model AS model, s.dcr AS dcr, cs.wattage AS wattage, "
+             "COUNT(*) AS qty FROM challan_serial cs "
+             "LEFT JOIN serial s ON s.serial=cs.serial "
+             "AND s.build_instance=cs.build_instance "
+             "WHERE cs.challan_id=%s GROUP BY s.model, s.dcr, cs.wattage "
+             "ORDER BY MIN(cs.challan_serial_id)", (challan_id,))
+
+
 @app.route("/challan/<int:fy>/<int:seq>/print")
 @require_screen_view("challan")
 def challan_print(fy, seq):
@@ -4544,16 +4558,7 @@ def challan_print(fy, seq):
                 return why, 400
         inv = store.one(cur, "SELECT * FROM invoice WHERE invoice_id=%s",
                         (ch["invoice_id"],)) if ch.get("invoice_id") else None
-        # what is really on the truck, one line per model: counted from the
-        # challan's own serials against the serial master, so a mixed load
-        # prints each model with its own wattage and a DCR item says DCR
-        goods_rows = store.rows(
-            cur, "SELECT s.model AS model, s.dcr AS dcr, cs.wattage AS wattage, "
-                 "COUNT(*) AS qty FROM challan_serial cs "
-                 "LEFT JOIN serial s ON s.serial=cs.serial "
-                 "AND s.build_instance=cs.build_instance "
-                 "WHERE cs.challan_id=%s GROUP BY s.model, s.dcr, cs.wattage "
-                 "ORDER BY MIN(cs.challan_serial_id)", (ch["challan_id"],))
+        goods_rows = _challan_goods_rows(cur, ch["challan_id"])
         style = cform.pick_style(request.args.get("style"),
                                  db.get_config(cur).get("print_style"))
     d = datetime.date.fromisoformat(ch["challan_date"])
@@ -4573,6 +4578,7 @@ def challan_print(fy, seq):
 def challan_excel(fy, seq):
     """Version 2 - Excel. Sheet 1 the challan WITHOUT the packing list,
     Sheet 2 the Flash Test Report. Not the older packing-list layout."""
+    from decimal import Decimal
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     from flask import Response
@@ -4589,10 +4595,19 @@ def challan_excel(fy, seq):
             if why:
                 return why, 400
         cfg = db.get_config(cur)
+        inv = store.one(cur, "SELECT * FROM invoice WHERE invoice_id=%s",
+                        (b["challan"]["invoice_id"],))             if b["challan"].get("invoice_id") else None
+        goods_rows = _challan_goods_rows(cur, b["challan"]["challan_id"])
     ch, sers = b["challan"], b["serials"]
     d = datetime.date.fromisoformat(ch["challan_date"])
     no = db.render_challan_no(d, ch["seq"], ch["suffix"])
     _log_print("export.challan_excel", "challan", no, template="challan v2 (Excel) + FTR")
+    # The same facts the printed challan reads (icon_challan_form). The copy
+    # used to print the challan's AVERAGE wattage for a mixed load (624.5),
+    # round kW to two places (44.38 where v1 says 44.375) and leave Ship to
+    # blank when it is the buyer - DECISIONS 2: one line per model with its
+    # own wattage, kW exact, never an average.
+    facts = cform.print_context(ch, b["boxes"], goods_rows, inv, no, "")
 
     head = Font(bold=True, color="FFFFFF")
     fill = PatternFill("solid", fgColor="1B4D7A")
@@ -4611,16 +4626,26 @@ def challan_excel(fy, seq):
     for k, v in (("Challan No.", no), ("Challan Date", ch["challan_date"]),
                  ("Invoice No.", ch["invoice_no"]), ("IRN", ch["irn"]),
                  ("Buyer", ch["buyer_name"]), ("Buyer GSTIN", ch["buyer_gstin"]),
-                 ("Consignee", ch["consignee_name"]),
-                 ("Ship to", ch["consignee_address"]),
+                 ("Consignee", facts["cons"]["name"] or None),
+                 ("Ship to", facts["cons"]["address"] or None),
                  ("Transporter", ch["transporter"]),
                  ("Vehicle No.", ch["vehicle_no"]), ("LR / GR No.", ch["lr_no"]),
                  ("Driver", ch["driver_name"]),
-                 ("Model", ch["model"]), ("Wattage", ch["wattage"]),
-                 ("Quantity", len(sers)),
-                 ("KW", round((ch["wattage"] or 0) * len(sers) / 1000.0, 2))):
+                 ("Quantity", facts["qty"]),
+                 ("KW", float(sum((g["_kw"] for g in facts["goods"]), Decimal(0))))):
         ws.cell(r, 1, k).font = key
         ws.cell(r, 2, v)
+        r += 1
+    r += 1
+    ws.cell(r, 1, "Goods").font = key
+    r += 1
+    for c, h in enumerate(["S.No.", "Description", "UOM", "Wattage", "Qty", "kW"], start=1):
+        cell = ws.cell(r, c, h); cell.font = head; cell.fill = fill
+    r += 1
+    for g in facts["goods"]:
+        for c, v in enumerate([g["no"], g["description"], "NOS", g["wattage"], g["qty"],
+                               float(g["_kw"])], start=1):
+            ws.cell(r, c, v).border = thin
         r += 1
     r += 1
     ws.cell(r, 1, "Boxes").font = key

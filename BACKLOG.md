@@ -7306,3 +7306,8 @@ commit.
 - **Cause:** both defaulted to the calendar date and filtered the date printed on the document (`challan_date`, which Edit can change; `gp_date`). DECISIONS 8: counted by when it happened, on the factory day.
 - **Change:** the loading list filters the factory day of the issue time, the gate pass list of `created_at`; both open and Reset on the factory day; the pickers still stop at the calendar date. The list shows when each challan was issued.
 - **Test:** `test_loading_ui.py` (browser clock pinned to 01:00 / 11:00). From `audit/A5-load-gatepass-print` fec2d5f.
+
+### The challan's Excel copy printed an average wattage and a rounded kW
+- **Found** by A5: a 625 W + 620 W truck read "Wattage 624.5" and kW 44.38 where the printed challan says 44.375; Consignee / Ship to blank when the same party (DECISIONS 2: one goods line per model, kW exact, never an average; both parties named).
+- **Change:** one goods helper for both documents; the Excel reads `print_context`: a goods table one line per model (-DCR), exact kW, the consignee / ship-to v1 prints. Pallet table and FTR sheet unchanged.
+- **Test:** `test_challan_excel.py` (new, 3). From `audit/A5-load-gatepass-print` 1ee1806.
