@@ -525,6 +525,19 @@ def t_submit_after_repack():
     assert state_of(serial(0)) == "dispatched"
 
 
+@test("submitting a draft answers with the quantity it dispatched, like Create - "
+      "the screen said 'undefined serial(s) now dispatched' from a body without it")
+def t_submit_answers_qty():
+    c = setup()
+    b = packed_box(c, [0, 1, 2])
+    inv = make_invoice(qty=3)
+    chid = c.post("/api/challan", json={"action": "draft", "boxes": [b],
+                                        "invoice_id": inv}).get_json()["challan_id"]
+    d = c.post("/api/challan/%d/submit" % chid, json={}).get_json()
+    assert d["ok"] and d["qty"] == 3, d
+    assert "kw" in d and d.get("suffix") is None, d
+
+
 @test("the sequence drawn at draft is reused at submit, never redrawn")
 def t_draft_seq_reused_at_submit():
     c = setup()

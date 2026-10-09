@@ -7037,3 +7037,12 @@ commit.
   27/27, `test_dashboards_ist` 13/13, `test_fqc_dashboard.js` 24/24,
   `test_dashboard_cascade.js` 15/15, `test_screens.js`, `test_trace.js`,
   `test_production.py`.
+
+
+### Create Challan > draft > Create said "undefined serial(s) now dispatched"
+- **Found** on the audit's golden path (agent A7, browser): submitting a saved draft
+  toasted "IS-09.10.2026/0001 created - undefined serial(s) now dispatched".
+- **Cause:** `/api/challan/<id>/submit` answered without `qty` (or `kw`, `suffix`),
+  which `chHandleResult()` reads for Create and submit alike.
+- **Change:** submit answers with the same shape Create does.
+- **Test:** `test_challan.py` +1 (71 passed). From `audit/A7-golden-volume` 650210c.

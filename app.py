@@ -3373,8 +3373,12 @@ def api_challan_submit(challan_id):
                  {"fy": ch["fy"], "seq": ch["seq"]})
     no = db.render_challan_no(datetime.date.fromisoformat(ch["challan_date"]),
                               ch["seq"], ch["suffix"])
+    # the same shape Create answers with: the screen says "N serial(s) now
+    # dispatched" from qty, and names the version by its suffix - without
+    # them a submitted draft read "undefined serial(s) now dispatched"
     return jsonify({"ok": True, "challan_id": challan_id, "fy": ch["fy"],
-                    "seq": ch["seq"], "no": no, "status": "issued"})
+                    "seq": ch["seq"], "suffix": ch["suffix"], "no": no,
+                    "status": "issued", "qty": chk["qty"], "kw": chk["kw"]})
 
 
 @app.route("/api/challan/<int:challan_id>/discard", methods=["POST"])
