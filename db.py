@@ -1512,6 +1512,14 @@ def provisional_pending(cur, n=500):
     and stays so. Once Quality has graded a rejected module (or it moved on)
     it is not waiting for anything, and a decision that has been flagged to
     Needs Review is Needs Review's, not this list's.
+
+    A decision made WITH the Sun Simulator's reading on screen is not waiting
+    for it, whatever else was missing: mode is 'provisional' whenever any
+    source is not OK, the EL included, and a reject made at 630 W while the
+    EL image was still unfiled used to be "reconciled" at once - flagged as
+    "decided without the reading; it says pass" and moved out of Quality's
+    queue onto hold. The EL never gates a decision, so there is nothing to
+    reconcile on it.
     """
     if cur is None:
         return []
@@ -1522,6 +1530,7 @@ def provisional_pending(cur, n=500):
         JOIN serial s ON s.serial = f.serial
                      AND s.build_instance = COALESCE(f.build_instance, 1)
         WHERE f.mode = 'provisional' AND f.superseded_by IS NULL
+          AND COALESCE(f.ss_state, '') <> 'OK'
           AND s.state IN ('hold', 'rejected')
           AND NOT EXISTS (SELECT 1 FROM review_item r
                           WHERE r.type = 'provisional_mismatch'

@@ -979,6 +979,28 @@ def t_resolve_provisional_mismatch():
         assert r.status_code == 400, "resolved twice"
 
 
+@test("a reject decided WITH the Sun Simulator reading - only the EL image "
+      "missing - waits for nothing: not on Hold, never flagged, it stays in "
+      "Quality's queue")
+def t_reject_with_reading_is_not_reconciled():
+    noel = "ICON625R1290220488"                   # 630 W read, no EL image at all
+    c = setup(ss_rows=ROWS + [row(noel, "2026-09-07 10:20:00", "630.0")])
+    with store.conn() as (cx, cur):
+        store.insert(cur, "serial", {
+            "serial": noel, "build_instance": 1, "model": "ISEN625-G12R",
+            "wattage": WATT, "customer": "STOCK", "dcr": "DCR",
+            "format_version": 2, "date_produced": "2026-09-07",
+            "shift": 1, "sequence": 488, "state": "planned"})
+    r = c.post("/api/fqc", json={"serial": noel, "outcome": "reject",
+                                 "defect": "Frame Dent"})
+    assert r.status_code == 200 and r.get_json()["mode"] == "provisional", r.get_json()
+    h = hold(c)
+    assert h["rows"] == [] and h["reconciled"]["flagged"] == 0, h
+    assert serial_row(noel)["state"] == "rejected", serial_row(noel)
+    q = [i["serial"] for i in c.get("/api/review").get_json() if i["type"] == "quality_grade"]
+    assert noel in q, q
+
+
 @test("a provisional REJECT is confirmed by agreeing evidence - and sent to "
       "Needs Review if the evidence would now make it a pass")
 def t_provisional_reject_reconciles():

@@ -7204,3 +7204,14 @@ commit.
   next restart on this code.**
 - **Test:** `test_review.py` +1, `test_fqc.py` mismatch case (one live record,
   inspected == 1). From `audit/A2-fqc-quality` 9f98e70.
+
+### Hold & Deviation "reconciled" a decision that had the Sun Simulator reading
+- **Found** by A2 (ICON625R12A0830039): a reject made at 630 W while the EL image was not
+  filed yet was mode `provisional`; the next read of Hold & Deviation flagged it as a
+  provisional mismatch ("decided reject without the reading; it says pass") and moved the
+  module from `rejected` to `hold`, out of Quality's queue.
+- **Cause:** `provisional_pending` took every provisional decision, while the reconcile
+  only checks the Sun Simulator - the EL never gates a decision.
+- **Change:** a decision whose snapshotted `ss_state` was OK waits for nothing. Items
+  already raised this way stay for Quality (keep the decision).
+- **Test:** `test_fqc.py` +1. From `audit/A2-fqc-quality` a68f18b.
