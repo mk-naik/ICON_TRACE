@@ -7046,3 +7046,14 @@ commit.
   which `chHandleResult()` reads for Create and submit alike.
 - **Change:** submit answers with the same shape Create does.
 - **Test:** `test_challan.py` +1 (71 passed). From `audit/A7-golden-volume` 650210c.
+
+### Search & Trace: the Quality Decision step showed FQC's time
+- **Found** on the golden path (A7): a reject FQC'd at 05:52:47 and returned A by
+  Quality at 05:54:26 showed 05:52:47 on its Quality Decision step - a module that
+  waits days in the queue would be days wrong.
+- **Cause:** `api_trace_serial` tagged the step with the FQC record's `at`, although
+  `quality_grade()` stores `quality_at`.
+- **Change:** the step carries `quality_at` (the record's time only for a row from
+  before `quality_at` existed).
+- **Test:** `test_fqc.py` journey test backdates the FQC decision and asserts the step
+  carries `quality_at` (fails before; 54 passed after). From `audit/A7-golden-volume` e7615f1.

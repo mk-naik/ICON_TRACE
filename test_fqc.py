@@ -596,10 +596,19 @@ def t_journey_reads():
     for j in c.get("/api/trace/serial/" + SHORT).get_json()["journey"]:
         assert "None" not in str(j["value"]), j
 
+    # Quality decides later than FQC did: the step carries QUALITY's time
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE fqc_record SET at='2026-09-07T10:00:00' WHERE serial=%s",
+                    (SHORT,))
     c.post("/api/quality", json={"serial": SHORT, "grade": "GY",
                                  "note": "edge chip, cosmetic"})
     q = stage(SHORT, "Quality Decision")
     assert q["value"] == "GY" and q["done"] is True, q
+    with store.conn() as (cx, cur):
+        qa = store.one(cur, "SELECT quality_at FROM fqc_record WHERE serial=%s "
+                            "AND quality_grade IS NOT NULL", (SHORT,))["quality_at"]
+    assert qa and q["tag"] == qa and q["tag"] != "2026-09-07T10:00:00", \
+        "the Quality Decision step shows FQC's time, not Quality's: %s" % q
 
     assert stage(CRACKED, "FQC")["done"] is False, "never judged, but shown as done"
 

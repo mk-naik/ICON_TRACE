@@ -8185,8 +8185,12 @@ def api_trace_serial(serial):
             else:
                 q_value, q_tone = "—", "t-mute"
                 q_detail = ["awaiting a quality decision"]
+            # the time QUALITY decided (quality_at), not FQC's - the step read
+            # the FQC decision's time, minutes or days before Quality looked
             journey.append({"stage": "Quality Decision", "value": q_value, "done": bool(f["quality_grade"]),
-                            "detail": q_detail, "tag": (f["at"] if f["quality_grade"] else "pending"), "tone": q_tone})
+                            "detail": q_detail,
+                            "tag": ((f.get("quality_at") or f["at"]) if f["quality_grade"] else "pending"),
+                            "tone": q_tone})
     elif cancelled_standing:
         # Nothing stands: the last live grade was cancelled and the module
         # reverted to 'produced' (api_fqc_cancel). Say what it WAS and who
