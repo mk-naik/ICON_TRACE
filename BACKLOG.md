@@ -7155,3 +7155,12 @@ commit.
   change is already in. Its test is kept: `test_gatepass.py` +1 (after the module gate
   pass is cancelled, list and detail read gp_count 0, not locked, and edit opens).
   From `audit/A5-load-gatepass-print` 46d4de8 (test only).
+
+### The challan detail's "Verify loading" did nothing
+- **Found** by A5 (Chromium): it closed the panel, stayed on the Challan list and
+  toasted "Challan #6 - find its boxes on this screen by box number" (the internal id,
+  and no such screen) - a button that did nothing.
+- **Cause:** `clVerifyLoading()` called `go('loading')`, a view that does not exist.
+- **Change:** it opens that challan's session (`ldOpenSession`), offered only to an
+  account that can view Loading Verification.
+- **Test:** `test_loading_ui.py` +1 (Chromium). From `audit/A5-load-gatepass-print` e1dc88c.

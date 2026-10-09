@@ -12067,9 +12067,11 @@ function wireFqcAnomalies() {
          what creates one now (api_loading_submit), automatically, from
          the challan's own data; nothing is left for a person to create
          manually, so there is nothing left for this screen to open. */
-      actions += '<button class="btn btn-ghost btn-sm" ' +
-        'onclick="clVerifyLoading(' + ch.challan_id + ')" ' +
-        'title="Open Loading Verification with these boxes">Verify loading</button> ';
+      if (typeof can !== 'function' || can('loadver')) {
+        actions += '<button class="btn btn-ghost btn-sm" ' +
+          'onclick="clVerifyLoading(' + ch.challan_id + ')" ' +
+          'title="Open this challan\'s Loading Verification session">Verify loading</button> ';
+      }
     }
 
     var boxRows = (d.boxes || []).map(function (b) {
@@ -12192,18 +12194,16 @@ function wireFqcAnomalies() {
   };
 
   window.clVerifyLoading = function (id) {
-    /* Navigate to Loading Verification.  The existing screen uses /loading
-       which lists boxes by scanning; this just navigates there and leaves
-       the scanning to the operator.  A future pass can pre-populate. */
+    /* This challan's own Loading Verification session - the one its row on
+       the Loading Verification list opens. It used to go('loading'), a
+       screen that does not exist: nothing opened, and a toast named the
+       internal id ("Challan #6 - find its boxes on this screen"). */
     clCloseDetail();
-    if (typeof go === 'function') {
-      var navEl = document.querySelector('[data-view="loading"]') ||
-                  document.querySelector('[href="#loading"]');
-      go('loading', navEl);
+    if (typeof can === 'function' && !can('loadver')) {
+      if (typeof toast === 'function') toast('Loading Verification is not one of your screens.');
+      return;
     }
-    if (typeof toast === 'function') {
-      toast('Challan #' + id + ' — find its boxes on this screen by box number.');
-    }
+    if (typeof ldOpenSession === 'function') ldOpenSession(id);
   };
 
   /* Load wiring for the challan list screen when navigated to */

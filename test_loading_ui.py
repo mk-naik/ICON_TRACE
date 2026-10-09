@@ -76,6 +76,24 @@ def t_contents_check_enter():
         assert not pg.errors, pg.errors
 
 
+@test("the challan detail's Verify loading opens THAT challan's loading session "
+      "(it called go('loading'), a screen that does not exist, and stayed put)")
+def t_challan_detail_verify_loading():
+    c = T.setup()
+    chid = issued(c, [4, 5], "INV-UI-VERIFY")
+    with H.browser() as b:
+        pg = H.open_page(b, role="Dispatch Operator")
+        pg.evaluate("go('challan', document.querySelector('.nav-i[data-v=challan]'))")
+        pg.wait_for_timeout(800)
+        pg.evaluate("clOpenDetail(%d)" % chid)
+        pg.click("#clDetailCard >> text=Verify loading")
+        pg.wait_for_selector("#v-loadsession.on", timeout=5000)
+        pg.wait_for_function("document.querySelectorAll('#lsRows tr').length === 1", timeout=5000)
+        no = c.get("/api/loading/%d" % chid).get_json()["no"]
+        assert no in pg.inner_text("#lsSubtitle"), pg.inner_text("#lsSubtitle")
+        assert not pg.errors, pg.errors
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0
