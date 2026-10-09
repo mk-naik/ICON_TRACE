@@ -164,6 +164,10 @@ var code = src.substring(from, to).replace(/\.catch\(/g, "['catch'](");
 var _ldFrom = src.indexOf('  function _localDate(');
 var _ldTo = src.indexOf(String.fromCharCode(10) + '  }', _ldFrom) + 4;
 eval(src.substring(_ldFrom, _ldTo));
+/* _shiftDay() too - the list opens on the factory day (DECISIONS 8) */
+var _sdFrom = src.indexOf('  function _shiftDay(');
+var _sdTo = src.indexOf(String.fromCharCode(10) + '  }', _sdFrom) + 4;
+eval(src.substring(_sdFrom, _sdTo));
 eval(code);
 
 /* ---- harness ------------------------------------------------------------ */

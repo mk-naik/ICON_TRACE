@@ -145,6 +145,14 @@ def statuses_of(chid):
     return {r["box_no"]: r["loading_status"] for r in rows}
 
 
+def issued_day(cur, chid):
+    """The factory day a challan was issued on - what the landing list's dates
+    count by (DECISIONS 8), not the date printed on it: a test run at 01:00
+    issues on the day before."""
+    return store.one(cur, "SELECT date(COALESCE(issued_at, created_at), '-6 hours') "
+                          "AS d FROM challan WHERE challan_id=%s", (chid,))["d"]
+
+
 def gatepasses_for(chid):
     with store.conn() as (cx, cur):
         return [dict(r) for r in store.rows(
@@ -489,8 +497,7 @@ def t_landing_shows_loaded_and_readonly_reopen():
     c.post("/api/loading/%d/submit" % chid, json={})
 
     with store.conn() as (cx, cur):
-        d = store.one(cur, "SELECT challan_date FROM challan WHERE "
-                          "challan_id=%s", (chid,))["challan_date"]
+        d = issued_day(cur, chid)
     r = c.get("/api/loading/challans?from=%s&to=%s" % (d, d))
     row = [x for x in r.get_json()["challans"]
           if x["challan_id"] == chid][0]
@@ -517,8 +524,7 @@ def t_landing_aggregate_status():
     inv = make_invoice(qty=4, invoice_no="INV-LOAD-AGG")
     chid = make_issued_challan(c, [b1, b2], inv)
     with store.conn() as (cx, cur):
-        d = store.one(cur, "SELECT challan_date FROM challan WHERE "
-                          "challan_id=%s", (chid,))["challan_date"]
+        d = issued_day(cur, chid)
 
     r = c.get("/api/loading/challans?from=%s&to=%s" % (d, d))
     row = [x for x in r.get_json()["challans"] if x["challan_id"] == chid][0]
@@ -549,8 +555,7 @@ def t_landing_excludes_cancelled_and_superseded():
     assert edit.status_code == 200, edit.get_json()
 
     with store.conn() as (cx, cur):
-        d = store.one(cur, "SELECT challan_date FROM challan WHERE "
-                          "challan_id=%s", (cancelled_id,))["challan_date"]
+        d = issued_day(cur, superseded_id)
     r = c.get("/api/loading/challans?from=%s&to=%s" % (d, d))
     ids = {x["challan_id"] for x in r.get_json()["challans"]}
     assert cancelled_id not in ids, "a cancelled challan appeared on the landing list"

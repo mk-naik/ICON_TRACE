@@ -2695,19 +2695,26 @@ def _loading_agg_status(n_total, n_saved, n_loaded):
 def api_loading_challans():
     """One row per LIVE challan - issued, not cancelled, not a superseded
     original, the same filter Challan's own issued-list already applies.
-    Defaults to today; a date range, search and aggregate-status filter are
-    all supported, same as every other list screen.
+    A date range, search and aggregate-status filter are all supported, same
+    as every other list screen.
+
+    The dates are FACTORY days of when the challan was issued (DECISIONS 8:
+    a filter counts by when it happened, 06:00 to 06:00), defaulting to the
+    current one - not the date printed on it. At 05:53 on 9 Oct a challan
+    issued at 23:00 on 8 Oct, in the same C shift, was waiting to be loaded
+    and the list (calendar 9 Oct, by challan_date) did not show it.
     """
     from_d = (request.args.get("from") or "").strip()
     to_d = (request.args.get("to") or "").strip()
     if not from_d and not to_d:
-        from_d = to_d = clock.today().isoformat()
+        from_d = to_d = clock.shift_day().isoformat()
+    issued_day = clock.shift_day_sql("COALESCE(c.issued_at, c.created_at)")
     q = (request.args.get("q") or "").strip()
     status = (request.args.get("status") or "").strip()
 
     with store.conn() as (cx, cur):
         sql = ("SELECT c.challan_id, c.fy, c.seq, c.suffix, c.challan_date, "
-               "c.invoice_no, c.buyer_name, "
+               "c.invoice_no, c.buyer_name, c.issued_at, "
                "SUM(CASE WHEN cb.loading_status='pending' THEN 1 ELSE 0 END) AS n_pending, "
                "SUM(CASE WHEN cb.loading_status='saved' THEN 1 ELSE 0 END) AS n_saved, "
                "SUM(CASE WHEN cb.loading_status='loaded' THEN 1 ELSE 0 END) AS n_loaded, "
@@ -2716,10 +2723,10 @@ def api_loading_challans():
                "WHERE c.status='issued'")
         params = []
         if from_d:
-            sql += " AND c.challan_date>=%s"
+            sql += " AND " + issued_day + ">=%s"
             params.append(from_d)
         if to_d:
-            sql += " AND c.challan_date<=%s"
+            sql += " AND " + issued_day + "<=%s"
             params.append(to_d)
         if q:
             lq = "%" + q + "%"

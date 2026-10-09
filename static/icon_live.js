@@ -12404,7 +12404,10 @@ function wireFqcAnomalies() {
         '</div>' +
       '</div>';
     main.appendChild(sec);
-    var today = _localDate();
+    // The FACTORY day (DECISIONS 8): the list counts challans by when they
+    // were issued, 06:00 to 06:00. At 01:00 it is still C shift of the day
+    // before - a challan issued at 23:00 is on it, waiting to be loaded.
+    var today = _shiftDay();
     ldEl('ldFrom').value = today;
     ldEl('ldTo').value = today;
     // icon_table.js's own search box still hides/shows rows visually;
@@ -12416,8 +12419,8 @@ function wireFqcAnomalies() {
     // does not reach, and stayed as they were.
     var rst = sec.querySelector('[data-role="reset"]');
     if (rst) rst.addEventListener('click', function () {
-      ldEl('ldFrom').value = today;
-      ldEl('ldTo').value = today;
+      ldEl('ldFrom').value = _shiftDay();
+      ldEl('ldTo').value = _shiftDay();
       ldEl('ldStatusFilter').value = '';
       ldLoad();
     });
@@ -12485,7 +12488,12 @@ function wireFqcAnomalies() {
   function ldRenderRow(r) {
     return '<tr>' +
       '<td class="mono">' + fqcEsc(r.challan_no || ('#' + r.challan_id)) + '</td>' +
-      '<td>' + fqcEsc(r.challan_date || '—') + '</td>' +
+      // the challan's own date, and when it was issued - the list counts by
+      // the second (a 09.10 challan issued at 01:00 is C shift of 08.10)
+      '<td>' + fqcEsc(r.challan_date || '—') +
+        (r.issued_at ? ' <div class="hint" style="font-size:11px">issued ' +
+          fqcEsc(String(r.issued_at).slice(8, 10) + '-' + String(r.issued_at).slice(5, 7) +
+                 ' ' + String(r.issued_at).slice(11, 16)) + '</div>' : '') + '</td>' +
       '<td style="font-size:11.5px">' + fqcEsc(r.buyer_name || '—') + '</td>' +
       '<td class="mono">' + fqcEsc(r.invoice_no || '—') + '</td>' +
       '<td class="num">' + (r.n_loaded || 0) + ' / ' + (r.n_total || 0) + '</td>' +
@@ -13448,6 +13456,10 @@ window.gpSetKind = function(k) {
     var main = document.querySelector('.main');
     if (!main) return;
     var today = _localDate();
+    // opens on the FACTORY day (DECISIONS 8), which the server counts the
+    // dates by: at 01:00 it is C shift of the day before. The pickers stop
+    // at the calendar date, as the server's own check does.
+    var fday = _shiftDay();
     var sec = document.createElement('section');
     sec.className = 'view';
     sec.id = 'v-gp-list';
@@ -13484,8 +13496,8 @@ window.gpSetKind = function(k) {
         '</table></div>' +
       '</div></div>';
     main.appendChild(sec);
-    gpLEl('gpLFrom').value = today;
-    gpLEl('gpLTo').value = today;
+    gpLEl('gpLFrom').value = fday;
+    gpLEl('gpLTo').value = fday;
     var newBtn = document.getElementById('gpNewBtn');
     if (newBtn) newBtn.onclick = function () {
       window.__gpEditing = null;
@@ -13507,9 +13519,9 @@ window.gpSetKind = function(k) {
   };
 
   window.gpListReset = function () {
-    var today = _localDate();
-    if (gpLEl('gpLFrom')) gpLEl('gpLFrom').value = today;
-    if (gpLEl('gpLTo')) gpLEl('gpLTo').value = today;
+    var fday = _shiftDay();
+    if (gpLEl('gpLFrom')) gpLEl('gpLFrom').value = fday;
+    if (gpLEl('gpLTo')) gpLEl('gpLTo').value = fday;
     if (gpLEl('gpLSearch')) gpLEl('gpLSearch').value = '';
     if (gpLEl('gpLCustomer')) gpLEl('gpLCustomer').value = '';
     gpListLoad();

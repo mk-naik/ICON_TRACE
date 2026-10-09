@@ -1843,9 +1843,15 @@ def gatepass_status(gp):
 def gatepasses_list(cur, q=None, date_from=None, date_to=None, customer=None, n=500):
     """The landing list: module-linked and standalone gate passes together,
     one feed, newest first - never two separate queries the screen has to
-    merge itself."""
+    merge itself.
+
+    date_from / date_to are FACTORY days of when the gate pass was made
+    (DECISIONS 8: 06:00 to 06:00), not the calendar date printed on it - a
+    gate pass made at 01:00 is C shift of the day before, with the rest of
+    that night's dispatch."""
     if cur is None:
         return []
+    made_day = clock.shift_day_sql("g.created_at")
     sql = ("SELECT g.*, "
            "(SELECT COUNT(*) FROM gatepass_item gi WHERE gi.gatepass_id=g.gp_id) "
            # Round 34: a cancelled gate pass leaves the working list
@@ -1853,9 +1859,9 @@ def gatepasses_list(cur, q=None, date_from=None, date_to=None, customer=None, n=
            "WHERE 1=1 AND g.status<>'cancelled'")
     params = []
     if date_from:
-        sql += " AND g.gp_date >= %s"; params.append(date_from)
+        sql += " AND " + made_day + " >= %s"; params.append(date_from)
     if date_to:
-        sql += " AND g.gp_date <= %s"; params.append(date_to)
+        sql += " AND " + made_day + " <= %s"; params.append(date_to)
     if customer:
         m_sql, m_args = customer_match("g.party", customer)   # any case
         sql += " AND " + m_sql; params.extend(m_args)

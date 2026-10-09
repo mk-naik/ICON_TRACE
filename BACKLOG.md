@@ -7300,3 +7300,9 @@ commit.
 - **Found** by A5: Reset emptied only the search box.
 - **Change:** Reset also puts From / To back to the day the list opens on and Status to All.
 - **Test:** `test_loading_ui.py` +1. From `audit/A5-load-gatepass-print` aa42f60.
+
+### Loading Verification and Gate Pass lists opened on the calendar day after midnight
+- **Found** by A5 at 05:53 on 9 Oct (C shift of 8 Oct): the Loading list did not show a challan issued 23:00 on 8 Oct and waiting to be loaded; the Gate Pass list the same.
+- **Cause:** both defaulted to the calendar date and filtered the date printed on the document (`challan_date`, which Edit can change; `gp_date`). DECISIONS 8: counted by when it happened, on the factory day.
+- **Change:** the loading list filters the factory day of the issue time, the gate pass list of `created_at`; both open and Reset on the factory day; the pickers still stop at the calendar date. The list shows when each challan was issued.
+- **Test:** `test_loading_ui.py` (browser clock pinned to 01:00 / 11:00). From `audit/A5-load-gatepass-print` fec2d5f.

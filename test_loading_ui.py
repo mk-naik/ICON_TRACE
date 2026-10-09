@@ -153,6 +153,102 @@ def t_list_reset():
         assert not pg.errors, pg.errors
 
 
+def open_at(b, when, role="Dispatch Operator"):
+    """A signed-in page whose clock reads `when` (IST) from its first script."""
+    import auth_test_helper as AUTH
+    ctx = b.new_context(viewport={"width": 1500, "height": 950})
+    ctx.clock.set_fixed_time(when)
+    ctx.add_cookies([{"name": "icon_sid", "value": AUTH.make_session_id(role=role),
+                      "domain": "127.0.0.1", "path": "/"}])
+    pg = ctx.new_page()
+    pg.errors = []
+    pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    pg.goto(H.base_url() + "/")
+    pg.wait_for_selector("#app.on", timeout=15000)
+    pg.wait_for_timeout(800)
+    return pg
+
+
+def stamp(chid, issued_at, challan_date):
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE challan SET issued_at=%s, challan_date=%s WHERE challan_id=%s",
+                    (issued_at, challan_date, chid))
+
+
+@test("at 01:00 the list opens on the FACTORY day and shows a challan issued at "
+      "23:00 (same C shift) and one issued at 00:30 - counted by when they were "
+      "issued (DECISIONS 8); at 11:00 it opens on the new day, and Reset goes back "
+      "to it from any filter")
+def t_list_factory_day_and_reset():
+    import datetime
+    c = T.setup()
+    late = issued(c, [6, 7], "INV-UI-NIGHT1")
+    after_midnight = issued(c, [8, 9], "INV-UI-NIGHT2")
+    stamp(late, "2026-10-08T23:00:00", "2026-10-08")
+    stamp(after_midnight, "2026-10-09T00:30:00", "2026-10-09")
+    nos = {cid: c.get("/api/loading/%d" % cid).get_json()["no"] for cid in (late, after_midnight)}
+    ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    with H.browser() as b:
+        pg = open_at(b, datetime.datetime(2026, 10, 9, 1, 0, tzinfo=ist))
+        pg.evaluate("go('loadver', document.querySelector('.nav-i[data-v=loadver]'))")
+        pg.wait_for_function("document.querySelectorAll('#ldTableBody tr td.mono').length >= 2",
+                             timeout=8000)
+        assert pg.input_value("#ldFrom") == "2026-10-08" == pg.input_value("#ldTo"),             (pg.input_value("#ldFrom"), pg.input_value("#ldTo"))
+        rows = listed(pg)
+        assert all(any(n in r for r in rows) for n in nos.values()), (rows, nos)
+        # every filter moved, then Reset
+        pg.fill("#ldFrom", "2026-09-01")
+        pg.select_option("#ldStatusFilter", "pending")
+        pg.fill("#v-loading-list [data-role=search]", "zzz-nothing")
+        pg.click("#v-loading-list [data-role=reset]")
+        pg.wait_for_timeout(900)
+        assert pg.input_value("#ldFrom") == "2026-10-08", pg.input_value("#ldFrom")
+        assert pg.input_value("#ldStatusFilter") == "", pg.input_value("#ldStatusFilter")
+        assert pg.input_value("#v-loading-list [data-role=search]") == ""
+        assert len(listed(pg)) == 2, listed(pg)
+        # a search on a value only the Date column holds: the badge agrees with the rows
+        pg.fill("#v-loading-list [data-role=search]", "2026-10-08")
+        pg.wait_for_timeout(300)
+        badge = pg.inner_text("#ldCount").lower()
+        assert len(listed(pg)) == 1 and badge.startswith("1 of 2"), (listed(pg), badge)
+        assert not pg.errors, pg.errors
+        pg.context.close()
+
+        pg = open_at(b, datetime.datetime(2026, 10, 9, 11, 0, tzinfo=ist))
+        pg.evaluate("go('loadver', document.querySelector('.nav-i[data-v=loadver]'))")
+        pg.wait_for_timeout(1200)
+        assert pg.input_value("#ldFrom") == "2026-10-09", pg.input_value("#ldFrom")
+        assert not [r for r in listed(pg) if r.startswith("IS-")], listed(pg)
+        pg.context.close()
+
+
+@test("the Gate Pass list opens on the factory day too: at 01:00 a gate pass made "
+      "at 00:40 (dated the 9th) is on the 8th's list, with that night's dispatch")
+def t_gatepass_list_factory_day():
+    import datetime
+    c = T.setup()
+    r = c.post("/api/gatepass", json={"kind": "NRGP", "party": "Unit-1 Stores",
+                                      "items": [{"description": "Cell stock", "unit": "Kg", "qty": 4}]})
+    assert r.status_code == 200, r.get_json()
+    gp_no = r.get_json()["gp_no"]
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE gatepass SET created_at='2026-10-09T00:40:00', gp_date='2026-10-09' "
+                    "WHERE gp_no=%s", (gp_no,))
+    ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    with H.browser() as b:
+        pg = open_at(b, datetime.datetime(2026, 10, 9, 1, 0, tzinfo=ist))
+        pg.evaluate("go('gp', document.querySelector('.nav-i[data-v=gp]'))")
+        pg.wait_for_timeout(1200)
+        assert pg.input_value("#gpLFrom") == "2026-10-08" == pg.input_value("#gpLTo")
+        assert gp_no in pg.inner_text("#gpLTableBody"), pg.inner_text("#gpLTableBody")
+        pg.fill("#gpLFrom", "2026-09-01")
+        pg.evaluate("gpListReset()")
+        pg.wait_for_timeout(800)
+        assert pg.input_value("#gpLFrom") == "2026-10-08", pg.input_value("#gpLFrom")
+        assert not pg.errors, pg.errors
+        pg.context.close()
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0

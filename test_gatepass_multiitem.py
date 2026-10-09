@@ -191,7 +191,9 @@ def t_date_filter_refuses_future():
     r2 = c.get("/api/gatepasses?from=" + tomorrow)
     assert r2.status_code == 400, r2.get_json()
 
-    today = datetime.date.today().isoformat()
+    # the factory day it was made on (DECISIONS 8) - at 01:00, the day before
+    import icon_clock
+    today = icon_clock.shift_day().isoformat()
     r3 = c.get("/api/gatepasses?from=" + today + "&to=" + today)
     assert r3.status_code == 200, r3.get_json()
     assert len(r3.get_json()["rows"]) == 1
