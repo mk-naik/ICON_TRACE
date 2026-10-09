@@ -7174,3 +7174,16 @@ commit.
 - **Change:** `_reject_needs_defect()` asks what `record_fqc` asks; an unmapped folder
   needs an operator defect and the refusal names the folder.
 - **Test:** `test_fqc.py` +1. From `audit/A2-fqc-quality` 76e96d8.
+
+### A rescan of a packed module skipped the FQC rules - a short module came out grade A
+- **Found** by A2 (ICON625R12A0830021): a GY module measuring 620.5 W (nameplate 625),
+  rescanned as a PASS, was recorded as a pass grade A, and the Incharge's "Keep the
+  rescanned" made it a packable A (DECISIONS 5: a reading below wattage can never be
+  overruled). A rescan reject needed no defect; a stale screen was not told the reading
+  had moved; a rescan passed with the Sun Simulator unreachable was kept graded A blind.
+- **Cause:** `/api/fqc` returned into `_handle_duplicate_scan` before the token, pass
+  route and defect checks; keeping the rescan set `graded` for any pass.
+- **Change:** the rescan is judged by the same rules as a first decision; a provisional
+  rescan pass carries no grade and, kept, puts the module on hold like any held pass.
+  `test_review.py`'s rescan rejects now name a defect, as every rejection must.
+- **Test:** `test_review.py` +3. From `audit/A2-fqc-quality` e7c7388.

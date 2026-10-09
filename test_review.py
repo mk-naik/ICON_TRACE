@@ -241,7 +241,7 @@ def t_disagree_creates_item():
     c = setup()
     pass_and_pack(c, 1)
     add_rescan_row(1, "2026-09-09 12:00:00", "600.0")   # below wattage: reject
-    r = c.post("/api/fqc", json={"serial": serial(1), "outcome": "reject"},
+    r = c.post("/api/fqc", json={"serial": serial(1), "outcome": "reject", "defect": "No Power"},
                headers=as_role(c, "FQC Operator"))
     assert r.status_code == 200, r.get_json()
     d = r.get_json()
@@ -259,6 +259,77 @@ def t_disagree_creates_item():
     assert serial_row(serial(1))["grade"] == "A"
 
 
+@test("a rescan is judged by the same rules as a first decision: a PASS below "
+      "the wattage is refused, so a GY module that measured short can never "
+      "come out of Needs Review as grade A")
+def t_rescan_pass_obeys_the_floor():
+    c = setup()
+    s = serial(4)
+    add_rescan_row(4, "2026-09-09 11:00:00", "610.0")     # measures short
+    AUTH.test_login(c)
+    assert c.post("/api/fqc", json={"serial": s, "outcome": "reject",
+                                    "defect": "Low Power"}).status_code == 200
+    r = c.post("/api/review/resolve", json={"type": "quality_grade", "id": s,
+               "grade": "GY", "reason": "610 W"}, headers=as_role(c, "Quality"))
+    assert r.status_code == 200, r.get_json()
+    AUTH.test_login(c)
+    b = c.post("/api/box/open", json={"grade": "GY", "model": MODEL, "capacity": 1}).get_json()
+    assert c.post("/api/box/%d/scan" % b["box_id"], json={"serial": s}).status_code == 200
+    assert c.post("/api/box/%d/close" % b["box_id"], json={}).status_code == 200
+
+    r = c.post("/api/fqc", json={"serial": s, "outcome": "pass"},
+               headers=as_role(c, "FQC Operator"))
+    assert r.status_code == 400 and "cannot be passed" in r.get_json()["why"], r.get_json()
+    with store.conn() as (cx, cur):
+        n = store.one(cur, "SELECT COUNT(*) AS n FROM review_item WHERE serial=%s "
+                           "AND type='duplicate_scan'", (s,))["n"]
+    assert n == 0, "a pass the floor refuses was flagged for someone to keep"
+    assert (serial_row(s)["state"], serial_row(s)["grade"]) == ("packed", "GY")
+
+
+@test("a rescan REJECT needs a defect, exactly as a first rejection does")
+def t_rescan_reject_needs_a_defect():
+    c = setup()
+    pass_and_pack(c, 5)
+    r = c.post("/api/fqc", json={"serial": serial(5), "outcome": "reject"},
+               headers=as_role(c, "FQC Operator"))
+    assert r.status_code == 400 and "defect" in r.get_json()["why"], r.get_json()
+    r = c.post("/api/fqc", json={"serial": serial(5), "outcome": "reject",
+                                 "defect": "Frame Dent"})
+    assert r.status_code == 200 and r.get_json()["agree"] is False, r.get_json()
+
+
+@test("a rescan PASS made with the Sun Simulator unreachable is provisional: "
+      "kept, the module is HELD until the reading arrives - never graded A blind")
+def t_rescan_pass_without_reading_is_held_when_kept():
+    c = setup()
+    s = serial(6)
+    AUTH.test_login(c)
+    assert c.post("/api/fqc", json={"serial": s, "outcome": "reject",
+                                    "defect": "Frame Dent"}).status_code == 200
+    assert c.post("/api/review/resolve", json={"type": "quality_grade", "id": s,
+                  "grade": "GY", "reason": "dent"},
+                  headers=as_role(c, "Quality")).status_code == 200
+    AUTH.test_login(c)
+    b = c.post("/api/box/open", json={"grade": "GY", "model": MODEL, "capacity": 1}).get_json()
+    assert c.post("/api/box/%d/scan" % b["box_id"], json={"serial": s}).status_code == 200
+    assert c.post("/api/box/%d/close" % b["box_id"], json={}).status_code == 200
+    with store.conn() as (cx, cur):
+        db.set_config(cur, {"ss_csv_path": os.path.join(TMP, "gone.csv")})
+    try:
+        r = c.post("/api/fqc", json={"serial": s, "outcome": "pass"},
+                   headers=as_role(c, "FQC Operator"))
+        assert r.status_code == 200 and r.get_json()["agree"] is False, r.get_json()
+        r = c.post("/api/review/resolve", json={"type": "duplicate_scan",
+                   "id": r.get_json()["review_id"], "resolution": "keep_rescanned",
+                   "reason": "dent was dust"}, headers=as_role(c, "Production Incharge"))
+        assert r.status_code == 200, r.get_json()
+        assert (serial_row(s)["state"], serial_row(s)["grade"]) == ("hold", None), serial_row(s)
+    finally:
+        with store.conn() as (cx, cur):
+            db.set_config(cur, {"ss_csv_path": SS})
+
+
 # --------------------------------------------------------------------------
 # 3 - only a Shift Incharge or above resolves it
 # --------------------------------------------------------------------------
@@ -269,7 +340,7 @@ def t_bare_operator_cannot_resolve():
     c = setup()
     pass_and_pack(c, 2)
     add_rescan_row(2, "2026-09-09 12:00:00", "600.0")
-    d = c.post("/api/fqc", json={"serial": serial(2), "outcome": "reject"},
+    d = c.post("/api/fqc", json={"serial": serial(2), "outcome": "reject", "defect": "No Power"},
                headers=as_role(c, "FQC Operator")).get_json()
     review_id = d["review_id"]
 
@@ -338,7 +409,7 @@ def t_keep_rescanned_uses_repack():
 
     # Now raise and resolve a duplicate-scan conflict on box X the same way.
     add_rescan_row(3, "2026-09-09 12:00:00", "600.0")
-    d = c.post("/api/fqc", json={"serial": serial(3), "outcome": "reject"},
+    d = c.post("/api/fqc", json={"serial": serial(3), "outcome": "reject", "defect": "No Power"},
                headers=as_role(c, "FQC Operator")).get_json()
     review_id = d["review_id"]
     out = c.post("/api/review/resolve",
@@ -383,7 +454,7 @@ def t_original_preserved_in_journey():
     before = live_fqc_row(serial(7))
 
     add_rescan_row(7, "2026-09-09 12:00:00", "600.0")
-    d = c.post("/api/fqc", json={"serial": serial(7), "outcome": "reject"},
+    d = c.post("/api/fqc", json={"serial": serial(7), "outcome": "reject", "defect": "No Power"},
                headers=as_role(c, "FQC Operator")).get_json()
     review_id = d["review_id"]
     out = c.post("/api/review/resolve",
@@ -428,7 +499,7 @@ def t_dispatched_admin_only_no_replacement():
     dispatch_one(c, 0)
 
     add_rescan_row(0, "2026-09-09 12:00:00", "600.0")
-    d = c.post("/api/fqc", json={"serial": serial(0), "outcome": "reject"},
+    d = c.post("/api/fqc", json={"serial": serial(0), "outcome": "reject", "defect": "No Power"},
                headers=as_role(c, "FQC Operator")).get_json()
     assert d.get("duplicate_scan") and d.get("agree") is False, d
     review_id = d["review_id"]
@@ -501,7 +572,7 @@ def t_reason_mandatory_everywhere():
     # duplicate_scan
     pass_and_pack(c, 1)
     add_rescan_row(1, "2026-09-09 12:00:00", "600.0")
-    d = c.post("/api/fqc", json={"serial": serial(1), "outcome": "reject"},
+    d = c.post("/api/fqc", json={"serial": serial(1), "outcome": "reject", "defect": "No Power"},
                headers=as_role(c, "FQC Operator")).get_json()
     review_id = d["review_id"]
     r = c.post("/api/review/resolve",
@@ -574,7 +645,7 @@ def t_open_counts_basic():
 
     pass_and_pack(c, 0)
     add_rescan_row(0, "2026-09-09 12:00:00", "600.0")   # disagreeing rescan
-    c.post("/api/fqc", json={"serial": serial(0), "outcome": "reject"},
+    c.post("/api/fqc", json={"serial": serial(0), "outcome": "reject", "defect": "No Power"},
            headers=as_role(c, "FQC Operator"))
     n = open_counts()
     assert n["duplicate_scan"] == 1 and n["total"] == 1, n

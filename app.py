@@ -9622,7 +9622,7 @@ def api_fqc_lookup():
 
 
 def _handle_duplicate_scan(cur, rec, evidence, serial, outcome,
-                           defect_code, note):
+                           defect_code, note, token=None):
     """serial is already 'packed' or 'dispatched' and has just been graded
     again at FQC. Compare what this attempt would record against the FQC
     record packing (or dispatch) already acted on:
@@ -9642,6 +9642,25 @@ def _handle_duplicate_scan(cur, rec, evidence, serial, outcome,
             "The Sun Simulator returned BAD for this serial. It cannot be "
             "judged until the probe, polarity, or junction-box fault is "
             "reviewed."}), 400
+
+    # The same rules as a first judgement: a module that has been packed is
+    # not easier to pass. This path used to skip all of them - a GY module
+    # that measured 620.5 W against 625, rescanned as a pass and "kept" by
+    # the Incharge, came out grade A (audit, 9 Oct 2026).
+    if token and token != _evidence_token(evidence):
+        return jsonify({"ok": False, "why":
+            "The reading changed since this screen loaded — it now reads "
+            "%s. Look again before deciding." % _evidence_summary(evidence)}), 409
+    hold = False
+    if outcome == "pass":
+        route, why_no = _pass_route(evidence)
+        if route is None:
+            return jsonify({"ok": False, "why":
+                "This module cannot be passed: %s" % why_no}), 400
+        hold = route == "provisional"     # kept, it is held until the reading
+    refusal = _reject_needs_defect(evidence, outcome, defect_code)
+    if refusal:
+        return jsonify({"ok": False, "why": refusal}), 400
 
     original = store.one(cur, "SELECT * FROM fqc_record WHERE serial=%s "
                               "AND superseded_by IS NULL "
@@ -9668,7 +9687,7 @@ def _handle_duplicate_scan(cur, rec, evidence, serial, outcome,
     # the caller's job to compute that here.
     new_rec = db.record_fqc(cur, serial, outcome, evidence, actor(), mode,
                             defect=defect_code, note=note,
-                            supersede=False, update_serial=False)
+                            supersede=False, update_serial=False, hold=hold)
     review_id = db.create_review_item(
         cur, "duplicate_scan", serial, fqc_id=original["fqc_id"],
         new_fqc_id=new_rec["fqc_id"],
@@ -10051,7 +10070,8 @@ def api_fqc_grade():
         # silently re-judging a module sitting in a real box.
         if rec.get("state") in ("packed", "dispatched"):
             return _handle_duplicate_scan(cur, rec, evidence, serial, outcome,
-                                          defect_code, note)
+                                          defect_code, note,
+                                          (d.get("evidence_token") or "").strip())
 
         if evidence.get("ss_state") == ev.BAD:
             return jsonify({"ok": False, "why":
@@ -10484,8 +10504,13 @@ def _resolve_duplicate_scan(cur, review_id, resolution, reason):
             new_rec = store.one(cur, "SELECT * FROM fqc_record WHERE fqc_id=%s",
                                 (item["new_fqc_id"],))
             db.supersede_fqc(cur, item["fqc_id"], item["new_fqc_id"])
+            # a rescan passed while the Sun Simulator was unreachable carries
+            # no grade: kept, the module is held until the reading arrives,
+            # exactly like any other provisional pass
+            held = new_rec["outcome"] == "pass" and not new_rec["grade"]
             db.set_serial(cur, serial,
-                          state="graded" if new_rec["outcome"] == "pass"
+                          state="hold" if held else
+                          "graded" if new_rec["outcome"] == "pass"
                           else "rejected", grade=new_rec["grade"])
 
     at = clock.now().isoformat(timespec="seconds")
