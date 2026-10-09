@@ -3084,14 +3084,17 @@ def _challan_precheck(cur, box_ids, invoice_id, exclude_challan_id=None):
                     % (invoice.get("invoice_no") or "This invoice")})
             evu = invoice.get("ewb_valid_upto")
             if evu:
-                try:
-                    if datetime.date.fromisoformat(str(evu)[:10]) < \
-                            clock.today():
-                        blocking.append({"code": "E-EWB", "detail":
-                            "The e-Way Bill expired on %s. The vehicle must "
-                            "not move against it." % evu})
-                except ValueError:
-                    pass
+                # read the way a hand-typed date may have been stored; one the
+                # server cannot read cannot be shown to be unexpired
+                evd = _read_ewb_date(evu)
+                if evd is None:
+                    blocking.append({"code": "E-EWB", "detail":
+                        "The invoice's e-Way Bill valid-until date (%s) cannot "
+                        "be read, so its expiry cannot be checked." % evu})
+                elif evd < clock.today():
+                    blocking.append({"code": "E-EWB", "detail":
+                        "The e-Way Bill expired on %s. The vehicle must "
+                        "not move against it." % evd.isoformat()})
             declared = invoice.get("declared_qty")
             if declared is None:
                 blocking.append({"code": "E-QTY", "detail":
@@ -8669,6 +8672,46 @@ def api_db_reset():
     return jsonify({"ok": True, "stats": store.stats()})
 
 
+def _read_ewb_date(v):
+    """The e-Way Bill valid-until date as a date, or None when it cannot be
+    read. The parser stores ISO, but the field is also typed by hand on the
+    invoice screen, the way people write a date here (08-10-2026, 08/10/2026,
+    8-Oct-26). An unread date used to pass every expiry check silently."""
+    t = str(v or "").strip()
+    if not t:
+        return None
+    try:
+        return datetime.date.fromisoformat(t[:10])
+    except ValueError:
+        pass
+    for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y"):
+        try:
+            return datetime.datetime.strptime(t, fmt).date()
+        except ValueError:
+            continue
+    iso = invparse.norm_date(t)
+    return datetime.date.fromisoformat(iso) if iso else None
+
+
+def _invoice_on_file(cur, irn, invoice_no):
+    """What the record already holds for an invoice being loaded: the row with
+    this IRN (a second copy of the same document), and the rows with the same
+    invoice number under another IRN - HO's re-issue, which this one
+    supersedes. Decided here, from the record, never from a list the browser
+    sends (DECISIONS 1)."""
+    dup = db.find_invoice_by_irn(cur, irn) if irn else None
+    prior = [dict(p) for p in (db.find_invoices_by_number(cur, invoice_no)
+                               if invoice_no else [])
+             if p.get("irn") != irn]
+    return (dict(dup) if dup else None), prior
+
+
+def _duplicate_why(dup):
+    return ("This invoice (IRN %s...) is already on file as %s%s. Nothing was "
+            "saved." % ((dup.get("irn") or "")[:16], dup.get("invoice_no") or "",
+                        " (cancelled)" if dup.get("status") == "cancelled" else ""))
+
+
 @app.route("/api/invoice/parse", methods=["POST"])
 @require_screen_write("invoice")
 def api_invoice_parse():
@@ -8684,6 +8727,25 @@ def api_invoice_parse():
         result = invparse.parse(tmp)
         if result["fingerprint"]["ok"]:
             session["pending"] = {"tmp": tmp, "sha": sha, "orig": f.filename}
+            # what the record already holds - shown before the operator types
+            # anything; confirm decides again, from the record itself
+            with store.conn() as (cx, cur):
+                dup, prior = _invoice_on_file(
+                    cur, result["fields"]["irn"]["value"],
+                    result["fields"]["invoice_no"]["value"])
+            if dup:
+                result["blocked"] = True
+                result["checks"].insert(0, {"level": "block", "id": "duplicate",
+                                            "msg": _duplicate_why(dup)})
+            result["supersedes"] = [{"invoice_id": p["invoice_id"],
+                                     "invoice_no": p["invoice_no"]}
+                                    for p in prior]
+            if prior:
+                result["checks"].append({"level": "warn", "id": "supersedes",
+                    "msg": "%s is already on file under another IRN - attaching "
+                           "this one marks the earlier one superseded, and no "
+                           "challan can be made against it any more."
+                           % result["fields"]["invoice_no"]["value"]})
         else:
             safe_remove(tmp)
         return jsonify(result)
@@ -8744,11 +8806,30 @@ def api_invoice_confirm():
             return jsonify({"ok": False, "why": f"Invoice declares {data['declared_qty']}, boxes scanned total {expect_int}. No override — fix the packing or have HO reissue."}), 400
 
     if data.get("ewb_valid_upto"):
-        try:
-            if datetime.date.fromisoformat(str(data["ewb_valid_upto"])) < clock.today():
-                return jsonify({"ok": False, "why": f"e-Way Bill expired on {data['ewb_valid_upto']}. The vehicle must not move."}), 400
-        except ValueError:
-            pass
+        # read the way it may have been typed, and stored as a date - a value
+        # the server cannot read would pass every expiry check after this one
+        evu = _read_ewb_date(data["ewb_valid_upto"])
+        if evu is None:
+            return jsonify({"ok": False, "why":
+                "The e-Way Bill valid-until date %r cannot be read. Type it as "
+                "DD-MM-YYYY." % data["ewb_valid_upto"]}), 400
+        if evu < clock.today():
+            return jsonify({"ok": False, "why": "e-Way Bill expired on %s. The "
+                            "vehicle must not move." % evu.isoformat()}), 400
+        data["ewb_valid_upto"] = evu.isoformat()
+
+    if not data.get("invoice_no"):
+        return jsonify({"ok": False, "why":
+            "The invoice number is blank. Type it before continuing."}), 400
+
+    # The same document twice is refused with its reason, before the file is
+    # filed (it used to reach UNIQUE(irn) as a 500 and leave the PDF behind).
+    # A re-issue under a new IRN supersedes the earlier one - decided here,
+    # from the record; a supersede_ids list from the browser is not read.
+    with db.conn() as (cx, cur):
+        dup, prior = _invoice_on_file(cur, data.get("irn"), data.get("invoice_no"))
+    if dup:
+        return jsonify({"ok": False, "why": _duplicate_why(dup)}), 400
 
     stamp = clock.now().strftime("%Y%m%d_%H%M%S")
     safe = "".join(c for c in (data.get("invoice_no") or "invoice") if c.isalnum() or c in "-_")
@@ -8760,17 +8841,20 @@ def api_invoice_confirm():
             inv_id = db.insert_invoice(
                 cur, data, os.path.relpath(final, BASE), pend["sha"],
                 result, bool(result["qr"].get("einvoice")), edited, actor())
-            
-            for pid in payload.get("supersede_ids") or []:
-                db.supersede_invoice(cur, pid, inv_id)
-            
+
+            for p in prior:
+                db.supersede_invoice(cur, p["invoice_id"], inv_id)
+
             db.audit(cur, actor(), "invoice.load", "invoice", inv_id,
                      {"file": pend["orig"], "sha256": pend["sha"],
                       "edited": list(edited.keys()),
-                      "qr": bool(result["qr"].get("einvoice"))})
+                      "qr": bool(result["qr"].get("einvoice")),
+                      "supersedes": [p["invoice_id"] for p in prior]})
 
         session.pop("pending", None)
-        return jsonify({"ok": True, "invoice_no": data.get("invoice_no"), "edited_count": len(edited)})
+        return jsonify({"ok": True, "invoice_no": data.get("invoice_no"),
+                        "edited_count": len(edited),
+                        "superseded": [p["invoice_id"] for p in prior]})
     except Exception as e:
         app.logger.error(traceback.format_exc())
         return jsonify({"ok": False, "why": "Database error: " + str(e)}), 500

@@ -7090,3 +7090,26 @@ commit.
   history, not a reconciliation (DECISIONS 1, "returns when that challan is cancelled").
 - **Test:** `test_cancel_documents.py` +1 (a live draft still locks it).
   From `audit/A4-invoice-challan` 6357c43.
+
+### Invoice upload: supersession and duplicates from the record; a typed e-Way Bill date read
+- **Found** by A4 on the Tax Invoice screen (`/api/invoice/parse` + `/confirm`):
+  1. `supersede_ids` came from the request and every id was superseded - any invoice
+     could be marked superseded (and then refused at Create Challan) on the browser's
+     word (DECISIONS 1);
+  2. the live screen never sent it, and the server never worked it out, so an HO
+     re-issue (same number, new IRN) left BOTH live - "a superseded invoice blocks"
+     never happened on the live path (only the pre-v4 page did it);
+  3. the same invoice uploaded twice hit UNIQUE(irn): a 500, the PDF already filed;
+  4. an e-Way Bill date typed 08/10/2026 or 08-10-2026 was stored unread and skipped
+     by both expiry checks - an expired one typed that way never blocked a challan.
+- **Change:** `_invoice_on_file()` reads the record: a duplicate IRN is refused before
+  the file is kept; the same number under another IRN is shown at parse and superseded
+  at confirm (what the pre-v4 page did with a hidden field - "Saving this marks the
+  earlier version superseded"); the browser's list is not read. `_read_ewb_date()`
+  reads ISO, DD-MM-YYYY, DD/MM/YYYY, DD.MM.YYYY, D-Mon-YY; one it cannot read is
+  refused at confirm and blocks at the challan pre-check. A blank invoice number is
+  refused with a reason (was a NOT NULL 500).
+- **Open (Mukesh):** invoice numbers repeating across financial years would make a new
+  year's invoice supersede last year's - as in the original design. Do they repeat?
+- **Test:** `test_invoice_confirm.py` (new, 5, synthetic PDFs; all fail before).
+  From `audit/A4-invoice-challan` 5f57376.
