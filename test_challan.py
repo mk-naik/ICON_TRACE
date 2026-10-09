@@ -874,6 +874,29 @@ def t_gp_blocks_edit():
     assert challan_row(chid)["status"] == "issued"
 
 
+@test("a CANCELLED gate pass no longer shows the challan locked: the list and "
+      "the detail panel count live gate passes, as edit and cancel do (audit 9 Oct)")
+def t_cancelled_gp_unlocks_list_and_detail():
+    c = setup()
+    b = packed_box(c, [150, 151])
+    inv = make_invoice(qty=2, invoice_no="INV-GPUNLOCK")
+    chid = make_issued_challan(c, [b], inv)
+    gp_no = add_gatepass(c, chid)
+
+    def shown():
+        det = c.get("/api/challan/%d" % chid).get_json()
+        row = [r for r in c.get("/api/challans").get_json()["challans"]
+               if r["challan_id"] == chid][0]
+        return det["challan"]["locked"], det["gp_count"], row["gp_count"]
+    assert shown() == (True, 1, 1), shown()
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE gatepass SET status='cancelled' WHERE gp_no=%s",
+                    (gp_no,))
+    assert shown() == (False, 0, 0), shown()
+    r = c.post("/api/challan/%d/edit-draft" % chid, json={})
+    assert r.status_code == 200, r.get_json()
+
+
 @test("cancelling an issued challan reverts every serial to packed, not dispatched")
 def t_cancel_reverts_serials():
     c = setup()

@@ -1813,7 +1813,10 @@ def challans_list(cur, q=None, status=None, fy=None, n=200):
                COUNT(DISTINCT gp.gp_id)          AS gp_count
         FROM challan c
         LEFT JOIN challan_box cb ON cb.challan_id = c.challan_id
+        -- a LIVE gate pass locks a challan; a cancelled one released it
+        -- (gp_count_for_challan, which edit and cancel enforce)
         LEFT JOIN gatepass gp   ON gp.challan_id  = c.challan_id
+                               AND gp.status <> 'cancelled'
         WHERE 1=1
     """
     params = []
@@ -1848,10 +1851,9 @@ def challan_detail(cur, challan_id):
     cur.execute("SELECT * FROM challan_box WHERE challan_id = %s "
                 "ORDER BY load_order", (challan_id,))
     boxes = cur.fetchall()
-    cur.execute("SELECT COUNT(*) AS n FROM gatepass WHERE challan_id = %s",
-                (challan_id,))
-    row = cur.fetchone()
-    gp_count = row["n"] if row else 0
+    # the same count edit and cancel enforce: a cancelled gate pass no
+    # longer locks the challan, so the panel must not show it locked either
+    gp_count = gp_count_for_challan(cur, challan_id)
     cur.execute("SELECT COUNT(*) AS n FROM challan_serial WHERE challan_id = %s",
                 (challan_id,))
     row = cur.fetchone()

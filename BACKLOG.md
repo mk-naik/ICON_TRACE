@@ -7068,3 +7068,14 @@ commit.
 - **Change:** only a draft is discarded; anything else but issued is refused, naming
   its status.
 - **Test:** `test_challan.py` +1. From `audit/A4-invoice-challan` 0166f21.
+
+### A cancelled module gate pass left its challan looking locked
+- **Found** independently by agents A4 and A5 (Chromium): after the module gate pass
+  was cancelled (the way to release a challan, Round 34) the Challan list kept the
+  lock and the detail panel said "locked" with no Edit / Cancel, while the server
+  accepted both.
+- **Cause:** `db.challans_list` / `db.challan_detail` counted cancelled gate passes;
+  the server's lock (`gp_count_for_challan`) counts live ones.
+- **Change:** both count live gate passes.
+- **Test:** `test_challan.py` +1 (and A5's `test_gatepass.py` case, next commits).
+  From `audit/A4-invoice-challan` d3fa85d.
