@@ -7369,3 +7369,8 @@ commit.
 - **Found** by A1: OCT-09/A item 1, OCT-09/B item 1, OCT-09/A item 2 ... on the list and its export.
 - **Change:** ordered by date, then indent, then item.
 - **Test:** `test_indent.py` +1. From `audit/A1-plan-produce` 852300c.
+
+### An allocation's range, quantity and customer came from the request
+- **Found** by A1: every Planning batch showed "0 - 0" under its quantity on Search & Trace (the screen never sends seq_from / seq_to); POST /api/allocation with a quantity and no serials wrote an allocation with no serial behind it, its range (7..9999) and customer ("SOMEONE ELSE") from the request; a bad material row was refused only AFTER the insert, leaving an empty allocation (DECISIONS 1: the server is the authority).
+- **Change:** the range is read from the serials (`_alloc_seq_span`), the customer is the indent's (as on its serial rows), a request with no serials is refused before anything is written, material rows are parsed first. The running-production guard is untouched.
+- **Test:** `test_custom_serials.py` +1. From `audit/A1-plan-produce` cc1179c.

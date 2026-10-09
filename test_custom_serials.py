@@ -268,6 +268,47 @@ def t_master_is_final_on_edit():
     assert serial_row("B100004")["sequence"] == 2 and serial_row("B100004")["format_version"] == 0
 
 
+@test("an allocation's range and customer are read from its serials and its "
+      "indent, never from the request; a quantity with no serials, or a bad "
+      "material row, writes nothing")
+def t_alloc_fields_are_the_servers():
+    c, custom_line, icon_line = world()
+    with store.conn() as (cx, cur):
+        cust = store.one(cur, "SELECT customer FROM serial LIMIT 1")
+    rng = ["ICON625R12A0910%03d" % q for q in range(5, 9)]   # running numbers 5..8
+    r = allocate(c, icon_line, rng, customer="SOMEONE ELSE", seq_from=0, seq_to=9999)
+    assert r.status_code == 200, r.get_json()
+    aid = r.get_json()["alloc_id"]
+    with store.conn() as (cx, cur):
+        a = store.one(cur, "SELECT * FROM allocation WHERE alloc_id=%s", (aid,))
+        s = store.one(cur, "SELECT customer FROM serial WHERE alloc_id=%s LIMIT 1", (aid,))
+    assert (a["seq_from"], a["seq_to"]) == (5, 8), dict(a)
+    assert a["customer"] == s["customer"] != "SOMEONE ELSE", (a["customer"], s["customer"])
+    d = c.get("/api/allocation/%d/detail" % aid).get_json()
+    # an edit moves the range with its serials
+    r = c.put("/api/allocation/%d/update" % aid, json={
+        "indent_line_id": icon_line, "qty": 2, "serials": rng[2:], "materials": [],
+        "customer": "SOMEONE ELSE"})
+    assert r.status_code == 200, r.get_json()
+    with store.conn() as (cx, cur):
+        a = store.one(cur, "SELECT * FROM allocation WHERE alloc_id=%s", (aid,))
+    assert (a["seq_from"], a["seq_to"], a["customer"]) == (7, 8, s["customer"]), dict(a)
+    # a custom list keeps its place numbers
+    r = allocate(c, custom_line, ["B100001", "B100002", "B100003"])
+    with store.conn() as (cx, cur):
+        a = store.one(cur, "SELECT * FROM allocation WHERE alloc_id=%s",
+                      (r.get_json()["alloc_id"],))
+    assert (a["seq_from"], a["seq_to"]) == (1, 3), dict(a)
+    n0 = n_alloc()
+    r = c.post("/api/allocation", json={"indent_line_id": icon_line, "qty": 3,
+                                        "seq_from": 7, "seq_to": 9999})
+    assert r.status_code == 400 and "No serial numbers" in r.get_json()["why"], r.get_json()
+    r = allocate(c, icon_line, ["ICON625R12A0910020"],
+                 materials=[{"material_no": "not-a-number"}])
+    assert r.status_code == 400 and "invalid material" in r.get_json()["why"], r.get_json()
+    assert n_alloc() == n0, "a refused request left an allocation behind"
+
+
 @test("Search & Trace finds a custom serial by exact match (it has no ICON "
       "shape to recognise), and says it can be a customer's own serial when "
       "nothing matches")

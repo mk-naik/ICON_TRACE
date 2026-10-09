@@ -6889,7 +6889,14 @@ def api_allocation_create():
                     "Indent %s uses custom serial numbers - there is no range "
                     "to generate. Upload the Excel file of serial numbers."
                     % L["indent_no"]}), 400
-        if serials and len(serials) != qty:
+        # An allocation IS its serials. A quantity with no serials wrote an
+        # allocation row with no serial behind it - its range and customer
+        # whatever the request said - that nothing could produce or pack.
+        if not serials:
+            return jsonify({"ok": False, "why":
+                "No serial numbers were sent - a quantity alone allocates "
+                "nothing. Fill the start and end serial of the range."}), 400
+        if len(serials) != qty:
             return jsonify({"ok": False, "why":
                 "The quantity (%d) does not match the %d serial numbers "
                 "sent." % (qty, len(serials))}), 400
@@ -6899,23 +6906,29 @@ def api_allocation_create():
         refusal = _serial_set_refusal(cur, serials, L, custom)
         if refusal:
             return jsonify({"ok": False, "why": refusal}), 400
+        # the batch's running numbers, read from its own serials - the screen
+        # never sent them, so every Planning batch read "0 - 0" on Search
+        seq_from, seq_to = _alloc_seq_span(serials, custom)
+        # a bad material row is refused here too, before anything is written -
+        # refused after the insert, it left the allocation with no serials
+        try:
+            mats = [(int(m.get("material_no")), m) for m in d.get("materials") or []]
+        except (TypeError, ValueError, AttributeError):
+            return jsonify({"ok": False, "why": "Allocation contains an invalid material row."}), 400
 
         made_on, made_shift = _alloc_date_shift()
         aid = store.insert(cur, "allocation", {
             "indent_line_id": line_id, "model": L["model"],
-            "wattage": L["wattage"], "customer": d.get("customer") or L["cust"],
+            # the indent's customer, as on every serial row below - never the
+            # request's own
+            "wattage": L["wattage"], "customer": L["cust"],
             "dcr": L["dcr"], "arc": L["arc"],
             "date_produced": made_on,
             "shift": made_shift, "qty": qty,
-            "seq_from": 1 if custom else (d.get("seq_from") or 0),
-            "seq_to": len(serials) if custom else (d.get("seq_to") or 0),
+            "seq_from": seq_from, "seq_to": seq_to,
             "alloc_type": _alloc_type(d.get("alloc_type")),
             "created_by": actor()})
-        for material in d.get("materials") or []:
-            try:
-                material_no = int(material.get("material_no"))
-            except (TypeError, ValueError):
-                return jsonify({"ok": False, "why": "Allocation contains an invalid material row."}), 400
+        for material_no, material in mats:
             store.insert(cur, "allocation_material", {
                 "alloc_id": aid, "material_no": material_no,
                 "vendor": material.get("vendor"),
@@ -6949,6 +6962,18 @@ def api_allocation_create():
     return jsonify({"ok": True, "alloc_id": aid, "qty": qty,
                     "left": after["left"], "indent_no": L["indent_no"],
                     "fqc_applied": fqc_applied, "review_closed": closed})
+
+
+def _alloc_seq_span(serials, custom):
+    """(seq_from, seq_to) of an allocation, from its serials: an ICON batch's
+    first and last running number; a custom list's place numbers, 1..n. Read
+    by the server, never taken from the request."""
+    if custom:
+        return 1, len(serials)
+    import icon_challan_import as CI
+    seqs = [CI.decompose(s).get("sequence") for s in serials]
+    seqs = [q for q in seqs if q is not None]
+    return (min(seqs), max(seqs)) if seqs else (0, 0)
 
 
 def _serials_in_master(cur, serials, exclude_alloc=None):
@@ -7170,10 +7195,9 @@ def api_allocation_update(alloc_id):
                     "customer=%s, dcr=%s, arc=%s, date_produced=%s, shift=%s, "
                     "qty=%s, seq_from=%s, seq_to=%s, alloc_type=%s "
                     "WHERE alloc_id=%s",
-                    (line_id, L["model"], L["wattage"], d.get("customer") or L["cust"],
+                    (line_id, L["model"], L["wattage"], L["cust"],
                      L["dcr"], L["arc"], made_on, made_shift, qty,
-                     1 if custom else (d.get("seq_from") or 0),
-                     len(serials) if custom else (d.get("seq_to") or 0),
+                     *_alloc_seq_span(serials, custom),
                      _alloc_type(d.get("alloc_type")) or old.get("alloc_type"),
                      alloc_id))
         was = [r["serial"] for r in store.rows(
