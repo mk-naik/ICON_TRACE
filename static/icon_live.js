@@ -12411,6 +12411,16 @@ function wireFqcAnomalies() {
     // this keeps the (separately owned) count text in step with it.
     var search = sec.querySelector('[data-role="search"]');
     if (search) search.addEventListener('input', ldRecount);
+    // Reset clears every field, not only the card's own search box: the
+    // dates and the status sit outside the card, where icon_table.js's reset
+    // does not reach, and stayed as they were.
+    var rst = sec.querySelector('[data-role="reset"]');
+    if (rst) rst.addEventListener('click', function () {
+      ldEl('ldFrom').value = today;
+      ldEl('ldTo').value = today;
+      ldEl('ldStatusFilter').value = '';
+      ldLoad();
+    });
   }
 
   // A challan's scan session used to be a fixed-position overlay floating

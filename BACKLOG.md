@@ -7295,3 +7295,8 @@ commit.
 - **Found** by A5: a search matching only the Date column left the row shown while the badge read "0 of 4 rows".
 - **Change:** `ldRecount()` matches the row's rendered text, as icon_table.js searches.
 - **Test:** `test_loading_ui.py` +1. From `audit/A5-load-gatepass-print` 0467ccb.
+
+### Loading Verification list: Reset left the dates and status
+- **Found** by A5: Reset emptied only the search box.
+- **Change:** Reset also puts From / To back to the day the list opens on and Status to All.
+- **Test:** `test_loading_ui.py` +1. From `audit/A5-load-gatepass-print` aa42f60.

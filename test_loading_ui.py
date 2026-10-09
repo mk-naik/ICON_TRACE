@@ -128,6 +128,31 @@ def t_list_count_badge():
         assert not pg.errors, pg.errors
 
 
+@test("Reset clears every field: the dates go back to the day the list opened on, "
+      "the status to All and the search empty - it reset only the search box")
+def t_list_reset():
+    c = T.setup()
+    issued(c, [14, 15], "INV-UI-RESET")
+    with H.browser() as b:
+        pg = H.open_page(b, role="Dispatch Operator")
+        pg.evaluate("go('loadver', document.querySelector('.nav-i[data-v=loadver]'))")
+        pg.wait_for_selector("#ldFrom", timeout=8000)
+        pg.wait_for_timeout(800)
+        opened = (pg.input_value("#ldFrom"), pg.input_value("#ldTo"))
+        pg.fill("#ldFrom", "2026-09-01")
+        pg.dispatch_event("#ldFrom", "change")
+        pg.wait_for_timeout(800)
+        pg.select_option("#ldStatusFilter", "pending")
+        pg.wait_for_timeout(800)
+        pg.fill("#v-loading-list [data-role=search]", "zzz-nothing")
+        pg.click("#v-loading-list [data-role=reset]")
+        pg.wait_for_timeout(900)
+        assert (pg.input_value("#ldFrom"), pg.input_value("#ldTo")) == opened,             ((pg.input_value("#ldFrom"), pg.input_value("#ldTo")), opened)
+        assert pg.input_value("#ldStatusFilter") == "", pg.input_value("#ldStatusFilter")
+        assert pg.input_value("#v-loading-list [data-role=search]") == ""
+        assert not pg.errors, pg.errors
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0
