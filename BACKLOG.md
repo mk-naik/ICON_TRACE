@@ -7265,3 +7265,8 @@ commit.
   corrected PDF is uploaded).
 - **Open (Mukesh):** if invoices should be editable, that is a new route and a rule.
 - **Test:** `test_invoice_screen_ui.py` +1. From `audit/A4-invoice-challan` 8cd44a2.
+
+### Picking the same invoice PDF a second time did nothing
+- **Found** by A4: the hidden file input kept its value, so no change event fired.
+- **Change:** cleared once read; the second pick is read and says "already on file".
+- **Test:** `test_invoice_screen_ui.py` +1. From `audit/A4-invoice-challan` 40e5b86.

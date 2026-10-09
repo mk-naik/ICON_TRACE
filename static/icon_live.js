@@ -8144,7 +8144,14 @@ function wireFqcAnomalies() {
       });
     }
 
-    inp.onchange = function () { if (inp.files[0]) send(inp.files[0]); };
+    inp.onchange = function () {
+      var f = inp.files[0];
+      /* cleared once read: picking the SAME file again (a second try, or the
+         same invoice by mistake) fires no change event otherwise, and the
+         screen did nothing at all - not even "already on file" */
+      inp.value = '';
+      if (f) send(f);
+    };
     /* the shared drop handling: a dropped invoice goes through the input's own
        change, and the zone is registered so the page-wide guard leaves it alone */
     iconDropZone(zone, inp, /\.pdf$/i, 'a PDF invoice');

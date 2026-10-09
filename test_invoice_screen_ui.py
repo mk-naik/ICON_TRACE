@@ -12,7 +12,8 @@ What the operator sees has to agree with what the server enforces:
      parser did not find this. Type it rather than trust a guess.") - no page
      error, Attach enables, and the typed figure is stored, marked edited;
   3. a stored invoice opens to be read (View), with Attach off - nothing on
-     the server edits one.
+     the server edits one;
+  4. the same PDF picked twice is read twice (the second time: already on file).
 
 The invoices are synthetic PDFs (invoice_pdf_fixture.py). ui_harness is
 imported FIRST: it fixes the throwaway database path.
@@ -118,6 +119,25 @@ def t_view_stored_invoice():
         pg.fill("#f_buyer_name", "SOMEONE ELSE")
         pg.wait_for_timeout(200)
         assert not pg.is_enabled("#invSubmit"), "typing re-enabled Attach"
+        assert not pg.errors, pg.errors
+
+
+@test("picking the same PDF again is read again: the second pick says the "
+      "invoice is already on file, instead of nothing happening (audit 9 Oct)")
+def t_same_file_again():
+    store.wipe()
+    with H.browser() as b:
+        pg = H.open_page(b, role="Dispatch Operator", login_id="disp.ui4")
+        path = make_pdf(H.TMP, "UINV/26-27/005", 36)
+        load(pg, path)
+        pg.click("#invSubmit")
+        pg.wait_for_timeout(1200)
+        assert stored("UINV/26-27/005")
+        pg.evaluate("window.__t = []; var o = window.toast; window.toast = "
+                    "function (m) { window.__t.push(String(m)); return o.apply(this, arguments); }")
+        load(pg, path)
+        said = pg.evaluate("window.__t")
+        assert any("already on file" in m for m in said), said
         assert not pg.errors, pg.errors
 
 
