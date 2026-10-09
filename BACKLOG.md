@@ -7290,3 +7290,8 @@ commit.
 - **Found** by A4: "9 boxes · 290 modules · 182.7 KW" (v4 demo) on a fresh screen, after picking an invoice, on opening an edit and after Cancel edit.
 - **Change:** the line is drawn with the pallet table after every load, check and toggle.
 - **Test:** `test_challan_edit_ui.py` +1. From `audit/A4-invoice-challan` f0f6ff2.
+
+### Loading Verification list: the row count disagreed with the search
+- **Found** by A5: a search matching only the Date column left the row shown while the badge read "0 of 4 rows".
+- **Change:** `ldRecount()` matches the row's rendered text, as icon_table.js searches.
+- **Test:** `test_loading_ui.py` +1. From `audit/A5-load-gatepass-print` 0467ccb.

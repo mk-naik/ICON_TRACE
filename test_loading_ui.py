@@ -94,6 +94,40 @@ def t_challan_detail_verify_loading():
         assert not pg.errors, pg.errors
 
 
+def listed(pg):
+    return pg.evaluate("Array.from(document.querySelectorAll('#ldTableBody tr'))"
+                       ".filter(function (r) { return r.style.display !== 'none'; })"
+                       ".map(function (r) { return r.cells[0].innerText; })")
+
+
+def open_list(pg, frm):
+    pg.evaluate("go('loadver', document.querySelector('.nav-i[data-v=loadver]'))")
+    pg.wait_for_selector("#ldFrom", timeout=8000)
+    pg.fill("#ldFrom", frm)
+    pg.dispatch_event("#ldFrom", "change")
+    pg.wait_for_timeout(900)
+
+
+@test("the list's count agrees with the rows a search leaves - a search for "
+      "a value only the Date column holds hid the other rows while the badge "
+      "read '0 of N'")
+def t_list_count_badge():
+    c = T.setup()
+    a = issued(c, [10, 11], "INV-UI-BADGE1")
+    issued(c, [12, 13], "INV-UI-BADGE2")
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE challan SET challan_date='2026-09-30' WHERE challan_id=%s", (a,))
+    with H.browser() as b:
+        pg = H.open_page(b, role="Dispatch Operator")
+        open_list(pg, "2026-09-01")
+        assert len(listed(pg)) == 2, listed(pg)
+        pg.fill("#v-loading-list [data-role=search]", "2026-09-30")
+        pg.wait_for_timeout(300)
+        badge = pg.inner_text("#ldCount").lower()
+        assert len(listed(pg)) == 1 and badge.startswith("1 of 2"), (listed(pg), badge)
+        assert not pg.errors, pg.errors
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0

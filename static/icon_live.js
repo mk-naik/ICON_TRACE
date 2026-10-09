@@ -12498,9 +12498,13 @@ function wireFqcAnomalies() {
       view.querySelector('[data-role="search"]') : null;
     var q = (input && input.value || '').trim().toLowerCase();
     var total = ldRows.length;
+    // matched against the row's own text, the way icon_table.js's search
+    // hides rows - a search for a date or a status hid none of the rows it
+    // matched and the badge still read "0 of 4"
+    var tb = document.createElement('tbody');
     var shown = !q ? total : ldRows.filter(function (r) {
-      return ((r.challan_no || '') + (r.buyer_name || '') +
-             (r.invoice_no || '')).toLowerCase().indexOf(q) !== -1;
+      tb.innerHTML = ldRenderRow(r);
+      return (tb.textContent || '').toLowerCase().indexOf(q) !== -1;
     }).length;
     cnt.textContent = shown === total
       ? total + (total === 1 ? ' row' : ' rows')
