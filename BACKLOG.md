@@ -7395,3 +7395,8 @@ commit.
 - **Found** by A3: Reset listed every pallet ever (blank date) and sent two requests with different dates.
 - **Change:** its own Reset - the factory day, every dropdown to its first option, one draw (as the Production Dashboard's).
 - **Test:** `test_packlog.py` +1 (Chromium). From `audit/A3-pack` 3810b83.
+
+### Packing Log: the Boxes row count went stale
+- **Found** by A3: "26 rows" beside 24 listed; a day with none counted its "Nothing found" line.
+- **Change:** the empty line is marked and the table layer recounts after every draw.
+- **Test:** `test_packlog.py` +1 (Chromium). From `audit/A3-pack` 44063ed.

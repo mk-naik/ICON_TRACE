@@ -158,6 +158,30 @@ def t_reset():
         assert not pg.errors, pg.errors
 
 
+@test("in the browser: the Boxes table's row count follows every fetch - "
+      "a day with pallets, a day with none, and back")
+def t_count():
+    c, boxes = seed()
+    with H.browser() as b:
+        pg = H.open_page(b, "packdash", wait_ms=1200)
+        date = "#v-packdash .filters input[type=date]"
+        tag = "#v-packdash [data-itable] [data-role=count]"
+
+        def count():           # textContent: the tag is upper-cased by CSS
+            return pg.eval_on_selector(tag, "e => e.textContent")
+        assert count() == "2 rows", count()
+        pg.fill(date, "2026-01-01")
+        pg.dispatch_event(date, "change")
+        pg.wait_for_timeout(900)
+        assert count() == "0 rows" and pg.eval_on_selector("#pkCount", "e => e.textContent") == "0 boxes", count()
+        assert not pg.query_selector("#pkBoxRows tr[data-none]"), "a second empty line"
+        pg.fill(date, clock.shift_day().isoformat())
+        pg.dispatch_event(date, "change")
+        pg.wait_for_timeout(900)
+        assert count() == "2 rows", count()
+        assert not pg.errors, pg.errors
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     only = [a for a in sys.argv[1:] if not a.startswith("-")]

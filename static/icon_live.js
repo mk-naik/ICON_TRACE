@@ -3301,7 +3301,8 @@ function wireFqcAnomalies() {
         var tBody = document.getElementById('pkBoxRows');
         if (tBody) {
           if (rows.length === 0) {
-            tBody.innerHTML = '<tr><td colspan="11"><div class="empty-state"><p>Nothing found under these filters.</p></div></td></tr>';
+            /* data-empty: the shared table layer counts it as no rows */
+            tBody.innerHTML = '<tr data-empty="1"><td colspan="11"><div class="empty-state"><p>Nothing found under these filters.</p></div></td></tr>';
           } else {
             tBody.innerHTML = rows.map(function(r) {
               kLists++;
@@ -3346,6 +3347,9 @@ function wireFqcAnomalies() {
         
         var countEl = document.getElementById('pkCount');
         if (countEl) countEl.textContent = kLists + ' boxes';
+        /* the table's own "N rows" and its search box, over THESE rows: the
+           count was left from the previous draw ("26 rows" beside 24 boxes) */
+        if (window.iconTable) window.iconTable.wireAll();
         /* repacks in the period, counted by the server: a retired pallet is
            not a row here, so counting rows in a 'repacked' state - one no
            pallet ever has - always said 0 */
