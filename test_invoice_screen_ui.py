@@ -10,7 +10,9 @@ What the operator sees has to agree with what the server enforces:
      expired = valid-until < today); one that ended yesterday cannot;
   2. when the parser finds no quantity, the operator types it (v4: "The
      parser did not find this. Type it rather than trust a guess.") - no page
-     error, Attach enables, and the typed figure is stored, marked edited.
+     error, Attach enables, and the typed figure is stored, marked edited;
+  3. a stored invoice opens to be read (View), with Attach off - nothing on
+     the server edits one.
 
 The invoices are synthetic PDFs (invoice_pdf_fixture.py). ui_harness is
 imported FIRST: it fixes the throwaway database path.
@@ -92,6 +94,31 @@ def t_quantity_typed_when_missing():
         row = stored("UINV/26-27/003")
         assert row and row["declared_qty"] == 36, dict(row or {})
         assert "quantity" in json.loads(row["edited_fields"] or "{}")
+
+
+@test("the invoice list's View opens a stored invoice with Attach off and "
+      "says why - there is no edit of a stored invoice to save (audit 9 Oct)")
+def t_view_stored_invoice():
+    store.wipe()
+    with H.browser() as b:
+        pg = H.open_page(b, role="Dispatch Operator", login_id="disp.ui3")
+        load(pg, make_pdf(H.TMP, "UINV/26-27/004", 36))
+        pg.click("#invSubmit")
+        pg.wait_for_timeout(1200)
+        assert stored("UINV/26-27/004")
+        pg.click("#sidenav [data-v='invoice']")
+        pg.wait_for_timeout(1200)
+        row = pg.locator("#invoiceListBody tr", has_text="UINV/26-27/004")
+        assert row.locator("button", has_text="Edit").count() == 0
+        row.locator("button", has_text="View").click()
+        pg.wait_for_timeout(1200)
+        assert pg.input_value("#f_invoice_no") == "UINV/26-27/004"
+        assert not pg.is_enabled("#invSubmit"), "Attach offered on a stored invoice"
+        assert "already on file" in pg.inner_text("#invStatus")
+        pg.fill("#f_buyer_name", "SOMEONE ELSE")
+        pg.wait_for_timeout(200)
+        assert not pg.is_enabled("#invSubmit"), "typing re-enabled Attach"
+        assert not pg.errors, pg.errors
 
 
 def _filed():

@@ -7255,3 +7255,13 @@ commit.
 - **Change:** the live layer's `invCheck` patch reads ISO / DD-MM-YYYY / DD/MM/YYYY /
   DD.MM.YYYY and hands v4 the day after the last valid day - one rule with the server.
 - **Test:** `test_invoice_screen_ui.py` +1. From `audit/A4-invoice-challan` 5fd2e2f.
+
+### Tax Invoice list: "Edit" could not save - now "View"
+- **Found** by A4: Edit loaded a stored invoice into the upload screen with Attach on;
+  Attach re-parsed whatever PDF was pending in the session and posted the stored fields
+  with it ("That upload expired", or the wrong PDF). No server route edits a stored
+  invoice (DECISIONS 1: never silently rewritten; no fake success).
+- **Change:** the button is View; Attach stays off with the reason (an Admin cancels, HO's
+  corrected PDF is uploaded).
+- **Open (Mukesh):** if invoices should be editable, that is a new route and a rule.
+- **Test:** `test_invoice_screen_ui.py` +1. From `audit/A4-invoice-challan` 8cd44a2.

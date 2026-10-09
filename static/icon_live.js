@@ -13025,7 +13025,12 @@ function wireFqcAnomalies() {
           '<td>' + status + '</td>' +
           '<td style="text-align:right">' +
           '<a href="/view/invoice/pdf/' + encodeURIComponent(inv.id) + '" target="_blank" class="btn btn-ghost btn-sm" style="margin-right:4px">PDF</a>' +
-          (inv.challan || inv.superseded_by ? '' : '<button class="btn btn-ghost btn-sm" onclick="editInvoice(' + Number(inv.id) + ')">Edit</button>') +
+          /* View, not Edit: nothing on the server edits a stored invoice (it
+             is HO's document - cancelled and re-uploaded, never rewritten),
+             and Attach on a loaded record posted its fields against whatever
+             PDF happened to be pending. */
+          '<button class="btn btn-ghost btn-sm" onclick="editInvoice(' + Number(inv.id) + ')" ' +
+            'title="The invoice as it was attached. A stored invoice is not changed here.">View</button>' +
           '</td>' +
           '</tr>';
       });
@@ -13046,7 +13051,8 @@ function wireFqcAnomalies() {
         qr: data.qr || {einvoice: true},
         fields: data.fields,
         edited: data.edited_fields || {},
-        bad: false
+        bad: false,
+        viewOnly: true       /* a stored record: Attach stays off (invCheck patch) */
       };
       window.INV_SCANNED = data.fields.quantity ? parseInt(String(data.fields.quantity.value).replace(/,/g, ''), 10) : 0;
       
@@ -13054,7 +13060,7 @@ function wireFqcAnomalies() {
       if (dz) {
         dz.classList.add('hasfile');
         document.getElementById('invDzT').textContent = data.pdf_name || 'Loaded from database';
-        document.getElementById('invDzS').textContent = 'Editing existing record';
+        document.getElementById('invDzS').textContent = 'Stored record - view only';
       }
       
       if(window.renderInvFields) window.renderInvFields();
@@ -13137,6 +13143,15 @@ function wireFqcAnomalies() {
             if (shown) shown.textContent = origDate;
         } else {
             originalInvCheck.apply(this, arguments);
+        }
+        if (st && st.viewOnly) {
+            var btn = document.getElementById('invSubmit');
+            if (btn) btn.disabled = true;
+            var note = document.getElementById('invStatus');
+            if (note) note.innerHTML = '<div class="note n-info" style="font-size:11.5px">' +
+                '<span>&#9432;</span><span>This invoice is already on file, as shown. A ' +
+                'stored invoice is not changed here: if it is wrong, an Admin cancels ' +
+                'it and HO&#8217;s corrected PDF is uploaded.</span></div>';
         }
     };
     window.__invCheckPatched = true;
