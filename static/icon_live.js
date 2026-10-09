@@ -3756,7 +3756,15 @@ function wireFqcAnomalies() {
 
   window.openModules = function(o) {
     o = o || {};
-    var f = fqcDashFilters();
+    /* The FQC Dashboard's own filters belong to the FQC Dashboard. Opened from
+       Management Overview or the Production Dashboard, the list starts from
+       what THAT screen passed - it used to inherit the FQC Dashboard's Shift
+       and Result left over from an earlier visit, so "View 1695" opened a list
+       of 5 (A7 audit, 9 Oct 2026). */
+    var onDash = ((document.querySelector('.view.on') || {}).id === 'v-dash');
+    var f = onDash ? fqcDashFilters()
+                   : { from: '', to: '', shift: '', customer: '', custName: '',
+                       model: '', result: '', resultLabel: '' };
     if (o.from) { f.from = o.from; f.to = o.to || o.from; }
     if (o.date) { f.from = o.date; f.to = o.date; }
     if (o.customer !== undefined) f.customer = o.customer;

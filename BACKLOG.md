@@ -7333,3 +7333,12 @@ commit.
   RGP only, a real date not before today); a standalone pass needs a party and items (or
   the old single description); the challan no. only from the linked row.
 - **Test:** `test_gatepass_multiitem.py` +4. From `audit/A5-load-gatepass-print` daba643.
+
+### A drill-in from the Production Dashboard or Management Overview inherited the FQC Dashboard's filters
+- **Found** on the A7 volume run: Production Dashboard "View 1695" opened a list of 5
+  when the FQC Dashboard had been left on Shift C + "Rejected only"; Management
+  Overview's "View N" the same.
+- **Cause:** `openModules()` started from `fqcDashFilters()`, the FQC Dashboard's own
+  controls, whatever screen called it.
+- **Change:** it starts from them only when the FQC Dashboard is the screen on view.
+- **Test:** `test_dashboards_e2e.py` +1 (28). From `audit/A7-golden-volume` 23230cd.

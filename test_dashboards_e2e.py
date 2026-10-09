@@ -187,6 +187,29 @@ def run():
                 else:
                     passes.append('proddash: openModules is a function')
 
+        # The Production Dashboard's "View N" opens a list of N modules even
+        # when the FQC Dashboard was left on a shift and "Rejected only": its
+        # drill-in used to start from the FQC Dashboard's own filters.
+        pg.evaluate("go('dash')"); pg.wait_for_timeout(900)
+        pg.select_option('#fDashResult', 'Rejected only')
+        pg.dispatch_event('#fDashResult', 'change')
+        pg.wait_for_timeout(700)
+        pg.evaluate("go('proddash')"); pg.wait_for_timeout(1300)
+        btn = pg.query_selector('#pdCustRows button')
+        if btn:
+            n = int(''.join(ch for ch in btn.inner_text() if ch.isdigit()) or 0)
+            btn.click()
+            pg.wait_for_function("() => !/loading/i.test(document.getElementById('mdlCount').innerText)",
+                                 timeout=10000)
+            shown = pg.inner_text('#mdlCount')
+            if not shown.startswith('%d ' % n):
+                fails.append('proddash: View %d opened a list of %r - the FQC '
+                             "Dashboard's own filters leaked into it" % (n, shown))
+            else:
+                passes.append('proddash: View %d opens %d modules, whatever the '
+                              'FQC Dashboard was left on' % (n, n))
+            pg.evaluate("() => document.getElementById('mdl').classList.remove('on')")
+
         # One direct smoke of the helper against a fresh, empty select
         pg.evaluate("go('dash')"); pg.wait_for_timeout(500)
         got = pg.evaluate("""
