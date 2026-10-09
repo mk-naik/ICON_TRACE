@@ -245,6 +245,25 @@ def t_edit_keeps_own_buyer_and_consignee():
         ("Typed Buyer Pvt Ltd", "Site Store", "Plot 4\nRaipur"), new
 
 
+@test("the selection line ('N boxes - N modules - N KW') describes the pallets "
+      "actually ticked: 0 on a fresh screen, the challan's own when an edit opens, "
+      "0 again after Cancel edit - never v4's demo '9 boxes - 290 modules' (audit 9 Oct)")
+def t_selection_line_is_real():
+    c, chid, boxes = seed()
+    with H.browser() as b:
+        pg = H.open_page(b, role="Super Admin", login_id="edit.sel", wait_ms=1200)
+        pg.evaluate("go('challan')")
+        pg.wait_for_timeout(1000)
+        assert pg.inner_text("#chSel").lower().startswith("0 boxes"), pg.inner_text("#chSel")
+        begin_edit(pg, chid)
+        line = pg.inner_text("#chSel").lower()
+        assert line == "3 boxes · 6 modules · 3.78 kw", line
+        pg.evaluate("chAbandonEdit()")
+        pg.wait_for_timeout(800)
+        assert pg.inner_text("#chSel").lower().startswith("0 boxes"), pg.inner_text("#chSel")
+        assert not pg.errors, pg.errors
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

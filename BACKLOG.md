@@ -7285,3 +7285,8 @@ commit.
 - **Found** by A2: the Anomaly count read 4 across both lines, its View listed Line A's one - the request sent the FQC Entry station's line (A by default) on a plant-wide screen.
 - **Change:** both testers are read; a Line column; tester text escaped.
 - **Test:** `test_fqc_screen.py` +1 (Chromium). From `audit/A2-fqc-quality` 033632d.
+
+### Create Challan's selection line showed v4's demo totals
+- **Found** by A4: "9 boxes · 290 modules · 182.7 KW" (v4 demo) on a fresh screen, after picking an invoice, on opening an edit and after Cancel edit.
+- **Change:** the line is drawn with the pallet table after every load, check and toggle.
+- **Test:** `test_challan_edit_ui.py` +1. From `audit/A4-invoice-challan` f0f6ff2.

@@ -11293,6 +11293,11 @@ function wireFqcAnomalies() {
         : 'Select an invoice first — boxes are shown once there is a ' +
           'buyer to filter them against.') +
       '</p></div></td></tr>');
+    /* The "N boxes · N modules · N KW" line is drawn with the table it
+       describes. It was redrawn only on a tick, so it kept v4's demo
+       "9 boxes · 290 modules · 182.7 KW" on a fresh screen, after an invoice
+       was chosen, while an edit opened and after one was abandoned. */
+    chRenderSummary();
   }
 
   window.chToggleBox = function (id, on) {
