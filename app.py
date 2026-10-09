@@ -4503,6 +4503,27 @@ def _refuse_if_superseded(cur, ch):
             "instead. A superseded document is not produced." % no)
 
 
+def _refuse_not_produced(cur, ch):
+    """Why this challan's documents are not produced, or None: a superseded
+    original (_refuse_if_superseded - the bare number of an edited challan)
+    or a cancelled challan. The Flash Test Report had neither check - the
+    bare URL of an edited challan's original printed the old one (DECISIONS
+    3 says it is refused, naming the live number) - and a cancelled challan
+    printed, exported and reported as if it were live once its pallets had
+    been loaded (load, gate pass cancelled, challan cancelled)."""
+    why = _refuse_if_superseded(cur, ch)
+    if why or ch["status"] != "cancelled":
+        return why
+    try:
+        no = db.render_challan_no(datetime.date.fromisoformat(ch["challan_date"]),
+                                  ch["seq"], ch.get("suffix"))
+    except (TypeError, ValueError):
+        no = "This challan"
+    return ("%s was cancelled%s%s - a cancelled challan is not produced."
+            % (no, (" on " + str(ch["cancelled_at"])[:10]) if ch.get("cancelled_at") else "",
+               (": " + ch["cancelled_reason"]) if ch.get("cancelled_reason") else ""))
+
+
 def _loading_incomplete(boxes):
     """None once every pallet on the challan is confirmed loaded; the
     refusal otherwise - checked before either document renders, never
@@ -4549,7 +4570,7 @@ def challan_print(fy, seq):
         if not b:
             abort(404)
         ch = b["challan"]
-        why = _refuse_if_superseded(cur, ch)
+        why = _refuse_not_produced(cur, ch)
         if why:
             return why, 400
         if ch["origin"] != "historical":
@@ -4587,7 +4608,7 @@ def challan_excel(fy, seq):
         b = _challan_bundle(cur, fy, seq, request.args.get("suffix"))
         if not b:
             abort(404)
-        why = _refuse_if_superseded(cur, b["challan"])
+        why = _refuse_not_produced(cur, b["challan"])
         if why:
             return why, 400
         if b["challan"]["origin"] != "historical":
@@ -4743,6 +4764,9 @@ def challan_ftr_print(fy, seq):
         b = _challan_bundle(cur, fy, seq, request.args.get("suffix"))
         if not b:
             abort(404)
+        why = _refuse_not_produced(cur, b["challan"])
+        if why:
+            return why, 400
         cfg = db.get_config(cur)
     ch = b["challan"]
     f = ftr.build(cfg, [s["serial"] for s in b["serials"]])

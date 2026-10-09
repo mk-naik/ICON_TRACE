@@ -7311,3 +7311,8 @@ commit.
 - **Found** by A5: a 625 W + 620 W truck read "Wattage 624.5" and kW 44.38 where the printed challan says 44.375; Consignee / Ship to blank when the same party (DECISIONS 2: one goods line per model, kW exact, never an average; both parties named).
 - **Change:** one goods helper for both documents; the Excel reads `print_context`: a goods table one line per model (-DCR), exact kW, the consignee / ship-to v1 prints. Pallet table and FTR sheet unchanged.
 - **Test:** `test_challan_excel.py` (new, 3). From `audit/A5-load-gatepass-print` 1ee1806.
+
+### A void challan's documents were still produced
+- **Found** by A5: the FTR of an edited original printed (Print / Excel refused it); a cancelled challan whose pallets had been loaded printed, exported and reported as a live Dispatch Challan cum Gate Pass.
+- **Change:** `_refuse_not_produced()` (superseded: names the live number; cancelled: says when and why) first in print, Excel and FTR. The FTR stays outside the loading gate (DECISIONS gates v1 / v2 only).
+- **Test:** `test_loading.py` +2. From `audit/A5-load-gatepass-print` a186e4b.

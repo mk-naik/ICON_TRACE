@@ -661,6 +661,44 @@ def t_pallet_qr_scans():
     assert found.get("box_no") == box_no and len(found.get("serials") or []) == 2, found
 
 
+@test("no document of a void challan: the bare Flash Test Report URL of an "
+      "edited challan's original is refused naming the live number (DECISIONS "
+      "3), and a cancelled challan's print, Excel and FTR are refused even "
+      "though its pallets were loaded")
+def t_void_challan_documents_refused():
+    c = setup()
+    b1 = packed_box(c, [94, 95])
+    b2 = packed_box(c, [96, 97])
+    inv = make_invoice(qty=2, invoice_no="INV-LOAD-VOID1")
+    chid = make_issued_challan(c, [b1], inv)
+    r = c.post("/api/challan/%d/edit-save" % chid, json={"boxes": [b2], "invoice_id": inv})
+    assert r.status_code == 200, r.get_json()
+    ma = r.get_json()
+    bare = c.get("/challan/%d/%d/ftr" % (ma["fy"], ma["seq"]))
+    assert bare.status_code == 400 and ma["no"] in bare.get_data(as_text=True),         bare.get_data(as_text=True)[:200]
+    assert c.get("/challan/%d/%d/ftr?suffix=MA" % (ma["fy"], ma["seq"])).status_code == 200
+
+    b3 = packed_box(c, [98, 99])
+    inv2 = make_invoice(qty=2, invoice_no="INV-LOAD-VOID2")
+    ch2 = make_issued_challan(c, [b3], inv2)
+    c.post("/api/loading/%d/confirm" % ch2, json={"box_no": box_no_of(ch2)})
+    assert c.post("/api/loading/%d/submit" % ch2, json={}).status_code == 200
+    with store.conn() as (cx, cur):
+        gid = store.one(cur, "SELECT gp_id FROM gatepass WHERE challan_id=%s", (ch2,))["gp_id"]
+        row = store.one(cur, "SELECT fy, seq FROM challan WHERE challan_id=%s", (ch2,))
+    assert c.post("/api/gatepass/%d/cancel" % gid, json={
+        "reason": "vehicle changed", "totp_code": AUTH.totp_code(_TOTP_SECRET)}).status_code == 200
+    # the replay guard takes one code per 30 s step; the next step's code is
+    # accepted too (the server allows now-1..now+1)
+    import pyotp, time as _t
+    nxt = pyotp.TOTP(_TOTP_SECRET).at(_t.time() + 30)
+    assert c.post("/api/challan/%d/cancel" % ch2, json={
+        "reason": "order withdrawn", "totp_code": nxt}).status_code == 200
+    for doc in ("print", "excel", "ftr"):
+        rr = c.get("/challan/%d/%d/%s" % (row["fy"], row["seq"], doc))
+        assert rr.status_code == 400 and "cancelled" in rr.get_data(as_text=True),             (doc, rr.status_code, rr.get_data(as_text=True)[:200])
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0
