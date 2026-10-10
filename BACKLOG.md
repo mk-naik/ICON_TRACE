@@ -7532,3 +7532,9 @@ commit.
 - **Found** by A6: the tab showed 13 items, none of the four bullets of "11. Open - needs Mukesh", which carry no `[open]` tag.
 - **Change:** `_decision_items` also takes every bullet of a section titled "N. Open ...", except a struck-through (answered) one.
 - **Test:** `test_admin_tabs.py` (fails before; the tab reads 17). From `audit/A6-overview-search-admin` eb0e0a0.
+
+### Search & Trace said "Was Icon Stock" on a module that never was
+- **Found** by A6: a Sai Babuji module in a pallet that carried no customer read "Was Icon Stock. Delivered on challan..." under its own allocation to Sai Babuji (DECISIONS 3: no row when the owner did not change).
+- **Cause:** every pallet assignment was printed on every module in the pallet as "Was Icon Stock".
+- **Change:** an assignment to the customer the module already belonged to is skipped; "Was" names the real previous owner. The pallet's own audit row is unchanged.
+- **Test:** `test_challan.py` +1 (fails before). From `audit/A6-overview-search-admin` ed73549.

@@ -1926,6 +1926,30 @@ def t_assignment_history_only_on_change():
     assert len(_assign_rows(g)) == 1, "submit logged the same change again"
 
 
+@test("a module allocated to the buyer, in a pallet that carried no customer, "
+      "shows no 'Was Icon Stock' row once delivered to that buyer - and one "
+      "allocated to someone else says whom it was (audit A6, 10 Oct)")
+def t_assignment_history_names_the_real_owner():
+    c = setup()
+    b = packed_box(c, [20, 21], customer=None)
+    o = packed_box(c, [22, 23], customer=None)
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE serial SET customer='C0001' WHERE serial IN (%s, %s)",
+                    (serial(20), serial(21)))
+        cur.execute("UPDATE serial SET customer=%s WHERE serial IN (%s, %s)",
+                    (BOROSIL_CODE, serial(22), serial(23)))
+    inv = make_invoice(qty=4, invoice_no="INV-OWNER")
+    r = c.post("/api/challan", json={"action": "create", "boxes": [b, o],
+                                     "invoice_id": inv}).get_json()
+    assert r["ok"], r
+    assert len(_assign_rows(b)) == 1, "the pallet's own change is still recorded"
+    rows = c.get("/api/trace/serial/" + serial(20)).get_json()["assignment"]
+    assert [x["reason"] for x in rows] == ["Original allocation"], rows
+    rows = c.get("/api/trace/serial/" + serial(22)).get_json()["assignment"]
+    assert len(rows) == 2 and rows[1]["reason"].startswith("Was Borosil"), rows
+    assert "AGNI" in rows[1]["customer"].upper(), rows
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0

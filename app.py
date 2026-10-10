@@ -8528,21 +8528,32 @@ def api_trace_serial(serial):
         "by": (alloc or {}).get("created_by") or "—",
         "approved": "—",
     }]
+    # A pallet's row is a change for THIS module only when the module did not
+    # already belong to that customer: a pallet can carry no customer while
+    # its modules were allocated to one, and the module then read "Was Icon
+    # Stock" under its own allocation to the same buyer (audit A6, 10 Oct).
+    # "Was" names whom the module belonged to, not always Icon Stock.
+    stock = customers.get("STOCK")
+    owner = cust_name if first["customer"] else (stock["name"] if stock else "Icon Stock")
     for a in assigned:
         try:
             det = json.loads(a.get("detail") or "{}")
         except ValueError:
             det = {}
         to = customers.get(det.get("customer"))
+        to_name = to["name"] if to else (det.get("customer") or "—")
+        if to_name.upper() == (owner or "").upper():
+            continue
         assignment.append({
             "from": _when_shift(a["at"]) if a.get("at") else "—",
-            "customer": to["name"] if to else (det.get("customer") or "—"),
-            "reason": "Was Icon Stock. %s" % (
+            "customer": to_name,
+            "reason": "Was %s. %s" % (owner, (
                 det.get("reason") or "Put on a challan (the reason was not "
-                                      "recorded at the time)"),
+                                      "recorded at the time)")),
             "by": a.get("actor") or "—",
             "approved": "—",
         })
+        owner = to_name
 
     # ---- the journey ----------------------------------------------------
     alloc_label = ALLOC_TYPES.get((alloc or {}).get("alloc_type") or "")
