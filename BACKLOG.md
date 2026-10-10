@@ -7405,3 +7405,10 @@ commit.
 - **Found** by A3: the older /settings form stored a 104 mm barcode in an 84 mm room (DECISIONS 7: the server refuses it) and an unknown print format; neither route checked the pallet ceiling - 'abc' made every New Pallet open a 500, '0' made every pallet impossible.
 - **Change:** one `_settings_clean()` behind both routes (print format, barcode with the overflow check, pallet ceiling a whole number >= 1); a refused form stores nothing (400).
 - **Test:** `test_barcode_text.py` +1. From `audit/A3-pack` f54fc9f.
+
+### New Pallet: a pallet opened as a grade, model or capacity no module can be
+- **Found** by A3 (API): grade 'Z' or an unknown model opened a box named by its bare
+  sequence ("31") whose packing list was a 500; capacity 'abc' or 0 silently became 36.
+- **Change:** grade must be A / GY / BGY, the model must be in the model master (stored
+  as the master spells it), and a capacity that is not a whole number is refused.
+- **Test:** `test_packing.py` +1. From `audit/A3-pack` 0acfd70.

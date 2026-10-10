@@ -502,6 +502,27 @@ def t_open_without_model_refused():
     print("      400 %s" % d["why"])
 
 
+@test("a pallet opened as a grade, model or capacity no module can be is refused "
+      "with the reason, and nothing is opened (audit 9 Oct: grade 'Z' opened a box "
+      "named by its bare sequence; capacity 'abc' and 0 quietly became 36)")
+def t_open_refuses_what_cannot_be():
+    c = setup()
+    with store.conn() as (cx, cur):
+        before = store.one(cur, "SELECT COUNT(*) AS n FROM box")["n"]
+    for body, words in (({"grade": "Z", "model": MODEL}, "grade"),
+                        ({"grade": "A", "model": "NOT-A-MODEL"}, "model master"),
+                        ({"grade": "A", "model": MODEL, "capacity": "abc"}, "whole number"),
+                        ({"grade": "A", "model": MODEL, "capacity": 12.5}, "whole number"),
+                        ({"grade": "A", "model": MODEL, "capacity": 0}, "at least one")):
+        r = c.post("/api/box/open", json=body)
+        assert r.status_code == 400 and words in r.get_json()["why"], (body, r.get_json())
+    with store.conn() as (cx, cur):
+        assert store.one(cur, "SELECT COUNT(*) AS n FROM box")["n"] == before
+    # no capacity at all is the frame's ceiling, as before; any case of the model
+    b = c.post("/api/box/open", json={"grade": "a", "model": MODEL.lower()}).get_json()
+    assert b["capacity"] == 36 and b["label"].startswith("ISPL"), b
+
+
 # --------------------------------------------------------------------------
 # a partial pallet is real, but it has to SAY so - capacity is what the
 # operator declared, and what is filled has to match it exactly before it

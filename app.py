@@ -1713,12 +1713,33 @@ def api_box_open():
     if not str(d.get("model") or "").strip():
         return jsonify({"ok": False, "why":
             "Choose a model before opening a pallet."}), 400
+    # What the pallet claims has to be something its modules can be: a box
+    # opened as grade 'Z' or an unknown model took nothing, printed no
+    # number (its label fell back to the bare sequence) and its sheet was a
+    # 500. The screen sends the first module's own grade and model.
+    grade = str(d.get("grade") or "A").strip().upper()
+    if grade not in boxno.GRADES:
+        return jsonify({"ok": False, "why": "A pallet's grade is %s, not %r."
+                        % (", ".join(boxno.GRADES), d.get("grade"))}), 400
+    if not models.get(d.get("model")):
+        return jsonify({"ok": False, "why": "%s is not a model in the model "
+                        "master." % d.get("model")}), 400
     with store.conn() as (cx, cur):
         ceiling = int(db.get_config(cur).get("pallet_ceiling") or 36)
-        try:
-            capacity = int(d.get("capacity") or ceiling)
-        except (TypeError, ValueError):
+        raw_cap = d.get("capacity")
+        if raw_cap is None or str(raw_cap).strip() == "":
             capacity = ceiling
+        else:
+            # a quantity that is not a number is refused, as the capacity
+            # route refuses it - not quietly read as the ceiling
+            try:
+                f = float(str(raw_cap).strip())
+                if f != int(f):
+                    raise ValueError
+                capacity = int(f)
+            except (ValueError, OverflowError):
+                return jsonify({"ok": False, "why": "Capacity %r is not a whole "
+                                "number of modules." % raw_cap}), 400
         # Any quantity the operator wants, up to what the frame holds. 26
         # good modules out of a 120 indent is a 26 pallet; the indent may
         # instruct fewer, never more.
@@ -1752,7 +1773,7 @@ def api_box_open():
 
         bid, seq = store.open_box(
             cur, pack_date.isoformat(),
-            d.get("grade", "A"), d["model"], d.get("customer"),
+            grade, models.get(d["model"])["model"], d.get("customer"),
             capacity, d.get("shift"), d.get("bin"), actor())
     with store.conn() as (cx, cur):
         b = dict(store.box_row(cur, bid))
