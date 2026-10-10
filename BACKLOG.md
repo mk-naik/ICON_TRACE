@@ -7444,3 +7444,9 @@ commit.
 - **Cause:** `draw_challan_seq` read next_seq with a SELECT before the first write; Python's sqlite3 opens the transaction only at the first INSERT / UPDATE, so the read (and the routes' own checks - pallet free, still issued) ran outside it.
 - **Change:** `store.write_lock()` (BEGIN IMMEDIATE) first in create / submit / discard / cancel / edit-save; `draw_challan_seq` writes before it reads. Readers are not held up (WAL).
 - **Test:** `test_challan.py` +1 (concurrent drafts; fails before). From `audit/A4-invoice-challan` 983b9cc. Same shape in `draw_gp_seq` / `draw_box_seq` - next entry.
+
+### An invoice whose buyer is not in the customer master let another customer's pallet through
+- **Found** by A4 (API): invoice to NEW SOLAR TRADERS (GSTIN not in the master) + a pallet allocated to Agni: the pre-check answered ok (DECISIONS 3: General Stock plus the invoice's customer, nothing else; /api/challan/boxes already left it off).
+- **Cause:** with no buyer code `_challan_precheck` refused only pallets of MORE THAN ONE customer.
+- **Change:** every customer-owned pallet is refused (E-OWNER) for an unknown buyer - General Stock only.
+- **Test:** `test_challan.py` +1. From `audit/A4-invoice-challan` 691f244.

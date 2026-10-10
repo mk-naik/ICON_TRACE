@@ -3223,6 +3223,19 @@ def _challan_precheck(cur, box_ids, invoice_id, exclude_challan_id=None):
                     "detail": "%s is allocated to %s, not %s."
                     % (b["label"], cr["name"] if cr else b["customer"],
                        buyer_name)})
+    elif invoice:
+        # The invoice's buyer is not in the customer master. Nothing but
+        # General Stock is offered for it (/api/challan/boxes), so nothing
+        # else is accepted either - a direct call used to put another
+        # customer's pallet on it (audit 9 Oct).
+        for b in owned:
+            cr = customers.get(b["customer"])
+            blocking.append({"code": "E-OWNER", "box_id": b["box_id"],
+                "detail": "%s is allocated to %s, and the invoice's buyer (%s) "
+                          "is not in the customer master - only General Stock "
+                          "can go against it."
+                          % (b["label"], cr["name"] if cr else b["customer"],
+                             invoice.get("buyer_name") or "no name")})
     else:
         distinct = sorted(set(b["customer"] for b in owned))
         if len(distinct) > 1:

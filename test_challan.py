@@ -786,6 +786,27 @@ def t_unresolvable_buyer_does_not_crash():
     assert box_row(b)["customer"] is None
 
 
+@test("an invoice whose buyer is not in the customer master takes General "
+      "Stock only - another customer's pallet is refused, as it is never "
+      "offered (audit 9 Oct)")
+def t_unknown_buyer_refuses_owned_pallet():
+    c = setup()
+    owned = packed_box(c, [250, 251], customer=BOROSIL_CODE)
+    stock = packed_box(c, [252, 253], customer=None)
+    inv = make_invoice(qty=2, buyer_name="SOME BRAND NEW COMPANY LTD",
+                       buyer_gstin="99ZZZZZ9999Z1Z9", invoice_no="INV-UNKNOWN-B")
+    offered = [b["box_id"] for b in
+               c.get("/api/challan/boxes?invoice_id=%d" % inv).get_json()]
+    assert stock in offered and owned not in offered, offered
+    r = c.post("/api/challan", json={"action": "create", "boxes": [owned],
+                                     "invoice_id": inv})
+    assert r.status_code == 400 and "customer master" in r.get_json()["why"], r.get_json()
+    assert challan_row_count() == 0
+    r = c.post("/api/challan", json={"action": "create", "boxes": [stock],
+                                     "invoice_id": inv})
+    assert r.status_code == 200, r.get_json()
+
+
 # --------------------------------------------------------------------------
 # what packing already refuses, this refuses too
 # --------------------------------------------------------------------------
