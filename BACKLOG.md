@@ -7493,3 +7493,32 @@ commit.
   arguments with JSON as the Production Dashboard's View buttons do.
 - **Test:** `test_inline_args_ui.py` (new, Chromium; both cases fail before),
   `test_trace.js` +3 (Node and WSH). From `audit/A6-overview-search-admin` ec2c757.
+
+### Audit outcome and what waits for Mukesh (10 Oct 2026)
+- **Result:** the chain held end to end in Chromium, each step by its own role, nothing
+  blocked; every screen under 1 s at production's size (40,000 serials, 5,000 FQC
+  decisions, ~10,000 open review items); integrity checks clean. 60 commits, each with a
+  test, every one logged above; the full suite 108 files green. The final code starts and
+  migrates cleanly on a copy of production (it repairs the one open provisional mismatch).
+  Full report, per-area reports, scripts and screenshots: `D:\GITHub\ICON_TRACE_audit_20261009\`.
+- **NEEDS MUKESH** (details and proposals in the report, section 3):
+  1. Retire the pre-v4 pages (/packing, /dispatch, /gatepass, /planning, /indent/new write
+     around the rules; GET /invoice lists invoices to anyone, signed in or not) - refused
+     tonight by the session's safety check without your explicit yes.
+  2. DECISIONS 5 vs the code (EL advisory, no coded reason, BAD blocks a reject too).
+  3. Quality "keep the decision" makes a below-nameplate held pass an A.
+  4. Unit-2's GSTIN: icon_customers vs the challan / gate pass prints and the invoice check.
+  5. "No one signs twice" (DECISIONS 2) is not enforced at Loading Verification.
+  6. "Dispatched" means three things across screens (DECISIONS 7 [open]).
+  7. Cancelling an indent leaves its planned serials live; an allocated indent's build type
+     and customer can still change.
+  8. A module gate pass by hand after a cancel; a cancelled gate pass prints as valid.
+  9. The pallet QR carries model / grade / qty / date (DECISIONS 1: identity only).
+  10. A pallet's customer comes from the browser; two customers' MTO modules share a pallet.
+  11. Needs Review lists 5,000 of ~9,800 open items (proposal: lift the cap).
+  12. TOTP backup codes for Admins (from 6 Oct).
+- **Not fixed, small** (report section 4): Repack's 200-pallet limit, Stock & Dispatch
+  counts read from code, gate pass number not found by Search, gatepass CSV includes
+  cancelled passes, /api/print/resolve, archive CSV field, "Indent line" wording.
+- **Housekeeping:** 7 agent worktrees under `.claude\worktrees\` (branches `audit/A1..A7-*`,
+  all merged) to remove; production copies in the audit folder to delete.
