@@ -7543,3 +7543,9 @@ commit.
 - **Found** by A6: with 40 modules (25.0 kW) dispatched every row read Dispatched 0; "KW shipped" was the kW in the yard; a customer with dispatches and no stock had no row.
 - **Change:** `db.stock_dispatch` returns the period's dispatched modules and kW per customer and model (the same rule as its Dispatched total); the table is one row per customer and model, stock beside dispatch.
 - **Test:** `test_challan.py` +1 (fails before); in Chromium the column sums to the cards. From `audit/A6-overview-search-admin` b1b0fc7.
+- **Addendum (10 Oct, 22:00):** the overview / search / admin agent finished after the summary
+  above - 4 more fixes (QR search, Open questions incl. DECISIONS 11, assignment history,
+  Overview's dispatch table), 64 commits in all; the final suite 109 files green. One more
+  for Mukesh (auth policy, not touched): an Admin can mint a Reset TOTP link for their own
+  account from an open session with no fresh code, and the old authenticator keeps working
+  until the link is used (A6-11). Report: `AUDIT_REPORT.md` in the audit folder.
