@@ -5514,6 +5514,60 @@ def _bom_summary(cur, ranges):
             "new_efficiencies": sorted(new_eff)}
 
 
+def _import_range_checked(rng, now):
+    """(range, None) as the range's own serials say it is, or (None, why).
+
+    /apply is sent back the ranges /parse produced, and nothing in them may be
+    taken on trust: parse's checks ran on the file, not on what came back. A
+    range edited in between wrote ICON625R... as a 630 W ISEN630-G12R module,
+    'produced', under an entry dated 2027-01-15 (audit, 10 Oct). So the start
+    and end serial are read again - one printed batch, start before end - and
+    the running numbers, quantity, wattage and model follow from them (a value
+    sent that disagrees is refused, naming it); the customer is resolved again
+    from what the file says; the date must be a real day and its shift must
+    have run. Backfill keeps its exemption from the backdate limit only."""
+    start = str(rng.get("start") or "").strip().upper()
+    end = str(rng.get("end") or "").strip().upper() or start
+    ds, de = chimport.decompose(start), chimport.decompose(end)
+    if not ds.get("ok"):
+        return None, "start serial %s - %s" % (start, ds.get("why"))
+    if not de.get("ok"):
+        return None, "end serial %s - %s" % (end, de.get("why"))
+    if ds["wattage"] != de["wattage"] or ds["family"] != de["family"]:
+        return None, "start and end serials are different models/wattages"
+    prefix, seq_len = _batch_prefix(start, ds["format_version"])
+    if len(end) != len(start) or end[:-seq_len] != prefix:
+        return None, "start and end were not printed in the same batch"
+    if ds["sequence"] > de["sequence"]:
+        return None, "start serial is greater than end serial"
+    model = trace_import._model_of(ds)
+    if not model:
+        return None, "the serial %s names no model family this plant makes" % start
+    derived = {"seq_from": ds["sequence"], "seq_to": de["sequence"],
+               "qty": de["sequence"] - ds["sequence"] + 1,
+               "wattage": ds["wattage"], "model": model}
+    for k, v in derived.items():
+        sent = rng.get(k)
+        if sent not in (None, "") and str(sent).strip().upper() != str(v).upper():
+            return None, ("the range says %s %s, but %s to %s is %s - the serials "
+                          "decide it" % (k.replace("_", " "), sent, start, end, v))
+    try:
+        day = datetime.date.fromisoformat(str(rng.get("date") or "").strip())
+    except ValueError:
+        return None, "%r is not a date" % (rng.get("date"),)
+    shift = str(rng.get("shift") or "").strip().upper()
+    n = clock.shift_number(shift) if shift in trace_import.SHIFTS else None
+    if not n:
+        return None, "shift %r is not A, B or C" % (rng.get("shift"),)
+    if datetime.datetime.combine(day, datetime.time(hour=_SHIFT_STARTS_AT[n])) > now:
+        return None, ("%s shift on %s has not started yet - a shift is recorded "
+                      "once it has run, never before." % (shift, day.strftime("%d-%m-%Y")))
+    code, name, resolved, rework = trace_import.resolve_customer(rng.get("customer_raw"))
+    return dict(rng, start=start, end=end, date=day.isoformat(), shift=shift,
+                customer_code=code, customer_name=name, customer_resolved=resolved,
+                rework=rework, **derived), None
+
+
 def _import_claim_range(cur, rng, incharge, stamp):
     """Record a range whose serials Planning already issued - the same rule
     the manual Production Entry enforces: every serial present, none already
@@ -5736,12 +5790,15 @@ def api_prodentry_import_apply():
                 # own "Shift Incharge" - always resolved against the master HERE
                 inc, why_inc = _incharge_refusal(
                     cur, incharge or (rng.get("incharge_raw") or ""))
-                if why_inc:
+                checked, why_rng = _import_range_checked(rng, stamp)
+                if why_rng:
+                    res = {"action": "error", "why": why_rng}
+                elif why_inc:
                     res = {"action": "error", "why": why_inc}
                 else:
-                    res = (_import_backfill_range(cur, rng, dcr, inc, stamp)
+                    res = (_import_backfill_range(cur, checked, dcr, inc, stamp)
                            if backfill else
-                           _import_claim_range(cur, rng, inc, stamp))
+                           _import_claim_range(cur, checked, inc, stamp))
                 if res.get("action") in ("error", "skipped"):
                     cx.execute("ROLLBACK TO %s" % sp)   # undo any partial writes
             except Exception as e:

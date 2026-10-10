@@ -508,6 +508,42 @@ def t_apply_isolates_failures():
     assert serial_row(S(8)) and serial_row(S(8))["state"] == "produced", "the good range still landed"
 
 
+@test("apply re-reads every range from its own serials: a range edited between "
+      "parse and apply (wattage, model, quantity, customer, a date to come) "
+      "writes nothing, and says what is wrong")
+def t_apply_rechecks_the_range():
+    c = client()
+    data = wb_bytes([{"date": D1, "shift": "A", "watt": "625W", "start": S(1),
+                      "end": S(5), "qty": 5, "customer": "BOROSIL"}])
+    good = parse_upload(c, data).get_json()["ranges"][0]
+    future = (datetime.date.today() + datetime.timedelta(days=40)).isoformat()
+    for edit, why in (({"wattage": 630}, "wattage 630"),
+                      ({"model": "ISEN630-G12R"}, "model ISEN630-G12R"),
+                      ({"qty": 50, "seq_to": 50}, "seq to 50"),
+                      ({"date": future}, "has not started"),
+                      ({"date": "next week"}, "is not a date"),
+                      ({"shift": "Z"}, "not A, B or C"),
+                      ({"end": "ICON625R1290150005"}, "same batch")):
+        for backfill in (True, False):
+            r = c.post("/api/prodentry/import/apply",
+                       json={"ranges": [dict(good, **edit)], "incharge": "X",
+                             "backfill": backfill}).get_json()
+            res = r["results"][0]
+            assert res["action"] == "error" and why in res["why"], (edit, backfill, res)
+    with store.conn() as (cx, cur):
+        n = store.one(cur, "SELECT COUNT(*) AS n FROM serial")["n"]
+        e = store.one(cur, "SELECT COUNT(*) AS n FROM production_entry")["n"]
+    assert n == 0 and e == 0, "an edited range wrote %d serials, %d entries" % (n, e)
+    # the customer is the file's own, resolved again - not a code sent beside it
+    r = c.post("/api/prodentry/import/apply",
+               json={"ranges": [dict(good, customer_code="C9999", customer_name="SOMEONE",
+                                     rework=True)],
+                     "incharge": "X", "backfill": True}).get_json()
+    assert r["results"][0]["action"] == "backfilled", r["results"][0]
+    row = serial_row(S(1))
+    assert row["customer"] == "Borosil Renewables Limited" and not row["rework"], row
+
+
 # --------------------------------------------------------------------------
 # 7  the real file
 # --------------------------------------------------------------------------

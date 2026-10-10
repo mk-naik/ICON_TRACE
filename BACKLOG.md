@@ -7417,3 +7417,8 @@ commit.
 - **Found** by A1: Withdraw on Recent Allocations sent a bare DELETE, so the server refused every press ("Enter your authenticator code to cancel.") - no batch could be withdrawn from Planning; it was also shown to a Production Incharge, whom the server refuses. DELETE /api/allocation never checked or recorded a reason - the one cancel of ten that did not (DECISIONS 1).
 - **Change:** Withdraw asks for a reason and the authenticator code (as the challan's Cancel does), offered to Admin / Super Admin only; the server refuses a blank reason (400, before the code is spent) and writes it on the planning.cancel audit row. DECISIONS 1: "nine cancel routes" -> ten. The running-production guard is unchanged.
 - **Test:** `test_alloc_withdraw_ui.py` (new, Chromium); `test_cancel_documents.py` blank-reason test +1 route. From `audit/A1-plan-produce` cb96da5.
+
+### The traceability import recorded whatever range it was sent back
+- **Found** by A1: /apply took /parse's ranges back from the browser and checked none of it again - an edited range backfilled ICON625R12A0730001-5 as 630 W ISEN630-G12R modules, "produced", under an entry dated 2027-01-15; customer code and rework flag came from the request too (DECISIONS 12 / 5: the serial's wattage is the nameplate).
+- **Change:** `_import_range_checked()` re-reads each range from its start and end serial; running numbers, quantity, wattage and model come from the serials and a sent value that disagrees is refused, naming it; the customer is resolved again from the file's text; a non-date, a shift not A/B/C and a shift not yet started are refused (backfill keeps only its exemption from the 30-day limit).
+- **Test:** `test_traceability_import.py` +1. From `audit/A1-plan-produce` f93a942.
