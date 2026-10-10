@@ -3420,6 +3420,7 @@ def api_challan_create():
     status = "draft" if action == "draft" else "issued"
     try:
         with store.conn() as (cx, cur):
+            store.write_lock(cur)       # the checks and the number, one step
             out = _write_challan(cur, d, status)
     except _ChallanRefused as e:
         return jsonify({"ok": False, "why": e.why, "blocking": e.blocking}), 400
@@ -3438,6 +3439,7 @@ def api_challan_submit(challan_id):
     day that has since turned over.
     """
     with store.conn() as (cx, cur):
+        store.write_lock(cur)
         ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
                        (challan_id,))
         if not ch:
@@ -3492,6 +3494,7 @@ def api_challan_discard(challan_id):
     reason_msg = (body.get("reason") or "draft discarded").strip()
 
     with store.conn() as (cx, cur):
+        store.write_lock(cur)
         ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s", (challan_id,))
         if not ch:
             return jsonify({"ok": False, "why": "No such challan."}), 404
@@ -3618,6 +3621,7 @@ def api_challan_cancel(challan_id):
     """
     d = request.get_json(force=True) or {}
     with store.conn() as (cx, cur):
+        store.write_lock(cur)
         err = _cancel_issued_challan(cur, challan_id, d)
         if err:
             return err
@@ -4386,6 +4390,7 @@ def api_challan_edit_save(challan_id):
     """
     d = request.get_json(force=True) or {}
     with store.conn() as (cx, cur):
+        store.write_lock(cur)
         ch = store.one(cur, "SELECT * FROM challan WHERE challan_id=%s",
                        (challan_id,))
         if not ch:

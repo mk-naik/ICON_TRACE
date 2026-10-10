@@ -109,16 +109,18 @@ def draw_challan_seq(cur, fy):
             _demo["counter"][fy] = n + 1
             return n
 
-    # SQLite serialises writers within a transaction, so the
-    # read-modify-write below is atomic without FOR UPDATE.
+    # The read must happen INSIDE the write transaction. Python's sqlite3
+    # opens it only at the first INSERT/UPDATE, so the SELECT that used to
+    # come first ran outside it, and two drafts made at once read the same
+    # next_seq and both took it (A4 audit, 9 Oct). The INSERT is the first
+    # write: it takes the write lock, and the read after it sees every draw
+    # already committed. (The challan routes also take the lock up front -
+    # store.write_lock - so their own checks are serialised too.)
+    cur.execute("INSERT INTO challan_counter (fy, next_seq) VALUES (%s, 1) "
+                "ON CONFLICT(fy) DO NOTHING", (fy,))
     cur.execute("SELECT next_seq FROM challan_counter WHERE fy=%s",
                 (fy,))
-    row = cur.fetchone()
-    if row is None:
-        cur.execute("INSERT INTO challan_counter (fy, next_seq) VALUES (%s, 2)",
-                    (fy,))
-        return 1
-    seq = row["next_seq"]
+    seq = cur.fetchone()["next_seq"]
     cur.execute("UPDATE challan_counter SET next_seq=%s WHERE fy=%s",
                 (seq + 1, fy))
     return seq

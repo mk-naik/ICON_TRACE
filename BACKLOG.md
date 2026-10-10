@@ -7438,3 +7438,9 @@ commit.
 - **Cause:** `clCancelChallan()` passed the Response to `api()` as a path - it fetched '/api/[object Response]'.
 - **Change:** the cancel goes through `api()`: a refusal names its reason; a cancel closes the panel and reloads the list.
 - **Test:** `test_challan_cancel_ui.py` +1 (fails before). From `audit/A4-invoice-challan` 6a6c4af.
+
+### BLOCKER: two challans made at the same moment took the same number
+- **Found** by A4: six drafts posted at once took seq 11, 11, 12, 12, 13, 14 - two live IS-10.10.2026/0011 (UNIQUE(fy, seq, suffix) did not catch it: suffix NULL). DECISIONS 3: the server draws the number; DATA_LAYER 6: drawn inside the writing transaction.
+- **Cause:** `draw_challan_seq` read next_seq with a SELECT before the first write; Python's sqlite3 opens the transaction only at the first INSERT / UPDATE, so the read (and the routes' own checks - pallet free, still issued) ran outside it.
+- **Change:** `store.write_lock()` (BEGIN IMMEDIATE) first in create / submit / discard / cancel / edit-save; `draw_challan_seq` writes before it reads. Readers are not held up (WAL).
+- **Test:** `test_challan.py` +1 (concurrent drafts; fails before). From `audit/A4-invoice-challan` 983b9cc. Same shape in `draw_gp_seq` / `draw_box_seq` - next entry.

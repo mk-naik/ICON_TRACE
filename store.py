@@ -631,6 +631,20 @@ def insert(cur, table, data):
     return cur.lastrowid
 
 
+def write_lock(cur):
+    """Take the database's write lock NOW, for the rest of this transaction.
+
+    Python's sqlite3 opens a transaction only at the first INSERT / UPDATE, so
+    whatever a route READ before its first write - a counter's next number, a
+    pallet "not on any live challan", a challan "still issued" - was read
+    outside the transaction, and a second request could act on the same
+    reading. Six drafts made at once took the numbers 11, 11, 12, 12, 13, 14
+    (A4 audit, 9 Oct). Called first, the check and the write are one step:
+    another writer waits (the 20 s timeout) and then sees what this one did.
+    Readers are not held up (WAL)."""
+    cur.execute("BEGIN IMMEDIATE")
+
+
 def rows(cur, sql, args=(), limit=None):
     cur.execute(sql + ("" if limit is None else " LIMIT %d" % limit), args)
     return cur.fetchall()

@@ -657,6 +657,44 @@ def t_invoice_list_names_live_challans():
     assert col() is None, col()
 
 
+@test("simultaneous drafts never share a number, and a pallet ticked on two "
+      "at once goes on only one of them (audit 9 Oct: six at once took 11, 11, "
+      "12, 12, 13, 14)")
+def t_concurrent_drafts():
+    import threading
+    c = setup()
+    pals = [packed_box(c, [200 + 2 * k, 201 + 2 * k]) for k in range(8)]
+    shared = packed_box(c, [240, 241])
+    invs = [make_invoice(qty=2, invoice_no="INV-RACE-%d" % k) for k in range(10)]
+    clients = []
+    for k in range(10):
+        ck = APP.app.test_client()
+        AUTH.test_login(ck, login_id="race.%d" % k)
+        clients.append(ck)
+    out = []
+
+    def draft(k, boxes):
+        r = clients[k].post("/api/challan", json={
+            "action": "draft", "boxes": boxes, "invoice_id": invs[k]})
+        out.append((r.status_code, r.get_json()))
+
+    def all_at_once(jobs):
+        del out[:]
+        th = [threading.Thread(target=draft, args=j) for j in jobs]
+        for t in th:
+            t.start()
+        for t in th:
+            t.join()
+    for _round in range(3):
+        all_at_once([(k, [pals[k]]) for k in range(8)])
+        seqs = [d["seq"] for st, d in out if st == 200]
+        assert len(seqs) == 8 and len(set(seqs)) == 8, sorted(seqs)
+        for st, d in out:
+            c.post("/api/challan/%d/discard" % d["challan_id"], json={})
+    all_at_once([(8, [shared]), (9, [shared])])
+    assert sorted(st for st, _ in out) == [200, 400], out
+
+
 @test("a SUPERSEDED challan cannot be discarded: it stays superseded, never "
       "rewritten 'cancelled' (audit 9 Oct)")
 def t_discard_refuses_superseded():
