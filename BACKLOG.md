@@ -7527,3 +7527,8 @@ commit.
 - **Found** by A6 (Chromium): `ICONTRACE|BOX|ISPL261010/K001|...` and `ICONTRACE|CHALLAN|IS-10.10.2026/0002 (MA)` typed by a scanner were answered "Nothing recorded matches" (DECISIONS 1: a scan looks the record up).
 - **Change:** `api_trace_find` takes the number out of an ICONTRACE payload and looks it up as the kind it names (BOX a pallet, CHALLAN a challan; a gate pass is still not searchable - A7-06).
 - **Test:** `test_search_invoice.py` +1 (fails before). From `audit/A6-overview-search-admin` a49ee9c.
+
+### Admin > Open questions left out section 11 of DECISIONS.md
+- **Found** by A6: the tab showed 13 items, none of the four bullets of "11. Open - needs Mukesh", which carry no `[open]` tag.
+- **Change:** `_decision_items` also takes every bullet of a section titled "N. Open ...", except a struck-through (answered) one.
+- **Test:** `test_admin_tabs.py` (fails before; the tab reads 17). From `audit/A6-overview-search-admin` eb0e0a0.

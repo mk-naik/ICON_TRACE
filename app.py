@@ -1352,9 +1352,11 @@ def api_fqc_rules():
     return jsonify({"in_force": db.FQC_RULE_VERSION, "versions": [dict(v) for v in vers]})
 
 
-def _decision_items(tag_re):
+def _decision_items(tag_re, section_re=None):
     """Bullets in DECISIONS.md whose text matches tag_re, with their section -
-    read from the file each time, so the screen and the file cannot disagree."""
+    read from the file each time, so the screen and the file cannot disagree.
+    With section_re, also every bullet of a section whose title matches it,
+    except one struck through (~~...~~ - answered, kept for the record)."""
     import re as _re
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "DECISIONS.md")
     try:
@@ -1364,7 +1366,9 @@ def _decision_items(tag_re):
     out, section, cur_item = [], "", None
 
     def flush():
-        if cur_item and _re.search(tag_re, cur_item):
+        if cur_item and (_re.search(tag_re, cur_item) or (
+                section_re and _re.search(section_re, section)
+                and not cur_item.lstrip().startswith("~~"))):
             item = _re.sub(r"\s+", " ", cur_item).strip()
             out.append({"section": section, "text": item})
     for line in text.splitlines():
@@ -1386,8 +1390,10 @@ def _decision_items(tag_re):
 def api_open_questions():
     """Admin's Open questions: the [open] items of DECISIONS.md, and its
     decided-but-not-built ones - v4 showed a fixed list from August, most of
-    it answered long ago."""
-    opens = _decision_items(r"\[open\]")
+    it answered long ago. Section 11, "Open - needs Mukesh", is open questions
+    by its title, and its bullets carry no [open] tag: they were left off the
+    tab until 10 Oct (audit A6)."""
+    opens = _decision_items(r"\[open\]", section_re=r"^\d+\.\s*Open\b")
     todo = _decision_items(r"\[decided\]|NOT BUILT|NOT ENFORCED")
     if opens is None:
         return jsonify({"ok": False, "why": "DECISIONS.md is not beside the app."}), 404

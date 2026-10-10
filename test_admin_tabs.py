@@ -166,15 +166,25 @@ def t_fqc_rules():
     assert got == {db.FQC_RULE_VERSION: 2, "2-old": 1}, got
 
 
-@test("open questions are DECISIONS.md's [open] items, read from the file")
+@test("open questions are DECISIONS.md's [open] items and the bullets of "
+      "section 11, \"Open - needs Mukesh\" (an answered, struck-through one left "
+      "out), read from the file")
 def t_open_questions():
     fresh()
     d = client().get("/api/admin/open-questions").get_json()
     assert d["ok"] and d["open"], d
-    assert all("[open]" in o["text"] for o in d["open"]), d["open"][:2]
+    # an item is open by its [open] tag, or by standing in "11. Open - needs
+    # Mukesh", whose bullets carry no tag (they were missing from the tab)
+    sec11 = [o for o in d["open"] if o["section"].startswith("11.")]
+    assert all("[open]" in o["text"] for o in d["open"] if o not in sec11), d["open"][:2]
     text = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "DECISIONS.md"),
                 encoding="utf-8").read()
-    assert len(d["open"]) <= text.count("[open]")
+    assert len(d["open"]) - len(sec11) <= text.count("[open]")
+    body = text.split("## 11.", 1)[1]
+    want = [l for l in body.splitlines() if l.startswith("- ") and not l.startswith("- ~~")]
+    assert len(sec11) == len(want) and want, (sec11, want)
+    assert any("as-of date" in o["text"] for o in sec11), sec11
+    assert not any("~~" in o["text"] for o in d["open"]), "a struck-through (answered) item is listed"
 
 
 @test("machine counts: a Super Admin saves them (0-50, refused whole), an Admin "
