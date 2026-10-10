@@ -7455,3 +7455,9 @@ commit.
 - **Found** by A4: challan_date '31/12/2026' -> 500.
 - **Change:** read before anything is written, refused naming the value; no number used up. (Whether a future / other-FY date should be refused is a question for Mukesh.)
 - **Test:** `test_challan.py` +1. From `audit/A4-invoice-challan` d319f65.
+
+### The Challan list's Search, Status filter and Refresh did nothing
+- **Found** by A4 (Chromium): every keystroke / change / click threw "clLoad is not defined"; the rows never changed (DECISIONS 8 lists the Challan list's dynamic filters as built). A reload asked for during a fetch was dropped.
+- **Cause:** inline handlers call `clLoad()` on window; it was local to the live layer's closure; `if (clBusy) return`.
+- **Change:** `clLoad` on window; a call made while busy runs when the fetch answers.
+- **Test:** `test_challan_list_ui.py` (new, fails before). From `audit/A4-invoice-challan` 8c22c4a.

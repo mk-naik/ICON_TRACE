@@ -11958,7 +11958,7 @@ function wireFqcAnomalies() {
    * screen (#v-challan).  Each row has a "View" action that opens the detail
    * panel below.
    */
-  var clRows = [], clBusy = false;
+  var clRows = [], clBusy = false, clAgain = false;
 
   function clEl(id) { return document.getElementById(id); }
 
@@ -11984,7 +11984,11 @@ function wireFqcAnomalies() {
   }
 
   function clLoad() {
-    if (clBusy) return;
+    /* A reload asked for while one is in flight is not dropped: it runs as
+       soon as that one answers, with what the search and the status say
+       THEN. Dropping it left the rows of the first keystroke ("R") under the
+       whole word ("RAVITYA") whenever the server took a moment. */
+    if (clBusy) { clAgain = true; return; }
     var host = clEl('clTableBody');
     if (!host) return;
     clBusy = true;
@@ -11996,6 +12000,7 @@ function wireFqcAnomalies() {
       .then(function (r) { return r.json(); })
       .then(function (d) {
         clBusy = false;
+        if (clAgain) { clAgain = false; clLoad(); return; }
         clRows = d.challans || [];
         /* dynamic: the statuses the search holds (server facet) */
         if (d.facets) _dashCascade('clStatusFilter', d.facets.status, 'All statuses', st,
@@ -12010,10 +12015,17 @@ function wireFqcAnomalies() {
       })
       .catch(function () {
         clBusy = false;
+        if (clAgain) { clAgain = false; clLoad(); return; }
         var host2 = clEl('clTableBody');
         if (host2) host2.innerHTML = '<tr><td colspan="8" style="color:var(--fail);padding:20px">Could not load challans.</td></tr>';
       });
   }
+
+  /* The list's own Search box, Status filter and Refresh button call clLoad()
+     from inline handlers, which look it up on window - and it lived only
+     inside this file's closure: every keystroke, every status change and
+     every Refresh threw "clLoad is not defined" and the list never moved. */
+  window.clLoad = clLoad;
 
   /* Inject the Challan List view if the DOM has the section already (patched in
      once).  v4 uses <section class="view" id="..."> — we need a new id so go()
