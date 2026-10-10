@@ -151,6 +151,32 @@ def standalone_gatepass(c, items=None, party="Repair vendor", kind="NRGP"):
     return r.get_json()
 
 
+
+@test("gate passes made at the same moment never share a number, and none fails "
+      "(the counter is written before it is read - audit 10 Oct)")
+def t_concurrent_gatepasses():
+    import threading
+    setup()
+    clients = []
+    for k in range(8):
+        ck = APP.app.test_client()
+        AUTH.test_login(ck, login_id="race.gp.%d" % k)
+        clients.append(ck)
+    out = []
+
+    def make_one(k):
+        r = clients[k].post("/api/gatepass", json={"kind": "NRGP",
+            "party": "Vendor %d" % k, "items": THREE_ITEMS})
+        out.append((r.status_code, r.get_json(silent=True)))
+    th = [threading.Thread(target=make_one, args=(k,)) for k in range(8)]
+    for x in th:
+        x.start()
+    for x in th:
+        x.join()
+    assert [st for st, _ in out] == [200] * 8, out
+    nos = [d["gp_no"] for _, d in out]
+    assert len(set(nos)) == 8, sorted(nos)
+
 # --------------------------------------------------------------------------
 # 1 - one merged feed
 # --------------------------------------------------------------------------

@@ -7466,3 +7466,15 @@ commit.
 - **Found** by A4: RAVITYA / AGNI GREEN found no challans - `_trace_customer` looks through serial.customer, while a General Stock pallet given to the customer on a challan changes box.customer only.
 - **Change:** challans whose buyer resolves to the customer are listed too (module counts unchanged).
 - **Test:** `test_search_invoice.py` +1. From `audit/A4-invoice-challan` d5f2c19.
+
+### Pallets or gate passes made at the same moment: the second failed on its number
+- **Found** following A4's challan race (983b9cc): the pallet counter (`store.next_seq`,
+  behind New Pallet's open) and the gate pass counter (`db.draw_gp_seq`) - and
+  `db.draw_box_seq` (the historical import) - read next_seq with a SELECT before the
+  transaction's first write. Eight pallets opened at once: four 200s (1-4), four 500s
+  (UNIQUE (pack_date, seq)); eight gate passes the same on UNIQUE (gp_no). The unique
+  keys kept the numbers from repeating, so the failure was a 500, not a duplicate.
+- **Change:** each counter is written before it is read (INSERT ... ON CONFLICT DO
+  NOTHING first, which takes the write lock), as `draw_challan_seq` now is.
+- **Test:** `test_packing.py` +1, `test_gatepass_multiitem.py` +1 (eight at once, all
+  200, all different; both fail before).

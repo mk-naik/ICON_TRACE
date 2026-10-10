@@ -98,6 +98,32 @@ def open_box(c, grade="A", model=MODEL, capacity=36):
                                          "capacity": capacity}).get_json()
 
 
+
+@test("pallets opened at the same moment never share a number, and none fails "
+      "(the counter is written before it is read - audit 10 Oct)")
+def t_concurrent_box_open():
+    import threading
+    setup()
+    clients = []
+    for k in range(8):
+        ck = APP.app.test_client()
+        AUTH.test_login(ck, login_id="race.pack.%d" % k)
+        clients.append(ck)
+    out = []
+
+    def open_one(k):
+        r = clients[k].post("/api/box/open", json={"grade": "A", "model": MODEL,
+                                                   "capacity": 36})
+        out.append((r.status_code, r.get_json(silent=True)))
+    th = [threading.Thread(target=open_one, args=(k,)) for k in range(8)]
+    for x in th:
+        x.start()
+    for x in th:
+        x.join()
+    assert [st for st, _ in out] == [200] * 8, out
+    seqs = [d["seq"] for _, d in out]
+    assert len(set(seqs)) == 8, sorted(seqs)
+
 def state_of(s):
     with store.conn() as (cx, cur):
         return dict(db.find_serial(cur, s) or {}).get("state")

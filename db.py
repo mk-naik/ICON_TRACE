@@ -345,14 +345,15 @@ def draw_box_seq(cur, pack_date):
             n = _demo["box_counter"].get(pack_date, 1)
             _demo["box_counter"][pack_date] = n + 1
             return n
+    # Written before it is read, as draw_challan_seq is: the INSERT is the
+    # transaction's first write and takes the write lock, so two pallets
+    # opened at once cannot read the same next_seq. Read first, outside the
+    # transaction, the second used to reach UNIQUE (pack_date, seq) and fail.
+    cur.execute("INSERT INTO box_counter (pack_date, next_seq) VALUES (%s, 1) "
+                "ON CONFLICT(pack_date) DO NOTHING", (pack_date,))
     cur.execute("SELECT next_seq FROM box_counter WHERE pack_date=%s",
                 (pack_date,))
-    row = cur.fetchone()
-    if row is None:
-        cur.execute("INSERT INTO box_counter (pack_date, next_seq) VALUES (%s, 2)",
-                    (pack_date,))
-        return 1
-    seq = row["next_seq"]
+    seq = cur.fetchone()["next_seq"]
     cur.execute("UPDATE box_counter SET next_seq=%s WHERE pack_date=%s",
                 (seq + 1, pack_date))
     return seq
@@ -1771,12 +1772,12 @@ def draw_gp_seq(cur, d):
             n = _demo["gp_counter"].get(fy, 1)
             _demo["gp_counter"][fy] = n + 1
             return n
+    # Written before it is read, as draw_challan_seq is (two gate passes made
+    # at once read the same next_seq, and the second failed UNIQUE (gp_no)).
+    cur.execute("INSERT INTO gp_counter (gp_date, next_seq) VALUES (%s, 1) "
+                "ON CONFLICT(gp_date) DO NOTHING", (fy,))
     cur.execute("SELECT next_seq FROM gp_counter WHERE gp_date=%s", (fy,))
-    row = cur.fetchone()
-    if row is None:
-        cur.execute("INSERT INTO gp_counter (gp_date, next_seq) VALUES (%s,2)", (fy,))
-        return 1
-    seq = row["next_seq"]
+    seq = cur.fetchone()["next_seq"]
     cur.execute("UPDATE gp_counter SET next_seq=%s WHERE gp_date=%s", (seq+1, fy))
     return seq
 

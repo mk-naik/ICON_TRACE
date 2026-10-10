@@ -656,17 +656,17 @@ def one(cur, sql, args=()):
 
 
 def next_seq(cur, table, key_col, key, seq_col="next_seq"):
-    """Draw a counter value. SQLite serialises writers, so the read-modify-
-    write inside one transaction is atomic - the same guarantee the MySQL
-    row lock gives."""
+    """Draw a counter value. SQLite serialises writers - but Python's sqlite3
+    opens the transaction only at the first INSERT / UPDATE, so a SELECT
+    first ran outside it and two pallets opened at once read the same value
+    (the second failed UNIQUE (pack_date, seq) - audit, 10 Oct). The INSERT
+    comes first now: it takes the write lock, and the read after it sees
+    every draw already committed (as db.draw_challan_seq does)."""
+    cur.execute("INSERT INTO %s (%s, %s) VALUES (%%s, 1) ON CONFLICT(%s) "
+                "DO NOTHING" % (table, key_col, seq_col, key_col), (key,))
     cur.execute("SELECT %s AS n FROM %s WHERE %s=%%s"
                 % (seq_col, table, key_col), (key,))
-    r = cur.fetchone()
-    if r is None:
-        cur.execute("INSERT INTO %s (%s, %s) VALUES (%%s, 2)"
-                    % (table, key_col, seq_col), (key,))
-        return 1
-    n = r["n"]
+    n = cur.fetchone()["n"]
     cur.execute("UPDATE %s SET %s=%%s WHERE %s=%%s"
                 % (table, seq_col, key_col), (n + 1, key))
     return n
