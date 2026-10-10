@@ -7450,3 +7450,8 @@ commit.
 - **Cause:** with no buyer code `_challan_precheck` refused only pallets of MORE THAN ONE customer.
 - **Change:** every customer-owned pallet is refused (E-OWNER) for an unknown buyer - General Stock only.
 - **Test:** `test_challan.py` +1. From `audit/A4-invoice-challan` 691f244.
+
+### A challan date that is not a date was a 500, after the number was drawn
+- **Found** by A4: challan_date '31/12/2026' -> 500.
+- **Change:** read before anything is written, refused naming the value; no number used up. (Whether a future / other-FY date should be refused is a question for Mukesh.)
+- **Test:** `test_challan.py` +1. From `audit/A4-invoice-challan` d319f65.

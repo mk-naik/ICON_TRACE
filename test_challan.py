@@ -807,6 +807,26 @@ def t_unknown_buyer_refuses_owned_pallet():
     assert r.status_code == 200, r.get_json()
 
 
+@test("a challan date that is not a date is refused with its reason, on "
+      "create and on an edit - not a 500, and no number is used up (audit 9 Oct)")
+def t_bad_challan_date_refused():
+    c = setup()
+    b1 = packed_box(c, [260, 261])
+    b2 = packed_box(c, [262, 263])
+    inv = make_invoice(qty=2, invoice_no="INV-BADDATE")
+    r = c.post("/api/challan", json={"action": "draft", "boxes": [b1],
+                                     "invoice_id": inv, "challan_date": "31/12/2026"})
+    assert r.status_code == 400 and "not a date" in r.get_json()["why"], r.get_json()
+    assert challan_row_count() == 0
+    chid = make_issued_challan(c, [b1], inv)
+    seq = challan_row(chid)["seq"]
+    assert seq == 1, "the refused draft used up a number: %s" % seq
+    r = c.post("/api/challan/%d/edit-save" % chid,
+               json={"boxes": [b2], "invoice_id": inv, "challan_date": "tomorrow"})
+    assert r.status_code == 400 and "not a date" in r.get_json()["why"], r.get_json()
+    assert challan_row(chid)["status"] == "issued"
+
+
 # --------------------------------------------------------------------------
 # what packing already refuses, this refuses too
 # --------------------------------------------------------------------------

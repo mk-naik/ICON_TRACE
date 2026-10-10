@@ -3326,6 +3326,16 @@ def _write_challan(cur, d, status, exclude_challan_id=None, fy=None, seq=None,
         invoice_id = int(invoice_id) if invoice_id else None
     except (TypeError, ValueError):
         invoice_id = None
+    # the date the document carries (its number is built from it): read here,
+    # before anything is written - a value that is not a date used to reach
+    # fromisoformat() after the number was drawn, as a 500
+    raw_date = (d.get("challan_date") or "").strip()
+    if raw_date:
+        try:
+            datetime.date.fromisoformat(raw_date)
+        except ValueError:
+            raise _ChallanRefused("The challan date %r is not a date "
+                                  "(YYYY-MM-DD)." % raw_date)
 
     chk = _challan_precheck(cur, box_ids, invoice_id,
                             exclude_challan_id=exclude_challan_id)
