@@ -6892,6 +6892,44 @@ def _front_glass(raw, n):
     return v, None
 
 
+def _pallet_qty(raw, n, ceiling):
+    """(value, error) for an item's per-pallet instruction: blank (the frame's
+    ceiling), or a whole number from 1 to the ceiling. 'abc' was a 500 and -5
+    was stored."""
+    if raw in (None, ""):
+        return None, None
+    try:
+        v = int(raw)
+        if float(raw) != v:
+            raise ValueError
+    except (TypeError, ValueError):
+        return None, "Item %d: per pallet must be a whole number - %r is not." % (n, raw)
+    if v < 1:
+        return None, "Item %d: per pallet must be at least 1." % n
+    if v > ceiling:
+        return None, ("Item %d: %s per pallet is impossible — the frame "
+                      "takes at most %d." % (n, raw, ceiling))
+    return v, None
+
+
+def _indent_head_errors(d):
+    """What the header itself may not say: a date that is not a date (stored as
+    typed, it sorts nowhere), a build type that is neither of Icon's two -
+    Packing reads it to keep make-to-order modules apart."""
+    errors = []
+    for k, label in (("indent_date", "Indent date"), ("delivery_by", "Delivery by")):
+        v = (d.get(k) or "").strip() if isinstance(d.get(k), str) else d.get(k)
+        if v:
+            try:
+                datetime.date.fromisoformat(str(v))
+            except ValueError:
+                errors.append("%s %r is not a date." % (label, v))
+    if d.get("build_type") and d["build_type"] not in ("make_to_stock", "make_to_order"):
+        errors.append("Build type must be make to stock or make to order, not %r."
+                      % d["build_type"])
+    return errors
+
+
 @app.route("/api/indent", methods=["POST"])
 @require_screen_write("indent")
 def api_indent_create():
@@ -6915,10 +6953,9 @@ def api_indent_create():
         if q < 1:
             errors.append("Item %d needs a quantity of at least 1." % i)
             continue
-        pal = it.get("pallet_qty")
-        if pal and int(pal) > mm["pallet_ceiling"]:
-            errors.append("Item %d: %s per pallet is impossible — the frame "
-                          "takes at most %d." % (i, pal, mm["pallet_ceiling"]))
+        pal, pal_err = _pallet_qty(it.get("pallet_qty"), i, mm["pallet_ceiling"])
+        if pal_err:
+            errors.append(pal_err)
         arc, arc_err = _front_glass(it.get("arc"), i)
         if arc_err:
             errors.append(arc_err)
@@ -6926,11 +6963,12 @@ def api_indent_create():
         lines.append({"item_description": mm["item"], "item_code": mm["item_code"],
                       "model": mm["model"], "wattage": mm["wattage"], "qty": q,
                       "dcr": mm["cell_type"], "arc": arc,
-                      "pallet_qty": int(pal) if pal else None, "line_note": None})
+                      "pallet_qty": pal, "line_note": None})
     for k, label in (("indent_no", "Indent number"), ("customer", "Customer"),
                      ("indent_date", "Indent date")):
         if not (d.get(k) or "").strip():
             errors.append("%s is required." % label)
+    errors.extend(_indent_head_errors(d))
     if not lines:
         errors.append("An indent needs at least one item.")
     if d.get("delivery_text") and not d.get("delivery_by"):
@@ -8849,10 +8887,9 @@ def api_indent_update(indent_no):
             errors.append("Item %d: quantity must be a whole number of at "
                           "least 1." % n)
             continue
-        pal = it.get("pallet_qty")
-        if pal and int(pal) > mm["pallet_ceiling"]:
-            errors.append("Item %d: %s per pallet is impossible — the frame "
-                          "takes at most %d." % (n, pal, mm["pallet_ceiling"]))
+        pal, pal_err = _pallet_qty(it.get("pallet_qty"), n, mm["pallet_ceiling"])
+        if pal_err:
+            errors.append(pal_err)
         arc, arc_err = _front_glass(it.get("arc"), n)
         if arc_err:
             errors.append(arc_err)
@@ -8860,7 +8897,8 @@ def api_indent_update(indent_no):
         lines.append({"item_description": mm["item"], "item_code": mm["item_code"],
                       "model": mm["model"], "wattage": mm["wattage"], "qty": q,
                       "dcr": mm["cell_type"], "arc": arc,
-                      "pallet_qty": int(pal) if pal else None, "line_note": None})
+                      "pallet_qty": pal, "line_note": None})
+    errors.extend(_indent_head_errors(d))
     # The serial type is fixed once serials exist: 300 ICON serials cannot
     # become "custom" after the fact, nor the reverse.
     if used and "custom_serial" in d and \

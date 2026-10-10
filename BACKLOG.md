@@ -7427,3 +7427,8 @@ commit.
 - **Found** by A1: ICON600G... serials were accepted on an ISEN600-G12R item and stored as G12R modules; Planning's screen refuses this, the server compared the wattage only.
 - **Change:** `_nameplate_refusal` also refuses a serial whose family letter is not the item model's, on create and edit, before anything is written.
 - **Test:** `test_custom_serials.py` +1. From `audit/A1-plan-produce` 0a42149.
+
+### An indent's per pallet 'abc' was a 500; bad dates and build types were stored
+- **Found** by A1: POST /api/indent with pallet_qty 'abc' answered 500 and -5 was stored; an indent date 'not a date' and build type 'make_to_whatever' were stored as sent (Packing reads the build type).
+- **Change:** `_pallet_qty()` (blank, or a whole number 1 to the ceiling) and `_indent_head_errors()` (real dates, one of the two build types), on create and edit.
+- **Test:** `test_indent.py` +1. From `audit/A1-plan-produce` 70e166e.

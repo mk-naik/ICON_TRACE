@@ -229,6 +229,30 @@ def t_same_day_items_together():
     got = [(x["indent_no"], x["line_no"]) for x in rows(c)]
     assert got == [("OCT-09/B", 1), ("OCT-09/B", 2), ("OCT-09/A", 1), ("OCT-09/A", 2)], got
 
+@test("what an indent may not say is refused with a reason, never a 500 or a "
+      "stored oddity: per pallet 'abc' / -5 / 1.5, a date that is not a date, a "
+      "build type that is not Icon's")
+def t_bad_fields_refused():
+    c = setup()
+    for item, why in (({"pallet_qty": "abc"}, "whole number"), ({"pallet_qty": -5}, "at least 1"),
+                      ({"pallet_qty": 1.5}, "whole number"), ({"pallet_qty": 99}, "impossible")):
+        r = c.post("/api/indent", json={"indent_no": "X/1", "indent_date": "2026-09-09",
+            "customer": "ICON STOCK", "items": [dict({"item_code": ITEMS[0], "qty": 36}, **item)]})
+        assert r.status_code == 200 and any(why in e for e in r.get_json().get("errors", [])),             (item, r.status_code, r.get_data(as_text=True)[:200])
+    for head, why in (({"indent_date": "not a date"}, "is not a date"),
+                      ({"delivery_by": "31-31-2026"}, "is not a date"),
+                      ({"build_type": "make_to_whatever"}, "Build type")):
+        body = dict({"indent_no": "X/2", "indent_date": "2026-09-09", "customer": "ICON STOCK",
+                     "items": [{"item_code": ITEMS[0], "qty": 36}]}, **head)
+        r = c.post("/api/indent", json=body).get_json()
+        assert any(why in e for e in r.get("errors", [])), (head, r)
+    assert not [x for x in rows(c) if x["indent_no"] in ("X/1", "X/2")], "a refused indent was saved"
+    make(c)
+    r = c.put("/api/indent/SEP-09%2F2026", json={"build_type": "nonsense",
+              "items": [{"item_code": ITEMS[0], "qty": 36, "pallet_qty": "abc"}]}).get_json()
+    assert len(r.get("errors", [])) == 2, r
+    assert make(c, no="X/3", items=[{"item_code": ITEMS[0], "qty": 36, "pallet_qty": "30"}]).get_json()["ok"]
+
 
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
