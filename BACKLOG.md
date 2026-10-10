@@ -7461,3 +7461,8 @@ commit.
 - **Cause:** inline handlers call `clLoad()` on window; it was local to the live layer's closure; `if (clBusy) return`.
 - **Change:** `clLoad` on window; a call made while busy runs when the fetch answers.
 - **Test:** `test_challan_list_ui.py` (new, fails before). From `audit/A4-invoice-challan` 8c22c4a.
+
+### Search & Trace by customer missed the challans built from Icon Stock pallets
+- **Found** by A4: RAVITYA / AGNI GREEN found no challans - `_trace_customer` looks through serial.customer, while a General Stock pallet given to the customer on a challan changes box.customer only.
+- **Change:** challans whose buyer resolves to the customer are listed too (module counts unchanged).
+- **Test:** `test_search_invoice.py` +1. From `audit/A4-invoice-challan` d5f2c19.

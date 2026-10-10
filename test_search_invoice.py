@@ -330,6 +330,24 @@ def t_customer():
     assert many["kind"] == "customers" and len(many["matches"]) > 1, many
 
 
+@test("a customer's challans include one built from Icon Stock pallets - the "
+      "pallet takes the buyer, its modules keep STOCK - found by the challan's "
+      "buyer (audit 9 Oct)")
+def t_customer_finds_stock_delivery():
+    c = seed()
+    with store.conn() as (cx, cur):
+        stock = ["ICON625R1290220591", "ICON625R1290220592"]
+        for k, s_ in enumerate(stock):
+            store.insert(cur, "serial", {"serial": s_, "build_instance": 1,
+                "model": "ISEN625-G12R", "wattage": 625, "customer": "STOCK",
+                "dcr": "DCR", "format_version": 2, "date_produced": "2026-09-05",
+                "shift": 1, "sequence": 591 + k, "state": "dispatched", "grade": "A"})
+        add_challan(cur, 9, "ICON/26-27/899", None, "issued",
+                    [("ISPL260905/K009", stock)], date="2026-09-06")
+    d = find(c, "sai babuji").get_json()
+    assert "IS-06.09.2026/0009" in [x["challan_no"] for x in d["challans"]],         [x["challan_no"] for x in d["challans"]]
+
+
 @test("a customer whose rows store the NAME, not the code - and in more than "
       "one case - is still found completely: every real allocation writes "
       "the name (not the code, which this file's own seed() happens to use, "

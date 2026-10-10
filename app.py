@@ -8246,12 +8246,25 @@ def _trace_customer(cur, q):
         "SELECT alloc_id, date_produced, model, qty FROM allocation "
         "WHERE UPPER(customer) IN (UPPER(%s), UPPER(%s)) "
         "ORDER BY alloc_id DESC LIMIT 200", ids)]
-    chs = store.rows(cur,
-        "SELECT DISTINCT c.* FROM challan_serial cs "
+    # The customer's challans: those carrying modules made for it, AND those
+    # whose buyer is it. A General Stock pallet delivered on a challan takes
+    # the buyer as its owner on the PALLET (db.assign_customer_on_challan) -
+    # its modules keep "STOCK" - so a challan built from Icon Stock was found
+    # through the modules alone never (audit 9 Oct). The buyer is resolved
+    # the way the challan screen resolves it (GSTIN first, then the name).
+    chids = {r["challan_id"] for r in store.rows(cur,
+        "SELECT DISTINCT cs.challan_id FROM challan_serial cs "
         "JOIN serial s ON s.serial=cs.serial AND s.build_instance=cs.build_instance "
-        "JOIN challan c ON c.challan_id=cs.challan_id "
-        "WHERE UPPER(s.customer) IN (UPPER(%s), UPPER(%s)) "
-        "ORDER BY c.challan_date DESC, c.challan_id DESC LIMIT 200", ids)
+        "WHERE UPPER(s.customer) IN (UPPER(%s), UPPER(%s))", ids)}
+    for r in store.rows(cur, "SELECT challan_id, buyer_name, buyer_gstin "
+                             "FROM challan"):
+        who = customers.resolve(r["buyer_name"], r["buyer_gstin"])
+        if who and who["customer_code"] == code:
+            chids.add(r["challan_id"])
+    chs = store.rows(cur,
+        "SELECT * FROM challan WHERE challan_id IN (%s) "
+        "ORDER BY challan_date DESC, challan_id DESC LIMIT 200"
+        % ",".join(str(int(x)) for x in chids)) if chids else []
     return {"ok": True, "kind": "customer",
             "customer": {"code": code, "name": c["name"], "gstin": c.get("gstin"),
                          "state": c.get("state")},
