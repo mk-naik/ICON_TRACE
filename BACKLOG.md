@@ -7412,3 +7412,8 @@ commit.
 - **Change:** grade must be A / GY / BGY, the model must be in the model master (stored
   as the master spells it), and a capacity that is not a whole number is refused.
 - **Test:** `test_packing.py` +1. From `audit/A3-pack` 0acfd70.
+
+### Planning's Withdraw could never withdraw; a withdrawal took no reason
+- **Found** by A1: Withdraw on Recent Allocations sent a bare DELETE, so the server refused every press ("Enter your authenticator code to cancel.") - no batch could be withdrawn from Planning; it was also shown to a Production Incharge, whom the server refuses. DELETE /api/allocation never checked or recorded a reason - the one cancel of ten that did not (DECISIONS 1).
+- **Change:** Withdraw asks for a reason and the authenticator code (as the challan's Cancel does), offered to Admin / Super Admin only; the server refuses a blank reason (400, before the code is spent) and writes it on the planning.cancel audit row. DECISIONS 1: "nine cancel routes" -> ten. The running-production guard is unchanged.
+- **Test:** `test_alloc_withdraw_ui.py` (new, Chromium); `test_cancel_documents.py` blank-reason test +1 route. From `audit/A1-plan-produce` cb96da5.

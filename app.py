@@ -7479,6 +7479,13 @@ def api_allocation_cancel(alloc_id):
     'planned' - only who may call it and the step-up are new. The code is
     carried in the DELETE's JSON body, same {reason, totp_code} as the rest."""
     d = request.get_json(silent=True) or {}
+    reason = (d.get("reason") or "").strip()
+    # a withdrawal is a cancel: a reason, never a default string, asked before
+    # the step-up so a blank one does not burn the one-time code (DECISIONS 1).
+    # The body always carried one; it was neither checked nor recorded.
+    if not reason:
+        return jsonify({"ok": False, "why":
+            "A reason is required to withdraw an allocation."}), 400
     with store.conn() as (cx, cur):
         err = _require_stepup(cur, d)
         if err:
@@ -7506,7 +7513,8 @@ def api_allocation_cancel(alloc_id):
             cur, released, by=actor(),
             reason="allocation #%d withdrawn" % alloc_id)
         db.audit(cur, actor(), "planning.cancel", "allocation", alloc_id,
-                 {"serials_released": n, "review_reopened": reopened})
+                 {"serials_released": n, "review_reopened": reopened,
+                  "reason": reason})
         after = _line_state(cur, a["indent_line_id"])
     return jsonify({"ok": True, "released": n,
                     "left": after["left"] if after else None})

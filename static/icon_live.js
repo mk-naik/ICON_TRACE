@@ -8045,7 +8045,10 @@ function wireFqcAnomalies() {
               (a.editable ?
                 ' <button class="btn btn-ghost btn-sm" onclick="iconEditAlloc(' +
                   a.alloc_id + ')">Edit</button>' : '') +
-              (a.editable ?
+              /* withdrawing is a cancel - Admin / Super Admin, as the
+                 server's own gate; nobody else is offered a button that is
+                 only ever refused */
+              (a.editable && (USER.role === 'Admin' || USER.role === 'Super Admin') ?
                 ' <button class="btn btn-ghost btn-sm" onclick="iconCancelAlloc(' +
                   a.alloc_id + ')">Withdraw</button>' : '') +
             '</td></tr>';
@@ -8059,10 +8062,19 @@ function wireFqcAnomalies() {
   window.iconEditAlloc = function (id) { planOpenAllocation(id, false); };
   window.iconCopyAlloc = function (id) { planOpenAllocation(id, true); };
 
+  /* A withdrawal is a cancel (Round 34): a reason and the authenticator code,
+     the way the challan's Cancel asks for them. The button sent neither, so
+     the server refused every press ("Enter your authenticator code") and no
+     batch could be withdrawn from Planning at all. */
   window.iconCancelAlloc = function (id) {
-    if (!confirm('Withdraw this allocation? Its serials are released and the ' +
-                 'quantity goes back to the indent item.')) return;
-    fetch('/api/allocation/' + id, { method: 'DELETE' })
+    var reason = prompt('Withdraw this allocation? Its serials are released and ' +
+                        'the quantity goes back to the indent item. Reason:');
+    if (!reason || !reason.trim()) return;
+    var totp = prompt('Your authenticator code, to confirm the withdrawal:');
+    if (!totp || !totp.trim()) return;
+    fetch('/api/allocation/' + id, { method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: reason.trim(), totp_code: totp.trim() }) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (typeof toast === 'function')

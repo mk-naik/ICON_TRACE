@@ -21,7 +21,7 @@ or finish a `[decided]` item, update this file in the same commit.
 - Documents are cancelled or superseded, never deleted or silently rewritten.
   The module journey shows the history. [built]
 - Every cancel, override and resolution records who, when and a **mandatory
-  reason**. Never substitute a default reason string. [built for all nine cancel
+  reason**. Never substitute a default reason string. [built for all ten cancel
   routes - a blank reason is a 400, asked before the authenticator step; **[open]**
   the box-abandon route still fills a stated-fact reason when none is sent]
 - Software shows evidence; a person decides; the system records who, why, when.

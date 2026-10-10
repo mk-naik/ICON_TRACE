@@ -731,7 +731,12 @@ def t_cancel_needs_a_real_reason():
             r = admin.post(url, json=body)
             why = (r.get_json() or {}).get("why", "")
             assert r.status_code == 400 and "reason is required" in why,                 (url, body, r.status_code, why)
-    print("      %d routes refuse a missing or blank reason" % len(routes))
+    # an allocation's withdrawal is a cancel too (its verb is DELETE)
+    for body in ({}, {"reason": "   "}):
+        r = admin.delete("/api/allocation/1", json=dict(body, totp_code=code(secret)))
+        why = (r.get_json() or {}).get("why", "")
+        assert r.status_code == 400 and "reason is required" in why, (body, r.status_code, why)
+    print("      %d routes refuse a missing or blank reason" % (len(routes) + 1))
 
 
 @test("the Cancel screen's lookup resolves the SAME display numbers the rest "
