@@ -7522,3 +7522,8 @@ commit.
   cancelled passes, /api/print/resolve, archive CSV field, "Indent line" wording.
 - **Housekeeping:** 7 agent worktrees under `.claude\worktrees\` (branches `audit/A1..A7-*`,
   all merged) to remove; production copies in the audit folder to delete.
+
+### Search & Trace did not find a scanned QR
+- **Found** by A6 (Chromium): `ICONTRACE|BOX|ISPL261010/K001|...` and `ICONTRACE|CHALLAN|IS-10.10.2026/0002 (MA)` typed by a scanner were answered "Nothing recorded matches" (DECISIONS 1: a scan looks the record up).
+- **Change:** `api_trace_find` takes the number out of an ICONTRACE payload and looks it up as the kind it names (BOX a pallet, CHALLAN a challan; a gate pass is still not searchable - A7-06).
+- **Test:** `test_search_invoice.py` +1 (fails before). From `audit/A6-overview-search-admin` a49ee9c.

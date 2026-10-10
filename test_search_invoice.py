@@ -263,6 +263,18 @@ def t_challan():
     assert r.status_code == 404 and "No challan IS-01.01.2020/0099 is recorded" in r.get_json()["why"]
 
 
+@test("a scanned QR finds what it names - the packing list's ICONTRACE|BOX|...")
+def t_qr_payload():
+    c = seed()
+    k1 = label(IDS["k1"])
+    d = find(c, "ICONTRACE|BOX|%s|ISEN625-G12R|A|2|2026-09-05" % k1).get_json()
+    assert d.get("kind") == "box" and d["box_no"] == k1, d
+    d = find(c, "icontrace|challan|IS-06.09.2026/0003 (MA)").get_json()
+    assert d.get("kind") == "challan" and d["challan"]["challan_no"] == "IS-06.09.2026/0003 (MA)", d
+    r = find(c, "ICONTRACE|BOX|ISPL260905/K099|ISEN625-G12R|A|2|2026-09-05")
+    assert r.status_code == 404 and "No pallet ISPL260905/K099" in r.get_json()["why"], r.get_json()
+
+
 @test("a pallet number finds the pallet - which is its packing list: modules, "
       "the challan it is on, and the repack trail in both directions")
 def t_pallet():

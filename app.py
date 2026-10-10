@@ -8311,6 +8311,14 @@ def api_trace_find():
     kind = (request.args.get("kind") or "auto").strip().lower()
     if not q:
         return jsonify({"ok": False, "why": "Enter something to look for."}), 400
+    # A scanned QR carries identity only (DECISIONS 1) and is looked up
+    # here: the number inside it, as the kind it names. A scanner at Search
+    # & Trace typed "ICONTRACE|BOX|ISPL261010/K001|..." and was told nothing
+    # recorded matched it (audit A6, 10 Oct).
+    qr = q.split("|")
+    if len(qr) >= 3 and qr[0] == "ICONTRACE" and qr[2].strip():
+        q = qr[2].strip()
+        kind = {"BOX": "box", "CHALLAN": "challan"}.get(qr[1].strip(), "auto")
     finders = _TRACE_FINDERS.get(kind) or _TRACE_AUTO
     try:
         with store.conn() as (cx, cur):
