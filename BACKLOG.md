@@ -7422,3 +7422,8 @@ commit.
 - **Found** by A1: /apply took /parse's ranges back from the browser and checked none of it again - an edited range backfilled ICON625R12A0730001-5 as 630 W ISEN630-G12R modules, "produced", under an entry dated 2027-01-15; customer code and rework flag came from the request too (DECISIONS 12 / 5: the serial's wattage is the nameplate).
 - **Change:** `_import_range_checked()` re-reads each range from its start and end serial; running numbers, quantity, wattage and model come from the serials and a sent value that disagrees is refused, naming it; the customer is resolved again from the file's text; a non-date, a shift not A/B/C and a shift not yet started are refused (backfill keeps only its exemption from the 30-day limit).
 - **Test:** `test_traceability_import.py` +1. From `audit/A1-plan-produce` f93a942.
+
+### The server allocated a G2X serial on a G12R item of the same wattage
+- **Found** by A1: ICON600G... serials were accepted on an ISEN600-G12R item and stored as G12R modules; Planning's screen refuses this, the server compared the wattage only.
+- **Change:** `_nameplate_refusal` also refuses a serial whose family letter is not the item model's, on create and edit, before anything is written.
+- **Test:** `test_custom_serials.py` +1. From `audit/A1-plan-produce` 0a42149.

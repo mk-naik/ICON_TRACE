@@ -7253,6 +7253,22 @@ def _nameplate_refusal(serials, L):
     want = L.get("wattage")
     if not want:
         return None
+    # The serial names its model family too (R = G12R, G = G2X), and two
+    # products share a wattage - ISEN600-G2X and ISEN600-G12R. Planning's screen
+    # refused a G serial on a G12R item; the server, wattage only, wrote it as
+    # a G12R module (audit, 10 Oct).
+    try:
+        fam = gen.family_of(L.get("model"))
+    except gen.SerialError:
+        fam = None
+    for s in serials:
+        r = CI.decompose(s)
+        if fam and r.get("ok") and r["family"] != fam:
+            return ("%s is a %s-family module (the letter after its wattage) and "
+                    "this indent item is %s, family %s. The serial names the "
+                    "product - it cannot be allocated as another. Plan it on an "
+                    "item of its own model."
+                    % (s, r["family"], L.get("model"), fam))
     bad = []
     for s in serials:
         r = CI.decompose(s)

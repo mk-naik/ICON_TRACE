@@ -309,6 +309,30 @@ def t_alloc_fields_are_the_servers():
     assert n_alloc() == n0, "a refused request left an allocation behind"
 
 
+@test("a serial goes only on an item of its own model family: a G2X serial "
+      "(ICON600G...) is refused on an ISEN600-G12R item of the same wattage, "
+      "on create and on edit, and nothing is written")
+def t_family_is_part_of_the_nameplate():
+    c, _, icon_line = world()
+    import icon_models as models
+    it = [i["item_code"] for i in models.ITEMS
+          if i["model"] == "ISEN600-G12R" and i["cell_type"] == "NDCR"][0]
+    assert c.post("/api/indent", json={"indent_no": "OCT-03/2026", "indent_date": "2026-10-01",
+        "customer": "ICON Stock", "items": [{"item_code": it, "qty": 10}]}).get_json()["ok"]
+    with store.conn() as (cx, cur):
+        line = store.one(cur, "SELECT l.indent_line_id AS id FROM indent_line l JOIN indent i "
+                              "ON i.indent_id=l.indent_id WHERE i.indent_no='OCT-03/2026'")["id"]
+    n0 = n_alloc()
+    r = allocate(c, line, ["ICON600G12A1010001", "ICON600G12A1010002"])
+    assert r.status_code == 400 and "family" in r.get_json()["why"], r.get_json()
+    assert n_alloc() == n0 and not serial_row("ICON600G12A1010001"), "a refused range wrote rows"
+    ok = allocate(c, line, ["ICON600R12A1010001"])
+    assert ok.status_code == 200, ok.get_json()
+    r = c.put("/api/allocation/%d/update" % ok.get_json()["alloc_id"], json={
+        "indent_line_id": line, "qty": 1, "serials": ["ICON600G12A1010003"], "materials": []})
+    assert r.status_code == 400 and "family" in r.get_json()["why"], r.get_json()
+
+
 @test("Search & Trace finds a custom serial by exact match (it has no ICON "
       "shape to recognise), and says it can be a customer's own serial when "
       "nothing matches")
