@@ -99,6 +99,42 @@ def t_admin_cancel_works():
     assert s["state"] == "packed", dict(s)
 
 
+@test("the Cancel button reports what the server answered: a wrong code is "
+      "refused with its reason and the panel stays; a cancel says cancelled and "
+      "refreshes the list - it used to say 'Failed: Unexpected token' for both "
+      "(audit 9 Oct)")
+def t_cancel_reports_the_answer():
+    cid = seed()
+    with H.browser() as b:
+        AUTH.make_user(role="Super Admin", login_id="sa.ui2")
+        secret = AUTH.provision_totp("sa.ui2")
+        pg = H.open_page(b, role="Super Admin", login_id="sa.ui2")
+        pg.evaluate("""() => { window.__t = []; var o = window.toast;
+            window.toast = (m) => { window.__t.push(String(m)); return o(m); }; }""")
+        hook = """(answers) => { window.__answers = answers;
+            window.prompt = () => window.__answers.shift(); }"""
+        pg.evaluate(hook, ["wrong consignee", "000000"])
+        open_detail(pg, cid)
+        pg.click("#clDetailCard button:has-text('Cancel')")
+        pg.wait_for_timeout(1500)
+        said = pg.evaluate("() => window.__t")
+        assert any("not cancelled" in m and "not accepted" in m for m in said), said
+        assert pg.is_visible("#clDetailCard"), "the panel closed on a refusal"
+        with store.conn() as (cx, cur):
+            assert store.one(cur, "SELECT status FROM challan WHERE challan_id=%s",
+                             (cid,))["status"] == "issued"
+        pg.evaluate("() => { window.__t = []; }")
+        pg.evaluate(hook, ["wrong consignee", AUTH.totp_code(secret)])
+        pg.click("#clDetailCard button:has-text('Cancel')")
+        pg.wait_for_timeout(1500)
+        said = pg.evaluate("() => window.__t")
+        assert any("cancelled" in m and "Failed" not in m for m in said), said
+        assert not pg.errors, pg.errors
+    with store.conn() as (cx, cur):
+        assert store.one(cur, "SELECT status FROM challan WHERE challan_id=%s",
+                         (cid,))["status"] == "cancelled"
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

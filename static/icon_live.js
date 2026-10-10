@@ -12227,12 +12227,23 @@ function wireFqcAnomalies() {
     if (!reason || !reason.trim()) return;
     var totp = prompt('Your authenticator code, to confirm the cancellation:');
     if (!totp || !totp.trim()) return;
-    fetch('/api/challan/' + id + '/discard', {
+    /* Through api(), which reads the server's answer: a refusal is shown with
+       its own reason and nothing is closed. This used to pass the Response to
+       api() as if it were a path (.then(api)), which fetched
+       "/api/[object Response]" - every outcome, a wrong code and a SUCCESSFUL
+       cancel alike, ended in "Failed: Unexpected token '<' ... not valid JSON". */
+    api('challan/' + id + '/discard', {
       method: 'POST',
       body: JSON.stringify({ reason: reason.trim(), totp_code: totp.trim() })
     })
-      .then(api)
       .then(function (d) {
+        if (!d || !d.ok) {
+          if (typeof toast === 'function') {
+            toast(no + ' was not cancelled: ' +
+                  String((d && (d.why || d.error)) || 'refused').replace(/\.$/, '') + '.');
+          }
+          return;
+        }
         if (typeof toast === 'function') toast(no + ' cancelled — serials reverted to packed.');
         clCloseDetail();
         clLoad();

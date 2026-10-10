@@ -7432,3 +7432,9 @@ commit.
 - **Found** by A1: POST /api/indent with pallet_qty 'abc' answered 500 and -5 was stored; an indent date 'not a date' and build type 'make_to_whatever' were stored as sent (Packing reads the build type).
 - **Change:** `_pallet_qty()` (blank, or a whole number 1 to the ceiling) and `_indent_head_errors()` (real dates, one of the two build types), on create and edit.
 - **Test:** `test_indent.py` +1. From `audit/A1-plan-produce` 70e166e.
+
+### The challan Cancel button said "Failed: Unexpected token" - even when the cancel worked
+- **Found** by A4 (Chromium): a wrong code AND a successful cancel both showed "Failed: Unexpected token '<' ..."; after the right code the challan WAS cancelled but the panel stayed open and the operator was told it failed (test_challan_cancel_ui checked only the database).
+- **Cause:** `clCancelChallan()` passed the Response to `api()` as a path - it fetched '/api/[object Response]'.
+- **Change:** the cancel goes through `api()`: a refusal names its reason; a cancel closes the panel and reloads the list.
+- **Test:** `test_challan_cancel_ui.py` +1 (fails before). From `audit/A4-invoice-challan` 6a6c4af.
