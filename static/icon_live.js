@@ -237,17 +237,19 @@
     if (!_canAct(viewerRole, u.role, u.login_id)) {
       return '<span class="sp hint">View only</span>';
     }
-    var id = fqcEsc(u.login_id), btns = [];
+    /* a login ID is typed by whoever creates the account - jsArg, so one
+       with an apostrophe still works its own buttons */
+    var id = jsArg(u.login_id), btns = [];
     if (u.role === 'Admin') {
-      btns.push('<button class="btn btn-ghost btn-sm" onclick="usrResetTotp(\'' +
-                id + '\')">Reset TOTP</button>');
+      btns.push('<button class="btn btn-ghost btn-sm" onclick="usrResetTotp(' +
+                id + ')">Reset TOTP</button>');
     } else {
-      btns.push('<button class="btn btn-ghost btn-sm" onclick="usrResetPw(\'' +
-                id + '\')">Reset password</button>');
+      btns.push('<button class="btn btn-ghost btn-sm" onclick="usrResetPw(' +
+                id + ')">Reset password</button>');
     }
     if (u.locked_minutes > 0) {
-      btns.push('<button class="btn btn-ghost btn-sm" onclick="usrUnlock(\'' +
-                id + '\')">Unlock</button>');
+      btns.push('<button class="btn btn-ghost btn-sm" onclick="usrUnlock(' +
+                id + ')">Unlock</button>');
     }
     /* Not on your own row: icon_auth refuses "Cannot deactivate yourself."
        and would refuse the reverse too, so offering either would be
@@ -257,13 +259,13 @@
       /* Round 28. Not on your own row either: set_screen_perms() refuses
          it, because it would be the one way a restricted account could
          hand itself a screen back. */
-      btns.push('<button class="btn btn-ghost btn-sm" onclick="usrEditPerms(\'' +
-                id + '\')">Edit permissions</button>');
+      btns.push('<button class="btn btn-ghost btn-sm" onclick="usrEditPerms(' +
+                id + ')">Edit permissions</button>');
       btns.push(u.active
-        ? '<button class="btn btn-ghost btn-sm" onclick="usrDeactivate(\'' + id +
-          '\')">Deactivate</button>'
-        : '<button class="btn btn-ghost btn-sm" onclick="usrReactivate(\'' + id +
-          '\')">Reactivate</button>');
+        ? '<button class="btn btn-ghost btn-sm" onclick="usrDeactivate(' + id +
+          ')">Deactivate</button>'
+        : '<button class="btn btn-ghost btn-sm" onclick="usrReactivate(' + id +
+          ')">Reactivate</button>');
     }
     return btns.join(' ');
   }
@@ -1849,10 +1851,10 @@
                    '<td><div class="bar-wrap"><div class="bar"><i style="width:' + Math.min(pct*12, 100) +
                    '%"></i></div><span class="mono">' + pct + '%</span></div></td>' +
                    '<td style="text-align:center"><button class="btn btn-ghost btn-sm" ' +
-                   'onclick="openModules({title:\'Shift ' + sName + ' · ' + fqcEsc(r.model) +
-                   '\',shift:\'' + sName + '\',model:\'' + fqcEsc(r.model) + '\',from:\'' +
-                   fqcEsc(f.from) + '\',to:\'' + fqcEsc(f.to) + '\',customer:\'' +
-                   fqcEsc(f.cust) + '\'})">View ' + r.t.toLocaleString() + '</button></td></tr>';
+                   'onclick="openModules(' + fqcEsc(JSON.stringify({
+                     title: 'Shift ' + sName + ' · ' + r.model, shift: sName,
+                     model: r.model, from: f.from, to: f.to, customer: f.cust })) +
+                   ')">View ' + r.t.toLocaleString() + '</button></td></tr>';
          }).join('') : '<tr data-empty><td colspan="8"><div class="empty-state"><p>' +
            'Nothing inspected under these filters.</p></div></td></tr>';
          el('mgsT', mgsT.toLocaleString());
@@ -2188,6 +2190,22 @@
       return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
     });
   }
+
+  /* A value handed to an inline handler: onclick="qTry(' + jsArg(v) + ')".
+     The browser decodes the attribute's entities BEFORE it parses the
+     script, so fqcEsc() inside '...' gives the apostrophe back - "Shree
+     Sai's Solar" ended the string and View N threw "Unexpected identifier",
+     and a name built for it would have run. Escaped as a JS string first,
+     then fqcEsc keeps that inside the attribute - as the Production
+     Dashboard's View buttons already do with JSON. No JSON here: test_trace.js
+     runs this under Windows Script Host too. */
+  function jsArg(value) {
+    return fqcEsc("'" + String(value == null ? '' : value)
+      .replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"')
+      .replace(/\r/g, '\\r').replace(/\n/g, '\\n')
+      .replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029') + "'");
+  }
+  window.jsArg = jsArg;
 
   function fmtIST(iso) {
     if (!iso) return '—';
@@ -3906,17 +3924,18 @@ function wireFqcAnomalies() {
           m.entry_at ? 'Production entry recorded ' +
           (typeof fmtIST === 'function' ? fmtIST(m.entry_at) : m.entry_at) :
           'No production entry yet - counted as produced from this scan';
-        var serial = fqcEsc(m.serial);
+        /* a customer's own serial may hold an apostrophe: jsArg in the handler */
+        var serial = fqcEsc(m.serial), sArg = jsArg(m.serial);
         html.push('<tr><td class="num" style="color:var(--ink3)">' + (i + 1) + '</td>' +
-          '<td class="mono"><button class="lnk" onclick="qTry(\'' + serial + '\')">' + serial + '</button></td>' +
+          '<td class="mono"><button class="lnk" onclick="qTry(' + sArg + ')">' + serial + '</button></td>' +
           '<td class="mono">' + fqcEsc(m.model) + '</td><td>' + fqcEsc(m.customer || '—') + '</td>' +
           '<td class="mono">' + (typeof fmtIST === 'function' ? fmtIST(m.at) : fqcEsc(m.at)) + '</td>' +
           '<td class="s' + fqcEsc(fc.shift) + '" title="' + fqcEsc(made) + '">' + fqcEsc(fc.shift) + '</td>' +
           '<td>' + fqcEsc(fc.cat) + '</td><td>' + fqcEsc(fc.rem) + '</td>' +
           '<td><span class="tag ' + (pass ? 't-pass">Passed' : 't-fail">Rejected') + '</span></td>' +
           '<td>' + fqcEsc(m.decided_by || '—') + '</td>' +
-          '<td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="qTry(\'' +
-            serial + '\')">Trace</button></td></tr>');
+          '<td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="qTry(' +
+            sArg + ')">Trace</button></td></tr>');
       }
       tbody.innerHTML = html.length ? html.join('') :
         '<tr><td colspan="11"><div class="empty-state">No modules match these filters.</div></td></tr>';
@@ -6293,7 +6312,7 @@ function wireFqcAnomalies() {
      kind of number the system issues resolves from the database now, so they
      all link; a legacy box label that is not an ISPL number does not. */
   function qlink(text) {
-    return '<button class="lnk" onclick="qTry(\'' + fqcEsc(text) + '\')">' +
+    return '<button class="lnk" onclick="qTry(' + jsArg(text) + ')">' +
            fqcEsc(text) + '</button>';
   }
   function boxlink(no) {
@@ -6332,8 +6351,8 @@ function wireFqcAnomalies() {
       return '<tr><td class="mono">' + (r.c.challan_no ? qlink(r.c.challan_no) : DASH) +
         (r.c.live ? '' : ' ' + traceTag(r.c.superseded ? 'superseded' : r.c.status, 't-fail')) +
         '</td><td class="mono">' + boxlink(r.box) + '</td>' +
-        (s ? '<td class="mono"><button class="lnk" onclick="qTry(\'' +
-             fqcEsc(s.serial) + '\')">' + fqcEsc(s.serial) + '</button></td>' +
+        (s ? '<td class="mono"><button class="lnk" onclick="qTry(' +
+             jsArg(s.serial) + ')">' + fqcEsc(s.serial) + '</button></td>' +
              '<td class="mono">' + fqcEsc(s.model || DASH) + '</td>' +
              '<td>' + fqcEsc(s.grade || DASH) + '</td>'
            : '<td class="mono" style="color:var(--ink3)">no serials recorded</td>' +
@@ -15788,8 +15807,8 @@ window.gpSetKind = function(k) {
     tb.innerHTML = d.rows.length ? d.rows.map(function (u) {
       var act = (typeof _canAct === 'function' && _canAct(viewer, u.role, u.login_id) &&
                  !_isMe(u.login_id)) ?
-        '<button class="btn btn-danger btn-sm" onclick="adDeactivate(\'' + fqcEsc(u.login_id) +
-        '\')">Deactivate</button>' : '<span class="sp hint">View only</span>';
+        '<button class="btn btn-danger btn-sm" onclick="adDeactivate(' + jsArg(u.login_id) +
+        ')">Deactivate</button>' : '<span class="sp hint">View only</span>';
       return '<tr><td class="mono">' + fqcEsc(u.login_id) + '</td><td>' + fqcEsc(u.name) + '</td>' +
         '<td><span class="tag ' + (u.role === 'Admin' ? 't-fail' : 't-info') + '">' +
           fqcEsc(u.role) + '</span></td>' +

@@ -7478,3 +7478,18 @@ commit.
   NOTHING first, which takes the write lock), as `draw_challan_seq` now is.
 - **Test:** `test_packing.py` +1, `test_gatepass_multiitem.py` +1 (eight at once, all
   200, all different; both fail before).
+
+### A name with an apostrophe broke the buttons it was on (and could have run as script)
+- **Found** by A6 (Chromium): Management Overview, customer "Shree Sai's Solar" (an indent
+  customer not in the master keeps its typed text) - View N threw "Unexpected identifier
+  's'" and opened nothing; a login ID with an apostrophe broke every button on its Users
+  row; a custom serial may hold one (Search & Trace links, Trace buttons). A value built
+  for it would have run as script.
+- **Cause:** inline handlers put `fqcEsc(value)` inside '...'; the browser decodes the
+  attribute's entities BEFORE it parses the script, so &#39; ended the string.
+- **Change:** `jsArg(value)` escapes the value as a JS string first, then `fqcEsc` keeps
+  it inside the attribute (renderMgmt shift rows, `_actionsCell`, `adAccessPaint`, the
+  openModules list, `qlink`, the invoice view's serial link); Overview's View N builds its
+  arguments with JSON as the Production Dashboard's View buttons do.
+- **Test:** `test_inline_args_ui.py` (new, Chromium; both cases fail before),
+  `test_trace.js` +3 (Node and WSH). From `audit/A6-overview-search-admin` ec2c757.

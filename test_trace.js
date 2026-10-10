@@ -88,6 +88,15 @@ function el(id) {
 }
 var document = { getElementById: function (id) { return el(id); } };
 
+/* the shipped jsArg (a value inside an inline handler), not a copy of it */
+var ja = src.indexOf('  function jsArg(');
+var jb = src.indexOf('  window.jsArg = jsArg;');
+if (ja === -1 || jb === -1 || jb < ja) {
+  echo('Could not find jsArg() in ' + LIVE + '.');
+  if (WSH) WScript.Quit(1); else process.exit(1);
+}
+eval(src.substring(ja, jb));
+
 var from = src.indexOf('  var DASH =');
 var to = src.indexOf('  function wireSearchOrder()');
 if (from === -1 || to === -1 || to < from) {
@@ -306,6 +315,39 @@ ok('a serial containing markup cannot inject into the page',
      grade: null, batch_no: 'b', indent_no: null, item_code: null,
      line_no: null, instances: [], assignment: [], journey: [], events: [],
      materials: [] }).indexOf('<img src=x') === -1, 'markup survived');
+
+/* A link whose number holds an apostrophe (a customer's own serial may: any
+   printable character but a space) must still call qTry with that number.
+   The browser decodes the onclick attribute's entities BEFORE it parses the
+   script - so the attribute is decoded here the same way and then run.
+   fqcEsc alone gave qTry('AB'12') back: a syntax error, and a way in for a
+   crafted name. */
+function decodeAttr(a) {
+  return a.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+function clickArg(html) {
+  var m = /onclick="([^"]*)"/.exec(html), got = [];
+  if (!m) return null;
+  try {
+    (new Function('qTry', decodeAttr(m[1])))(function (v) { got.push(v); });
+  } catch (e) { return 'threw: ' + e.message; }
+  return got.length === 1 ? got[0] : 'called ' + got.length + ' times';
+}
+var odd = "RTF'26\\x\"1</b>";
+var oddHtml = traceSerialHtml({ ok: true, serial: odd,
+  model: 'm', wattage: 1, customer: 'c', dcr: 'DCR', state: 'packed',
+  grade: 'A', batch_no: 'BAT-2610-00007', indent_no: null, item_code: null,
+  line_no: null, instances: [], assignment: [], events: [], materials: [],
+  journey: [{ stage: 'Allocated', value: 'BAT-2610-00007', done: true },
+            { stage: 'Packed', value: "ISPL261010/K001", done: true }] });
+ok('a journey link calls qTry with exactly its number',
+   clickArg(oddHtml) === 'BAT-2610-00007', clickArg(oddHtml));
+ok('a value with an apostrophe, quotes and a backslash reaches qTry whole - ' +
+   'the attribute is decoded before the script runs, as a browser does',
+   clickArg(qlink(odd)) === odd, clickArg(qlink(odd)));
+ok('...and is still shown as text, never markup',
+   qlink(odd).indexOf('</b>') === -1, qlink(odd));
 
 echo('');
 echo(FAIL ? FAIL + ' of ' + RAN + ' failed' : RAN + ' passed, 0 failed');
