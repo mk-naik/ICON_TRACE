@@ -1225,6 +1225,26 @@ def t_edit_frees_the_pallet_it_removed():
     assert sd["fg_ready"]["box_count"] == 0, sd["fg_ready"]
 
 
+@test("Stock & Dispatch gives the period's dispatches per customer and model - "
+      "Management Overview's Dispatch & stock table read a hard-coded 0 and the "
+      "stock's KW as 'shipped' (audit A6, 10 Oct)")
+def t_stock_dispatch_by_customer_model():
+    c = setup()
+    b1 = packed_box(c, [120, 121])
+    b2 = packed_box(c, [122, 123])
+    b3 = packed_box(c, [124, 125, 126])                    # stays in stock
+    make_issued_challan(c, [b1, b2], make_invoice(qty=4, invoice_no="INV-DISPBY"))
+    day = __import__("icon_clock").shift_day().isoformat()
+    sd = c.get("/api/stock_dispatch?from=%s&to=%s" % (day, day)).get_json()
+    by = [(r["model"], r["modules"], round(r["kw"], 3)) for r in sd["disp_by"]]
+    assert by == [(MODEL, 4, round(4 * WATT / 1000.0, 3))], sd["disp_by"]
+    assert "AGNI" in sd["disp_by"][0]["customer_name"].upper(), sd["disp_by"]
+    assert sum(r["modules"] for r in sd["disp_by"]) == sd["disp_today"]["modules"]
+    assert [(r["modules"], r["box_count"]) for r in sd["table_fg"]] == [(3, 1)], sd["table_fg"]
+    other = c.get("/api/stock_dispatch?from=2020-01-01&to=2020-01-02").get_json()
+    assert other["disp_by"] == [], "a period with no dispatch lists none"
+
+
 @test("the Challan list's Status dropdown offers the statuses on file under the "
       "search - Superseded included, which it never offered (6 Oct)")
 def t_challan_list_status_facet():

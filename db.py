@@ -2756,18 +2756,33 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
     # on the document.
     issued_day = clock.shift_day_sql("COALESCE(c.issued_at, c.created_at)")
     params_disp = list(bx_params)
+    per_sql = ""
     if d_from or d_to:
         if d_from:
-            sql_disp += " AND " + issued_day + " >= %s"
+            per_sql += " AND " + issued_day + " >= %s"
             params_disp.append(d_from)
         if d_to:
-            sql_disp += " AND " + issued_day + " <= %s"
+            per_sql += " AND " + issued_day + " <= %s"
             params_disp.append(d_to)
     elif d_date:
-        sql_disp += " AND " + issued_day + " = %s"
+        per_sql += " AND " + issued_day + " = %s"
         params_disp.append(d_date)
-    cur.execute(sql_disp, tuple(params_disp))
+    cur.execute(sql_disp + per_sql, tuple(params_disp))
     disp_today = dict(cur.fetchone() or {})
+
+    # The same, per customer and model: Management Overview's "Dispatch &
+    # stock" table puts it beside the stock. Its Dispatched column was a
+    # hard-coded 0 and its KW shipped the KW of the stock still in the yard.
+    cur.execute(sql_disp.replace(
+        "SELECT COUNT(DISTINCT b.box_id) as box_count,",
+        "SELECT b.customer, b.model, COUNT(DISTINCT b.box_id) as box_count,", 1)
+        + per_sql + " GROUP BY b.customer, b.model ORDER BY b.customer, b.model",
+        tuple(params_disp))
+    disp_by = fold_customer_rows(cur.fetchall(), "customer", ["model"],
+                                 ["box_count", "modules", "kw"])
+    for r in disp_by:
+        cr = customers.get(r.get("customer")) or customers.resolve(r.get("customer") or "")
+        r["customer_name"] = cr["name"] if cr else r.get("customer")
     
     sql_disp_cnt = f"""
         SELECT COUNT(DISTINCT c.challan_id) as ch_count
@@ -2907,6 +2922,7 @@ def stock_dispatch(cur, d_date=None, customer=None, model=None, grade=None,
         "disp_today": disp_today,
         "daily": daily,
         "table_fg": table_data,
+        "disp_by": disp_by,
         "recent": recent,
         "facets": facets
     }

@@ -1863,15 +1863,33 @@
          el('mgsPc', mgsT ? (mgsRej/mgsT*100).toFixed(2)+'%' : '0.00%');
       }
 
+      /* one row per customer and model: the pallets and modules still in
+         stock (every grade), beside what was dispatched in the period. The
+         Dispatched column was a hard-coded 0 and KW shipped showed the KW of
+         the stock still in the yard (audit A6, 10 Oct). */
       var stock = document.getElementById('mgStockRows');
-      if (stock && disp.table_fg && disp.table_fg.length) {
-         stock.innerHTML = disp.table_fg.map(function(r) {
-           return '<tr><td>'+fqcEsc(r.customer_name || r.customer || '—')+'</td>'+
-                  '<td>'+fqcEsc(r.model)+'</td><td class="num">'+(r.box_count||0)+'</td>'+
-                  '<td class="num">'+(r.modules||0)+'</td><td class="num">0</td><td class="num">'+(r.kw||0).toFixed(1)+'</td></tr>';
-         }).join('');
-      } else if (stock) {
-         stock.innerHTML = '<tr data-empty><td colspan="6"><div class="empty-state">No stock data found</div></td></tr>';
+      if (stock) {
+        var sm = {}, order = [];
+        var srow = function (r) {
+          var cust = r.customer_name || r.customer || '—';
+          var k = String(cust).toUpperCase() + '|' + r.model;
+          if (!sm[k]) { sm[k] = { cust: cust, model: r.model, boxes: 0, mods: 0, dm: 0, dkw: 0 };
+                        order.push(k); }
+          return sm[k];
+        };
+        (disp.table_fg || []).forEach(function (r) {
+          var x = srow(r); x.boxes += r.box_count || 0; x.mods += r.modules || 0;
+        });
+        (disp.disp_by || []).forEach(function (r) {
+          var x = srow(r); x.dm += r.modules || 0; x.dkw += r.kw || 0;
+        });
+        stock.innerHTML = order.length ? order.map(function (k) {
+          var x = sm[k];
+          return '<tr><td>' + fqcEsc(x.cust) + '</td><td>' + fqcEsc(x.model) + '</td>' +
+                 '<td class="num">' + x.boxes + '</td><td class="num">' + x.mods + '</td>' +
+                 '<td class="num">' + x.dm + '</td><td class="num">' + x.dkw.toFixed(1) + '</td></tr>';
+        }).join('') : '<tr data-empty><td colspan="6"><div class="empty-state">' +
+          'Nothing in stock, and nothing dispatched in this period.</div></td></tr>';
       }
 
       /* Where the plant stands - one row per section, every value counted */

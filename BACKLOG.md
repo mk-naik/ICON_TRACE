@@ -7538,3 +7538,8 @@ commit.
 - **Cause:** every pallet assignment was printed on every module in the pallet as "Was Icon Stock".
 - **Change:** an assignment to the customer the module already belonged to is skipped; "Was" names the real previous owner. The pallet's own audit row is unchanged.
 - **Test:** `test_challan.py` +1 (fails before). From `audit/A6-overview-search-admin` ed73549.
+
+### Management Overview's Dispatch & stock table showed 0 dispatched and the stock's kW as shipped
+- **Found** by A6: with 40 modules (25.0 kW) dispatched every row read Dispatched 0; "KW shipped" was the kW in the yard; a customer with dispatches and no stock had no row.
+- **Change:** `db.stock_dispatch` returns the period's dispatched modules and kW per customer and model (the same rule as its Dispatched total); the table is one row per customer and model, stock beside dispatch.
+- **Test:** `test_challan.py` +1 (fails before); in Chromium the column sums to the cards. From `audit/A6-overview-search-admin` b1b0fc7.
