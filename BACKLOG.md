@@ -7567,3 +7567,15 @@ commit.
 - Also found in that review: `22AADCI5761L1Z4` (icon_customers' Unit-2 GSTIN) fails the
   GSTIN check digit (it would end in G); `22AADCI5761L3ZE` is valid. Which unit owns which
   number stays with Mukesh.
+
+### 13 Oct 2026 - ICON's own GSTINs labelled as the GST portal says
+- **Settled** (Mukesh, through the GST portal and the plant's two challans; audit decision 4):
+  22AADCI5761L3ZE is Unit-2, the Tekari plant - what the printed challans, the classic gate
+  pass, `OWN_GSTIN` and the invoice seller check already use; 22AADCI5761L1ZG is the head
+  office's registration, which Unit-1 prints on its challans.
+- **Was wrong:** `icon_customers.py` labelled L3ZE "Unit-1" and listed "22AADCI5761L1Z4"
+  as "Unit-2" - a mistyped L1ZG (its check letter would be G), so a buyer with L1ZG matched
+  ICON by name only. Nothing reads those labels anywhere else.
+- **Change:** L3ZE "Unit-2", L1ZG "Head Office / Unit-1", the Maharashtra godown unchanged;
+  L1Z4 dropped. L3ZE stays first, so ICON's primary GSTIN is unchanged.
+- **Test:** the next commit (every GSTIN in the master passes its check letter).

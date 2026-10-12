@@ -40,9 +40,16 @@ import re
 _SEED = [
     ("STOCK", "Icon Stock", None, "Chhattisgarh",
      ["GENERAL STOCK", "STOCK", "ICON", "UNALLOCATED", "Normal"]),
+    # Settled 13 Oct 2026 (GST portal and the plant's own challans): L3ZE is
+    # the Tekari plant, Unit-2 - what the challans, the gate pass, OWN_GSTIN and
+    # the invoice seller check use; L1ZG is the head office's registration,
+    # which Unit-1 prints on its challans. This used to read L3ZE "Unit-1" and
+    # "22AADCI5761L1Z4" "Unit-2" - a mistyped L1ZG (bad check letter), so a
+    # buyer with L1ZG matched by name only. L3ZE stays first: it is ICON's
+    # primary GSTIN.
     ("ICON", "Icon Solar-En Power Technologies Pvt. Ltd.", {
-        "22AADCI5761L3ZE": "Unit-1",
-        "22AADCI5761L1Z4": "Unit-2",
+        "22AADCI5761L3ZE": "Unit-2",
+        "22AADCI5761L1ZG": "Head Office / Unit-1",
         "27AADCI5761L1Z6": "Maharashtra Godown",
     }, "Chhattisgarh", [
         "ICON SOLAR-EN POWER TECHNOLOGIES PVT LTD",
