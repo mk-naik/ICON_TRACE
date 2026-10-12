@@ -7549,3 +7549,21 @@ commit.
   for Mukesh (auth policy, not touched): an Admin can mint a Reset TOTP link for their own
   account from an open session with no fresh code, and the old authenticator keeps working
   until the link is used (A6-11). Report: `AUDIT_REPORT.md` in the audit folder.
+
+### 13 Oct 2026 - the apostrophe fix reaches Needs Review and the FQC Dashboard
+- **Found** in the review of the audit (A6-01 was only partly fixed by 63ea7b1): Needs
+  Review's Pass A / GY / BGY, the grade prompt's View EL image, Flash test values and
+  Record, the FQC Dashboard's shift and rejection View buttons, and the invoice view's
+  challan link still put `esc()` / `fqcEsc()` inside a quoted JS argument. A custom serial
+  may hold any printable character but a space: one with an apostrophe broke the buttons
+  ("missing ) after argument list"), and a crafted one could run as script on a click.
+- **Change:** those nine handlers use `jsArg()`. Left as they are: `mgShowDay` /
+  `pdShowDay` (they carry only an ISO date).
+- **Test:** `test_inline_args_ui.py` +1 (Quality grades the custom serial "AB'CD7001" GY
+  from Needs Review; fails before, passes after); `test_fqc_dashboard.js` now lifts
+  `jsArg` from the shipped file as it lifts `_localDate` (24/24 under Node; under Windows
+  Script Host it was already 1/24 on main - "Object doesn't support this property" - a
+  separate, older gap).
+- Also found in that review: `22AADCI5761L1Z4` (icon_customers' Unit-2 GSTIN) fails the
+  GSTIN check digit (it would end in G); `22AADCI5761L3ZE` is valid. Which unit owns which
+  number stays with Mukesh.

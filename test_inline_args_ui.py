@@ -92,6 +92,36 @@ def t_users_row():
         assert LOGIN in title, title
 
 
+@test("Needs Review: Quality grades a custom serial with an apostrophe - GY opens "
+      "its prompt and Record GY records it, with no page error")
+def t_review_grade_apostrophe():
+    serial = "AB'CD7001"           # a custom serial: any printable token, not ICON-shaped
+    seed()
+    with store.conn() as (cx, cur):
+        store.insert(cur, "serial", {
+            "serial": serial, "build_instance": 1, "model": "ISEN625-G12R",
+            "wattage": 625, "customer": CUST, "dcr": "DCR", "format_version": 0,
+            "date_produced": clock.today().isoformat(), "shift": 1,
+            "sequence": 1, "state": "planned"})
+        db.record_fqc(cur, serial, "reject", evidence={"pmax": 630, "ss_state": "OK",
+                      "el": "OK", "proposed": "reject"}, decided_by="t", mode="live",
+                      defect="DF-CELLCRACK")
+    with H.browser() as b:
+        pg = H.open_page(b, view="review", wait_ms=1500, role="Quality")
+        row = pg.locator("tr", has_text=serial)
+        assert row.count(), "the reject is not listed on Needs Review"
+        row.first.locator("button", has_text="GY").first.click()
+        pg.wait_for_timeout(600)
+        assert not pg.errors, pg.errors
+        pg.fill("#revWhy", "edge chip, cosmetic")
+        pg.locator("button", has_text="Record GY").first.click()
+        pg.wait_for_timeout(1200)
+        assert not pg.errors, pg.errors
+    with store.conn() as (cx, cur):
+        s = store.one(cur, "SELECT state, grade FROM serial WHERE serial=%s", (serial,))
+    assert (s["state"], s["grade"]) == ("graded", "GY"), s
+
+
 def main():
     width = max(len(n) for n, _ in _results)
     failed = 0

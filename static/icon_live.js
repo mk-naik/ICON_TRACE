@@ -3519,7 +3519,7 @@ function wireFqcAnomalies() {
               '<td class="num">' + r.rejected + '</td>' +
               '<td><div class="bar-wrap"><div class="bar"><i style="width:' +
                 Math.min(pct * 12, 100) + '%"></i></div><span class="mono">' + pct +
-                '%</span></div></td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:\'Shift '+fqcEsc(shiftName)+' · '+fqcEsc(r.model)+'\',shift:\''+fqcEsc(r.shift)+'\',model:\''+fqcEsc(r.model)+'\'})">View '+r.inspected+'</button></td></tr>';
+                '%</span></div></td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:'+jsArg('Shift '+shiftName+' · '+r.model)+',shift:'+jsArg(r.shift)+',model:'+jsArg(r.model)+'})">View '+r.inspected+'</button></td></tr>';
           }).join('') : '<tr data-empty><td colspan="8"><div class="empty-state">' +
             'Nothing matches these filters.</div></td></tr>';
         }
@@ -3566,7 +3566,7 @@ function wireFqcAnomalies() {
             var pct = maxQ ? Math.round(x.qty / maxQ * 100) : 0;
             return '<tr><td>' + fqcEsc(x.defect) + '</td><td class="num">' + x.qty +
               '</td><td><div class="bar-wrap"><div class="bar"><i style="width:' + pct +
-              '%"></i></div><span class="mono">' + pct + '%</span></div></td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:\'Rejection — '+fqcEsc(x.defect)+'\',result:\'Rejected only\',remark:\''+fqcEsc(x.defect)+'\'})">View ' + x.qty + '</button></td></tr>';
+              '%"></i></div><span class="mono">' + pct + '%</span></div></td><td style="text-align:center"><button class="btn btn-ghost btn-sm" onclick="openModules({title:'+jsArg('Rejection — '+x.defect)+',result:\'Rejected only\',remark:'+jsArg(x.defect)+'})">View ' + x.qty + '</button></td></tr>';
           }).join('') : '<tr data-empty><td colspan="4"><div class="empty-state">' +
             'No rejections in this range.</div></td></tr>';
         }
@@ -8703,12 +8703,12 @@ function wireFqcAnomalies() {
       if (r.locked) {
         action = '<span class="hint">Quality only</span>';
       } else if (r.type === 'quality_grade') {
-        action = '<button class="btn btn-ghost btn-sm" onclick="reviewGradePrompt(\'' +
-            esc(r.serial) + '\',\'A\')" title="Pass it back to A — only if it makes its wattage">Pass A</button> ' +
-          '<button class="btn btn-ghost btn-sm" onclick="reviewGradePrompt(\'' +
-            esc(r.serial) + '\',\'GY\')">GY</button> ' +
-          '<button class="btn btn-ghost btn-sm" onclick="reviewGradePrompt(\'' +
-            esc(r.serial) + '\',\'BGY\')">BGY</button>';
+        action = '<button class="btn btn-ghost btn-sm" onclick="reviewGradePrompt(' +
+            jsArg(r.serial) + ',\'A\')" title="Pass it back to A — only if it makes its wattage">Pass A</button> ' +
+          '<button class="btn btn-ghost btn-sm" onclick="reviewGradePrompt(' +
+            jsArg(r.serial) + ',\'GY\')">GY</button> ' +
+          '<button class="btn btn-ghost btn-sm" onclick="reviewGradePrompt(' +
+            jsArg(r.serial) + ',\'BGY\')">BGY</button>';
       } else if (r.type === 'provisional_mismatch') {
         action = '<button class="btn btn-ghost btn-sm" onclick="reviewOpenProvisional(' +
           r.id + ')">Resolve</button>';
@@ -8899,17 +8899,17 @@ function wireFqcAnomalies() {
           esc(row.decided_by || '—') + '</div></div>' +
       '</div>' +
       '<div style="display:flex;gap:8px;margin:0 0 10px">' +
-        '<button class="btn btn-ghost btn-sm" onclick="iconShowEl(\'' +
-          esc(serial) + '\')">View EL image</button>' +
-        '<button class="btn btn-ghost btn-sm" onclick="iconShowFtr(\'' +
-          esc(serial) + '\')">Flash test values</button></div>' +
+        '<button class="btn btn-ghost btn-sm" onclick="iconShowEl(' +
+          jsArg(serial) + ')">View EL image</button>' +
+        '<button class="btn btn-ghost btn-sm" onclick="iconShowFtr(' +
+          jsArg(serial) + ')">Flash test values</button></div>' +
       '<div class="fld"><label>Why ' +
         (grade === 'A' ? 'pass this' : grade) + '? (required)</label>' +
         '<textarea id="revWhy" rows="3" placeholder="what the image and the ' +
         'reading show, and why that makes it ' + grade + '"></textarea></div>' +
       '</div><div class="card-f">' +
-      '<button class="btn btn-primary" onclick="reviewSubmitQuality(\'' +
-        esc(serial) + '\',\'' + grade + '\')">Record ' + grade + '</button>' +
+      '<button class="btn btn-primary" onclick="reviewSubmitQuality(' +
+        jsArg(serial) + ',\'' + grade + '\')">Record ' + grade + '</button>' +
       '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
       '<span class="hint" style="margin-left:auto">A grade with no reasoning ' +
         'behind it is one nobody can defend later.</span></div></div>';
@@ -13416,7 +13416,7 @@ function wireFqcAnomalies() {
                      var stName = r.status === 'issued' ? (r.gp_no ? 'Dispatched' : 'Issued') : (r.status === 'cancelled' ? 'Cancelled' : 'Draft');
                      if (r.status === 'issued' && r.gp_no) st = 't-solar';
                      var chLnk = r.status === 'cancelled' ? ('<span class="mono" style="color:var(--ink3)">' + r.challan_no + '</span>') :
-                                 ('<button class="lnk mono" onclick="qTry(\'' + fqcEsc(r.challan_no) + '\')">' + fqcEsc(r.challan_no) + '</button>');
+                                 ('<button class="lnk mono" onclick="qTry(' + jsArg(r.challan_no) + ')">' + fqcEsc(r.challan_no) + '</button>');
                      
                      html2 += '<tr>' +
                         '<td>' + chLnk + '</td>' +

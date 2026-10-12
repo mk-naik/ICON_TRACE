@@ -365,6 +365,20 @@ if (ldFrom < 0 || ldEnd < 0) {
   if (WSH) WScript.Quit(1); else process.exit(1);
 }
 eval(srcFull.substring(ldFrom, ldEnd));
+/* jsArg() - how the shift and rejection rows' View buttons quote what they
+   pass to openModules() (audit 13 Oct: an apostrophe ended the string) - lives
+   outside the block as well: read from the shipped file the same way. */
+var jaFrom = srcFull.indexOf('  function jsArg(value) {');
+var jaEnd = -1;
+if (jaFrom >= 0) {
+  var jaM = /\r?\n  \}\r?\n/.exec(srcFull.slice(jaFrom));
+  if (jaM) jaEnd = jaFrom + jaM.index + jaM[0].length;
+}
+if (jaFrom < 0 || jaEnd < 0) {
+  echo('CANNOT RUN: icon_live.js no longer has function jsArg(value).');
+  if (WSH) WScript.Quit(1); else process.exit(1);
+}
+eval(srcFull.substring(jaFrom, jaEnd));
 eval(dashSrc);
 
 /* ---- harness -------------------------------------------------------------- */
