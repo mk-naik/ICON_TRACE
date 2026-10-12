@@ -7579,3 +7579,11 @@ commit.
 - **Change:** L3ZE "Unit-2", L1ZG "Head Office / Unit-1", the Maharashtra godown unchanged;
   L1Z4 dropped. L3ZE stays first, so ICON's primary GSTIN is unchanged.
 - **Test:** the next commit (every GSTIN in the master passes its check letter).
+
+### 13 Oct 2026 - a test that every GSTIN in the customer master is a real one
+- **Why:** the head office's GSTIN sat in the master mistyped (22AADCI5761L1Z4 - check
+  letter G expected) unnoticed; all 74 others were valid.
+- **Test:** `test_customer_gstins.py` (new, 3): the check letter is v4's own `gstChecksum`
+  (proved on the GSTIN v4's page prints for Unit-2), every GSTIN in `icon_customers` passes
+  it, and `resolve(gstin=OWN_GSTIN)` is ICON at "Unit-2" (L1ZG resolves to ICON too). Two of
+  the three fail on the master as it was before the previous commit.
