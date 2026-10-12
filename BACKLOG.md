@@ -7587,3 +7587,13 @@ commit.
   (proved on the GSTIN v4's page prints for Unit-2), every GSTIN in `icon_customers` passes
   it, and `resolve(gstin=OWN_GSTIN)` is ICON at "Unit-2" (L1ZG resolves to ICON too). Two of
   the three fail on the master as it was before the previous commit.
+
+### 13 Oct 2026 - dc179a1's other buttons get tests that fail without it
+- **Why:** dc179a1 had a failing-before test for Needs Review only (review of the audit).
+- **Test:** `test_fqc_dashboard.js` +2 - the FQC Dashboard's shift View (model
+  "O'BRIEN-625") and rejection View (defect "Operator's note") buttons, each onclick decoded
+  as a browser does and run: they hand openModules the value whole (fail before: the script
+  breaks); `test_inline_args_ui.py` +1 - Stock & Dispatch's recent-challan link (the review
+  called it the invoice view's), its answer doctored with "IS-X'1" (a real number is
+  server-built and has no apostrophe): clicking it hands qTry the number whole, no page
+  error (fails before). Tests only; no code changed.

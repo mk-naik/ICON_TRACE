@@ -515,6 +515,41 @@ function () {
     'the old single dummy row is still there: ' + rej);
 });
 
+/* Audit 13 Oct: what a View button hands openModules() - a model, a defect -
+   sat inside '...' through fqcEsc alone; the browser decodes &#39; back before
+   it runs the handler, so an apostrophe ended the string and the button threw
+   (dc179a1). Each onclick is run here as a browser would: entities decoded,
+   then the script, with openModules captured. */
+function runViewButtons(html) {
+  var got = [], re = /onclick="([^"]*)"/g, m;
+  var openModules = function (a) { got.push(a); };
+  while ((m = re.exec(html))) eval(decodeEnt(m[1]));
+  return got;
+}
+
+test('a shift row whose model has an apostrophe still hands the View button ' +
+     'its model whole', function () {
+  reset();
+  REPLY = defaultReply();
+  REPLY.rows[0].model = "O'BRIEN-625";
+  renderLiveFqcDash();
+  var got = runViewButtons(document.getElementById('shiftRows').innerHTML);
+  var hit = got.filter(function (a) { return a.model === "O'BRIEN-625"; });
+  assert(hit.length === 1 && hit[0].title.indexOf("O'BRIEN-625") !== -1,
+    'the View button did not pass the model whole: ' + got.length + ' call(s)');
+});
+
+test('a rejection reason with an apostrophe still hands its View button the ' +
+     'defect whole', function () {
+  reset();
+  REPLY = defaultReply();
+  REPLY.by_defect = [{ defect: "Operator's note", qty: 2 }];
+  renderLiveFqcDash();
+  var got = runViewButtons(document.getElementById('rejRows').innerHTML);
+  assert(got.length === 1 && got[0].remark === "Operator's note" &&
+         got[0].result === 'Rejected only', 'the View button did not pass the defect whole');
+});
+
 test('Needs Review is a real live count, not the literal dash v4 shipped ' +
      'with a frozen "3 duplicate" sample forever underneath it', function () {
   reset();

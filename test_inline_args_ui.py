@@ -122,6 +122,37 @@ def t_review_grade_apostrophe():
     assert (s["state"], s["grade"]) == ("graded", "GY"), s
 
 
+@test("Stock & Dispatch: a recent challan's link hands qTry its number whole, even "
+      "one with an apostrophe (the number is server-built; the answer is doctored "
+      "here to prove the button is safe)")
+def t_disp_challan_link():
+    odd = "IS-X'1"
+    seed()
+
+    def doctor(route):
+        resp = route.fetch()
+        data = resp.json()
+        data["recent"] = [{"challan_no": odd, "status": "issued", "gp_no": None,
+                           "challan_date": "2026-10-13", "customer_name": "X",
+                           "vehicle_no": "CG04", "qty": 1, "kw": 0.6}]
+        route.fulfill(response=resp, json=data)
+
+    with H.browser() as b:
+        pg = H.open_page(b, wait_ms=1200)
+        pg.route("**/api/stock_dispatch*", doctor)
+        pg.evaluate("go('disp')")
+        pg.wait_for_timeout(1500)
+        btn = pg.locator("#v-disp button.lnk", has_text=odd)
+        assert btn.count(), "the doctored row is not on Stock & Dispatch"
+        pg.evaluate("window.__asked = []; window.qTry = function (v) { window.__asked.push(v); };")
+        btn.first.click()
+        pg.wait_for_timeout(300)
+        assert not pg.errors, pg.errors
+        # (the page's own click delegation also calls qTry once, with nothing)
+        asked = [v for v in pg.evaluate("window.__asked") if v]
+        assert asked == [odd], asked
+
+
 def main():
     width = max(len(n) for n, _ in _results)
     failed = 0
