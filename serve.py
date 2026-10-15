@@ -107,6 +107,13 @@ if __name__ == "__main__":
     log.info("Event ingest running: not-in-master, SS skip, looked-up-no-"
              "decision, FTR anomalies - every 60s")
 
+    # its own thread: a Pre-EL or Post EL PC that is switched off must never
+    # delay the ingest above
+    import icon_el_capture
+    icon_el_capture.start_background()
+    log.info("Pre-EL / Post EL image index running (Settings > Evidence "
+             "Sources) - every 60s")
+
     log.info("Serving on http://%s:%s with %d threads", HOST, PORT, THREADS)
     serve(app, host=HOST, port=PORT, threads=THREADS,
           ident="ICON TRACE", channel_timeout=120)

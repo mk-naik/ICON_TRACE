@@ -43,8 +43,23 @@ indent ── indent_line ── allocation ── serial ──┬── fqc_re
 Beside the spine: `fqc_defect` and `defect_master` (what a decision found),
 `entity_revision` (who created or edited what, with before and after),
 `review_item` (Needs Review - one table, a `type` column), `ftr_reading`
-(the Sun Simulator reading saved for a module the master does not have yet)
-and `fqc_lookup_log`.
+(the Sun Simulator reading saved for a module the master does not have yet),
+`fqc_lookup_log` and `el_capture`.
+
+**`el_capture`** is one row per image filed at the Pre-EL (before lamination)
+or Post EL (after lamination) station: station, line (NULL when one folder
+serves both lines, never derived from the serial), serial, re-shot number,
+verdict (the folder it is filed in), path, the file's time (the EL PC's clock)
+and when it was first seen. Nobody looks a serial up at those stations, so it
+is written by one thing only, the poller in `icon_el_capture.py` (started by
+`serve.py`, every 60 s, on its own thread): it walks the newest two date
+folders of each folder set in Settings, skips an image still waiting in its
+shift folder, and inserts only what is not on record (`UNIQUE(station,
+path)`, path compared without case). It is **never purged**: a row is not
+changed or deleted when its file is moved or deleted or its share goes away -
+it is the record that the module was captured there. No request reads the
+shares. It is outside the change feed
+(`store.UNTRACKED`): the poller writes it all day and no screen refreshes on it.
 
 **`serial` is the spine.** One row per module, written once at allocation and
 updated as it moves. Everything else joins to it.

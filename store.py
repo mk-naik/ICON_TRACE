@@ -70,9 +70,11 @@ TOPIC_OF_TABLE = {
 #                       like activity and never go quiet
 #   change_log          the feed must not report itself
 #   auth_*              credential machinery; it is nobody's screen data
+#   el_capture          the EL poller writes it all day; no screen needs a live refresh for it
 UNTRACKED = frozenset((
     "change_log", "auth_session", "auth_attempt", "auth_event",
     "auth_enrol_token", "auth_recovery_code", "auth_backup_window",
+    "el_capture",
 ))
 
 # An hour, against a client that polls every five seconds - generous enough

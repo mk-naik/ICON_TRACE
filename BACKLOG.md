@@ -7597,3 +7597,26 @@ commit.
   called it the invoice view's), its answer doctored with "IS-X'1" (a real number is
   server-built and has no apostrophe): clicking it hands qTry the number whole, no page
   error (fails before). Tests only; no code changed.
+
+### 15 Oct 2026 - Pre-EL and Post EL images are indexed by the server (1 of 3: the index)
+- **Why:** Unit-2's other two EL stations - Pre-EL (before lamination; it scans the back
+  label) and Post EL (after lamination) - file images exactly like the FQC EL, and nobody
+  looks a serial up at either, so nothing in ICON TRACE knew a module had passed them.
+- **Checked first, read-only:** the real Pre-EL share of Line B (`\169.254.1.242\el`):
+  `date\shift\verdict\serial.jpg` (shifts 早班 / 中班 / 晚班 = A / B / C by the files'
+  times), 42 images one folder deeper (`Lead Open\Cross`, `ell issue\Ribbon bold`), 7 still
+  in a shift folder, 18 junk names, 3 `Thumbs.db` (no non-image file named by a serial). A
+  module shot again was filed again under its own name in another verdict folder - none
+  was named `_N`.
+- **Change:** settings `pre_el_a_root`, `pre_el_b_root`, `post_el_a_root`, `post_el_b_root`
+  (blank = not scanned); table `el_capture`; `icon_el_capture.py`, a poller on its own
+  thread from `serve.py` every 60 s: newest two date folders, any depth, an image counted
+  when its name less `_N` looks like a serial or is one in the master (one lookup a pass,
+  misses remembered an hour), skipped while unfiled (`ev._unfiled`, and the same rule by
+  position for a `16-09-2026` folder `_unfiled` cannot read), verdict = the parent folder
+  as `read_el` reads it. Reads the shares with no connection open, then writes only rows not
+  on record; never deletes. An unreachable folder is logged once per outage. Outside the
+  change feed. The Settings fields and the journey are the next two commits.
+- **Test:** `test_el_capture.py` (new, 17); five deliberate breakages each caught. On a
+  copy of the dev database `store.ensure()` added the table; one pass over the real share
+  recorded 2,419 images (2,440 files - 18 junk - 3 unfiled) in 0.17 s, a second wrote nothing.

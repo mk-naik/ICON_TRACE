@@ -847,6 +847,29 @@ CREATE TABLE IF NOT EXISTS ftr_reading (
   recorded_at TEXT NOT NULL     -- when ICON TRACE captured this snapshot
 ) ;
 
+-- One row per image filed at the Pre-EL (before lamination) and Post EL
+-- (after lamination) stations. Nobody looks a serial up at either, so the
+-- server finds the images itself (icon_el_capture.py, every minute) and the
+-- module journey reads them from here, never from the shares. Written only by
+-- that poller; a row is never changed or deleted when its file or its share
+-- disappears - it is the record that the module was captured there.
+CREATE TABLE IF NOT EXISTS el_capture (
+  capture_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+  station     TEXT NOT NULL,         -- 'pre_el' | 'post_el'
+  line        TEXT NULL,             -- 'A' | 'B'; NULL when one folder serves
+                                      -- both lines - never derived from the serial
+  serial      TEXT NOT NULL,
+  recapture   INTEGER NOT NULL DEFAULT 0,  -- 0 the original, N for <serial>_N
+  verdict     TEXT NOT NULL,         -- the folder it is filed in, as read_el reads it
+  -- NOCASE: a Windows share's paths are, so re-typing a folder's spelling in
+  -- Settings does not make every image on it look new
+  path        TEXT NOT NULL COLLATE NOCASE,
+  file_time   TEXT NOT NULL,         -- the file's modified time, the EL PC's clock
+  seen_at     TEXT NOT NULL,         -- when the poller first recorded it
+  UNIQUE (station, path)
+) ;
+CREATE INDEX IF NOT EXISTS ix_el_capture_serial ON el_capture (serial) ;
+
 CREATE TABLE IF NOT EXISTS gp_counter (
   gp_date  TEXT NOT NULL PRIMARY KEY,
   next_seq INT  NOT NULL DEFAULT 1
