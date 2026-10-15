@@ -1,0 +1,173 @@
+<div class="pg"><h2>EL Stations</h2>
+  <p>Pre-EL and Post EL &middot; every module imaged, its rework, its rejections</p>
+  <div class="pg-act"><button class="btn btn-ghost" onclick="elstLoad()">Refresh</button></div></div>
+
+<div class="note n-info"><span>&#9432;</span><span><b>OK is Pass; any other folder is
+  NG.</b> At Pre-EL an NG module goes for rework and comes back until it passes. After
+  lamination a module cannot be reworked, so an NG at Post EL is <b>rejected</b>. A
+  module counts on the factory day (06:00 to 06:00) and shift of its first image at a
+  station. Read from the server's index of the EL folders, which it updates every
+  minute.</span></div>
+
+<div class="filters">
+  <div class="fld"><label>From</label><input type="date" id="elFrom"></div>
+  <div class="fld"><label>To</label><input type="date" id="elTo"></div>
+  <div class="fld"><label>Shift</label><select id="elShift"><option value="">All shifts</option></select></div>
+  <div class="fld"><label>Station</label><select id="elStation"><option value="">Both stations</option></select></div>
+  <div class="fld"><label>Result</label><select id="elResult"><option value="">All results</option></select></div>
+  <div class="fld"><label>Line</label><select id="elLine"><option value="">Both lines</option></select></div>
+  <div class="sp"><button class="btn btn-ghost" onclick="elstReset()">Reset</button></div>
+</div>
+
+<div class="grid g3" style="margin-bottom:10px">
+  <div class="kpi"><label>Pre-EL scanned</label><div class="v" id="elK1">&mdash;</div>
+    <div class="d" id="elK1d">modules first imaged in the period</div></div>
+  <div class="kpi k-pass"><label>Pass first time</label><div class="v" id="elK2">&mdash;</div>
+    <div class="d" id="elK2d">&mdash;</div></div>
+  <div class="kpi k-rev"><label>Rework</label><div class="v" id="elK3">&mdash;</div>
+    <div class="d" id="elK3d">&mdash;</div></div>
+</div>
+<div class="grid g3" style="margin-bottom:14px">
+  <div class="kpi"><label>Post EL scanned</label><div class="v" id="elK4">&mdash;</div>
+    <div class="d" id="elK4d">modules first imaged in the period</div></div>
+  <div class="kpi k-pass"><label>Post EL pass</label><div class="v" id="elK5">&mdash;</div>
+    <div class="d">OK at every image</div></div>
+  <div class="kpi k-fail"><label>Post EL NG &middot; rejected</label><div class="v" id="elK6">&mdash;</div>
+    <div class="d">no rework after lamination</div></div>
+</div>
+
+<div class="card" data-itable="el-stations" data-export="el-stations">
+  <div class="card-h"><h3>Modules</h3>
+    <div class="ch-r"><span class="tag t-mute" data-role="count"></span>
+      <button class="btn btn-ghost btn-sm" data-role="export">Export</button></div></div>
+  <div class="card-b" style="border-bottom:1px solid var(--line2)">
+    <div class="fld"><label>Search</label><input data-role="search" placeholder="serial, model or reason"></div>
+    <div class="hint" id="elNote" style="margin-top:6px"></div></div>
+  <div class="scroll"><table>
+    <thead><tr><th>Serial</th><th>Model</th><th>Pre-EL</th><th>Pre-EL reason</th>
+      <th class="num">Reworks</th><th>Pre-EL images</th><th>Post EL</th>
+      <th>Post EL reason</th><th>Post EL image</th><th>Line</th></tr></thead>
+    <tbody id="elRows"></tbody></table></div>
+</div>
+
+<script>
+(function () {
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function $(id) { return document.getElementById(id); }
+  function when(t) { return t ? (typeof fmtIST === 'function' ? fmtIST(t) : t) : ''; }
+  var LABEL = { pre_el: 'Pre-EL', post_el: 'Post EL' };
+  var TONE = { 'pre_el:pass': 't-pass', 'pre_el:reworked': 't-pass',
+               'pre_el:in_rework': 't-rev', 'post_el:pass': 't-pass',
+               'post_el:ng': 't-fail' };
+  var busy = false, again = false;
+
+  /* each dropdown offers what the rows hold under every OTHER filter, and
+     never drops the value already picked (DECISIONS 8) */
+  function refill(id, values, label) {
+    var sel = $(id), keep = sel.value, first = sel.options[0].outerHTML;
+    var vals = values.slice();
+    if (keep && vals.indexOf(keep) < 0) vals.push(keep);
+    sel.innerHTML = first + vals.map(function (v) {
+      return '<option value="' + esc(v) + '">' + esc(label ? label(v) : v) + '</option>';
+    }).join('');
+    sel.value = keep;
+  }
+
+  function cell(st, s) {
+    if (!s) return '<td style="color:var(--ink3)">&mdash;</td>';
+    return '<td><span class="tag ' + (TONE[st + ':' + s.status] || 't-mute') + '">' +
+           esc(s.label) + '</span></td>';
+  }
+
+  function draw(d) {
+    if (!$('elFrom').value) $('elFrom').value = d.from || '';
+    if (!$('elTo').value) $('elTo').value = d.to || '';
+    refill('elShift', d.facets.shift);
+    refill('elStation', d.facets.station, function (v) { return LABEL[v] || v; });
+    refill('elResult', d.facets.result);
+    refill('elLine', d.facets.line, function (v) { return 'Line ' + v; });
+
+    var pre = d.kpi.pre_el, post = d.kpi.post_el;
+    $('elK1').textContent = pre.scanned.toLocaleString();
+    $('elK2').textContent = pre.pass.toLocaleString();
+    $('elK2d').textContent = pre.fpy === null ? 'first-pass yield —'
+                                              : 'first-pass yield ' + pre.fpy + '%';
+    $('elK3').textContent = pre.rework.toLocaleString();
+    $('elK3d').textContent = pre.reworked + ' passed after rework · ' +
+                             pre.in_rework + ' still in rework';
+    $('elK4').textContent = post.scanned.toLocaleString();
+    $('elK5').textContent = post.pass.toLocaleString();
+    $('elK6').textContent = post.ng.toLocaleString();
+    $('elK1d').textContent = d.configured.pre_el ? 'modules first imaged in the period'
+                           : 'no Pre-EL folder set (Admin › Stations & sources)';
+    $('elK4d').textContent = d.configured.post_el ? 'modules first imaged in the period'
+                           : 'no Post EL folder set (Admin › Stations & sources)';
+
+    $('elRows').innerHTML = d.rows.length ? d.rows.map(function (r) {
+      var p = r.pre, q = r.post;
+      return '<tr><td class="mono"><button class="lnk" onclick="qTry(' +
+          (typeof jsArg === 'function' ? jsArg(r.serial) : JSON.stringify(r.serial)) +
+          ')" title="Open its journey in Search &amp; Trace">' + esc(r.serial) + '</button></td>' +
+        '<td class="mono">' + (r.in_master ? esc(r.model || '') :
+          '<span style="color:var(--ink3)">not in the master</span>') + '</td>' +
+        cell('pre_el', p) + '<td>' + esc(p && p.reason || '') + '</td>' +
+        '<td class="num">' + (p ? p.reworks : '') + '</td>' +
+        '<td class="mono" style="font-size:11px">' + (p ? esc(when(p.first_at)) +
+          (p.images > 1 ? ' → ' + esc(when(p.last_at)) + ' (' + p.images + ' images)' : '')
+          : '') + '</td>' +
+        cell('post_el', q) + '<td>' + esc(q && q.reason || '') + '</td>' +
+        '<td class="mono" style="font-size:11px">' + (q ? esc(when(q.last_at)) : '') + '</td>' +
+        '<td>' + esc(r.lines.join(', ')) + '</td></tr>';
+    }).join('') : '<tr data-empty><td colspan="10"><div class="empty-state"><p>' +
+      'No module was first imaged at an EL station in this period' +
+      ($('elShift').value || $('elStation').value || $('elResult').value || $('elLine').value
+        ? ' under these filters' : '') + '.</p></div></td></tr>';
+    $('elNote').textContent = d.total > d.rows.length
+      ? 'Showing the newest ' + d.rows.length.toLocaleString() + ' of ' +
+        d.total.toLocaleString() + ' modules - narrow the dates to see the rest.' : '';
+    if (window.iconTable) window.iconTable.wireAll();
+  }
+
+  window.elstLoad = function () {
+    if (busy) { again = true; return; }
+    busy = true;
+    var q = ['from', $('elFrom').value, 'to', $('elTo').value, 'shift', $('elShift').value,
+             'station', $('elStation').value, 'result', $('elResult').value,
+             'line', $('elLine').value];
+    var qs = [];
+    for (var i = 0; i < q.length; i += 2) if (q[i + 1]) qs.push(q[i] + '=' + encodeURIComponent(q[i + 1]));
+    fetch('/api/el/stations' + (qs.length ? '?' + qs.join('&') : ''), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) {
+          $('elRows').innerHTML = '<tr data-empty><td colspan="10"><div class="note n-bad">' +
+            esc(d.why || 'The server refused it.') + '</div></td></tr>';
+          return;
+        }
+        draw(d);
+      })
+      .catch(function (e) {
+        $('elRows').innerHTML = '<tr data-empty><td colspan="10"><div class="note n-bad">' +
+          'Could not load: ' + esc(e) + '</div></td></tr>';
+      })
+      .then(function () { busy = false; if (again) { again = false; window.elstLoad(); } });
+  };
+
+  window.elstReset = function () {
+    $('elFrom').value = ''; $('elTo').value = '';      /* the server's today */
+    ['elShift', 'elStation', 'elResult', 'elLine'].forEach(function (id) { $(id).value = ''; });
+    window.elstLoad();
+  };
+
+  ['elFrom', 'elTo', 'elShift', 'elStation', 'elResult', 'elLine'].forEach(function (id) {
+    $(id).addEventListener('change', window.elstLoad);
+  });
+  /* landed on directly (a refresh on #elst): the screen is already showing */
+  var v = $('v-elst');
+  if (v && v.classList.contains('on')) window.elstLoad();
+})();
+</script>

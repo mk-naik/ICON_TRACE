@@ -223,6 +223,73 @@ def t_journey_on_screen():
         assert pg.errors == [], pg.errors
 
 
+IN_REWORK = "ICON625R12A1522913"
+REJECTED = "ICON625R12A1522914"
+
+
+@test("EL Stations on the page: after Production Entry for a Production Incharge, its "
+      "KPIs and one row a module; a Result pick narrows it; a serial opens its journey; "
+      "Quality has no such screen")
+def t_screen_on_page():
+    seed_journey()
+    with store.conn() as (cx, cur):
+        for i, s in enumerate((IN_REWORK, REJECTED)):
+            store.insert(cur, "serial", {
+                "serial": s, "build_instance": 1, "model": "ISEN625-G12R",
+                "wattage": 625, "customer": "STOCK", "dcr": "DCR",
+                "format_version": 2, "date_produced": "2026-10-15", "shift": 1,
+                "sequence": 10 + i, "state": "planned"})
+    put(PRE_A, "2026-10-15/晚班/Cell Crack", IN_REWORK + ".jpg", "2026-10-15T22:02:25")
+    put(POST_B, "2026-10-15/中班/Cell Crack", REJECTED + ".jpg", "2026-10-15T15:00:00")
+    with store.conn() as (cx, cur):
+        assert elcap.run(db.get_config(cur), cur) == {"pre_el": 1, "post_el": 1}
+
+    def rows(pg):
+        return pg.evaluate("""() => Array.from(document.querySelectorAll('#elRows tr'))
+            .filter(tr => !tr.hasAttribute('data-empty') && tr.style.display !== 'none')
+            .map(tr => Array.from(tr.cells).map(c => c.textContent.trim()))""")
+
+    with H.browser() as b:
+        pg = H.open_page(b, None, role="Production Incharge")
+        order = pg.evaluate("""() => Array.from(document.querySelectorAll('#sidenav .nav-i'))
+            .filter(b => b.offsetParent !== null).map(b => b.getAttribute('data-v'))""")
+        assert "elst" in order and order.index("elst") == order.index("prodentry") + 1, order
+        pg.click('#sidenav [data-v="elst"]')
+        pg.wait_for_selector("#v-elst.on #elRows", timeout=10000)
+        pg.fill("#elFrom", "2026-10-15")
+        pg.fill("#elTo", "2026-10-15")
+        pg.wait_for_function("document.getElementById('elRows').textContent.indexOf('%s') >= 0"
+                             % IN_REWORK, timeout=10000)
+        pg.wait_for_timeout(300)
+        k = {i: pg.text_content("#elK%d" % i) for i in range(1, 7)}
+        assert k == {1: "2", 2: "0", 3: "2", 4: "2", 5: "1", 6: "1"}, k
+        assert "1 passed after rework · 1 still in rework" in pg.text_content("#elK3d")
+        got = {r[0]: r for r in rows(pg)}
+        assert set(got) == {BOTH, IN_REWORK, REJECTED}, got
+        assert got[BOTH][2] == "Pass after rework" and got[BOTH][3] == "Ribbon short", got[BOTH]
+        assert got[BOTH][4] == "1" and got[BOTH][6] == "Pass" and got[BOTH][9] == "A, B", got[BOTH]
+        assert got[REJECTED][2] == "—" and got[REJECTED][6] == "NG - rejected", got[REJECTED]
+
+        pg.select_option("#elResult", "Pre-EL: In rework")
+        pg.wait_for_function("document.querySelectorAll('#elRows tr').length === 1 && "
+                             "document.getElementById('elRows').textContent.indexOf('%s') >= 0"
+                             % IN_REWORK, timeout=10000)
+        opts = pg.eval_on_selector_all("#elResult option", "os => os.map(o => o.value)")
+        assert opts == ["", "Pre-EL: Pass after rework", "Pre-EL: In rework", "Post EL: Pass",
+                        "Post EL: NG - rejected"], opts
+
+        pg.click("#elRows button.lnk")
+        pg.wait_for_selector("#searchOut .crumb:has-text('%s')" % IN_REWORK, timeout=10000)
+        stages = pg.eval_on_selector_all("#searchOut .chain .node label",
+                                         "ls => ls.map(l => l.textContent)")
+        assert stages[:4] == ["Allocated", "Produced", "Pre-EL", "Rework"], stages
+        assert pg.errors == [], pg.errors
+
+        q = H.open_page(b, None, role="Quality")
+        assert not q.locator('#sidenav [data-v="elst"]').is_visible(), "Quality sees EL Stations"
+        assert q.errors == [], q.errors
+
+
 if __name__ == "__main__":
     passed = failed = 0
     try:

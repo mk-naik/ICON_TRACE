@@ -8397,6 +8397,12 @@ function wireFqcAnomalies() {
   var NEW_VIEWS = [
     { id: 'indent',  label: 'Indent', icon: '\u25A4', after: 'proddash',
       roles: ['Admin', 'Production Incharge'], url: '/view/indent' },
+    /* Pre-EL and Post EL: which modules were imaged, passed, sent for rework,
+       rejected (Mukesh, 16 Oct 2026). Production Incharge, Admin and Super
+       Admin to begin with; anyone else by user permission. */
+    { id: 'elst', label: 'EL Stations', icon: '\u25A6', after: 'prodentry',
+      roles: ['Admin', 'Production Incharge'], url: '/view/el-stations',
+      title: 'Pre-EL and Post EL - every module imaged, its rework, its rejections' },
     { id: 'items', label: 'Item Master', icon: '\u25A5', after: 'admin',
       roles: ['Admin'], url: '/view/items',
       title: 'Maintained by Admin, not by operators' },
@@ -12960,6 +12966,9 @@ function wireFqcAnomalies() {
         if (view === 'gp-list') { window.gpListLoad(); }
         if (view === 'gp-new') { wireGp(); }
         if (view === 'prodentry') { if (typeof peInit === 'function') peInit(); }
+        /* EL Stations is fetched once at sign-in; its data is read on the way in */
+        if (view === 'elst' && typeof can === 'function' && can('elst') &&
+            typeof window.elstLoad === 'function') window.elstLoad();
         if (view === 'loss') { if (typeof loInit === 'function') loInit(); }
         if (view === 'disp') {
           wireDisp();

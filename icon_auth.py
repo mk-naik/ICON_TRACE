@@ -224,6 +224,7 @@ SCREENS = (
     ("indent",    "Indent",               "Production"),
     ("plan",      "Planning",             "Production"),
     ("prodentry", "Production Entry",     "Production"),
+    ("elst",      "EL Stations",          "Production"),
     ("loss",      "Loss & Breakdown",     "Production"),
     ("dash",      "FQC Dashboard",        "FQC"),
     ("fqc",       "FQC Entry",            "FQC"),
@@ -272,8 +273,18 @@ SUBVIEWS = {
 # POST /api/review/resolve - it is the Quality role's entire job. Marking it
 # read-only would, the moment Round 27 enforces this table, take that job
 # away, which this round's own rule forbids: nobody's access changes.
+#   elst - EL Stations (16 Oct 2026) lists what the EL poller recorded; GET only.
 READ_ONLY_SCREENS = frozenset(("mgmt", "search", "proddash", "dash",
-                               "packdash", "hold", "drafts"))
+                               "packdash", "hold", "drafts", "elst"))
+
+# Screens added after accounts already existed. Every NEW account gets a row
+# per screen when it is created; an existing one has none for a screen added
+# later, and no row is no access - so each of these is written ONCE for the
+# accounts that have no row for it, by their role's default, and never over a
+# row that exists: an Admin's later choice stands.
+#   elst  EL Stations - Production Incharge, Admin and Super Admin to begin
+#         with, others by user permission (Mukesh, 16 Oct 2026)
+LATER_SCREENS = ("elst",)
 
 
 def log_event(cur, login_id, event, ip=None, detail=None, now=None):
@@ -1040,6 +1051,34 @@ def default_perms_for_role(role):
     return {sid: {"view": sid in views,
                   "write": sid in views and sid not in READ_ONLY_SCREENS}
             for sid in SCREEN_IDS}
+
+
+def grant_later_screens(cur, now=None):
+    """Give every account a row for each LATER_SCREENS screen it has none for,
+    by its role's default - once: the next run finds the row and leaves it,
+    whatever an Admin has made of it since. Each grant that opens a screen is
+    an auth_event. Returns {login_id: [screen_id, ...]} opened this call."""
+    t = _now(now)
+    cur.execute("SELECT user_id, login_id, role FROM app_user ORDER BY user_id")
+    users = cur.fetchall()
+    out = {}
+    for u in users:
+        cur.execute("SELECT screen_id FROM user_screen_perm WHERE user_id=%s",
+                    (u["user_id"],))
+        have = {r["screen_id"] for r in cur.fetchall()}
+        todo = [s for s in LATER_SCREENS if s not in have]
+        if not todo:
+            continue
+        defaults = default_perms_for_role(u["role"])
+        perms = {s: defaults.get(s, {"view": False, "write": False}) for s in todo}
+        _write_screen_perms(cur, u["user_id"], perms)
+        opened = sorted(s for s, p in perms.items() if p["view"])
+        if opened:
+            out[u["login_id"]] = opened
+            log_event(cur, u["login_id"], "screen_perms_set", None,
+                      "by system: %s, a screen added since the account was made, "
+                      "given by the %s role's default" % (", ".join(opened), u["role"]), t)
+    return out
 
 
 def _write_screen_perms(cur, user_id, perms):

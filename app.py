@@ -276,6 +276,9 @@ _RESET_ENABLED = os.environ.get("ICON_ALLOW_RESET", "").strip().lower() in ("1",
 # depending on icon_auth_cli.py having been run first.
 with store.conn() as (_cx, _cur):
     icon_auth.ensure_schema(_cur)
+    # a screen added since the accounts were made (icon_auth.LATER_SCREENS):
+    # given once by role default, never over an Admin's own choice
+    icon_auth.grant_later_screens(_cur)
 
 
 # ---------------------------------------------------------------------------
@@ -6465,6 +6468,196 @@ def api_prod_dashboard():
     })
 
 
+# --------------------------------------------------------------------------
+# EL Stations (Mukesh, 16 Oct 2026): which modules were imaged at Pre-EL and
+# Post EL, what they read, and the rework at Pre-EL. Read from el_capture -
+# the poller's index - never from the folders. A module counts on the factory
+# day (06:00 to 06:00) and shift of its FIRST image at a station; the rules
+# for Pass, NG, rework and rejection are icon_el_capture's.
+# --------------------------------------------------------------------------
+
+def _el_rows_for(cur, serials, station=None):
+    """Every el_capture row of these serials (at one station, or both)."""
+    out, serials = [], sorted(serials)
+    for i in range(0, len(serials), 500):
+        part = serials[i:i + 500]
+        out.extend(store.rows(
+            cur, "SELECT capture_id, station, line, serial, recapture, verdict, "
+                 "file_time, seen_at FROM el_capture WHERE serial IN (%s)%s"
+                 % (",".join(["%s"] * len(part)),
+                    " AND station=%s" if station else ""),
+            tuple(part) + ((station,) if station else ())))
+    return out
+
+
+def _el_period(cur, frm, to, customer="", model="", wattage=""):
+    """{station: {serial: summary}} - the modules whose FIRST image at the
+    station is on a factory day from frm to to (either may be blank), each
+    summary (icon_el_capture.summary, from ALL its images there) carrying that
+    image's factory day and shift. The dashboards' customer, model and wattage
+    narrow it to modules in the master that match, as their own figures are
+    narrowed; with none set, a module the master does not have yet counts too."""
+    day = clock.shift_day_sql("file_time")
+    w, a = [], []
+    if frm:
+        w.append(day + " >= %s"); a.append(frm)
+    if to:
+        w.append(day + " <= %s"); a.append(to)
+    m, ma = [], []
+    if customer and customer.lower() != "all customers":
+        g2g = "G2G (M10R)" in customer             # v4's name for general stock
+        sql, ca = db.customer_match("customer", "STOCK" if g2g else customer)
+        m.append("(customer IS NULL OR %s)" % sql if g2g else sql); ma.extend(ca)
+    if model and model.lower() not in ("all", "all models"):
+        m.append("model = %s"); ma.append(model)
+    if _int_or_none(wattage):
+        m.append("wattage = %s"); ma.append(_int_or_none(wattage))
+    narrow = (" AND serial IN (SELECT serial FROM serial WHERE build_instance = 1"
+              " AND %s)" % " AND ".join(m)) if m else ""
+    out = {}
+    for station, _label in elcap.STATIONS:
+        seen = [r["serial"] for r in store.rows(
+            cur, "SELECT DISTINCT serial FROM el_capture WHERE station = %s" +
+                 "".join(" AND " + x for x in w) + narrow, tuple([station] + a + ma))]
+        by = {}
+        for r in _el_rows_for(cur, seen, station):
+            by.setdefault(r["serial"], []).append(r)
+        mine = {}
+        for serial, caps in by.items():
+            s = elcap.summary(station, caps)
+            t = datetime.datetime.fromisoformat(s["first_at"])
+            d = clock.shift_day(t).isoformat()
+            if (frm and d < frm) or (to and d > to):
+                continue                      # first imaged before the period
+            s.update(day=d, shift=clock.SHIFT_LETTER[clock.shift_of(t.hour)])
+            mine[serial] = s
+        out[station] = mine
+    return out
+
+
+def _el_kpi(period, shift="", line=""):
+    """What each station's modules in the period add up to: Pre-EL scanned,
+    passed the first time, reworked and passed, still in rework (first-pass
+    yield beside them); Post EL scanned, passed, rejected."""
+    def keep(s):
+        return (not shift or s["shift"] == shift) and (not line or line in s["lines"])
+    pre = [s for s in period["pre_el"].values() if keep(s)]
+    post = [s for s in period["post_el"].values() if keep(s)]
+    n = lambda xs, st: sum(1 for s in xs if s["status"] == st)
+    first, rw, ir = n(pre, "pass"), n(pre, "reworked"), n(pre, "in_rework")
+    return {"pre_el": {"scanned": len(pre), "pass": first, "reworked": rw,
+                       "in_rework": ir, "rework": rw + ir,
+                       "fpy": round(first * 100.0 / len(pre), 1) if pre else None},
+            "post_el": {"scanned": len(post), "pass": n(post, "pass"),
+                        "ng": n(post, "ng")}}
+
+
+# the Result filter's options, in the order a person reads them
+_EL_RESULTS = [(st, status, "%s: %s" % (elcap.LABEL[st], elcap.STATUS_LABEL[(st, status)]))
+               for st, status in (("pre_el", "pass"), ("pre_el", "reworked"),
+                                  ("pre_el", "in_rework"), ("post_el", "pass"),
+                                  ("post_el", "ng"))]
+_EL_ROW_CAP = 5000
+
+
+@app.route("/api/el/stations")
+@require_screen_view("elst")
+def api_el_stations():
+    """The EL Stations screen: per station, what the period's modules add up
+    to, and one row per module - its Pre-EL and Post EL story side by side.
+
+    A module is listed when its first image at a station is in the period
+    (From / To, factory days; today when neither is given); its row shows ALL
+    its images at both stations, not only the part inside the period. Shift,
+    Station and Line ask of that first image; Result asks of what the module's
+    images add up to. Every dropdown is dynamic (DECISIONS 8): it offers the
+    values the rows hold under every OTHER filter."""
+    frm = (request.args.get("from") or "").strip()
+    to = (request.args.get("to") or "").strip()
+    if not frm and not to:
+        frm = to = clock.shift_day().isoformat()
+    for v in (frm, to):
+        if v and not _ISO_DAY.match(v):
+            return jsonify({"ok": False, "why": "Dates are YYYY-MM-DD."}), 400
+    shift = (request.args.get("shift") or "").strip().upper()
+    station = (request.args.get("station") or "").strip()
+    result = (request.args.get("result") or "").strip()
+    line = (request.args.get("line") or "").strip().upper()
+    if station and station not in elcap.LABEL:
+        return jsonify({"ok": False, "why": "No such station: %s." % station}), 400
+
+    with store.conn() as (cx, cur):
+        period = _el_period(cur, frm, to)
+        listed = set(period["pre_el"]) | set(period["post_el"])
+        caps = _el_rows_for(cur, listed)
+        master = {}
+        names = sorted(listed)
+        for i in range(0, len(names), 500):
+            part = names[i:i + 500]
+            for r in store.rows(cur, "SELECT serial, model FROM serial WHERE "
+                                     "build_instance = 1 AND serial IN (%s)"
+                                % ",".join(["%s"] * len(part)), tuple(part)):
+                master[r["serial"]] = r["model"]
+        cfg = db.get_config(cur)
+
+    by = {}
+    for c in caps:
+        by.setdefault(c["serial"], {}).setdefault(c["station"], []).append(c)
+    rows = []
+    for serial in listed:
+        sums = {st: elcap.summary(st, by.get(serial, {}).get(st, []))
+                for st, _l in elcap.STATIONS}
+        members = [{"station": st, "shift": period[st][serial]["shift"],
+                    "lines": period[st][serial]["lines"]}
+                   for st, _l in elcap.STATIONS if serial in period[st]]
+        rows.append({
+            "serial": serial, "model": master.get(serial),
+            "in_master": serial in master,
+            "pre": sums["pre_el"], "post": sums["post_el"],
+            "lines": sorted({ln for s in sums.values() if s for ln in s["lines"]}),
+            "last_at": max(s["last_at"] for s in sums.values() if s),
+            "members": members,
+            "results": [lab for st, status, lab in _EL_RESULTS
+                        if sums[st] and sums[st]["status"] == status]})
+
+    def member_ok(m, skip=None):
+        return ((skip == "station" or not station or m["station"] == station) and
+                (skip == "shift" or not shift or m["shift"] == shift) and
+                (skip == "line" or not line or line in m["lines"]))
+
+    def row_ok(r, skip=None):
+        if skip != "result" and result and result not in r["results"]:
+            return False
+        return any(member_ok(m, skip) for m in r["members"])
+
+    facets = {
+        "shift": sorted({m["shift"] for r in rows if row_ok(r, "shift")
+                         for m in r["members"] if member_ok(m, "shift")}),
+        "station": [st for st, _l in elcap.STATIONS
+                    if any(m["station"] == st for r in rows if row_ok(r, "station")
+                           for m in r["members"] if member_ok(m, "station"))],
+        "line": sorted({ln for r in rows if row_ok(r, "line")
+                        for m in r["members"] if member_ok(m, "line")
+                        for ln in m["lines"]}),
+        "result": [lab for _st, _s, lab in _EL_RESULTS
+                   if any(lab in r["results"] for r in rows if row_ok(r, "result"))],
+    }
+    shown = sorted((r for r in rows if row_ok(r)), key=lambda r: r["last_at"],
+                   reverse=True)
+    for r in shown:
+        del r["members"], r["results"]
+    return jsonify({
+        "ok": True, "from": frm, "to": to,
+        "kpi": _el_kpi(period, shift, line),
+        "rows": shown[:_EL_ROW_CAP], "total": len(shown), "cap": _EL_ROW_CAP,
+        "facets": facets,
+        # a station with no folder set reads 0 because nothing is scanned, not
+        # because nothing came through - the screen says which
+        "configured": {st: any(_el_station_root(cfg, st, ln) for ln in ev.LINES)
+                       for st, _l in elcap.STATIONS},
+    })
+
+
 @app.route("/api/packing/log")
 @require_screen_view("packdash")
 def api_packing_log():
@@ -6637,6 +6830,7 @@ _FRAGMENT_GATE = {
     "indent":      {"screens": ("indent",)},
     "indent-form": {"screens": ("indent",)},
     "loading":     {"screens": ("loadver",)},
+    "el-stations": {"screens": ("elst",)},
     # the Admin screen's own fragments - role-gated like the rest of it
     "items":       {"roles": _R_ADMIN},
     "settings":    {"roles": _R_ADMIN},
@@ -6666,7 +6860,8 @@ def view_fragment(name):
                "loading": "frag_loading.html",
                "indent-form": "frag_indent_form.html",
                "items": "frag_items.html",
-               "settings": "frag_settings.html"}
+               "settings": "frag_settings.html",
+               "el-stations": "frag_el_stations.html"}
     if name not in allowed:
         abort(404)
     # One route, several screens - so gated here by name, not by decorator.

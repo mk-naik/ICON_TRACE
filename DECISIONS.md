@@ -215,6 +215,14 @@ no one signs twice. [enforcement unverified]
   station the serial was never captured at gives no step at all - not "pending". [built]
   **[open]** whether a Post EL rejection should also stop the module (FQC, packing) or
   raise a Needs Review item - today it is shown, not enforced.
+- **EL Stations is a screen of its own** (Production section, after Production Entry;
+  Mukesh, 16 Oct): every module first imaged at Pre-EL or Post EL in the period, one row
+  each with both stations side by side, and per station what they add up to - Pre-EL
+  scanned, passed first time (first-pass yield), reworked and passed, still in rework;
+  Post EL scanned, passed, rejected. **A module counts on the factory day and shift of
+  its FIRST image at a station**; its row shows all its images. Production Incharge,
+  Admin and Super Admin see it to begin with; anyone else by user permission (section 9).
+  Read-only. [built]
 
 ## 6. Quality, Needs Review, duplicate scans
 
@@ -324,7 +332,7 @@ no one signs twice. [enforcement unverified]
 - **Every filter dropdown is dynamic** (Mukesh, 6 Oct): it offers the values the
   data holds under every OTHER filter on the screen - its own left out, so a pick
   does not hide its siblings - and never drops the value already picked.
-  [built on: Production Entry, Loss & Breakdown, FQC Dashboard, Production Dashboard, Management Overview, Packing Log, Stock & Dispatch, FQC Recent gradings, every table filter drawn by icon_table.js (Recent Allocations, Indents, Item Master), the Challan, Loading Verification and Gate Pass lists, and the FQC drill-in (which already was)]
+  [built on: Production Entry, Loss & Breakdown, FQC Dashboard, Production Dashboard, Management Overview, Packing Log, Stock & Dispatch, FQC Recent gradings, every table filter drawn by icon_table.js (Recent Allocations, Indents, Item Master), the Challan, Loading Verification and Gate Pass lists, the FQC drill-in (which already was), and EL Stations]
   Management Overview's **Line** filter is disabled ("Not built yet"): a line is
   recorded only on production entries, so allocation, FQC, packing and dispatch
   cannot be split by it. **[open]** whether Mukesh wants it on the production
@@ -342,6 +350,11 @@ no one signs twice. [enforcement unverified]
   are role-gated, never per-user; master-data changes are Super Admin only.
 - Per-screen flags cannot express a per-action rule, so action limits use an
   inline role check (`_require_role`). "Cancel a challan" is one of them.
+- **A screen added after the accounts exist is given once, by role** (`icon_auth.
+  LATER_SCREENS`): each account with no row for it gets its role's default at start-up,
+  recorded as an auth event; a row that exists - an Admin's own choice - is never
+  rewritten. EL Stations (16 Oct) is the first: Production Incharge, Admin and Super
+  Admin. [built]
 - **Admin's audit, print log, access review and machine counts are real** (7 Oct):
   every document opened to print and every export is recorded (who, which document,
   which template - never a copy count, which only the browser's print dialog knows);

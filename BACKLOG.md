@@ -7683,3 +7683,23 @@ commit.
   repeating, "In rework", the real share's same-name re-shot, a re-filed image, the order
   rule, Post EL NG standing against a later OK, the summaries. `test_el_capture_ui.py`: the
   cycle on the page (Pre-EL NG, Rework "3 min", Pre-EL Pass, Post EL).
+
+### 16 Oct 2026 - EL Stations, a screen of its own
+- **Asked (Mukesh):** "there is no way to see which serial is scanned in both EL" - a new
+  screen for both stations; Production Incharge, Admin and Super Admin for now, others by
+  user permission.
+- **Change:** screen `elst` ("EL Stations", Production section after Production Entry;
+  `NEW_VIEWS`, `icon_auth.SCREENS`, read-only). `/api/el/stations`: per station, what the
+  period's modules add up to (Pre-EL scanned / passed first time / reworked and passed /
+  still in rework, first-pass yield; Post EL scanned / pass / rejected) and one row per
+  module with both stations side by side; a module counts on the factory day and shift of
+  its first image at a station (`_el_period`, shared with the dashboards next). From / To /
+  Shift / Station / Result / Line, every dropdown dynamic; search and Export by
+  `icon_table.js`; a serial opens its journey; newest 5,000 rows sent, the total said; a
+  station with no folder set says so. Existing accounts get the screen once, by role,
+  at start-up (`icon_auth.grant_later_screens`, `LATER_SCREENS`), an auth event each;
+  an Admin's later choice is never rewritten.
+- **Test:** `test_el_capture.py` +7 (46): KPIs and rows on a seeded day, the first-image
+  rule across midnight days, every filter and its dynamic options, today by default, a
+  bad date, an unset station, the row cap, the gate per role, the one-time grant.
+  `test_el_capture_ui.py` +1 (5, Chromium). `test_screen_view_gates.py`: the new read gate.

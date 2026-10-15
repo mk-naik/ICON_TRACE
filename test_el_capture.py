@@ -27,10 +27,16 @@ THE RULES THIS FILE DEFENDS
      FQC EL, Pre-EL and Post EL (any line). The same folder for one station on
      both lines is one machine serving both, and allowed.
 
-  7. The module journey shows a Pre-EL and a Post EL step only where the
-     serial was captured - no step at all otherwise - after Produced and
-     before Anomaly / FQC, valued by the latest capture's verdict, never a
-     reject; read from el_capture, never from the shares.
+  7. The module journey shows the EL steps only where the serial was captured
+     - no step at all otherwise - after Produced and before Anomaly / FQC: every
+     Pre-EL image, each NG followed by a Rework step until one passes; Post EL
+     as one step, an NG there a rejection. Read from el_capture, never from the
+     shares.
+
+  8. EL Stations lists every module first imaged at a station in the period,
+     with what its images add up to; its dropdowns are dynamic; Production
+     Incharge, Admin and Super Admin may open it, others by user permission -
+     and the accounts that existed before it are given it once, by role.
 
 Each test names the rule it defends, so a failure says which decision broke.
 """
@@ -816,6 +822,168 @@ def t_journey_reads_table_only():
         assert [x["value"] for x in el_part(S_CRACK)] == ["NG", "In rework"]
     finally:
         _os.scandir = real
+
+
+# --------------------------------------------------------------------------
+# 8. the EL Stations screen
+# --------------------------------------------------------------------------
+
+def seed_day():
+    """The 14th: a module reworked and passed (then Post EL OK), one passed
+    first time, one still in rework (C shift), one rejected at Post EL, one the
+    master does not have - and one first imaged on the 13th."""
+    fresh()
+    put(PRE_A, "2026-10-14/早班/Cell Crack", S_CRACK + ".jpg", "2026-10-14T09:00:00")
+    put(PRE_A, "2026-10-14/早班/OK", S_CRACK + "_1.jpg", "2026-10-14T09:30:00")
+    put(POST_B, "2026-10-14/中班/OK", S_CRACK + ".jpg", "2026-10-14T14:10:00")
+    put(PRE_A, "2026-10-14/早班/OK", S_CROSS + ".jpg", "2026-10-14T10:00:00")
+    put(PRE_A, "2026-10-14/晚班/Cell Crack", S_OLD + ".jpg", "2026-10-14T23:30:00")
+    put(POST_B, "2026-10-14/中班/Cell Crack", S_POST + ".jpg", "2026-10-14T16:00:00")
+    put(PRE_A, "2026-10-14/中班/OK", NOT_PLANNED + ".jpg", "2026-10-14T15:00:00")
+    put(PRE_A, "2026-10-13/中班/Grid Burning", S_STRAY + ".jpg", "2026-10-13T20:00:00")
+    put(PRE_A, "2026-10-14/早班/OK", S_STRAY + ".jpg", "2026-10-14T08:00:00")
+    run()
+
+
+def el_api(c=None, **q):
+    c = c or signed_in()
+    r = c.get("/api/el/stations", query_string=q)
+    return r.status_code, r.get_json()
+
+
+@test("EL Stations: the period's modules by their first image - KPIs, one row a "
+      "module with both stations' story, a module the master lacks included")
+def t_screen_api():
+    seed_day()
+    code, d = el_api(**{"from": "2026-10-14", "to": "2026-10-14"})
+    assert code == 200 and d["ok"], d
+    assert d["kpi"] == {"pre_el": {"scanned": 4, "pass": 2, "reworked": 1, "in_rework": 1,
+                                   "rework": 2, "fpy": 50.0},
+                        "post_el": {"scanned": 2, "pass": 1, "ng": 1}}, d["kpi"]
+    rows = {r["serial"]: r for r in d["rows"]}
+    assert set(rows) == {S_CRACK, S_CROSS, S_OLD, S_POST, NOT_PLANNED}, sorted(rows)
+    c = rows[S_CRACK]
+    assert (c["pre"]["label"], c["pre"]["reworks"], c["pre"]["reason"], c["pre"]["images"]) == \
+        ("Pass after rework", 1, "Cell Crack", 2), c["pre"]
+    assert c["post"]["label"] == "Pass" and c["model"] == "ISEN625-G12R" and c["lines"] == ["A", "B"]
+    p = rows[S_POST]
+    assert p["pre"] is None and (p["post"]["label"], p["post"]["reason"]) == \
+        ("NG - rejected", "Cell Crack"), p
+    assert rows[S_OLD]["pre"]["label"] == "In rework"
+    assert rows[NOT_PLANNED]["in_master"] is False and rows[NOT_PLANNED]["model"] is None
+    assert [r["serial"] for r in d["rows"]][0] == S_OLD, "newest activity first"
+    assert d["facets"] == {"shift": ["A", "B", "C"], "station": ["pre_el", "post_el"],
+                           "line": ["A", "B"],
+                           "result": ["Pre-EL: Pass", "Pre-EL: Pass after rework",
+                                      "Pre-EL: In rework", "Post EL: Pass",
+                                      "Post EL: NG - rejected"]}, d["facets"]
+    assert d["configured"] == {"pre_el": True, "post_el": True}
+    # the 13th's module is the 13th's, its image on the 14th notwithstanding
+    code, d13 = el_api(**{"from": "2026-10-13", "to": "2026-10-13"})
+    assert [r["serial"] for r in d13["rows"]] == [S_STRAY], d13["rows"]
+    assert d13["rows"][0]["pre"]["label"] == "Pass after rework"
+
+
+@test("EL Stations filters: Shift, Station and Line ask of the first image, Result "
+      "of what the images add up to - each dropdown offered under the OTHERS")
+def t_screen_filters():
+    seed_day()
+    day = {"from": "2026-10-14", "to": "2026-10-14"}
+    _c, d = el_api(shift="C", **day)
+    assert [r["serial"] for r in d["rows"]] == [S_OLD], d["rows"]
+    assert d["facets"]["shift"] == ["A", "B", "C"], "its own pick must not hide its siblings"
+    assert d["facets"]["station"] == ["pre_el"], d["facets"]
+    assert d["kpi"]["pre_el"]["scanned"] == 1 and d["kpi"]["post_el"]["scanned"] == 0
+    _c, d = el_api(result="Post EL: NG - rejected", **day)
+    assert [r["serial"] for r in d["rows"]] == [S_POST], d["rows"]
+    _c, d = el_api(station="post_el", **day)
+    assert {r["serial"] for r in d["rows"]} == {S_CRACK, S_POST}, d["rows"]
+    assert d["facets"]["shift"] == ["B"], d["facets"]
+    _c, d = el_api(line="A", **day)
+    assert S_POST not in {r["serial"] for r in d["rows"]} and len(d["rows"]) == 4, d["rows"]
+    code, d = el_api(station="nowhere", **day)
+    assert code == 400
+
+
+@test("EL Stations: no dates means today's factory day; a date that is not one is refused")
+def t_screen_dates():
+    fresh()
+    code, d = el_api()
+    assert code == 200 and d["from"] == d["to"] == clock.shift_day().isoformat(), d
+    assert d["rows"] == [] and d["kpi"]["pre_el"]["scanned"] == 0
+    assert d["configured"] == {"pre_el": True, "post_el": True}
+    code, d = el_api(**{"from": "14-10-2026"})
+    assert code == 400, d
+
+
+@test("EL Stations: a station with no folder set says so, rather than a plain 0")
+def t_screen_unconfigured():
+    fresh(post_el_b_root="")
+    _c, d = el_api()
+    assert d["configured"] == {"pre_el": True, "post_el": False}, d["configured"]
+
+
+@test("EL Stations: more modules than the cap - the newest are sent, the total said")
+def t_screen_cap():
+    seed_day()
+    cap = APP._EL_ROW_CAP
+    APP._EL_ROW_CAP = 2
+    try:
+        _c, d = el_api(**{"from": "2026-10-14", "to": "2026-10-14"})
+    finally:
+        APP._EL_ROW_CAP = cap
+    assert len(d["rows"]) == 2 and d["total"] == 5 and d["cap"] == 2, d
+
+
+@test("EL Stations opens for Production Incharge, Admin and Super Admin; another role "
+      "is refused - by the API and by the screen's own markup")
+def t_screen_gate():
+    fresh()
+    for role, want in (("Production Incharge", 200), ("Admin", 200), ("Super Admin", 200),
+                       ("Quality", 403), ("FQC Operator", 403)):
+        c = APP.app.test_client()
+        AUTH.test_login(c, role=role)
+        assert c.get("/api/el/stations").status_code == want, role
+        assert c.get("/view/el-stations").status_code == want, role
+    c = APP.app.test_client()
+    assert c.get("/api/el/stations").status_code == 401
+
+
+@test("accounts made before EL Stations existed are given it once, by role - and an "
+      "Admin's later choice is never undone")
+def t_grant_later_screens():
+    import icon_auth
+    fresh()
+    who = {}
+    for role in ("Production Incharge", "Admin", "Super Admin", "Quality", "FQC Operator"):
+        who[role] = AUTH.make_user(role)["login_id"]
+    with store.conn() as (cx, cur):                # as if made before the screen
+        cur.execute("DELETE FROM user_screen_perm WHERE screen_id='elst'")
+        assert all(not icon_auth.get_screen_perms(cur, l)["elst"]["view"] for l in who.values())
+        got = icon_auth.grant_later_screens(cur)
+    assert got == {who["Production Incharge"]: ["elst"], who["Admin"]: ["elst"],
+                   who["Super Admin"]: ["elst"]}, got
+    with store.conn() as (cx, cur):
+        perms = {r: icon_auth.get_screen_perms(cur, l)["elst"] for r, l in who.items()}
+        logged = store.rows(cur, "SELECT login_id, detail FROM auth_event WHERE "
+                                 "event='screen_perms_set' AND detail LIKE 'by system:%'")
+        rows = store.one(cur, "SELECT COUNT(*) AS n FROM user_screen_perm "
+                              "WHERE screen_id='elst'")["n"]
+    assert perms["Production Incharge"] == {"view": True, "write": False}, perms
+    assert perms["Quality"] == {"view": False, "write": False}, perms
+    assert rows == 5, "every account gets an explicit row"
+    assert sorted(r["login_id"] for r in logged) == sorted(
+        who[r] for r in ("Production Incharge", "Admin", "Super Admin")), logged
+    assert all("elst" in r["detail"] and "role's default" in r["detail"] for r in logged), logged
+    # an Admin takes it away from the incharge, and gives it to Quality
+    with store.conn() as (cx, cur):
+        icon_auth.set_screen_perms(cur, who["Super Admin"], who["Production Incharge"],
+                                   {"elst": {"view": False, "write": False}})
+        icon_auth.set_screen_perms(cur, who["Super Admin"], who["Quality"],
+                                   {"elst": {"view": True, "write": False}})
+        assert icon_auth.grant_later_screens(cur) == {}
+        assert icon_auth.get_screen_perms(cur, who["Production Incharge"])["elst"]["view"] is False
+        assert icon_auth.get_screen_perms(cur, who["Quality"])["elst"]["view"] is True
 
 
 if __name__ == "__main__":
