@@ -30,7 +30,7 @@ never changed or deleted - an image moved away, or a share switched off,
 leaves the record of what was captured.
 """
 
-import os, time, logging, datetime, threading
+import os, re, time, logging, datetime, threading
 
 import icon_clock as clock
 import icon_defects
@@ -48,6 +48,67 @@ MISS_TTL_S = 3600        # a name that is no serial is asked about again after t
 _NOT_SERIAL = {}         # name -> time.time() it was found not to be in the master
 _DOWN = set()            # (station, folder) unreachable - logged once per outage
 _CHUNK = 500             # names per IN (...) list
+
+
+# ---- what an image says (Mukesh, 16 Oct 2026) ------------------------------
+#
+# OK is Pass; any other folder is NG. At Pre-EL an NG module goes for rework
+# and comes back to Pre-EL - NG, rework, Pre-EL again, until it passes. After
+# lamination a module cannot go back to the pre-lamination process, so an NG
+# at Post EL is a rejection: no rework, and a later image does not undo it.
+
+_PASS = re.compile(r"^(ok|pass)$", re.I)        # the FQC screen's own test
+
+
+def is_pass(verdict):
+    return bool(_PASS.match((verdict or "").strip()))
+
+
+def images(rows):
+    """One serial's el_capture rows at ONE station as its images, in order -
+    the re-shot number, then the file's time. An image re-filed under another
+    verdict (same re-shot number, same time: one image, moved) is one image,
+    and the filing seen last is the one that stands."""
+    out = []
+    for r in sorted(rows, key=lambda r: (r["recapture"] or 0, r["file_time"] or "",
+                                         r["seen_at"] or "", r["capture_id"])):
+        if out and (out[-1]["recapture"] or 0) == (r["recapture"] or 0) \
+                and out[-1]["file_time"] == r["file_time"]:
+            out[-1] = r
+        else:
+            out.append(r)
+    return out
+
+
+# a module's state at a station, and how a person reads it
+STATUS_LABEL = {("pre_el", "pass"): "Pass", ("pre_el", "reworked"): "Pass after rework",
+                ("pre_el", "in_rework"): "In rework",
+                ("post_el", "pass"): "Pass", ("post_el", "ng"): "NG - rejected"}
+
+
+def summary(station, rows):
+    """What one serial's images at one station add up to, or None for none.
+
+    Pre-EL: 'pass' (never NG), 'reworked' (NG at least once, its last image
+    OK) or 'in_rework' (its last image NG). Post EL: 'pass', or 'ng' the
+    moment any image is NG - a rejection stands. A module counts on the
+    factory day and shift of its FIRST image at the station."""
+    imgs = images(rows)
+    if not imgs:
+        return None
+    ngs = [i for i in imgs if not is_pass(i["verdict"])]
+    if station == "pre_el":
+        status = ("pass" if not ngs else
+                  "reworked" if is_pass(imgs[-1]["verdict"]) else "in_rework")
+        reason = ngs[-1]["verdict"] if ngs else None
+    else:
+        status = "ng" if ngs else "pass"
+        reason = ngs[0]["verdict"] if ngs else None
+    return {"status": status, "label": STATUS_LABEL[(station, status)],
+            "reason": reason, "images": len(imgs),
+            "reworks": len(ngs) if station == "pre_el" else 0,
+            "first_at": imgs[0]["file_time"], "last_at": imgs[-1]["file_time"],
+            "lines": sorted({i["line"] for i in imgs if i["line"]})}
 
 
 def folder_key(path):

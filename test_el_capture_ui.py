@@ -176,28 +176,29 @@ def open_module(pg, serial):
           tone: n.querySelector('.ns .tag').className}))""")
 
 
-@test("Search & Trace: a module captured at both stations shows Pre-EL and Post EL "
-      "after Produced, with their verdicts; one captured at neither shows no such "
-      "step - no empty step either way - and the chain still scrolls")
+@test("Search & Trace: a module NG at Pre-EL, reworked and passed shows Pre-EL NG, "
+      "Rework, Pre-EL Pass and Post EL after Produced; one captured at neither "
+      "shows no such step - no empty step either way - and the chain still scrolls")
 def t_journey_on_screen():
     seed_journey()
     with H.browser() as b:
         pg = H.open_page(b, "search")
         nodes = open_module(pg, BOTH)
         stages = [n["stage"] for n in nodes]
-        assert stages == ["Allocated", "Produced", "Pre-EL", "Post EL", "FQC", "Packed",
-                          "Challan", "Gate pass"], stages
-        pre, post = nodes[2], nodes[3]
-        assert pre["value"] == "OK" and "t-pass" in pre["tone"], pre
-        assert pre["detail"] == ["Ribbon short · 15-10-2026 13:07",
-                                 "OK · 15-10-2026 13:10", "Line A"], pre
-        assert pre["tag"] == "15-10-2026 13:10 · shift A", pre
-        assert post["value"] == "OK" and post["detail"] == ["OK · 15-10-2026 16:42",
-                                                            "Line B"], post
-        for n in (pre, post):
+        assert stages == ["Allocated", "Produced", "Pre-EL", "Rework", "Pre-EL", "Post EL",
+                          "FQC", "Packed", "Challan", "Gate pass"], stages
+        ng, rw, ok, post = nodes[2:6]
+        assert ng["value"] == "NG" and "t-rev" in ng["tone"], ng
+        assert ng["detail"] == ["Ribbon short", "Line A"], ng
+        assert ng["tag"] == "15-10-2026 13:07 · shift A", ng
+        assert rw["value"] == "Rework" and rw["tag"] == "3 min", rw
+        assert rw["detail"] == ["after Ribbon short", "back at Pre-EL 15-10-2026 13:10"], rw
+        assert ok["value"] == "Pass" and "t-pass" in ok["tone"], ok
+        assert post["value"] == "Pass" and post["detail"] == ["Line B"], post
+        for n in (ng, rw, ok, post):
             assert n["value"].strip() and n["value"] != "—", n
 
-        # nine nodes are wider than the card: the chain scrolls inside it, the
+        # ten nodes are wider than the card: the chain scrolls inside it, the
         # page itself does not
         chain = "#searchOut .chain"
         geo = pg.evaluate("""(sel) => { const c = document.querySelector(sel);

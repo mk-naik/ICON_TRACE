@@ -610,12 +610,6 @@ def journey(serial):
     return r.get_json()["journey"]
 
 
-def step(serial, stage):
-    got = [j for j in journey(serial) if j["stage"] == stage]
-    assert len(got) == 1, (stage, [j["stage"] for j in journey(serial)])
-    return got[0]
-
-
 @test("a serial with no captures has no Pre-EL or Post EL step at all - not a "
       "dash, not 'pending' - and the journey is otherwise as it was")
 def t_journey_none():
@@ -626,9 +620,14 @@ def t_journey_none():
     assert stages == ["Allocated", "Produced", "FQC", "Packed", "Challan", "Gate pass"], stages
 
 
-@test("a module re-shot from Cell Crack to OK shows OK, both captures oldest first, "
-      "after Produced and before Anomaly and FQC - Post EL after Pre-EL")
-def t_journey_reshot():
+def el_part(serial):
+    """The journey's EL steps only."""
+    return [j for j in journey(serial) if j["stage"] in ("Pre-EL", "Rework", "Post EL")]
+
+
+@test("NG at Pre-EL is followed by a Rework step and the next Pre-EL image - Cell "
+      "Crack, rework, Pass - after Produced, before Anomaly and FQC; Post EL last")
+def t_journey_cycle():
     fresh()
     put(PRE_A, "2026-10-14/早班/Cell Crack", S_CRACK + ".jpg", "2026-10-14T13:07:34")
     put(PRE_A, "2026-10-14/早班/OK", S_CRACK + "_1.jpg", "2026-10-14T13:10:14")
@@ -641,84 +640,163 @@ def t_journey_reshot():
                           + ["1"] * 10) + "\n")
     with store.conn() as (cx, cur):
         db.set_config(cur, {"ss_a_csv_path": ss})
-    stages = [j["stage"] for j in journey(S_CRACK)]
-    assert stages == ["Allocated", "Produced", "Pre-EL", "Post EL", "Anomaly", "FQC",
-                      "Packed", "Challan", "Gate pass"], stages
-    pre = step(S_CRACK, "Pre-EL")
-    assert pre["value"] == "OK" and pre["done"] is True and pre["tone"] == "t-pass", pre
-    assert pre["detail"] == ["Cell Crack · 14-10-2026 13:07",
-                             "OK · 14-10-2026 13:10 · re-shot 1", "Line A"], pre["detail"]
-    assert pre["tag"] == "14-10-2026 13:10 · shift A", pre["tag"]
-    post = step(S_CRACK, "Post EL")
-    assert post["value"] == "OK" and post["detail"] == ["OK · 16-10-2026 01:12", "Line B"], post
-    assert post["tag"] == "16-10-2026 01:12 · shift C (15-10)", post["tag"]
+    j = journey(S_CRACK)
+    assert [x["stage"] for x in j] == [
+        "Allocated", "Produced", "Pre-EL", "Rework", "Pre-EL", "Post EL", "Anomaly",
+        "FQC", "Packed", "Challan", "Gate pass"], [x["stage"] for x in j]
+    ng, rw, ok, post = j[2], j[3], j[4], j[5]
+    assert (ng["value"], ng["tone"], ng["done"], ng["detail"], ng["tag"]) == \
+        ("NG", "t-rev", True, ["Cell Crack", "Line A"], "14-10-2026 13:07 · shift A"), ng
+    assert (rw["value"], rw["done"], rw["detail"], rw["tag"]) == \
+        ("Rework", True, ["after Cell Crack", "back at Pre-EL 14-10-2026 13:10"],
+         "3 min"), rw
+    assert (ok["value"], ok["tone"], ok["detail"], ok["tag"]) == \
+        ("Pass", "t-pass", ["re-shot 1", "Line A"], "14-10-2026 13:10 · shift A"), ok
+    assert (post["value"], post["tone"], post["detail"], post["tag"]) == \
+        ("Pass", "t-pass", ["Line B"], "16-10-2026 01:12 · shift C (15-10)"), post
 
 
-@test("re-shot under its own name, as the real Pre-EL share does it: the later "
-      "file is the latest")
+@test("NG, rework, NG, rework, Pass: the loop repeats until the module passes")
+def t_journey_loop():
+    fresh()
+    put(PRE_A, "2026-10-14/早班/Cell Crack", S_OLD + ".jpg", "2026-10-14T09:00:00")
+    put(PRE_A, "2026-10-14/早班/Grid Burning", S_OLD + ".jpg", "2026-10-14T09:30:00")
+    put(PRE_A, "2026-10-14/中班/OK", S_OLD + ".jpg", "2026-10-14T15:45:00")
+    run()
+    got = [(x["stage"], x["value"], x["tag"]) for x in el_part(S_OLD)]
+    assert got == [("Pre-EL", "NG", "14-10-2026 09:00 · shift A"),
+                   ("Rework", "Rework", "30 min"),
+                   ("Pre-EL", "NG", "14-10-2026 09:30 · shift A"),
+                   ("Rework", "Rework", "6 h 15 min"),
+                   ("Pre-EL", "Pass", "14-10-2026 15:45 · shift B")], got
+    assert el_part(S_OLD)[3]["detail"] == ["after Grid Burning",
+                                           "back at Pre-EL 14-10-2026 15:45"]
+
+
+@test("still NG at its last image: 'In rework', pending - nothing more is assumed")
+def t_journey_in_rework():
+    fresh()
+    put(PRE_A, "2026-10-15/晚班/Cell Crack", S_CROSS + ".jpg", "2026-10-15T22:02:25")
+    run()
+    ng, rw = el_part(S_CROSS)
+    assert (ng["value"], ng["detail"]) == ("NG", ["Cell Crack", "Line A"]), ng
+    assert (rw["stage"], rw["value"], rw["done"], rw["tag"], rw["tone"], rw["detail"]) == \
+        ("Rework", "In rework", False, "pending", "t-rev",
+         ["after Cell Crack", "no Pre-EL image since"]), rw
+    assert [x["stage"] for x in journey(S_CROSS)][-4:] == ["FQC", "Packed", "Challan",
+                                                           "Gate pass"]
+
+
+@test("re-shot under its own name, as the real Pre-EL share does it: Ribbon short "
+      "13:07, rework, OK 13:10")
 def t_journey_same_name_reshot():
     fresh()
     put(PRE_A, "2026-10-15/早班/Ribbon short", S_CROSS + ".jpg", "2026-10-15T13:07:34")
     put(PRE_A, "2026-10-15/早班/OK", S_CROSS + ".jpg", "2026-10-15T13:10:14")
     run()
-    pre = step(S_CROSS, "Pre-EL")
-    assert pre["value"] == "OK" and pre["tone"] == "t-pass", pre
-    assert pre["detail"] == ["Ribbon short · 15-10-2026 13:07", "OK · 15-10-2026 13:10",
-                             "Line A"], pre["detail"]
+    got = [(x["stage"], x["value"]) for x in el_part(S_CROSS)]
+    assert got == [("Pre-EL", "NG"), ("Rework", "Rework"), ("Pre-EL", "Pass")], got
+    assert el_part(S_CROSS)[0]["detail"] == ["Ribbon short", "Line A"]
 
 
-@test("the highest re-shot number is the latest even against a later file time; "
-      "a defect verdict is t-rev, never t-fail")
-def t_journey_latest_rule():
+@test("an image re-filed under another verdict is ONE image: its latest filing "
+      "stands - not a Pass and then an NG")
+def t_journey_refiled():
+    fresh()
+    p = put(PRE_A, "2026-10-14/早班/OK", S_CRACK + ".jpg", "2026-10-14T13:07:34")
+    run()
+    d = os.path.join(PRE_A, "2026-10-14", "早班", "Cell Crack")
+    os.makedirs(d)
+    os.replace(p, os.path.join(d, S_CRACK + ".jpg"))         # the operator re-files it
+    assert run() == {"pre_el": 1}                            # both filings are on record
+    got = [(x["stage"], x["value"]) for x in el_part(S_CRACK)]
+    assert got == [("Pre-EL", "NG"), ("Rework", "In rework")], got
+
+
+@test("the re-shot number orders the images before the time does")
+def t_journey_order_rule():
     fresh()
     put(PRE_A, "2026-10-14/早班/OK", S_OLD + ".jpg", "2026-10-14T10:00:00")
     put(PRE_A, "2026-10-14/早班/Cell Crack", S_OLD + "_2.jpg", "2026-10-14T09:00:00")
     run()
-    pre = step(S_OLD, "Pre-EL")
-    assert pre["value"] == "Cell Crack" and pre["tone"] == "t-rev", pre
-    assert pre["detail"][-2] == "Cell Crack · 14-10-2026 09:00 · re-shot 2", pre["detail"]
-    assert pre["tag"].startswith("14-10-2026 09:00"), pre["tag"]
+    got = [(x["stage"], x["value"]) for x in el_part(S_OLD)]
+    assert got == [("Pre-EL", "Pass"), ("Pre-EL", "NG"), ("Rework", "In rework")], got
+    assert el_part(S_OLD)[1]["detail"] == ["Cell Crack", "re-shot 2", "Line A"]
 
 
-@test("'Pass' and ' ok ' are clean, as on the FQC screen")
+@test("Post EL NG is a rejection: one step, NG in red with its reason, no Rework - "
+      "and a later OK image does not undo it")
+def t_journey_post_el_ng():
+    fresh()
+    put(POST_B, "2026-10-14/中班/Cell Crack", S_POST + ".jpg", "2026-10-14T16:00:00")
+    put(POST_B, "2026-10-14/中班/OK", S_POST + "_1.jpg", "2026-10-14T16:30:00")
+    run()
+    got = el_part(S_POST)
+    assert [x["stage"] for x in got] == ["Post EL"], [x["stage"] for x in got]
+    post = got[0]
+    assert (post["value"], post["tone"], post["tag"]) == \
+        ("NG", "t-fail", "14-10-2026 16:00 · shift B"), post
+    assert post["detail"] == ["Cell Crack", "rejected - no rework after lamination",
+                              "Cell Crack · 14-10-2026 16:00", "OK · 14-10-2026 16:30",
+                              "Line B"], post["detail"]
+
+
+@test("Post EL with more than four images lists the four latest, the rest counted")
+def t_journey_post_many():
+    fresh()
+    for i in range(6):
+        put(POST_B, "2026-10-14/早班/OK", S_POST + ("_%d.jpg" % i if i else ".jpg"),
+            "2026-10-14T1%d:00:00" % i)
+    run()
+    post = el_part(S_POST)[0]
+    assert post["value"] == "Pass" and post["detail"] == [
+        "+2 earlier", "OK · 14-10-2026 12:00", "OK · 14-10-2026 13:00",
+        "OK · 14-10-2026 14:00", "OK · 14-10-2026 15:00", "Line B"], post
+
+
+@test("'Pass' and ' ok ' are Pass, as on the FQC screen; no Post EL image, no step")
 def t_journey_clean_words():
     fresh(post_el_b_root="")
     put(PRE_A, "2026-10-14/早班/Pass", S_OLD + ".jpg")
     put(PRE_A, "2026-10-14/早班/ ok", S_STRAY + ".jpg")
     run()
-    assert step(S_OLD, "Pre-EL")["tone"] == "t-pass"
-    assert step(S_STRAY, "Pre-EL")["tone"] == "t-pass"
-    assert [j["stage"] for j in journey(S_OLD)].count("Post EL") == 0
+    for s in (S_OLD, S_STRAY):
+        assert [(x["stage"], x["value"], x["tone"]) for x in el_part(s)] == \
+            [("Pre-EL", "Pass", "t-pass")], el_part(s)
 
 
-@test("more than four captures: the four latest are listed, the rest counted first")
-def t_journey_many():
-    fresh()
-    for i in range(6):
-        put(PRE_A, "2026-10-14/早班/%s" % ("OK" if i == 5 else "Cell Crack"),
-            S_POST + ("_%d.jpg" % i if i else ".jpg"), "2026-10-14T1%d:00:00" % i)
-    run()
-    pre = step(S_POST, "Pre-EL")
-    assert pre["detail"] == ["+2 earlier",
-                             "Cell Crack · 14-10-2026 12:00 · re-shot 2",
-                             "Cell Crack · 14-10-2026 13:00 · re-shot 3",
-                             "Cell Crack · 14-10-2026 14:00 · re-shot 4",
-                             "OK · 14-10-2026 15:00 · re-shot 5", "Line A"], pre["detail"]
-
-
-@test("one folder serving both lines: no line is claimed; captures from two "
-      "lines each say which")
+@test("one folder serving both lines claims no line; a step from a Line B folder says B")
 def t_journey_lines():
     fresh(pre_el_b_root=PRE_A)
     put(PRE_A, "2026-10-14/早班/OK", S_CRACK + ".jpg", "2026-10-14T09:00:00")
     run()
-    assert step(S_CRACK, "Pre-EL")["detail"] == ["OK · 14-10-2026 09:00"]
+    assert el_part(S_CRACK)[0]["detail"] == []
     with store.conn() as (cx, cur):
         db.set_config(cur, {"pre_el_b_root": PRE_B})
     put(PRE_B, "2026-10-14/中班/Cell Crack", S_CRACK + "_1.jpg", "2026-10-14T15:00:00")
     run()
-    assert step(S_CRACK, "Pre-EL")["detail"] == [
-        "OK · 14-10-2026 09:00", "Cell Crack · 14-10-2026 15:00 · re-shot 1 · Line B"]
+    assert el_part(S_CRACK)[1]["detail"] == ["Cell Crack", "re-shot 1", "Line B"]
+
+
+@test("what a module's images add up to, per station: Pass first time, Pass after "
+      "rework, In rework; at Post EL Pass, or NG - rejected - once any image is NG")
+def t_summary():
+    def rows(*vs):
+        return [{"capture_id": i, "recapture": 0, "file_time": "2026-10-14T1%d:00:00" % i,
+                 "seen_at": "x", "verdict": v, "line": "B"} for i, v in enumerate(vs)]
+    s = elcap.summary
+    assert s("pre_el", []) is None
+    assert s("pre_el", rows("OK"))["status"] == "pass"
+    r = s("pre_el", rows("Cell Crack", "Cross", "OK"))
+    assert (r["status"], r["label"], r["reworks"], r["reason"], r["images"]) == \
+        ("reworked", "Pass after rework", 2, "Cross", 3), r
+    r = s("pre_el", rows("OK", "Cell Crack"))
+    assert (r["status"], r["label"], r["reason"]) == ("in_rework", "In rework", "Cell Crack")
+    assert r["first_at"] == "2026-10-14T10:00:00" and r["lines"] == ["B"]
+    r = s("post_el", rows("Cell Crack", "OK"))
+    assert (r["status"], r["label"], r["reason"], r["reworks"]) == \
+        ("ng", "NG - rejected", "Cell Crack", 0), r
+    assert s("post_el", rows("OK", " pass "))["status"] == "pass"
 
 
 @test("the journey reads el_capture, never the shares: a share gone, the steps stay")
@@ -735,7 +813,7 @@ def t_journey_reads_table_only():
 
     _os.scandir = no_share
     try:
-        assert step(S_CRACK, "Pre-EL")["value"] == "Cell Crack"
+        assert [x["value"] for x in el_part(S_CRACK)] == ["NG", "In rework"]
     finally:
         _os.scandir = real
 

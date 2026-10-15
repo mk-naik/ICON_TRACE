@@ -8446,49 +8446,100 @@ def _when_shift(ts):
     return out
 
 
-_EL_CLEAN = re.compile(r"^(ok|pass)$", re.I)    # the FQC screen's own test
 _EL_STEP_LINES = 4
 
 
-def _el_capture_step(stage, caps):
-    """The journey step for one EL station from this serial's el_capture rows,
-    or None: a station the serial was never captured at gets NO step - not
-    "—", not "pending" - as Anomaly is added only when found.
+def _el_when(ts):
+    """'2026-10-15T13:10:14' -> '15-10-2026 13:10'."""
+    try:
+        return datetime.datetime.fromisoformat(ts).strftime("%d-%m-%Y %H:%M")
+    except (TypeError, ValueError):
+        return ts or "—"
 
-    The latest capture - the highest re-shot number, then the latest file
-    time - gives the value. The detail is one line per capture in that same
-    order, which is oldest first; at most four, the earlier ones counted.
-    Captures belong to the serial, not a build instance (the image carries
-    only the serial), so all are shown. An EL folder is a person's reading,
-    not a reject: a clean one (OK / Pass) is t-pass, anything else t-rev,
-    never t-fail."""
-    if not caps:
-        return None
-    caps = sorted(caps, key=lambda c: (c["recapture"] or 0, c["file_time"] or "",
-                                       c["seen_at"] or "", c["capture_id"]))
-    last = caps[-1]
-    one_line = len({c["line"] for c in caps}) == 1
 
-    def row(c):
-        try:
-            when = datetime.datetime.fromisoformat(c["file_time"]).strftime("%d-%m-%Y %H:%M")
-        except (TypeError, ValueError):
-            when = c["file_time"] or "—"
-        bits = [c["verdict"], when]
-        if c["recapture"]:
-            bits.append("re-shot %d" % c["recapture"])
-        if c["line"] and not one_line:
-            bits.append("Line " + c["line"])
-        return " · ".join(bits)
+def _el_took(a, b):
+    """How long a rework took: one image's time to the next one's."""
+    try:
+        s = (datetime.datetime.fromisoformat(b) -
+             datetime.datetime.fromisoformat(a)).total_seconds()
+    except (TypeError, ValueError):
+        return "—"
+    if s < 0:
+        return "—"                       # the EL PC's clock went back
+    m = int(round(s / 60.0))
+    if m < 1:
+        return "under a minute"
+    if m < 60:
+        return "%d min" % m
+    if m < 24 * 60:
+        return "%d h %d min" % (m // 60, m % 60)
+    return "%d d %d h" % (m // 1440, m % 1440 // 60)
 
-    shown = caps[-_EL_STEP_LINES:]
-    detail = (["+%d earlier" % (len(caps) - len(shown))] if len(caps) > len(shown) else [])
-    detail += [row(c) for c in shown]
-    if one_line and last["line"]:
-        detail.append("Line " + last["line"])
-    return {"stage": stage, "value": last["verdict"], "done": True, "detail": detail,
-            "tag": _when_shift(last["file_time"]),
-            "tone": "t-pass" if _EL_CLEAN.match((last["verdict"] or "").strip()) else "t-rev"}
+
+def _pre_el_steps(imgs):
+    """Pre-EL as it happened (Mukesh, 16 Oct 2026): every image is a step. OK
+    is Pass and the module moves on; anything else is NG - its folder is the
+    reason - and a Rework step follows, then the next Pre-EL image, until one
+    passes. ICON TRACE keeps no rework record: a Rework step is what the images
+    say - after which NG, and when the module was back. Still NG at its last
+    image, the module is 'In rework' and nothing more is assumed."""
+    steps = []
+    for i, img in enumerate(imgs):
+        ok = elcap.is_pass(img["verdict"])
+        detail = [] if ok else [img["verdict"]]
+        if img["recapture"]:
+            detail.append("re-shot %d" % img["recapture"])
+        if img["line"]:
+            detail.append("Line " + img["line"])
+        steps.append({"stage": "Pre-EL", "value": "Pass" if ok else "NG", "done": True,
+                      "detail": detail, "tag": _when_shift(img["file_time"]),
+                      "tone": "t-pass" if ok else "t-rev"})
+        if ok:
+            continue
+        nxt = imgs[i + 1] if i + 1 < len(imgs) else None
+        if nxt:
+            steps.append({"stage": "Rework", "value": "Rework", "done": True,
+                          "detail": ["after " + img["verdict"],
+                                     "back at Pre-EL " + _el_when(nxt["file_time"])],
+                          "tag": _el_took(img["file_time"], nxt["file_time"]),
+                          "tone": "t-mute"})
+        else:
+            steps.append({"stage": "Rework", "value": "In rework", "done": False,
+                          "detail": ["after " + img["verdict"], "no Pre-EL image since"],
+                          "tag": "pending", "tone": "t-rev"})
+    return steps
+
+
+def _post_el_step(imgs):
+    """Post EL is one step. A laminated module cannot go back to the
+    pre-lamination process, so NG there is a rejection (Mukesh, 16 Oct 2026):
+    no Rework step, and a later image does not undo it. Every image is listed
+    when there is more than one."""
+    ngs = [i for i in imgs if not elcap.is_pass(i["verdict"])]
+    at = ngs[0] if ngs else imgs[-1]
+    detail = [ngs[0]["verdict"], "rejected - no rework after lamination"] if ngs else []
+    if len(imgs) > 1:
+        shown = imgs[-_EL_STEP_LINES:]
+        if len(imgs) > len(shown):
+            detail.append("+%d earlier" % (len(imgs) - len(shown)))
+        detail += ["%s · %s" % (i["verdict"], _el_when(i["file_time"])) for i in shown]
+    lines = sorted({i["line"] for i in imgs if i["line"]})
+    if lines:
+        detail.append(" / ".join("Line " + ln for ln in lines))
+    return {"stage": "Post EL", "value": "NG" if ngs else "Pass", "done": True,
+            "detail": detail, "tag": _when_shift(at["file_time"]),
+            "tone": "t-fail" if ngs else "t-pass"}
+
+
+def _el_steps(caps):
+    """The journey's EL steps from one serial's el_capture rows - Pre-EL, then
+    Post EL, in process order. A station the serial was never captured at
+    gives NO step - not "—", not "pending" - as Anomaly is added only when
+    found. Captures belong to the serial, not a build instance (an image
+    carries only the serial), so all of them count."""
+    pre = elcap.images([c for c in caps if c["station"] == "pre_el"])
+    post = elcap.images([c for c in caps if c["station"] == "post_el"])
+    return _pre_el_steps(pre) + ([_post_el_step(post)] if post else [])
 
 
 @app.route("/api/trace/serial/<path:serial>")
@@ -8710,12 +8761,9 @@ def api_trace_serial(serial):
                       (["counted as produced from its FQC scan"] if scanned else []),
             "tag": "pending", "tone": "t-mute"})
 
-    # Pre-EL, then Post EL, in process order - each only if the module was
-    # captured there
-    for station, label in elcap.STATIONS:
-        step = _el_capture_step(label, [c for c in el_caps if c["station"] == station])
-        if step:
-            journey.append(step)
+    # Pre-EL (each image, with its rework loops), then Post EL - only where
+    # the module was captured
+    journey.extend(_el_steps(el_caps))
 
     anomaly = ev.find_anomaly(cfg, s)
     if anomaly:

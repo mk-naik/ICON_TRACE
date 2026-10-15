@@ -201,12 +201,20 @@ no one signs twice. [enforcement unverified]
   line (none when one folder serves both lines - never read from the serial),
   serial, re-shot number, the folder's name as the verdict, the file's time. A record
   is never changed or deleted when its file or share disappears. One folder is one
-  station: Settings refuses a folder set as two of FQC EL, Pre-EL and Post EL. **The
-  module journey shows a "Pre-EL" and a "Post EL" step only when the serial was
-  captured there** - no step, not "pending", when it was not - after Produced, valued
-  by the latest capture's verdict (highest re-shot number, then latest time): clean
-  (OK / Pass) or for review, never a reject - an EL folder is a person's reading.
-  The images are not served (above, and section 10). [built]
+  station: Settings refuses a folder set as two of FQC EL, Pre-EL and Post EL. The
+  images are not served (above, and section 10). [built]
+- **At an EL station OK is Pass; any other folder is NG** (Mukesh, 16 Oct). **At Pre-EL
+  an NG module goes for rework and comes back**, so the module journey shows every
+  Pre-EL image as a step - Pass, or NG with its folder as the reason - and after an NG
+  a Rework step (read from the images: after which NG, and when the module was back at
+  Pre-EL; "In rework" while its last image is NG), then the next Pre-EL image, until one
+  passes. **After lamination a module cannot go back to the pre-lamination process, so
+  NG at Post EL is a rejection**: one Post EL step, NG in red with its reason, no Rework,
+  and a later image does not undo it. Images are ordered by re-shot number, then time;
+  an image re-filed under another verdict is one image, its latest filing standing. A
+  station the serial was never captured at gives no step at all - not "pending". [built]
+  **[open]** whether a Post EL rejection should also stop the module (FQC, packing) or
+  raise a Needs Review item - today it is shown, not enforced.
 
 ## 6. Quality, Needs Review, duplicate scans
 

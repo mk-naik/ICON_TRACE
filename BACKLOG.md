@@ -7665,3 +7665,21 @@ commit.
 - **Change:** `run_pass` logs "Pre-EL: <serial> <verdict> (<line>), ..." after the counts,
   at most ten a station, then "(+N more)". The list on a screen is the next commits.
 - **Test:** `test_el_capture.py` +1 (34).
+
+### 16 Oct 2026 - the journey shows the Pre-EL rework loop; a Post EL NG is a rejection
+- **Decided (Mukesh, 16 Oct):** OK is Pass, anything else NG. An NG module at Pre-EL goes
+  for rework and back to Pre-EL until it passes; after lamination a module cannot be
+  reworked, so NG at Post EL is rejected.
+- **Was:** one step per station, valued by the latest image's folder, never red.
+- **Change:** `icon_el_capture` holds the rules (`is_pass`, `images`: re-shot number then
+  time, a re-filed image counted once at its latest filing; `summary`: Pre-EL pass /
+  reworked / in rework, Post EL pass / NG). The journey shows every Pre-EL image as a step
+  - Pass, or NG with its folder - each NG followed by a Rework step (after which NG, back
+  at Pre-EL when, how long; "In rework", pending, while the last image is NG); Post EL is
+  one step, NG in red ("rejected - no rework after lamination"), not undone by a later
+  image. DECISIONS 5 rewritten; whether a Post EL rejection should also stop the module
+  is left **[open]**.
+- **Test:** `test_el_capture.py` (39): the cycle in order before Anomaly / FQC, the loop
+  repeating, "In rework", the real share's same-name re-shot, a re-filed image, the order
+  rule, Post EL NG standing against a later OK, the summaries. `test_el_capture_ui.py`: the
+  cycle on the page (Pre-EL NG, Rework "3 min", Pre-EL Pass, Post EL).
