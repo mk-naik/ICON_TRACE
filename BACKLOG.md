@@ -7602,8 +7602,8 @@ commit.
 - **Why:** Unit-2's other two EL stations - Pre-EL (before lamination; it scans the back
   label) and Post EL (after lamination) - file images exactly like the FQC EL, and nobody
   looks a serial up at either, so nothing in ICON TRACE knew a module had passed them.
-- **Checked first, read-only:** the real Pre-EL share of Line B (`\169.254.1.242\el`):
-  `date\shift\verdict\serial.jpg` (shifts 早班 / 中班 / 晚班 = A / B / C by the files'
+- **Checked first, read-only:** the real Pre-EL share of Line B (its path goes in
+  Settings, not here): `date\shift\verdict\serial.jpg` (shifts 早班 / 中班 / 晚班 = A / B / C by the files'
   times), 42 images one folder deeper (`Lead Open\Cross`, `ell issue\Ribbon bold`), 7 still
   in a shift folder, 18 junk names, 3 `Thumbs.db` (no non-image file named by a serial). A
   module shot again was filed again under its own name in another verdict folder - none
@@ -7636,7 +7636,7 @@ commit.
 - **Found on the way (same card), fixed:** the data_source table was never re-headed -
   `loadSources` took the first header in the pane, station_config's, so five headers sat
   over six-cell rows ("Ingest rule" over the state tags). The SS and EL placeholders
-  printed doubled backslashes (`\\EL-A\output`).
+  printed every backslash twice (`\\\\EL-A\\output` on the screen).
 - **Test:** `test_el_capture.py` +8 (25); `test_el_capture_ui.py` (new, 3, Chromium): the
   fields and tags on the page; a refused save shows the server's reason and stores nothing,
   a good one shows "Pre-EL OK" and lists PRE-EL-B; the header test fails without the fix.
