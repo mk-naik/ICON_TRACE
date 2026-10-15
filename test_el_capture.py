@@ -27,6 +27,11 @@ THE RULES THIS FILE DEFENDS
      FQC EL, Pre-EL and Post EL (any line). The same folder for one station on
      both lines is one machine serving both, and allowed.
 
+  7. The module journey shows a Pre-EL and a Post EL step only where the
+     serial was captured - no step at all otherwise - after Produced and
+     before Anomaly / FQC, valued by the latest capture's verdict, never a
+     reject; read from el_capture, never from the shares.
+
 Each test names the rule it defends, so a failure says which decision broke.
 """
 
@@ -562,6 +567,146 @@ def t_probes_at_once():
     took = time.time() - t
     assert got == {i: True for i in range(8)}, got
     assert took < 1.5, "%.2fs for eight 0.4 s probes" % took
+
+
+# --------------------------------------------------------------------------
+# 7. the module journey
+# --------------------------------------------------------------------------
+
+def journey(serial):
+    r = signed_in().get("/api/trace/serial/" + serial)
+    assert r.status_code == 200, r.get_json()
+    return r.get_json()["journey"]
+
+
+def step(serial, stage):
+    got = [j for j in journey(serial) if j["stage"] == stage]
+    assert len(got) == 1, (stage, [j["stage"] for j in journey(serial)])
+    return got[0]
+
+
+@test("a serial with no captures has no Pre-EL or Post EL step at all - not a "
+      "dash, not 'pending' - and the journey is otherwise as it was")
+def t_journey_none():
+    fresh()
+    put(PRE_A, "2026-10-14/早班/OK", S_CRACK + ".jpg")           # another module's
+    run()
+    stages = [j["stage"] for j in journey(S_CROSS)]
+    assert stages == ["Allocated", "Produced", "FQC", "Packed", "Challan", "Gate pass"], stages
+
+
+@test("a module re-shot from Cell Crack to OK shows OK, both captures oldest first, "
+      "after Produced and before Anomaly and FQC - Post EL after Pre-EL")
+def t_journey_reshot():
+    fresh()
+    put(PRE_A, "2026-10-14/早班/Cell Crack", S_CRACK + ".jpg", "2026-10-14T13:07:34")
+    put(PRE_A, "2026-10-14/早班/OK", S_CRACK + "_1.jpg", "2026-10-14T13:10:14")
+    put(POST_B, "2026-10-15/晚班/OK", S_CRACK + ".jpg", "2026-10-16T01:12:56")
+    run()
+    # a tester row that never read, so the Anomaly step is there to be ordered against
+    ss = os.path.join(TMP, "ftr.csv")
+    with open(ss, "w", encoding="utf-8") as fh:
+        fh.write(",".join(["2026-10-14 16:00:00", S_CRACK, "0.0055", "nan", "-0.898"]
+                          + ["1"] * 10) + "\n")
+    with store.conn() as (cx, cur):
+        db.set_config(cur, {"ss_a_csv_path": ss})
+    stages = [j["stage"] for j in journey(S_CRACK)]
+    assert stages == ["Allocated", "Produced", "Pre-EL", "Post EL", "Anomaly", "FQC",
+                      "Packed", "Challan", "Gate pass"], stages
+    pre = step(S_CRACK, "Pre-EL")
+    assert pre["value"] == "OK" and pre["done"] is True and pre["tone"] == "t-pass", pre
+    assert pre["detail"] == ["Cell Crack · 14-10-2026 13:07",
+                             "OK · 14-10-2026 13:10 · re-shot 1", "Line A"], pre["detail"]
+    assert pre["tag"] == "14-10-2026 13:10 · shift A", pre["tag"]
+    post = step(S_CRACK, "Post EL")
+    assert post["value"] == "OK" and post["detail"] == ["OK · 16-10-2026 01:12", "Line B"], post
+    assert post["tag"] == "16-10-2026 01:12 · shift C (15-10)", post["tag"]
+
+
+@test("re-shot under its own name, as the real Pre-EL share does it: the later "
+      "file is the latest")
+def t_journey_same_name_reshot():
+    fresh()
+    put(PRE_A, "2026-10-15/早班/Ribbon short", S_CROSS + ".jpg", "2026-10-15T13:07:34")
+    put(PRE_A, "2026-10-15/早班/OK", S_CROSS + ".jpg", "2026-10-15T13:10:14")
+    run()
+    pre = step(S_CROSS, "Pre-EL")
+    assert pre["value"] == "OK" and pre["tone"] == "t-pass", pre
+    assert pre["detail"] == ["Ribbon short · 15-10-2026 13:07", "OK · 15-10-2026 13:10",
+                             "Line A"], pre["detail"]
+
+
+@test("the highest re-shot number is the latest even against a later file time; "
+      "a defect verdict is t-rev, never t-fail")
+def t_journey_latest_rule():
+    fresh()
+    put(PRE_A, "2026-10-14/早班/OK", S_OLD + ".jpg", "2026-10-14T10:00:00")
+    put(PRE_A, "2026-10-14/早班/Cell Crack", S_OLD + "_2.jpg", "2026-10-14T09:00:00")
+    run()
+    pre = step(S_OLD, "Pre-EL")
+    assert pre["value"] == "Cell Crack" and pre["tone"] == "t-rev", pre
+    assert pre["detail"][-2] == "Cell Crack · 14-10-2026 09:00 · re-shot 2", pre["detail"]
+    assert pre["tag"].startswith("14-10-2026 09:00"), pre["tag"]
+
+
+@test("'Pass' and ' ok ' are clean, as on the FQC screen")
+def t_journey_clean_words():
+    fresh(post_el_b_root="")
+    put(PRE_A, "2026-10-14/早班/Pass", S_OLD + ".jpg")
+    put(PRE_A, "2026-10-14/早班/ ok", S_STRAY + ".jpg")
+    run()
+    assert step(S_OLD, "Pre-EL")["tone"] == "t-pass"
+    assert step(S_STRAY, "Pre-EL")["tone"] == "t-pass"
+    assert [j["stage"] for j in journey(S_OLD)].count("Post EL") == 0
+
+
+@test("more than four captures: the four latest are listed, the rest counted first")
+def t_journey_many():
+    fresh()
+    for i in range(6):
+        put(PRE_A, "2026-10-14/早班/%s" % ("OK" if i == 5 else "Cell Crack"),
+            S_POST + ("_%d.jpg" % i if i else ".jpg"), "2026-10-14T1%d:00:00" % i)
+    run()
+    pre = step(S_POST, "Pre-EL")
+    assert pre["detail"] == ["+2 earlier",
+                             "Cell Crack · 14-10-2026 12:00 · re-shot 2",
+                             "Cell Crack · 14-10-2026 13:00 · re-shot 3",
+                             "Cell Crack · 14-10-2026 14:00 · re-shot 4",
+                             "OK · 14-10-2026 15:00 · re-shot 5", "Line A"], pre["detail"]
+
+
+@test("one folder serving both lines: no line is claimed; captures from two "
+      "lines each say which")
+def t_journey_lines():
+    fresh(pre_el_b_root=PRE_A)
+    put(PRE_A, "2026-10-14/早班/OK", S_CRACK + ".jpg", "2026-10-14T09:00:00")
+    run()
+    assert step(S_CRACK, "Pre-EL")["detail"] == ["OK · 14-10-2026 09:00"]
+    with store.conn() as (cx, cur):
+        db.set_config(cur, {"pre_el_b_root": PRE_B})
+    put(PRE_B, "2026-10-14/中班/Cell Crack", S_CRACK + "_1.jpg", "2026-10-14T15:00:00")
+    run()
+    assert step(S_CRACK, "Pre-EL")["detail"] == [
+        "OK · 14-10-2026 09:00", "Cell Crack · 14-10-2026 15:00 · re-shot 1 · Line B"]
+
+
+@test("the journey reads el_capture, never the shares: a share gone, the steps stay")
+def t_journey_reads_table_only():
+    fresh()
+    put(PRE_A, "2026-10-14/早班/Cell Crack", S_CRACK + ".jpg")
+    run()
+    shutil.rmtree(PRE_A)
+    import os as _os
+    real = _os.scandir
+
+    def no_share(path="."):
+        raise AssertionError("the journey read a folder: %s" % path)
+
+    _os.scandir = no_share
+    try:
+        assert step(S_CRACK, "Pre-EL")["value"] == "Cell Crack"
+    finally:
+        _os.scandir = real
 
 
 if __name__ == "__main__":

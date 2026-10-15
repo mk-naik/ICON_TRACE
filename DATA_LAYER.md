@@ -57,8 +57,9 @@ folders of each folder set in Settings, skips an image still waiting in its
 shift folder, and inserts only what is not on record (`UNIQUE(station,
 path)`, path compared without case). It is **never purged**: a row is not
 changed or deleted when its file is moved or deleted or its share goes away -
-it is the record that the module was captured there. No request reads the
-shares. It is outside the change feed
+it is the record that the module was captured there. Search & Trace's module
+journey reads it (a Pre-EL / Post EL step only where the serial has a row); no
+request reads the shares. It is outside the change feed
 (`store.UNTRACKED`): the poller writes it all day and no screen refreshes on it.
 
 **`serial` is the spine.** One row per module, written once at allocation and

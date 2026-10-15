@@ -8446,6 +8446,51 @@ def _when_shift(ts):
     return out
 
 
+_EL_CLEAN = re.compile(r"^(ok|pass)$", re.I)    # the FQC screen's own test
+_EL_STEP_LINES = 4
+
+
+def _el_capture_step(stage, caps):
+    """The journey step for one EL station from this serial's el_capture rows,
+    or None: a station the serial was never captured at gets NO step - not
+    "—", not "pending" - as Anomaly is added only when found.
+
+    The latest capture - the highest re-shot number, then the latest file
+    time - gives the value. The detail is one line per capture in that same
+    order, which is oldest first; at most four, the earlier ones counted.
+    Captures belong to the serial, not a build instance (the image carries
+    only the serial), so all are shown. An EL folder is a person's reading,
+    not a reject: a clean one (OK / Pass) is t-pass, anything else t-rev,
+    never t-fail."""
+    if not caps:
+        return None
+    caps = sorted(caps, key=lambda c: (c["recapture"] or 0, c["file_time"] or "",
+                                       c["seen_at"] or "", c["capture_id"]))
+    last = caps[-1]
+    one_line = len({c["line"] for c in caps}) == 1
+
+    def row(c):
+        try:
+            when = datetime.datetime.fromisoformat(c["file_time"]).strftime("%d-%m-%Y %H:%M")
+        except (TypeError, ValueError):
+            when = c["file_time"] or "—"
+        bits = [c["verdict"], when]
+        if c["recapture"]:
+            bits.append("re-shot %d" % c["recapture"])
+        if c["line"] and not one_line:
+            bits.append("Line " + c["line"])
+        return " · ".join(bits)
+
+    shown = caps[-_EL_STEP_LINES:]
+    detail = (["+%d earlier" % (len(caps) - len(shown))] if len(caps) > len(shown) else [])
+    detail += [row(c) for c in shown]
+    if one_line and last["line"]:
+        detail.append("Line " + last["line"])
+    return {"stage": stage, "value": last["verdict"], "done": True, "detail": detail,
+            "tag": _when_shift(last["file_time"]),
+            "tone": "t-pass" if _EL_CLEAN.match((last["verdict"] or "").strip()) else "t-rev"}
+
+
 @app.route("/api/trace/serial/<path:serial>")
 @require_screen_view("search")
 def api_trace_serial(serial):
@@ -8526,6 +8571,11 @@ def api_trace_serial(serial):
                  "entity_id IN (%s) ORDER BY at, audit_id"
                  % ",".join("%s" for _ in boxes),
             tuple(str(b["box_id"]) for b in boxes)) if boxes else []
+        # the Pre-EL and Post EL images the poller found (icon_el_capture) -
+        # read from the table, never from the shares
+        el_caps = store.rows(cur, "SELECT capture_id, station, line, recapture, "
+                                  "verdict, file_time, seen_at FROM el_capture "
+                                  "WHERE serial=%s", (s,))
         cfg = db.get_config(cur)
 
     bno = batch_no(alloc) if alloc else "—"
@@ -8659,6 +8709,13 @@ def api_trace_serial(serial):
             "detail": ["no production entry yet"] +
                       (["counted as produced from its FQC scan"] if scanned else []),
             "tag": "pending", "tone": "t-mute"})
+
+    # Pre-EL, then Post EL, in process order - each only if the module was
+    # captured there
+    for station, label in elcap.STATIONS:
+        step = _el_capture_step(label, [c for c in el_caps if c["station"] == station])
+        if step:
+            journey.append(step)
 
     anomaly = ev.find_anomaly(cfg, s)
     if anomaly:

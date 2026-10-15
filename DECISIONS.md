@@ -193,6 +193,20 @@ no one signs twice. [enforcement unverified]
   onto it. [open]
 - EL images are kept 1–3 years (GM). Serving them will be a separate service
   on another machine, not part of this Flask process. [decided]
+- **Pre-EL and Post EL images are indexed by a server pass every minute** (15 Oct).
+  Pre-EL (before lamination; it scans the back label) and Post EL (after lamination)
+  file images like the FQC EL, and nobody looks a serial up at either, so the server
+  walks the newest two date folders of each folder set in Settings (per line; blank =
+  not scanned) and records every image once it is filed under a verdict: station,
+  line (none when one folder serves both lines - never read from the serial),
+  serial, re-shot number, the folder's name as the verdict, the file's time. A record
+  is never changed or deleted when its file or share disappears. One folder is one
+  station: Settings refuses a folder set as two of FQC EL, Pre-EL and Post EL. **The
+  module journey shows a "Pre-EL" and a "Post EL" step only when the serial was
+  captured there** - no step, not "pending", when it was not - after Produced, valued
+  by the latest capture's verdict (highest re-shot number, then latest time): clean
+  (OK / Pass) or for review, never a reject - an EL folder is a person's reading.
+  The images are not served (above, and section 10). [built]
 
 ## 6. Quality, Needs Review, duplicate scans
 

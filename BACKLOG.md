@@ -7640,3 +7640,21 @@ commit.
 - **Test:** `test_el_capture.py` +8 (25); `test_el_capture_ui.py` (new, 3, Chromium): the
   fields and tags on the page; a refused save shows the server's reason and stores nothing,
   a good one shows "Pre-EL OK" and lists PRE-EL-B; the header test fails without the fix.
+
+### 15 Oct 2026 - the module journey shows Pre-EL and Post EL (3 of 3)
+- **Change:** `api_trace_serial` reads the serial's `el_capture` rows (never the shares)
+  and adds a "Pre-EL" then a "Post EL" step after Produced, before Anomaly / FQC - only
+  for a station the serial was captured at; otherwise no step at all, as Anomaly. Value =
+  the latest capture's verdict (highest re-shot number, then latest file time); detail =
+  one line per capture, oldest first, "<verdict> · <time>" (+ "re-shot N"), the four
+  latest with "+N earlier" above them, the line once at the end when all agree (per
+  capture when they differ, none when one folder serves both); tag = `_when_shift`;
+  tone t-pass for OK / Pass, else t-rev - never t-fail. No JS change: `traceSerialHtml`
+  draws any step. DECISIONS 5 records it.
+- **Test:** `test_el_capture.py` +8 (33): no step without a capture; the order Produced,
+  Pre-EL, Post EL, Anomaly, FQC; re-shot by `_N` and by the same name (the real share's
+  way); the re-shot number beating a later time; "+N earlier"; lines; the shares never
+  read on a request. `test_el_capture_ui.py` +1 (4): the steps on the page, none for a
+  module captured nowhere, the nine-node chain scrolling inside its card. Real case, on a
+  throwaway database: one pass over the real Pre-EL B share, then ICON625R12A1512780 reads
+  Pre-EL "OK" - "Ribbon short · 15-10-2026 13:07", "OK · 15-10-2026 13:10", "Line B".
