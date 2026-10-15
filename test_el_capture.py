@@ -23,6 +23,10 @@ THE RULES THIS FILE DEFENDS
   5. Nothing is deleted or changed when a file or a share disappears, and an
      unreachable folder costs only itself.
 
+  6. One folder is one EL station: Settings refuses a folder set as two of
+     FQC EL, Pre-EL and Post EL (any line). The same folder for one station on
+     both lines is one machine serving both, and allowed.
+
 Each test names the rule it defends, so a failure says which decision broke.
 """
 
@@ -35,6 +39,8 @@ import db                                                    # noqa: E402
 import store                                                 # noqa: E402
 import icon_clock as clock                                   # noqa: E402
 import icon_el_capture as elcap                              # noqa: E402
+import app as APP                                            # noqa: E402
+import auth_test_helper as AUTH                              # noqa: E402
 
 _results = []
 
@@ -438,6 +444,124 @@ def t_ensure_adds_table():
     assert cols == ["capture_id", "station", "line", "serial", "recapture", "verdict",
                     "path", "file_time", "seen_at"], cols
     assert "ix_el_capture_serial" in idx, idx
+
+
+# --------------------------------------------------------------------------
+# 6. Settings: one folder is one station
+# --------------------------------------------------------------------------
+
+FQC_EL = os.path.join(TMP, "fqc_el")
+
+
+def signed_in():
+    c = APP.app.test_client()
+    AUTH.test_login(c)                         # Super Admin: who writes Settings
+    return c
+
+
+def stored(key):
+    with store.conn() as (cx, cur):
+        return db.get_config(cur)[key]
+
+
+@test("a save that uses the FQC EL folder as Pre-EL is refused with the reason - "
+      "however it is spelled - and nothing of that save is stored")
+def t_settings_fqc_as_pre_el():
+    fresh(el_b_root=FQC_EL, pre_el_a_root="", post_el_b_root="")
+    r = signed_in().post("/api/settings", json={
+        "pre_el_b_root": FQC_EL.upper().replace("\\", "/") + "/", "unit": "9"})
+    assert r.status_code == 400, r.get_json()
+    why = r.get_json()["why"]
+    assert "FQC EL folder of Line B" in why and "Pre-EL folder of Line B" in why, why
+    assert stored("pre_el_b_root") == "" and stored("unit") == "2"
+
+
+@test("Pre-EL and Post EL may not share a folder either, on any line; nor may "
+      "Line A's FQC folder kept in the older el_root setting")
+def t_settings_other_clashes():
+    fresh(el_root=FQC_EL, el_a_root="", pre_el_a_root="", post_el_b_root="")
+    c = signed_in()
+    r = c.post("/api/settings", json={"pre_el_a_root": PRE_A, "post_el_b_root": PRE_A})
+    assert r.status_code == 400 and "Post EL folder of Line B" in r.get_json()["why"], \
+        r.get_json()
+    r = c.post("/api/settings", json={"post_el_a_root": FQC_EL + "\\"})
+    assert r.status_code == 400 and "FQC EL folder of Line A" in r.get_json()["why"], \
+        r.get_json()
+    assert stored("pre_el_a_root") == "" and stored("post_el_a_root") == ""
+
+
+@test("the same folder for one station on both lines is allowed: one machine "
+      "serving both lines")
+def t_settings_one_folder_both_lines():
+    fresh(el_a_root=FQC_EL, el_b_root=FQC_EL, pre_el_a_root="", post_el_b_root="")
+    r = signed_in().post("/api/settings", json={
+        "pre_el_a_root": PRE_A, "pre_el_b_root": PRE_A.lower() + "\\",
+        "post_el_a_root": POST_B, "post_el_b_root": POST_B})
+    assert r.status_code == 200, r.get_json()
+    assert stored("pre_el_a_root") == PRE_A and stored("post_el_b_root") == POST_B
+
+
+@test("the older /settings form is held to the same rule")
+def t_settings_form_route():
+    fresh(el_b_root=FQC_EL, pre_el_a_root="", post_el_b_root="")
+    r = signed_in().post("/settings", data={"pre_el_b_root": FQC_EL})
+    assert r.status_code == 400, r.status_code
+    assert stored("pre_el_b_root") == ""
+
+
+@test("a save that names no EL folder is not held up by the folder rule")
+def t_settings_unrelated_save():
+    fresh(el_b_root=FQC_EL)
+    with store.conn() as (cx, cur):          # a clash written behind the screen's back
+        db.set_config(cur, {"pre_el_b_root": FQC_EL})
+    r = signed_in().post("/api/settings", json={"unit": "2", "pallet_ceiling": "36"})
+    assert r.status_code == 200, r.get_json()
+
+
+@test("Evidence Sources shows both new folders on each line, with a reachability "
+      "tag and the hint that the server reads them")
+def t_settings_page():
+    fresh(pre_el_b_root=os.path.join(TMP, "switched_off"))
+    html = " ".join(signed_in().get("/view/settings").get_data(as_text=True).split())
+    for ln in ("a", "b"):
+        assert 'id="s_%s_pre_el"' % ln in html and 'id="s_%s_post_el"' % ln in html, ln
+    assert html.count("Pre-EL image root folder") == 2, html.count("Pre-EL image root folder")
+    assert html.count("Post EL (after lamination) image root folder") == 2
+    assert html.count("Read by the server every minute, not by FQC; the account the "
+                      "server runs as needs read access to the share.") == 4
+    assert "Pre-EL OK" in html and "Post EL OK" in html          # A's Pre-EL, B's Post EL
+    assert "Pre-EL NC" in html and "Unreachable: %s" % os.path.join(TMP, "switched_off") in html
+    assert "Pre-EL —" not in html and "Post EL —" in html        # A's Post EL is blank
+    assert "No Post EL folder configured for this line." in html
+    assert "body['pre_el_'+ln+'_root']" in html and "body['post_el_'+ln+'_root']" in html
+
+
+@test("/api/evidence/sources lists Pre-EL and Post EL for each line, with their state")
+def t_sources_api():
+    fresh(pre_el_b_root=os.path.join(TMP, "switched_off"))
+    rows = {r["id"]: r for r in signed_in().get("/api/evidence/sources").get_json()}
+    assert {"PRE-EL-A", "PRE-EL-B", "POST-EL-A", "POST-EL-B"} <= set(rows), sorted(rows)
+    assert rows["PRE-EL-A"]["state"] == "OK" and rows["PRE-EL-A"]["path"] == PRE_A
+    assert rows["PRE-EL-B"]["state"] == "NC"
+    assert rows["POST-EL-A"]["state"] == "—" and rows["POST-EL-B"]["state"] == "OK"
+    assert rows["POST-EL-B"]["type"] == "POST_EL_ROOT" and rows["PRE-EL-A"]["line"] == "A"
+    assert "every minute" in rows["PRE-EL-A"]["rule"]
+
+
+@test("the reachability probes are asked at once, not one after another - a "
+      "switched-off PC costs the page one timeout, not one per folder")
+def t_probes_at_once():
+    import time
+
+    def slow(path):
+        time.sleep(0.4)
+        return True
+
+    t = time.time()
+    got = APP._reachable_all({i: (slow, "p%d" % i) for i in range(8)})
+    took = time.time() - t
+    assert got == {i: True for i in range(8)}, got
+    assert took < 1.5, "%.2fs for eight 0.4 s probes" % took
 
 
 if __name__ == "__main__":

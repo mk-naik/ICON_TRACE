@@ -9654,7 +9654,9 @@ function wireFqcAnomalies() {
           SOURCES.length = 0;
           rows.forEach(function (s) { SOURCES.push(s); });
         }
-        var head = document.querySelector('#ad-stations table thead tr');
+        /* this table's own header: the first one in the pane is station_config's
+           (six cells), which left the five-cell header over six-cell rows */
+        var head = body.parentNode.querySelector('thead tr');
         if (head && head.cells.length === 5 &&
             !/state/i.test(head.cells[4].textContent)) {
           head.innerHTML = '<th>Source</th><th>Type</th><th>Path</th>' +

@@ -39,6 +39,7 @@ import icon_box_number as bx
 import icon_serial as gen
 import icon_evidence as ev
 import icon_ingest
+import icon_el_capture as elcap
 import icon_models as models
 import icon_customers as customers
 import icon_barcode as bc
@@ -6708,31 +6709,54 @@ def _settings_context(cfg):
                 bc_room_mm=PACKING_LIST_BARCODE_ROOM_MM)
 
 
+def _reachable_all(checks):
+    """{key: reachable?} for {key: (test, path)} - every path asked at once.
+    Windows takes 42 s to give up on a host that does not answer and 21 s on a
+    share name that does not exist (measured, 15 Oct 2026); asked one after
+    another, a page with two machines switched off waited for the sum."""
+    checks = {k: v for k, v in checks.items() if v[1]}
+    if not checks:
+        return {}
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=len(checks)) as pool:
+        asked = {k: pool.submit(test, path) for k, (test, path) in checks.items()}
+        return {k: f.result() for k, f in asked.items()}
+
+
+def _el_station_root(cfg, station, ln):
+    """A Pre-EL or Post EL folder as configured for one line ('' = none)."""
+    return (cfg.get("%s_%s_root" % (station, ln.lower())) or "").strip()
+
+
+# (probe key, what it is) - the Sun Simulator, FQC's EL, then the two stations
+# the server reads (icon_el_capture)
+_PROBED = (("ss", "Sun Simulator"), ("el", "EL folder"),
+           ("pre_el", "Pre-EL folder"), ("post_el", "Post EL folder"))
+
+
 def _evidence_probe(cfg):
-    """Is each line's tester actually reachable? Reported per line, because
-    one share being down says nothing about the other - and an operator
-    needs to know WHICH one to chase."""
+    """Is each line's tester, and each EL station's folder, actually reachable?
+    Reported per line, because one share being down says nothing about the
+    other - and an operator needs to know WHICH one to chase."""
     byline = {s["line"]: s for s in ev.sources(cfg)}
+    checks = {}
+    for ln in ev.LINES:
+        s = byline.get(ln) or {}
+        checks[(ln, "ss")] = (os.path.exists, s.get("ss_path") or "")
+        checks[(ln, "el")] = (os.path.isdir, s.get("el_root") or "")
+        for station, _label in elcap.STATIONS:
+            checks[(ln, station)] = (os.path.isdir, _el_station_root(cfg, station, ln))
+    ok = _reachable_all(checks)
     out = {}
     for ln in ev.LINES:
-        s = byline.get(ln)
-        ss_path = (s or {}).get("ss_path") or ""
-        el_root = (s or {}).get("el_root") or ""
-        ss = ("—" if not ss_path
-              else ("OK" if os.path.exists(ss_path) else "NC"))
-        el = ("—" if not el_root
-              else ("OK" if os.path.isdir(el_root) else "NC"))
-        out[ln] = {
-            "ss": ss, "el": el,
-            "ss_note": ("No Sun Simulator configured for this line."
-                        if ss == "—" else
-                        ("Reachable." if ss == "OK"
-                         else "Unreachable: %s" % ss_path)),
-            "el_note": ("No EL folder configured for this line."
-                        if el == "—" else
-                        ("Reachable." if el == "OK"
-                         else "Unreachable: %s" % el_root)),
-        }
+        out[ln] = {}
+        for key, what in _PROBED:
+            path = checks[(ln, key)][1]
+            state = "—" if not path else ("OK" if ok.get((ln, key)) else "NC")
+            out[ln][key] = state
+            out[ln][key + "_note"] = (
+                "No %s configured for this line." % what if state == "—" else
+                "Reachable." if state == "OK" else "Unreachable: %s" % path)
     return out
 
 
@@ -6748,7 +6772,7 @@ def api_evidence_sources():
     with store.conn() as (cx, cur):
         cfg = db.get_config(cur)
     byline = {s["line"]: s for s in ev.sources(cfg)}
-    out = []
+    listed = []
     for ln in ev.LINES:
         s = byline.get(ln)
         for kind, path, typ, rule in (
@@ -6756,19 +6780,26 @@ def api_evidence_sources():
              "CSV, read by column position"),
             ("EL", (s or {}).get("el_root"), "ELVI_ROOT",
              "Folder name is the verdict"),
+            ("PRE-EL", _el_station_root(cfg, "pre_el", ln), "PRE_EL_ROOT",
+             "Read by the server every minute; folder name is the verdict"),
+            ("POST-EL", _el_station_root(cfg, "post_el", ln), "POST_EL_ROOT",
+             "Read by the server every minute; folder name is the verdict"),
         ):
-            ok = bool(path) and (os.path.isdir(path) if kind == "EL"
-                                 else os.path.exists(path))
-            out.append({
-                "id": "%s-%s" % (kind, ln), "type": typ, "line": ln,
-                "path": path or "— not configured —",
-                "state": "OK" if ok else ("NC" if path else "—"),
-                "rule": rule if path else "nothing is read from this line",
-                # the column map is per source, so it belongs on the row
-                "cols": ("serial %d · Pmax %d · Isc %d · Voc %d"
-                         % (s["serial_col"], s["pmax_col"], s["isc_col"],
-                            s["voc_col"])) if (s and kind == "SS") else "",
-            })
+            listed.append((ln, s, kind, path or "", typ, rule))
+    ok = _reachable_all({i: (os.path.exists if kind == "SS" else os.path.isdir, path)
+                         for i, (_ln, _s, kind, path, _t, _r) in enumerate(listed)})
+    out = []
+    for i, (ln, s, kind, path, typ, rule) in enumerate(listed):
+        out.append({
+            "id": "%s-%s" % (kind, ln), "type": typ, "line": ln,
+            "path": path or "— not configured —",
+            "state": "OK" if ok.get(i) else ("NC" if path else "—"),
+            "rule": rule if path else "nothing is read from this line",
+            # the column map is per source, so it belongs on the row
+            "cols": ("serial %d · Pmax %d · Isc %d · Voc %d"
+                     % (s["serial_col"], s["pmax_col"], s["isc_col"],
+                        s["voc_col"])) if (s and kind == "SS") else "",
+        })
     return jsonify(out)
 
 
@@ -6867,6 +6898,39 @@ def _bars_overflow(cfg):
             % (w, PACKING_LIST_BARCODE_ROOM_MM))
 
 
+# Every setting that names an EL station's folder: FQC's own (el_root is Line
+# A's from before there were two lines), then Pre-EL and Post EL.
+_EL_FOLDER_KEYS = ("el_root", "el_a_root", "el_b_root") + tuple(
+    "%s_%s_root" % (station, ln) for station, _label in elcap.STATIONS
+    for ln in ("a", "b"))
+
+
+def _el_folders_clash(cfg):
+    """Why these EL folders cannot be stored, or None. One folder is one
+    station: with FQC's folder also set as Pre-EL, the index would record
+    every FQC image as a Pre-EL capture (and one station's as the other's).
+    The same folder for ONE station on both lines is allowed - one machine
+    serving both lines. Compared without case or a trailing slash."""
+    named = [("FQC EL", s["line"], s["el_root"]) for s in ev.sources(cfg)]
+    for station, label in elcap.STATIONS:
+        named.extend((label, ln, _el_station_root(cfg, station, ln))
+                     for ln in ev.LINES)
+    first = {}
+    for station, ln, path in named:
+        key = elcap.folder_key(path)
+        if not key:
+            continue
+        was = first.setdefault(key, (station, ln))
+        if was[0] != station:
+            return ("Not saved - %s is set as the %s folder of Line %s and as the "
+                    "%s folder of Line %s. One folder is one EL station, or the "
+                    "server would file one station's images as the other's. (The "
+                    "same folder for one station on both lines is fine: one "
+                    "machine serving both lines.)"
+                    % (path, was[0], was[1], station, ln))
+    return None
+
+
 def _settings_clean(cur, d):
     """(what to store, None) or (None, why) for a save of DEFAULT_CONFIG keys.
     One check for both routes that write them - /api/settings and the older
@@ -6890,6 +6954,12 @@ def _settings_clean(cur, d):
             return None, ("Pallet ceiling must be a whole number of modules, "
                           "at least 1 - not %r." % raw)
         d["pallet_ceiling"] = str(n)
+    if any(k in d for k in _EL_FOLDER_KEYS):
+        # the stored folders with this save laid over them, as the bars are
+        why = _el_folders_clash(dict(db.get_config(cur), **{
+            k: "" if v is None else str(v) for k, v in d.items()}))
+        if why:
+            return None, why
     clean, why = bc.clean_settings(d)
     if why:
         return None, why

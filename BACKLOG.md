@@ -7620,3 +7620,23 @@ commit.
 - **Test:** `test_el_capture.py` (new, 17); five deliberate breakages each caught. On a
   copy of the dev database `store.ensure()` added the table; one pass over the real share
   recorded 2,419 images (2,440 files - 18 junk - 3 unfiled) in 0.17 s, a second wrote nothing.
+
+### 15 Oct 2026 - Pre-EL and Post EL folders in Settings (2 of 3)
+- **Change:** Evidence Sources, each line: "Pre-EL image root folder" and "Post EL (after
+  lamination) image root folder" under the EL one, each with a reachability tag in the
+  card's header (`_evidence_probe`) and the hint that the server reads it every minute, not
+  FQC, and needs read access to the share; both listed by `/api/evidence/sources`
+  (PRE-EL-A/B, POST-EL-A/B). `_settings_clean` refuses a folder set as two stations (FQC EL -
+  Line A's older `el_root` included - Pre-EL, Post EL; any line; case, slash style and a
+  trailing slash ignored), judged on the stored settings with the save laid over them, and
+  only when the save names an EL folder. The same folder for one station on both lines is
+  allowed. The reachability probes are now asked at once: Windows takes 42 s to give up on a
+  host that does not answer (21 s on a missing share name), and four more folders asked one
+  by one would have added that per switched-off PC to the Settings page.
+- **Found on the way (same card), fixed:** the data_source table was never re-headed -
+  `loadSources` took the first header in the pane, station_config's, so five headers sat
+  over six-cell rows ("Ingest rule" over the state tags). The SS and EL placeholders
+  printed doubled backslashes (`\\EL-A\output`).
+- **Test:** `test_el_capture.py` +8 (25); `test_el_capture_ui.py` (new, 3, Chromium): the
+  fields and tags on the page; a refused save shows the server's reason and stores nothing,
+  a good one shows "Pre-EL OK" and lists PRE-EL-B; the header test fails without the fix.

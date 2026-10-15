@@ -1,10 +1,11 @@
 <div class="pg"><h2>Evidence Sources</h2>
-  <p>Where FQC reads the Sun Simulator and EL from</p></div>
+  <p>Where FQC reads the Sun Simulator and EL from, and where the server finds
+    the Pre-EL and Post EL images</p></div>
 
-<div class="note n-info">FQC reads these <b>directly</b>, not through the
-  server. SS, EL and FQC share one switch; the server is about four switches
-  away. Routing evidence via the server would make FQC depend on hops the data
-  never needs to cross.</div>
+<div class="note n-info">FQC reads the Sun Simulator and the EL <b>directly</b>,
+  not through the server. SS, EL and FQC share one switch; the server is about
+  four switches away. Routing evidence via the server would make FQC depend on
+  hops the data never needs to cross.</div>
 
 <div class="note n-info"><span>&#9432;</span><span>Unit-2 runs <b>two lines</b>
   and each has its own Sun Simulator and its own EL, so each is configured
@@ -21,17 +22,31 @@
   <div class="ch-r">
     <span class="tag {{ 't-pass' if probe[LN].ss=='OK' else ('t-mute' if probe[LN].ss=='—' else 't-rev') }}">SS {{ probe[LN].ss }}</span>
     <span class="tag {{ 't-pass' if probe[LN].el=='OK' else ('t-mute' if probe[LN].el=='—' else 't-rev') }}">EL {{ probe[LN].el }}</span>
+    <span class="tag {{ 't-pass' if probe[LN].pre_el=='OK' else ('t-mute' if probe[LN].pre_el=='—' else 't-rev') }}">Pre-EL {{ probe[LN].pre_el }}</span>
+    <span class="tag {{ 't-pass' if probe[LN].post_el=='OK' else ('t-mute' if probe[LN].post_el=='—' else 't-rev') }}">Post EL {{ probe[LN].post_el }}</span>
   </div></div>
 <div class="card-b"><div class="grid g4">
   <div class="fld" style="grid-column:1/-1"><label>Sun Simulator CSV</label>
     <input id="s_{{ ln }}_ss" value="{{ cfg['ss_' + ln + '_csv_path'] }}"
-           placeholder="\\\\SS-{{ LN }}\\share\\results.csv">
+           placeholder="\\SS-{{ LN }}\share\results.csv">
     <div class="hint">{{ probe[LN].ss_note }}</div></div>
   <div class="fld" style="grid-column:1/-1"><label>EL image root folder</label>
     <input id="s_{{ ln }}_el" value="{{ cfg['el_' + ln + '_root'] }}"
-           placeholder="\\\\EL-{{ LN }}\\output">
+           placeholder="\\EL-{{ LN }}\output">
     <div class="hint">{{ probe[LN].el_note }} The folder a file sits in is the
       operator&rsquo;s verdict.</div></div>
+  <div class="fld" style="grid-column:1/-1"><label>Pre-EL image root folder</label>
+    <input id="s_{{ ln }}_pre_el" value="{{ cfg['pre_el_' + ln + '_root'] }}"
+           placeholder="\\PRE-EL-{{ LN }}\el">
+    <div class="hint">{{ probe[LN].pre_el_note }} Before lamination. Read by the
+      server every minute, not by FQC; the account the server runs as needs read
+      access to the share. Leave it blank and nothing is scanned.</div></div>
+  <div class="fld" style="grid-column:1/-1"><label>Post EL (after lamination) image root folder</label>
+    <input id="s_{{ ln }}_post_el" value="{{ cfg['post_el_' + ln + '_root'] }}"
+           placeholder="\\POST-EL-{{ LN }}\el">
+    <div class="hint">{{ probe[LN].post_el_note }} Read by the server every
+      minute, not by FQC; the account the server runs as needs read access to the
+      share. Leave it blank and nothing is scanned.</div></div>
 
   <div class="fld" style="grid-column:1/-1"><label>Column positions in this
       tester&rsquo;s export</label>
@@ -278,6 +293,8 @@
     LINES.forEach(function(ln){
       body['ss_'+ln+'_csv_path']=g('s_'+ln+'_ss');
       body['el_'+ln+'_root']=g('s_'+ln+'_el');
+      body['pre_el_'+ln+'_root']=g('s_'+ln+'_pre_el');
+      body['post_el_'+ln+'_root']=g('s_'+ln+'_post_el');
       COLS.forEach(function(c){ body['ss_'+ln+'_'+c]=g('s_'+ln+'_'+c); });
     });
     /* Line A also writes the single-source keys, so anything still reading
