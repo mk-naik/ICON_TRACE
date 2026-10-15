@@ -222,7 +222,9 @@ no one signs twice. [enforcement unverified]
   Post EL scanned, passed, rejected. **A module counts on the factory day and shift of
   its FIRST image at a station**; its row shows all its images. Production Incharge,
   Admin and Super Admin see it to begin with; anyone else by user permission (section 9).
-  Read-only. [built]
+  Read-only. The Production Dashboard and the Management Overview show the same
+  figures in an "EL stations" card under their KPI tiles, under their own period and
+  shift; their customer, model and wattage narrow it to modules in the master. [built]
 
 ## 6. Quality, Needs Review, duplicate scans
 

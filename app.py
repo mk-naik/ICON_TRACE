@@ -6398,6 +6398,11 @@ def api_prod_dashboard():
             "FROM loss_event WHERE end_time IS NULL AND status<>'cancelled'")
         cur.execute("DROP TABLE IF EXISTS temp.module_ev")
         facets = _module_facets(cur, frm, to, shift_no, customer, model, wattage)
+        # Pre-EL and Post EL, each module on the day and shift of its first
+        # image there, under the same customer / model / wattage (16 Oct 2026)
+        el = _el_kpi(_el_period(cur, frm, to, customer, model, wattage),
+                     clock.SHIFT_LETTER[shift_no] if shift_no else "")
+        el_cfg = db.get_config(cur)
 
     kpi = {k: ((kpi_row or {}).get(k) or 0) for k in keys}
     kpi["hold"] = hold or 0
@@ -6464,7 +6469,10 @@ def api_prod_dashboard():
         "today": clock.shift_day().isoformat(),
         "customers": db.customer_options(r["customer"] for r in customers_rows),
         "models": [r["model"] for r in models_rows],
-        "facets": facets
+        "facets": facets,
+        "el": el,
+        "el_configured": {st: any(_el_station_root(el_cfg, st, ln) for ln in ev.LINES)
+                          for st, _l in elcap.STATIONS},
     })
 
 

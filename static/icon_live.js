@@ -1682,6 +1682,51 @@
   window.wireDynamicFilters = wireDynamicFilters;
 
   
+  /* Pre-EL and Post EL on the two dashboards (Mukesh, 16 Oct 2026): what the
+     period's modules add up to at each station, each module counted on the
+     day and shift of its FIRST image there - the same figures as EL Stations,
+     from the same /api/prod/dashboard answer the dashboard already has. One
+     card under the KPI tiles; a station with no folder set says so. */
+  function elDashCard(viewId, cardId, d) {
+    var view = document.getElementById(viewId);
+    if (!view || !d || !d.el) return;
+    var card = document.getElementById(cardId);
+    if (!card) {
+      var anchor = view.querySelector('.grid.g5');
+      if (!anchor) return;
+      card = document.createElement('div');
+      card.className = 'card';
+      card.id = cardId;
+      anchor.parentNode.insertBefore(card, anchor.nextSibling);
+    }
+    var pre = d.el.pre_el, post = d.el.post_el, cfg = d.el_configured || {};
+    var n = function (v) { return (v || 0).toLocaleString(); };
+    var pct = function (a, b) { return b ? (a * 100 / b).toFixed(1) + '%' : '—'; };
+    var none = '<td class="num" style="color:var(--ink3)">—</td>';
+    var off = '<td colspan="6" style="color:var(--ink3)">no folder set ' +
+              '(Admin › Stations &amp; sources)</td>';
+    var open = typeof can === 'function' && can('elst')
+      ? ' <button class="btn btn-ghost btn-sm" onclick="go(\'elst\')">Open EL Stations</button>' : '';
+    card.innerHTML = '<div class="card-h"><h3>EL stations</h3><div class="ch-r">' +
+      '<span class="tag t-mute">each module counted on its first image there</span>' + open +
+      '</div></div><div class="card-b flush"><table><thead><tr><th>Station</th>' +
+      '<th class="num">Scanned</th><th class="num">Pass first time</th>' +
+      '<th class="num">Reworked, passed</th><th class="num">Still in rework</th>' +
+      '<th class="num">NG · rejected</th><th class="num">First-pass yield</th></tr></thead><tbody>' +
+      '<tr data-el="pre_el"><td style="font-weight:600">Pre-EL</td>' +
+      (cfg.pre_el === false && !pre.scanned ? off :
+        '<td class="num">' + n(pre.scanned) + '</td><td class="num">' + n(pre.pass) + '</td>' +
+        '<td class="num">' + n(pre.reworked) + '</td><td class="num">' + n(pre.in_rework) + '</td>' +
+        none + '<td class="num">' + pct(pre.pass, pre.scanned) + '</td>') + '</tr>' +
+      '<tr data-el="post_el"><td style="font-weight:600">Post EL</td>' +
+      (cfg.post_el === false && !post.scanned ? off :
+        '<td class="num">' + n(post.scanned) + '</td><td class="num">' + n(post.pass) + '</td>' +
+        none + none + '<td class="num"' + (post.ng ? ' style="color:var(--fail);font-weight:700"' : '') +
+        '>' + n(post.ng) + '</td><td class="num">' + pct(post.pass, post.scanned) + '</td>') +
+      '</tr></tbody></table></div>';
+  }
+  window.iconElCard = elDashCard;
+
   // --- MANAGEMENT OVERVIEW ---
   function wireMgmt() {
     if (window.__mgmtWired) return;
@@ -1753,6 +1798,7 @@
       fetch('/api/stock_dispatch' + qsDisp).then(function(r) { return r.json(); }).catch(function(){ return {}; })
     ]).then(function(results) {
       var prod = results[0], fqc = results[1], disp = results[2];
+      elDashCard('v-mgmt', 'mgElCard', prod);
 
       var pk = prod.kpi || {};
       var alloc = pk.alloc || 0, made = pk.prod || 0, atFqc = pk.fqc || 0,
@@ -3226,6 +3272,7 @@ function wireFqcAnomalies() {
         _dashCascade('pdCust',  fc ? fc.customer : (d.customers || []), 'All customers',
                      f.customer, { facet: !!fc });
         _dashCascade('pdModel', fc ? fc.model : (d.models || []), 'All', f.model, { facet: !!fc });
+        if (window.iconElCard) window.iconElCard('v-proddash', 'pdElCard', d);
         if (window.iconTable) window.iconTable.wireAll();
       })
       .catch(function (err) {

@@ -227,10 +227,9 @@ IN_REWORK = "ICON625R12A1522913"
 REJECTED = "ICON625R12A1522914"
 
 
-@test("EL Stations on the page: after Production Entry for a Production Incharge, its "
-      "KPIs and one row a module; a Result pick narrows it; a serial opens its journey; "
-      "Quality has no such screen")
-def t_screen_on_page():
+def seed_screen():
+    """BOTH (reworked, then Post EL OK), one still in rework, one rejected at Post
+    EL - all first imaged on 15-10-2026."""
     seed_journey()
     with store.conn() as (cx, cur):
         for i, s in enumerate((IN_REWORK, REJECTED)):
@@ -243,6 +242,13 @@ def t_screen_on_page():
     put(POST_B, "2026-10-15/中班/Cell Crack", REJECTED + ".jpg", "2026-10-15T15:00:00")
     with store.conn() as (cx, cur):
         assert elcap.run(db.get_config(cur), cur) == {"pre_el": 1, "post_el": 1}
+
+
+@test("EL Stations on the page: after Production Entry for a Production Incharge, its "
+      "KPIs and one row a module; a Result pick narrows it; a serial opens its journey; "
+      "Quality has no such screen")
+def t_screen_on_page():
+    seed_screen()
 
     def rows(pg):
         return pg.evaluate("""() => Array.from(document.querySelectorAll('#elRows tr'))
@@ -288,6 +294,42 @@ def t_screen_on_page():
         q = H.open_page(b, None, role="Quality")
         assert not q.locator('#sidenav [data-v="elst"]').is_visible(), "Quality sees EL Stations"
         assert q.errors == [], q.errors
+
+
+@test("the Production Dashboard and the Management Overview show an EL stations card "
+      "under their KPI tiles with the period's figures; its button opens EL Stations")
+def t_dashboards_on_page():
+    seed_screen()
+    want = {"pre_el": ["Pre-EL", "2", "0", "1", "1", "—", "0.0%"],
+            "post_el": ["Post EL", "2", "1", "—", "—", "1", "50.0%"]}
+
+    def card(pg, view, card_id, frm, to, render):
+        pg.evaluate("go(%r)" % view)
+        pg.wait_for_timeout(500)
+        pg.evaluate("""([a, b, f]) => { document.getElementById(a).value = '2026-10-15';
+                        document.getElementById(b).value = '2026-10-15'; window[f](); }""",
+                    [frm, to, render])
+        pg.wait_for_function("""(id) => { const c = document.getElementById(id);
+            const tr = c && c.querySelector('tr[data-el=post_el]');
+            return !!tr && tr.cells.length > 1 && tr.cells[1].textContent.trim() === '2'; }""",
+                             arg=card_id, timeout=15000)
+        got = pg.evaluate("""(id) => Object.fromEntries(Array.from(document.querySelectorAll(
+            '#' + id + ' tbody tr')).map(tr => [tr.getAttribute('data-el'),
+            Array.from(tr.cells).map(c => c.textContent.trim())]))""", card_id)
+        under = pg.evaluate("""(id) => { const p = document.getElementById(id).previousElementSibling;
+            return p.classList.contains('grid') && !!p.querySelector('.kpi'); }""", card_id)
+        return got, under
+
+    with H.browser() as b:
+        pg = H.open_page(b, None, role="Production Incharge")
+        got, under = card(pg, "proddash", "pdElCard", "pdFrom", "pdTo", "renderProd")
+        assert got == want, got
+        assert under, "the card is not right under the KPI tiles"
+        got, under = card(pg, "mgmt", "mgElCard", "mgFrom", "mgTo", "renderMgmt")
+        assert got == want and under, got
+        pg.click("#mgElCard button:has-text('Open EL Stations')")
+        pg.wait_for_selector("#v-elst.on", timeout=10000)
+        assert pg.errors == [], pg.errors
 
 
 if __name__ == "__main__":

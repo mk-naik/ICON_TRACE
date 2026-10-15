@@ -7703,3 +7703,18 @@ commit.
   rule across midnight days, every filter and its dynamic options, today by default, a
   bad date, an unset station, the row cap, the gate per role, the one-time grant.
   `test_el_capture_ui.py` +1 (5, Chromium). `test_screen_view_gates.py`: the new read gate.
+
+### 16 Oct 2026 - the Production Dashboard and Management Overview show the EL stations
+- **Asked (Mukesh):** "both show in production and management dashboard".
+- **Change:** `/api/prod/dashboard` answers `el` (the EL Stations figures, `_el_kpi` over
+  `_el_period`) under its own period and shift, its customer / model / wattage narrowing
+  to modules in the master, and `el_configured`. Both dashboards draw one "EL stations"
+  card under their KPI tiles from the answer they already fetch (`elDashCard`): per
+  station scanned, pass first time, reworked and passed, still in rework, NG - rejected,
+  first-pass yield; "no folder set" for a station not configured; "Open EL Stations" for
+  whoever may open it.
+- **Test:** `test_el_capture.py` +1 (47): the same counts as the screen, each dashboard
+  filter. `test_el_capture_ui.py` +1 (6): the card on both dashboards, right under the
+  KPI tiles, and its button. Dashboard suites re-run: `test_dashboards_ist`,
+  `test_customer_filters`, `test_production`, `test_loss`, `test_factory_day_defaults_ui`,
+  `test_fqc_dashboard.js`, `test_screens.js` all pass.

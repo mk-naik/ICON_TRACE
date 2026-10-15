@@ -986,6 +986,33 @@ def t_grant_later_screens():
         assert icon_auth.get_screen_perms(cur, who["Quality"])["elst"]["view"] is True
 
 
+@test("the dashboards' EL figures (/api/prod/dashboard): the same counts as EL "
+      "Stations, under the dashboard's own period, shift, customer, model and wattage")
+def t_dashboard_el():
+    seed_day()
+    c = signed_in()
+
+    def el(**q):
+        r = c.get("/api/prod/dashboard", query_string=dict(
+            {"from": "2026-10-14", "to": "2026-10-14"}, **q))
+        assert r.status_code == 200, r.get_json()
+        return r.get_json()
+
+    d = el()
+    _c, screen = el_api(c, **{"from": "2026-10-14", "to": "2026-10-14"})
+    assert d["el"] == screen["kpi"], (d["el"], screen["kpi"])
+    assert d["el_configured"] == {"pre_el": True, "post_el": True}
+    # a model (or customer, or wattage) narrows to modules the master has
+    m = el(model="ISEN625-G12R")["el"]
+    assert m["pre_el"]["scanned"] == 3 and m["post_el"]["scanned"] == 2, m
+    assert el(model="ISEN600-G2X")["el"]["pre_el"]["scanned"] == 0
+    assert el(customer="STOCK")["el"]["pre_el"]["scanned"] == 3
+    assert el(wattage="625")["el"]["pre_el"]["scanned"] == 3
+    s = el(shift="C")["el"]
+    assert (s["pre_el"]["scanned"], s["pre_el"]["in_rework"], s["post_el"]["scanned"]) == \
+        (1, 1, 0), s
+
+
 if __name__ == "__main__":
     width = max(len(n) for n, _ in _results)
     passed = failed = 0
