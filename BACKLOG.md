@@ -7658,3 +7658,10 @@ commit.
   module captured nowhere, the nine-node chain scrolling inside its card. Real case, on a
   throwaway database: one pass over the real Pre-EL B share, then ICON625R12A1512780 reads
   Pre-EL "OK" - "Ribbon short · 15-10-2026 13:07", "OK · 15-10-2026 13:10", "Line B".
+
+### 16 Oct 2026 - the EL poller's log names the serials it recorded
+- **Was:** "new images: {'pre_el': 2}" - how many, never which (Mukesh: "which are those,
+  how can I see it?").
+- **Change:** `run_pass` logs "Pre-EL: <serial> <verdict> (<line>), ..." after the counts,
+  at most ten a station, then "(+N more)". The list on a screen is the next commits.
+- **Test:** `test_el_capture.py` +1 (34).

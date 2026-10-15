@@ -289,9 +289,30 @@ def run(cfg, cur):
     return apply(cur, pick_new(cur, scan(cfg)))
 
 
+LOG_NAMES = 10           # serials named per station in the log line
+
+
+def named(rows, limit=LOG_NAMES):
+    """'Pre-EL: ICON...0201 OK (A), ICON...0131 Cell Crack (A)' - the serials
+    a pass recorded, so the log says WHICH, not only how many (Mukesh, 16 Oct:
+    "which are those, how can I see it?")."""
+    out = []
+    for station, label in STATIONS:
+        mine = [r for r in rows if r["station"] == station]
+        if not mine:
+            continue
+        shown = ", ".join("%s %s%s" % (r["serial"], r["verdict"],
+                                       " (%s)" % r["line"] if r["line"] else "")
+                          for r in mine[:limit])
+        more = len(mine) - limit
+        out.append("%s: %s%s" % (label, shown, " (+%d more)" % more if more > 0 else ""))
+    return "; ".join(out)
+
+
 def run_pass():
     """One pass as the poller runs it: the settings, then the shares with no
-    database connection held, then a short write of what is new."""
+    database connection held, then a short write of what is new - logged by
+    name."""
     import store, db
     with store.conn() as (cx, cur):
         cfg = db.get_config(cur)
@@ -299,7 +320,11 @@ def run_pass():
     if not files:
         return {}
     with store.conn() as (cx, cur):
-        return apply(cur, pick_new(cur, files))
+        new = pick_new(cur, files)
+        counts = apply(cur, new)
+    if counts:
+        log.info("new images: %s - %s", counts, named(new))
+    return counts
 
 
 def start_background(interval=60):
@@ -312,9 +337,7 @@ def start_background(interval=60):
     def loop():
         while True:
             try:
-                counts = run_pass()
-                if counts:
-                    log.info("new images: %s", counts)
+                run_pass()                     # logs what it recorded, by name
             except Exception:
                 log.exception("EL capture pass failed")
             time.sleep(interval)

@@ -413,6 +413,37 @@ def t_unreachable():
     assert [m for lvl, m in seen if lvl == "INFO" and "answers again" in m], seen
 
 
+@test("the poller's log line names the serials it recorded, not only how many - "
+      "at most ten a station, then '+N more'")
+def t_log_names_serials():
+    fresh()
+    put(PRE_A, "2026-10-14/早班/OK", S_CRACK + ".jpg", "2026-10-14T09:00:00")
+    put(PRE_A, "2026-10-14/早班/Cell Crack", S_CROSS + ".jpg", "2026-10-14T09:01:00")
+    seen = []
+
+    class H(logging.Handler):
+        def emit(self, rec):
+            seen.append(rec.getMessage())
+
+    h = H()
+    elcap.log.addHandler(h)
+    level = elcap.log.level
+    elcap.log.setLevel(logging.INFO)
+    try:
+        assert elcap.run_pass() == {"pre_el": 2}
+        for i in range(12):
+            put(PRE_A, "2026-10-14/中班/OK", "ICON625R12A15229%02d.jpg" % (40 + i),
+                "2026-10-14T15:%02d:00" % i)
+        assert elcap.run_pass() == {"pre_el": 12}
+    finally:
+        elcap.log.removeHandler(h)
+        elcap.log.setLevel(level)
+    assert len(seen) == 2, seen
+    assert "Pre-EL: %s OK (A), %s Cell Crack (A)" % (S_CRACK, S_CROSS) in seen[0], seen[0]
+    assert "ICON625R12A1522940 OK (A)" in seen[1] and "(+2 more)" in seen[1], seen[1]
+    assert "ICON625R12A1522950" not in seen[1], seen[1]
+
+
 @test("an image deleted from the share keeps its row")
 def t_deleted_file_kept():
     fresh()
