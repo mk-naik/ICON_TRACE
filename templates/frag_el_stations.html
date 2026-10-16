@@ -117,7 +117,11 @@
         cell('pre_el', p) + '<td>' + esc(p && p.reason || '') + '</td>' +
         '<td class="num">' + (p ? p.reworks : '') + '</td>' +
         '<td class="mono" style="font-size:11px">' + (p ? esc(when(p.first_at)) +
-          (p.images > 1 ? ' → ' + esc(when(p.last_at)) + ' (' + p.images + ' images)' : '')
+          (p.images > 1 ? ' → ' + esc(when(p.last_at)) + ' (' + p.images + ' images)' : '') +
+          /* which machine, once the secondary is involved (a rework comes back
+             through the other one) */
+          ((p.units || []).indexOf(2) >= 0 ? ' · ' +
+            ((p.units || []).length > 1 ? 'primary + secondary' : 'secondary') : '')
           : '') + '</td>' +
         cell('post_el', q) + '<td>' + esc(q && q.reason || '') + '</td>' +
         '<td class="mono" style="font-size:11px">' + (q ? esc(when(q.last_at)) : '') + '</td>' +

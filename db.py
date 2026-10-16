@@ -2040,10 +2040,12 @@ for _ln in ("a", "b"):
     # Where the tester keeps one result file per module (<root>\<yyyymmdd>\<serial>.xml).
     # Blank = beside the CSV, at <CSV folder>\..\XML, which is where it is.
     DEFAULT_CONFIG["ss_%s_xml_root" % _ln] = ""
-    # The two other EL stations, Pre-EL (before lamination) and Post EL (after
-    # it): the server walks these every minute (icon_el_capture). Blank = the
-    # station is not configured on this line and nothing is scanned.
+    # The two other EL stations, Pre-EL (before lamination; two machines a
+    # line, primary and secondary) and Post EL (after it): the server walks
+    # these every minute (icon_el_capture.SOURCES). Blank = that machine is
+    # not configured on this line and nothing is scanned.
     DEFAULT_CONFIG["pre_el_%s_root" % _ln] = ""
+    DEFAULT_CONFIG["pre_el2_%s_root" % _ln] = ""
     DEFAULT_CONFIG["post_el_%s_root" % _ln] = ""
     for _k, _v in _SS_COLS.items():
         DEFAULT_CONFIG["ss_%s_%s" % (_ln, _k)] = _v

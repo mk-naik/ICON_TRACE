@@ -6471,8 +6471,7 @@ def api_prod_dashboard():
         "models": [r["model"] for r in models_rows],
         "facets": facets,
         "el": el,
-        "el_configured": {st: any(_el_station_root(el_cfg, st, ln) for ln in ev.LINES)
-                          for st, _l in elcap.STATIONS},
+        "el_configured": _el_configured(el_cfg),
     })
 
 
@@ -6490,7 +6489,7 @@ def _el_rows_for(cur, serials, station=None):
     for i in range(0, len(serials), 500):
         part = serials[i:i + 500]
         out.extend(store.rows(
-            cur, "SELECT capture_id, station, line, serial, recapture, verdict, "
+            cur, "SELECT capture_id, station, unit, line, serial, recapture, verdict, "
                  "file_time, seen_at FROM el_capture WHERE serial IN (%s)%s"
                  % (",".join(["%s"] * len(part)),
                     " AND station=%s" if station else ""),
@@ -6661,8 +6660,7 @@ def api_el_stations():
         "facets": facets,
         # a station with no folder set reads 0 because nothing is scanned, not
         # because nothing came through - the screen says which
-        "configured": {st: any(_el_station_root(cfg, st, ln) for ln in ev.LINES)
-                       for st, _l in elcap.STATIONS},
+        "configured": _el_configured(cfg),
     })
 
 
@@ -6926,15 +6924,25 @@ def _reachable_all(checks):
         return {k: f.result() for k, f in asked.items()}
 
 
-def _el_station_root(cfg, station, ln):
-    """A Pre-EL or Post EL folder as configured for one line ('' = none)."""
-    return (cfg.get("%s_%s_root" % (station, ln.lower())) or "").strip()
+def _el_root_setting(cfg, prefix, ln):
+    """One of the folders the EL poller reads (icon_el_capture.SOURCES: pre_el,
+    pre_el2, post_el) as configured for one line ('' = none)."""
+    return (cfg.get("%s_%s_root" % (prefix, ln.lower())) or "").strip()
 
 
-# (probe key, what it is) - the Sun Simulator, FQC's EL, then the two stations
-# the server reads (icon_el_capture)
+def _el_configured(cfg):
+    """{station: is any of its folders set, on any line?} - a station with none
+    reads 0 because nothing is scanned, and the screens say so."""
+    return {st: any(_el_root_setting(cfg, p, ln) for p, s2, _u, _l in elcap.SOURCES
+                    if s2 == st for ln in ev.LINES)
+            for st, _label in elcap.STATIONS}
+
+
+# (probe key, what it is) - the Sun Simulator, FQC's EL, then the folders the
+# server reads (icon_el_capture.SOURCES)
 _PROBED = (("ss", "Sun Simulator"), ("el", "EL folder"),
-           ("pre_el", "Pre-EL folder"), ("post_el", "Post EL folder"))
+           ("pre_el", "Pre-EL primary folder"), ("pre_el2", "Pre-EL secondary folder"),
+           ("post_el", "Post EL folder"))
 
 
 def _evidence_probe(cfg):
@@ -6947,8 +6955,8 @@ def _evidence_probe(cfg):
         s = byline.get(ln) or {}
         checks[(ln, "ss")] = (os.path.exists, s.get("ss_path") or "")
         checks[(ln, "el")] = (os.path.isdir, s.get("el_root") or "")
-        for station, _label in elcap.STATIONS:
-            checks[(ln, station)] = (os.path.isdir, _el_station_root(cfg, station, ln))
+        for prefix, _st, _u, _label in elcap.SOURCES:
+            checks[(ln, prefix)] = (os.path.isdir, _el_root_setting(cfg, prefix, ln))
     ok = _reachable_all(checks)
     out = {}
     for ln in ev.LINES:
@@ -6983,9 +6991,11 @@ def api_evidence_sources():
              "CSV, read by column position"),
             ("EL", (s or {}).get("el_root"), "ELVI_ROOT",
              "Folder name is the verdict"),
-            ("PRE-EL", _el_station_root(cfg, "pre_el", ln), "PRE_EL_ROOT",
-             "Read by the server every minute; folder name is the verdict"),
-            ("POST-EL", _el_station_root(cfg, "post_el", ln), "POST_EL_ROOT",
+            ("PRE-EL1", _el_root_setting(cfg, "pre_el", ln), "PRE_EL_ROOT",
+             "Primary. Read by the server every minute; folder name is the verdict"),
+            ("PRE-EL2", _el_root_setting(cfg, "pre_el2", ln), "PRE_EL2_ROOT",
+             "Secondary. Read by the server every minute; folder name is the verdict"),
+            ("POST-EL", _el_root_setting(cfg, "post_el", ln), "POST_EL_ROOT",
              "Read by the server every minute; folder name is the verdict"),
         ):
             listed.append((ln, s, kind, path or "", typ, rule))
@@ -7101,22 +7111,23 @@ def _bars_overflow(cfg):
             % (w, PACKING_LIST_BARCODE_ROOM_MM))
 
 
-# Every setting that names an EL station's folder: FQC's own (el_root is Line
-# A's from before there were two lines), then Pre-EL and Post EL.
+# Every setting that names an EL machine's folder: FQC's own (el_root is Line
+# A's from before there were two lines), then Pre-EL primary and secondary,
+# and Post EL.
 _EL_FOLDER_KEYS = ("el_root", "el_a_root", "el_b_root") + tuple(
-    "%s_%s_root" % (station, ln) for station, _label in elcap.STATIONS
+    "%s_%s_root" % (prefix, ln) for prefix, _st, _u, _label in elcap.SOURCES
     for ln in ("a", "b"))
 
 
 def _el_folders_clash(cfg):
-    """Why these EL folders cannot be stored, or None. One folder is one
-    station: with FQC's folder also set as Pre-EL, the index would record
-    every FQC image as a Pre-EL capture (and one station's as the other's).
-    The same folder for ONE station on both lines is allowed - one machine
-    serving both lines. Compared without case or a trailing slash."""
+    """Why these EL folders cannot be stored, or None. One folder is one EL
+    machine: with FQC's folder also set as Pre-EL, the index would record every
+    FQC image as a Pre-EL capture (and the primary's as the secondary's). The
+    same folder for ONE machine on both lines is allowed - one machine serving
+    both lines. Compared without case or a trailing slash."""
     named = [("FQC EL", s["line"], s["el_root"]) for s in ev.sources(cfg)]
-    for station, label in elcap.STATIONS:
-        named.extend((label, ln, _el_station_root(cfg, station, ln))
+    for prefix, _st, _u, label in elcap.SOURCES:
+        named.extend((label, ln, _el_root_setting(cfg, prefix, ln))
                      for ln in ev.LINES)
     first = {}
     for station, ln, path in named:
@@ -8680,20 +8691,21 @@ def _el_took(a, b):
 
 
 def _pre_el_steps(imgs):
-    """Pre-EL as it happened (Mukesh, 16 Oct 2026): every image is a step. OK
-    is Pass and the module moves on; anything else is NG - its folder is the
-    reason - and a Rework step follows, then the next Pre-EL image, until one
-    passes. ICON TRACE keeps no rework record: a Rework step is what the images
-    say - after which NG, and when the module was back. Still NG at its last
-    image, the module is 'In rework' and nothing more is assumed."""
+    """Pre-EL as it happened (Mukesh, 16 Oct 2026): every image is a step, in
+    the order taken across the line's two machines. OK is Pass and the module
+    moves on; anything else is NG - its folder is the reason - and a Rework
+    step follows, then the next Pre-EL image (usually on the OTHER machine),
+    until one passes. ICON TRACE keeps no rework record: a Rework step is what
+    the images say - after which NG, and when the module was back. Still NG at
+    its last image, the module is 'In rework' and nothing more is assumed."""
     steps = []
     for i, img in enumerate(imgs):
         ok = elcap.is_pass(img["verdict"])
         detail = [] if ok else [img["verdict"]]
         if img["recapture"]:
             detail.append("re-shot %d" % img["recapture"])
-        if img["line"]:
-            detail.append("Line " + img["line"])
+        machine = elcap.UNIT_NAME.get(img.get("unit") or 1, "")
+        detail.append(("Line %s · %s" % (img["line"], machine)) if img["line"] else machine)
         steps.append({"stage": "Pre-EL", "value": "Pass" if ok else "NG", "done": True,
                       "detail": detail, "tag": _when_shift(img["file_time"]),
                       "tone": "t-pass" if ok else "t-rev"})
@@ -8827,7 +8839,7 @@ def api_trace_serial(serial):
             tuple(str(b["box_id"]) for b in boxes)) if boxes else []
         # the Pre-EL and Post EL images the poller found (icon_el_capture) -
         # read from the table, never from the shares
-        el_caps = store.rows(cur, "SELECT capture_id, station, line, recapture, "
+        el_caps = store.rows(cur, "SELECT capture_id, station, unit, line, recapture, "
                                   "verdict, file_time, seen_at FROM el_capture "
                                   "WHERE serial=%s", (s,))
         cfg = db.get_config(cur)

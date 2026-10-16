@@ -47,8 +47,10 @@ Beside the spine: `fqc_defect` and `defect_master` (what a decision found),
 `fqc_lookup_log` and `el_capture`.
 
 **`el_capture`** is one row per image filed at the Pre-EL (before lamination)
-or Post EL (after lamination) station: station, line (NULL when one folder
-serves both lines, never derived from the serial), serial, re-shot number,
+or Post EL (after lamination) station: station, unit (which machine - 1 the
+primary, 2 the secondary Pre-EL beside it; rows from before 16 Oct are 1), line
+(NULL when one folder serves both lines, never derived from the serial), serial,
+re-shot number,
 verdict (the folder it is filed in), path, the file's time (the EL PC's clock)
 and when it was first seen. Nobody looks a serial up at those stations, so it
 is written by one thing only, the poller in `icon_el_capture.py` (started by

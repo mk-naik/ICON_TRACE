@@ -856,6 +856,8 @@ CREATE TABLE IF NOT EXISTS ftr_reading (
 CREATE TABLE IF NOT EXISTS el_capture (
   capture_id  INTEGER PRIMARY KEY AUTOINCREMENT,
   station     TEXT NOT NULL,         -- 'pre_el' | 'post_el'
+  unit        INTEGER NOT NULL DEFAULT 1,  -- which machine: 1 the primary (Post
+                                      -- EL's only one), 2 the secondary Pre-EL
   line        TEXT NULL,             -- 'A' | 'B'; NULL when one folder serves
                                       -- both lines - never derived from the serial
   serial      TEXT NOT NULL,

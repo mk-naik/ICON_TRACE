@@ -198,21 +198,30 @@ no one signs twice. [enforcement unverified]
   file images like the FQC EL, and nobody looks a serial up at either, so the server
   walks the newest two date folders of each folder set in Settings (per line; blank =
   not scanned) and records every image once it is filed under a verdict: station,
-  line (none when one folder serves both lines - never read from the serial),
-  serial, re-shot number, the folder's name as the verdict, the file's time. A record
+  machine, line (none when one folder serves both lines - never read from the
+  serial), serial, re-shot number, the folder's name as the verdict, the file's
+  time. **Each line has two Pre-EL machines side by side** (Mukesh, 16 Oct): the
+  primary takes the line's flow, the secondary takes it when the primary is busy or
+  down, and an NG module back from rework goes through the OTHER one - so both are
+  configured and read (Pre-EL primary / Pre-EL secondary); Post EL has one. A record
   is never changed or deleted when its file or share disappears. One folder is one
-  station: Settings refuses a folder set as two of FQC EL, Pre-EL and Post EL. The
-  images are not served (above, and section 10). [built]
-- **At an EL station OK is Pass; any other folder is NG** (Mukesh, 16 Oct). **At Pre-EL
+  machine: Settings refuses a folder set as two of FQC EL, Pre-EL primary, Pre-EL
+  secondary and Post EL. The images are not served (above, and section 10). [built]
+- **At an EL station OK is Pass; any other folder is NG** (Mukesh, 16 Oct) - SR too: it
+  is the NG of a module the stringer reworked, a folder of its own so they can be
+  counted. **At Pre-EL
   an NG module goes for rework and comes back**, so the module journey shows every
   Pre-EL image as a step - Pass, or NG with its folder as the reason - and after an NG
   a Rework step (read from the images: after which NG, and when the module was back at
   Pre-EL; "In rework" while its last image is NG), then the next Pre-EL image, until one
   passes. **After lamination a module cannot go back to the pre-lamination process, so
   NG at Post EL is a rejection**: one Post EL step, NG in red with its reason, no Rework,
-  and a later image does not undo it. Images are ordered by re-shot number, then time;
-  an image re-filed under another verdict is one image, its latest filing standing. A
-  station the serial was never captured at gives no step at all - not "pending". [built]
+  and a later image does not undo it. **Images are ordered by their time** ("here time
+  is crucial"), across both Pre-EL machines - each names its own re-shots, so a
+  re-shot number orders nothing between them; the order is only as good as the two EL
+  PCs' clocks. An image re-filed under another verdict (same machine, re-shot number
+  and time) is one image, its latest filing standing. A station the serial was never
+  captured at gives no step at all - not "pending". [built]
   **[open]** whether a Post EL rejection should also stop the module (FQC, packing) or
   raise a Needs Review item - today it is shown, not enforced.
 - **EL Stations is a screen of its own** (Production section, after Production Entry;

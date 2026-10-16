@@ -246,6 +246,11 @@ def _migrate(cx, text):
     if cols("material") and "default_make" not in cols("material"):
         cx.execute("ALTER TABLE material ADD COLUMN default_make TEXT")
 
+    # 16 Oct 2026: a line has two Pre-EL machines - which one took the image.
+    # Rows recorded before are the primary's: it was the only one read.
+    if cols("el_capture") and "unit" not in cols("el_capture"):
+        cx.execute("ALTER TABLE el_capture ADD COLUMN unit INTEGER NOT NULL DEFAULT 1")
+
     # pre-shared or post-shared, recorded at allocation
     if cols("allocation") and "alloc_type" not in cols("allocation"):
         cx.execute("ALTER TABLE allocation ADD COLUMN alloc_type TEXT")

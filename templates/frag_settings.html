@@ -22,7 +22,8 @@
   <div class="ch-r">
     <span class="tag {{ 't-pass' if probe[LN].ss=='OK' else ('t-mute' if probe[LN].ss=='—' else 't-rev') }}">SS {{ probe[LN].ss }}</span>
     <span class="tag {{ 't-pass' if probe[LN].el=='OK' else ('t-mute' if probe[LN].el=='—' else 't-rev') }}">EL {{ probe[LN].el }}</span>
-    <span class="tag {{ 't-pass' if probe[LN].pre_el=='OK' else ('t-mute' if probe[LN].pre_el=='—' else 't-rev') }}">Pre-EL {{ probe[LN].pre_el }}</span>
+    <span class="tag {{ 't-pass' if probe[LN].pre_el=='OK' else ('t-mute' if probe[LN].pre_el=='—' else 't-rev') }}">Pre-EL primary {{ probe[LN].pre_el }}</span>
+    <span class="tag {{ 't-pass' if probe[LN].pre_el2=='OK' else ('t-mute' if probe[LN].pre_el2=='—' else 't-rev') }}">Pre-EL secondary {{ probe[LN].pre_el2 }}</span>
     <span class="tag {{ 't-pass' if probe[LN].post_el=='OK' else ('t-mute' if probe[LN].post_el=='—' else 't-rev') }}">Post EL {{ probe[LN].post_el }}</span>
   </div></div>
 <div class="card-b"><div class="grid g4">
@@ -35,12 +36,21 @@
            placeholder="\\EL-{{ LN }}\output">
     <div class="hint">{{ probe[LN].el_note }} The folder a file sits in is the
       operator&rsquo;s verdict.</div></div>
-  <div class="fld" style="grid-column:1/-1"><label>Pre-EL image root folder</label>
+  <div class="fld" style="grid-column:1/-1"><label>Pre-EL primary image root folder</label>
     <input id="s_{{ ln }}_pre_el" value="{{ cfg['pre_el_' + ln + '_root'] }}"
            placeholder="\\PRE-EL-{{ LN }}\el">
-    <div class="hint">{{ probe[LN].pre_el_note }} Before lamination. Read by the
-      server every minute, not by FQC; the account the server runs as needs read
-      access to the share. Leave it blank and nothing is scanned.</div></div>
+    <div class="hint">{{ probe[LN].pre_el_note }} Before lamination, the machine the
+      line's flow goes to. Read by the server every minute, not by FQC; the account
+      the server runs as needs read access to the share. Leave it blank and nothing
+      is scanned.</div></div>
+  <div class="fld" style="grid-column:1/-1"><label>Pre-EL secondary image root folder</label>
+    <input id="s_{{ ln }}_pre_el2" value="{{ cfg['pre_el2_' + ln + '_root'] }}"
+           placeholder="\\PRE-EL2-{{ LN }}\el">
+    <div class="hint">{{ probe[LN].pre_el2_note }} The machine beside the primary - it
+      takes the flow when the primary is busy or down, and a reworked module comes
+      back through the other one, so both are read and their images put in order by
+      time. Read by the server every minute, not by FQC; the account the server runs
+      as needs read access to the share. Leave it blank and nothing is scanned.</div></div>
   <div class="fld" style="grid-column:1/-1"><label>Post EL (after lamination) image root folder</label>
     <input id="s_{{ ln }}_post_el" value="{{ cfg['post_el_' + ln + '_root'] }}"
            placeholder="\\POST-EL-{{ LN }}\el">
@@ -294,6 +304,7 @@
       body['ss_'+ln+'_csv_path']=g('s_'+ln+'_ss');
       body['el_'+ln+'_root']=g('s_'+ln+'_el');
       body['pre_el_'+ln+'_root']=g('s_'+ln+'_pre_el');
+      body['pre_el2_'+ln+'_root']=g('s_'+ln+'_pre_el2');
       body['post_el_'+ln+'_root']=g('s_'+ln+'_post_el');
       COLS.forEach(function(c){ body['ss_'+ln+'_'+c]=g('s_'+ln+'_'+c); });
     });

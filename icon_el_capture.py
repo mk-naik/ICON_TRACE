@@ -5,7 +5,8 @@ Unit-2 has three EL stations. FQC's own (Settings: EL image root folder) is
 read by icon_evidence when FQC looks a serial up. The other two are never
 looked up - nobody types a serial at either:
 
-    Pre-EL     before lamination; it scans the back label
+    Pre-EL     before lamination; it scans the back label - two machines a
+               line, a primary and a secondary beside it
     Post EL    after lamination
 
 so the server finds their images itself, by walking the folders every minute
@@ -43,6 +44,17 @@ log = logging.getLogger("icontrace.el_capture")
 STATIONS = (("pre_el", "Pre-EL"), ("post_el", "Post EL"))
 LABEL = dict(STATIONS)
 
+# Every EL folder the server reads: (settings prefix, station, unit, its name).
+# Each line has TWO Pre-EL machines side by side (Mukesh, 16 Oct 2026): the
+# primary takes the line's flow and the secondary takes it when the primary
+# is busy or down - and an NG module back from rework goes to the OTHER one.
+# So one module's Pre-EL images can sit on both machines, named by each on its
+# own, and only their times put them in order. Post EL has one machine a line.
+SOURCES = (("pre_el", "pre_el", 1, "Pre-EL primary"),
+           ("pre_el2", "pre_el", 2, "Pre-EL secondary"),
+           ("post_el", "post_el", 1, "Post EL"))
+UNIT_NAME = {1: "primary", 2: "secondary"}
+
 DAYS = 2                 # the newest date folders walked, as icon_ingest's SS skip
 MISS_TTL_S = 3600        # a name that is no serial is asked about again after this
 _NOT_SERIAL = {}         # name -> time.time() it was found not to be in the master
@@ -65,14 +77,18 @@ def is_pass(verdict):
 
 
 def images(rows):
-    """One serial's el_capture rows at ONE station as its images, in order -
-    the re-shot number, then the file's time. An image re-filed under another
-    verdict (same re-shot number, same time: one image, moved) is one image,
-    and the filing seen last is the one that stands."""
+    """One serial's el_capture rows at ONE station as its images, in the order
+    they were taken: by TIME, across both Pre-EL machines ("here time is
+    crucial" - an NG at one is re-imaged at the other after rework, and each
+    machine numbers its own re-shots). The order is only as good as the two EL
+    PCs' clocks. An image re-filed under another verdict - same machine, same
+    re-shot number, same time: one image, moved - is one image, and the filing
+    seen last is the one that stands."""
     out = []
-    for r in sorted(rows, key=lambda r: (r["recapture"] or 0, r["file_time"] or "",
+    for r in sorted(rows, key=lambda r: (r["file_time"] or "", r["recapture"] or 0,
                                          r["seen_at"] or "", r["capture_id"])):
-        if out and (out[-1]["recapture"] or 0) == (r["recapture"] or 0) \
+        if out and out[-1].get("unit", 1) == r.get("unit", 1) \
+                and (out[-1]["recapture"] or 0) == (r["recapture"] or 0) \
                 and out[-1]["file_time"] == r["file_time"]:
             out[-1] = r
         else:
@@ -108,7 +124,8 @@ def summary(station, rows):
             "reason": reason, "images": len(imgs),
             "reworks": len(ngs) if station == "pre_el" else 0,
             "first_at": imgs[0]["file_time"], "last_at": imgs[-1]["file_time"],
-            "lines": sorted({i["line"] for i in imgs if i["line"]})}
+            "lines": sorted({i["line"] for i in imgs if i["line"]}),
+            "units": sorted({i.get("unit", 1) for i in imgs})}
 
 
 def folder_key(path):
@@ -118,22 +135,26 @@ def folder_key(path):
 
 
 def roots(cfg):
-    """(station, line, folder) for every configured Pre-EL and Post EL folder.
+    """(station, unit, line, folder) for every configured EL folder (SOURCES).
 
-    One folder set for a station on BOTH lines is one machine serving both. It
-    is walked once, and its images carry no line (None): an image's line is
-    what the folder says, never guessed from its serial."""
+    One folder set for the same machine on BOTH lines is one machine serving
+    both. It is walked once, and its images carry no line (None): an image's
+    line is what the folder says, never guessed from its serial."""
     out = []
-    for station, _label in STATIONS:
-        a = (cfg.get("%s_a_root" % station) or "").strip()
-        b = (cfg.get("%s_b_root" % station) or "").strip()
+    for prefix, station, unit, _label in SOURCES:
+        a = (cfg.get("%s_a_root" % prefix) or "").strip()
+        b = (cfg.get("%s_b_root" % prefix) or "").strip()
         if a and b and folder_key(a) == folder_key(b):
-            out.append((station, None, a))
+            out.append((station, unit, None, a))
             continue
         for line, root in (("A", a), ("B", b)):
             if root:
-                out.append((station, line, root))
+                out.append((station, unit, line, root))
     return out
+
+
+def source_label(station, unit):
+    return next(lab for _p, st, u, lab in SOURCES if st == station and u == unit)
 
 
 def _walk(day_dir):
@@ -181,13 +202,13 @@ def _filed(path, depth):
     return True
 
 
-def _reachable(station, line, root):
+def _reachable(station, unit, line, root):
     """Is the folder there? An unreachable one is logged when it goes, once,
     and when it comes back - not every minute in between."""
-    key = (station, folder_key(root))
+    key = (station, unit, folder_key(root))
     ok = os.path.isdir(root)
-    where = "%s%s folder %s" % (LABEL[station], " Line %s" % line if line else "",
-                                root)
+    where = "%s%s folder %s" % (source_label(station, unit),
+                                " Line %s" % line if line else "", root)
     if not ok and key not in _DOWN:
         _DOWN.add(key)
         log.warning("%s cannot be read - skipped until it answers", where)
@@ -209,15 +230,15 @@ def scan(cfg):
     shares alone, no database. A folder that cannot be read is skipped; the
     others are still walked."""
     out = []
-    for station, line, root in roots(cfg):
-        if not _reachable(station, line, root):
+    for station, unit, line, root in roots(cfg):
+        if not _reachable(station, unit, line, root):
             continue
         for day in icon_ingest._el_day_dirs(root, DAYS):
             for path, mtime, depth in _walk(day.path):
                 if not _filed(path, depth):
                     continue          # filed within minutes; a later pass has it
                 out.append({
-                    "station": station, "line": line,
+                    "station": station, "unit": unit, "line": line,
                     "path": os.path.normpath(path),
                     "stem": os.path.splitext(os.path.basename(path))[0],
                     # exactly as read_el() reads a verdict
@@ -281,10 +302,10 @@ def pick_new(cur, files):
 
     A file counts when its name, less any _N, looks like a serial or is a serial
     in the master (a custom one). One image is one capture however it is
-    reached: a file whose station, serial, re-shot number, verdict and time are
-    already recorded is that capture again - the folder's spelling changed in
-    Settings, or the image was moved to another shift folder under the same
-    verdict - and is not recorded twice."""
+    reached: a file whose station, machine, serial, re-shot number, verdict and
+    time are already recorded is that capture again - the folder's spelling
+    changed in Settings, or the image was moved to another shift folder under
+    the same verdict - and is not recorded twice."""
     out = []
     for station, _label in STATIONS:
         mine = {}
@@ -312,13 +333,13 @@ def pick_new(cur, files):
         if not hits:
             continue
 
-        same = {(r["serial"], r["recapture"], r["verdict"], r["file_time"])
+        same = {(r["unit"], r["serial"], r["recapture"], r["verdict"], r["file_time"])
                 for r in _recorded(
-                    cur, "SELECT serial, recapture, verdict, file_time FROM "
+                    cur, "SELECT unit, serial, recapture, verdict, file_time FROM "
                          "el_capture WHERE station=%%s AND serial IN (%s)",
                     station, {h["serial"] for h in hits})}
         for h in sorted(hits, key=lambda h: (h["file_time"], h["path"])):
-            ident = (h["serial"], h["recapture"], h["verdict"], h["file_time"])
+            ident = (h["unit"], h["serial"], h["recapture"], h["verdict"], h["file_time"])
             if ident in same:
                 continue
             same.add(ident)
@@ -334,11 +355,11 @@ def apply(cur, rows):
     seen = clock.stamp()
     for r in rows:
         cur.execute(
-            "INSERT INTO el_capture (station, line, serial, recapture, verdict, "
-            "path, file_time, seen_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
+            "INSERT INTO el_capture (station, unit, line, serial, recapture, verdict, "
+            "path, file_time, seen_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) "
             "ON CONFLICT (station, path) DO NOTHING",
-            (r["station"], r["line"], r["serial"], r["recapture"], r["verdict"],
-             r["path"], r["file_time"], seen))
+            (r["station"], r["unit"], r["line"], r["serial"], r["recapture"],
+             r["verdict"], r["path"], r["file_time"], seen))
         if cur.rowcount:
             out[r["station"]] = out.get(r["station"], 0) + 1
     return out
@@ -362,8 +383,11 @@ def named(rows, limit=LOG_NAMES):
         mine = [r for r in rows if r["station"] == station]
         if not mine:
             continue
-        shown = ", ".join("%s %s%s" % (r["serial"], r["verdict"],
-                                       " (%s)" % r["line"] if r["line"] else "")
+        def where(r):
+            bits = ([r["line"]] if r["line"] else []) + \
+                   (["secondary"] if r.get("unit") == 2 else [])
+            return " (%s)" % ", ".join(bits) if bits else ""
+        shown = ", ".join("%s %s%s" % (r["serial"], r["verdict"], where(r))
                           for r in mine[:limit])
         more = len(mine) - limit
         out.append("%s: %s%s" % (label, shown, " (+%d more)" % more if more > 0 else ""))

@@ -7718,3 +7718,25 @@ commit.
   KPI tiles, and its button. Dashboard suites re-run: `test_dashboards_ist`,
   `test_customer_filters`, `test_production`, `test_loss`, `test_factory_day_defaults_ui`,
   `test_fqc_dashboard.js`, `test_screens.js` all pass.
+
+### 16 Oct 2026 - two Pre-EL machines a line; images ordered by time
+- **Was wrong (Mukesh's correction):** Pre-EL was taken as one machine a line. There are
+  two side by side: the primary takes the flow, the secondary when the primary is busy
+  or down, and an NG module back from rework goes through the OTHER one. With only one
+  share read, a reworked module's return image was missing: on the real share on the
+  15th, 164 modules read "still in rework" and 3 "passed after rework".
+- **Change:** Settings has a "Pre-EL secondary image root folder" per line (`pre_el2_
+  {a,b}_root`, tag, probe, `/api/evidence/sources` PRE-EL2-A/B; the primary's label now
+  says primary); one folder is one machine (refused as two of FQC EL / Pre-EL primary /
+  Pre-EL secondary / Post EL). `el_capture.unit` (1 primary, 2 secondary; the migration
+  makes earlier rows 1) recorded by the poller (`icon_el_capture.SOURCES`). Images are
+  ordered by TIME across both machines ("here time is crucial" - each names its own
+  re-shots); the journey's Pre-EL steps name the machine ("Line A · secondary"); EL
+  Stations says "primary + secondary" when both took part; the log says "(A, secondary)".
+  SR confirmed an NG like any other.
+- **Test:** `test_el_capture.py` (50): NG at the primary back through the secondary is one
+  cycle, and the other way round; time beats the re-shot number; the unit column added to
+  an el_capture from before; primary and secondary may not share a folder, one secondary
+  may serve both lines; the probe, sources and Settings fields. `test_el_capture_ui.py`
+  (6): the secondary's field and tag on the page; the journey and EL Stations with the
+  re-shot on the secondary.

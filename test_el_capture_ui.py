@@ -60,21 +60,25 @@ def card(pg, line):
     return pg.locator('#v-settings .card:has(h3:text-is("Line %s"))' % line)
 
 
-@test("each line's card has a Pre-EL and a Post EL folder, with their tags and hints")
+@test("each line's card has a Pre-EL primary, a Pre-EL secondary and a Post EL folder, "
+      "with their tags and hints")
 def t_fields_shown():
     world()
     with H.browser() as b:
         pg = stations(b)
         for ln in ("A", "B"):
             c = card(pg, ln)
-            for fid in ("#s_%s_pre_el" % ln.lower(), "#s_%s_post_el" % ln.lower()):
+            for fid in ("#s_%s_pre_el" % ln.lower(), "#s_%s_pre_el2" % ln.lower(),
+                        "#s_%s_post_el" % ln.lower()):
                 assert c.locator(fid).is_visible(), (ln, fid)
             # textContent, not innerText: labels and tags are upper-cased by CSS
             text = " ".join(c.text_content().split())
-            assert "Pre-EL image root folder" in text, text
+            assert "Pre-EL primary image root folder" in text, text
+            assert "Pre-EL secondary image root folder" in text, text
             assert "Post EL (after lamination) image root folder" in text, text
             tags = c.locator(".card-h .tag").all_text_contents()
-            assert "Pre-EL —" in tags and "Post EL —" in tags, tags
+            assert "Pre-EL primary —" in tags and "Pre-EL secondary —" in tags and \
+                "Post EL —" in tags, tags
             assert "Read by the server every minute, not by FQC" in text, text
         assert pg.errors == [], pg.errors
 
@@ -99,14 +103,14 @@ def t_refused_then_saved():
         # the card is drawn again from the server once the save is kept
         pg.wait_for_function(
             "Array.from(document.querySelectorAll('#v-settings .card-h .tag'))"
-            ".some(function (t) { return t.textContent === 'Pre-EL OK'; })", timeout=15000)
+            ".some(function (t) { return t.textContent === 'Pre-EL primary OK'; })", timeout=15000)
         assert pg.input_value("#s_b_pre_el") == PRE_B
-        assert "Pre-EL OK" in card(pg, "B").locator(".card-h .tag").all_text_contents()
-        assert "Pre-EL —" in card(pg, "A").locator(".card-h .tag").all_text_contents()
+        assert "Pre-EL primary OK" in card(pg, "B").locator(".card-h .tag").all_text_contents()
+        assert "Pre-EL primary —" in card(pg, "A").locator(".card-h .tag").all_text_contents()
         with store.conn() as (cx, cur):
             assert db.get_config(cur)["pre_el_b_root"] == PRE_B
-        pg.wait_for_selector("#sourceRows tr:has-text('PRE-EL-B')", timeout=10000)
-        row = " ".join(pg.text_content("#sourceRows tr:has-text('PRE-EL-B')").split())
+        pg.wait_for_selector("#sourceRows tr:has-text('PRE-EL1-B')", timeout=10000)
+        row = " ".join(pg.text_content("#sourceRows tr:has-text('PRE-EL1-B')").split())
         assert PRE_B in row and "OK" in row and "every minute" in row, row
         assert pg.errors == [], pg.errors
 
@@ -117,21 +121,23 @@ def t_table_header_and_placeholders():
     world(pre_el_b_root=PRE_B)
     with H.browser() as b:
         pg = stations(b)
-        pg.wait_for_selector("#sourceRows tr:has-text('PRE-EL-B')", timeout=10000)
+        pg.wait_for_selector("#sourceRows tr:has-text('PRE-EL1-B')", timeout=10000)
         head = pg.locator("table:has(#sourceRows) thead th").all_text_contents()
         assert head == ["Source", "Type", "Path", "Line", "State", "Columns / rule"], head
         cells = pg.locator("#sourceRows tr").first.locator("td").count()
         assert cells == len(head), (cells, head)
         ph = {f: pg.get_attribute(f, "placeholder")
-              for f in ("#s_a_ss", "#s_a_el", "#s_b_pre_el", "#s_b_post_el")}
+              for f in ("#s_a_ss", "#s_a_el", "#s_b_pre_el", "#s_b_pre_el2", "#s_b_post_el")}
         assert ph == {"#s_a_ss": r"\\SS-A\share\results.csv", "#s_a_el": r"\\EL-A\output",
-                      "#s_b_pre_el": r"\\PRE-EL-B\el", "#s_b_post_el": r"\\POST-EL-B\el"}, ph
+                      "#s_b_pre_el": r"\\PRE-EL-B\el", "#s_b_pre_el2": r"\\PRE-EL2-B\el",
+                      "#s_b_post_el": r"\\POST-EL-B\el"}, ph
         assert pg.errors == [], pg.errors
 
 
 BOTH = "ICON625R12A1522911"            # captured at Pre-EL (re-shot) and Post EL
 NEITHER = "ICON625R12A1522912"         # captured at neither
 PRE_A = os.path.join(SHARES, "pre_a")
+PRE_A2 = os.path.join(SHARES, "pre_a2")     # Line A's secondary Pre-EL machine
 POST_B = os.path.join(SHARES, "post_b")
 
 
@@ -145,9 +151,11 @@ def put(root, rel, name, at):
 
 
 def seed_journey():
-    for d in (PRE_A, POST_B):
+    """BOTH: NG at Line A's primary Pre-EL, back from rework through the
+    SECONDARY (the way the line runs), then Post EL OK."""
+    for d in (PRE_A, PRE_A2, POST_B):
         shutil.rmtree(d, ignore_errors=True)
-    world(pre_el_a_root=PRE_A, post_el_b_root=POST_B)
+    world(pre_el_a_root=PRE_A, pre_el2_a_root=PRE_A2, post_el_b_root=POST_B)
     with store.conn() as (cx, cur):
         for i, s in enumerate((BOTH, NEITHER)):
             store.insert(cur, "serial", {
@@ -156,7 +164,7 @@ def seed_journey():
                 "format_version": 2, "date_produced": "2026-10-15", "shift": 1,
                 "sequence": i + 1, "state": "planned"})
     put(PRE_A, "2026-10-15/早班/Ribbon short", BOTH + ".jpg", "2026-10-15T13:07:34")
-    put(PRE_A, "2026-10-15/早班/OK", BOTH + ".jpg", "2026-10-15T13:10:14")
+    put(PRE_A2, "2026-10-15/早班/OK", BOTH + ".jpg", "2026-10-15T13:10:14")
     put(POST_B, "2026-10-15/中班/OK", BOTH + ".jpg", "2026-10-15T16:42:05")
     with store.conn() as (cx, cur):
         assert elcap.run(db.get_config(cur), cur) == {"pre_el": 2, "post_el": 1}
@@ -189,11 +197,12 @@ def t_journey_on_screen():
                           "FQC", "Packed", "Challan", "Gate pass"], stages
         ng, rw, ok, post = nodes[2:6]
         assert ng["value"] == "NG" and "t-rev" in ng["tone"], ng
-        assert ng["detail"] == ["Ribbon short", "Line A"], ng
+        assert ng["detail"] == ["Ribbon short", "Line A · primary"], ng
         assert ng["tag"] == "15-10-2026 13:07 · shift A", ng
         assert rw["value"] == "Rework" and rw["tag"] == "3 min", rw
         assert rw["detail"] == ["after Ribbon short", "back at Pre-EL 15-10-2026 13:10"], rw
         assert ok["value"] == "Pass" and "t-pass" in ok["tone"], ok
+        assert ok["detail"] == ["Line A · secondary"], ok
         assert post["value"] == "Pass" and post["detail"] == ["Line B"], post
         for n in (ng, rw, ok, post):
             assert n["value"].strip() and n["value"] != "—", n
@@ -273,6 +282,7 @@ def t_screen_on_page():
         got = {r[0]: r for r in rows(pg)}
         assert set(got) == {BOTH, IN_REWORK, REJECTED}, got
         assert got[BOTH][2] == "Pass after rework" and got[BOTH][3] == "Ribbon short", got[BOTH]
+        assert got[BOTH][5].endswith("(2 images) · primary + secondary"), got[BOTH]
         assert got[BOTH][4] == "1" and got[BOTH][6] == "Pass" and got[BOTH][9] == "A, B", got[BOTH]
         assert got[REJECTED][2] == "—" and got[REJECTED][6] == "NG - rejected", got[REJECTED]
 

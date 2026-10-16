@@ -64,6 +64,7 @@ def test(name):
 
 
 PRE_A = os.path.join(TMP, "pre_a")
+PRE_A2 = os.path.join(TMP, "pre_a2")    # Line A's secondary Pre-EL machine
 PRE_B = os.path.join(TMP, "pre_b")
 POST_B = os.path.join(TMP, "post_b")
 
@@ -104,11 +105,12 @@ def fresh(**cfg):
     store.wipe()
     elcap._NOT_SERIAL.clear()
     elcap._DOWN.clear()
-    for d in (PRE_A, PRE_B, POST_B):
+    for d in (PRE_A, PRE_A2, PRE_B, POST_B):
         shutil.rmtree(d, ignore_errors=True)
         os.makedirs(d)
     conf = {"el_root": "", "el_a_root": "", "el_b_root": "",
             "pre_el_a_root": PRE_A, "pre_el_b_root": "",
+            "pre_el2_a_root": "", "pre_el2_b_root": "",
             "post_el_a_root": "", "post_el_b_root": POST_B}
     conf.update(cfg)
     with store.conn() as (cx, cur):
@@ -422,9 +424,10 @@ def t_unreachable():
 @test("the poller's log line names the serials it recorded, not only how many - "
       "at most ten a station, then '+N more'")
 def t_log_names_serials():
-    fresh()
+    fresh(pre_el2_a_root=PRE_A2)
     put(PRE_A, "2026-10-14/早班/OK", S_CRACK + ".jpg", "2026-10-14T09:00:00")
     put(PRE_A, "2026-10-14/早班/Cell Crack", S_CROSS + ".jpg", "2026-10-14T09:01:00")
+    put(PRE_A2, "2026-10-14/早班/OK", S_CROSS + ".jpg", "2026-10-14T11:00:00")
     seen = []
 
     class H(logging.Handler):
@@ -436,7 +439,7 @@ def t_log_names_serials():
     level = elcap.log.level
     elcap.log.setLevel(logging.INFO)
     try:
-        assert elcap.run_pass() == {"pre_el": 2}
+        assert elcap.run_pass() == {"pre_el": 3}
         for i in range(12):
             put(PRE_A, "2026-10-14/中班/OK", "ICON625R12A15229%02d.jpg" % (40 + i),
                 "2026-10-14T15:%02d:00" % i)
@@ -445,7 +448,8 @@ def t_log_names_serials():
         elcap.log.removeHandler(h)
         elcap.log.setLevel(level)
     assert len(seen) == 2, seen
-    assert "Pre-EL: %s OK (A), %s Cell Crack (A)" % (S_CRACK, S_CROSS) in seen[0], seen[0]
+    assert "Pre-EL: %s OK (A), %s Cell Crack (A), %s OK (A, secondary)" % (
+        S_CRACK, S_CROSS, S_CROSS) in seen[0], seen[0]
     assert "ICON625R12A1522940 OK (A)" in seen[1] and "(+2 more)" in seen[1], seen[1]
     assert "ICON625R12A1522950" not in seen[1], seen[1]
 
@@ -483,8 +487,8 @@ def t_ensure_adds_table():
     with store.conn() as (cx, cur):
         cols = [r["name"] for r in store.rows(cur, "PRAGMA table_info(el_capture)")]
         idx = [r["name"] for r in store.rows(cur, "PRAGMA index_list(el_capture)")]
-    assert cols == ["capture_id", "station", "line", "serial", "recapture", "verdict",
-                    "path", "file_time", "seen_at"], cols
+    assert cols == ["capture_id", "station", "unit", "line", "serial", "recapture",
+                    "verdict", "path", "file_time", "seen_at"], cols
     assert "ix_el_capture_serial" in idx, idx
 
 
@@ -514,7 +518,7 @@ def t_settings_fqc_as_pre_el():
         "pre_el_b_root": FQC_EL.upper().replace("\\", "/") + "/", "unit": "9"})
     assert r.status_code == 400, r.get_json()
     why = r.get_json()["why"]
-    assert "FQC EL folder of Line B" in why and "Pre-EL folder of Line B" in why, why
+    assert "FQC EL folder of Line B" in why and "Pre-EL primary folder of Line B" in why, why
     assert stored("pre_el_b_root") == "" and stored("unit") == "2"
 
 
@@ -529,7 +533,13 @@ def t_settings_other_clashes():
     r = c.post("/api/settings", json={"post_el_a_root": FQC_EL + "\\"})
     assert r.status_code == 400 and "FQC EL folder of Line A" in r.get_json()["why"], \
         r.get_json()
+    # the primary and the secondary are two machines, so two folders
+    r = c.post("/api/settings", json={"pre_el_a_root": PRE_A, "pre_el2_b_root": PRE_A})
+    why = r.get_json().get("why", "")
+    assert r.status_code == 400 and "Pre-EL primary folder of Line A" in why and \
+        "Pre-EL secondary folder of Line B" in why, r.get_json()
     assert stored("pre_el_a_root") == "" and stored("post_el_a_root") == ""
+    assert stored("pre_el2_b_root") == ""
 
 
 @test("the same folder for one station on both lines is allowed: one machine "
@@ -538,9 +548,11 @@ def t_settings_one_folder_both_lines():
     fresh(el_a_root=FQC_EL, el_b_root=FQC_EL, pre_el_a_root="", post_el_b_root="")
     r = signed_in().post("/api/settings", json={
         "pre_el_a_root": PRE_A, "pre_el_b_root": PRE_A.lower() + "\\",
+        "pre_el2_a_root": PRE_A2, "pre_el2_b_root": PRE_A2,
         "post_el_a_root": POST_B, "post_el_b_root": POST_B})
     assert r.status_code == 200, r.get_json()
     assert stored("pre_el_a_root") == PRE_A and stored("post_el_b_root") == POST_B
+    assert stored("pre_el2_b_root") == PRE_A2
 
 
 @test("the older /settings form is held to the same rule")
@@ -560,34 +572,45 @@ def t_settings_unrelated_save():
     assert r.status_code == 200, r.get_json()
 
 
-@test("Evidence Sources shows both new folders on each line, with a reachability "
-      "tag and the hint that the server reads them")
+@test("Evidence Sources shows the Pre-EL primary, Pre-EL secondary and Post EL "
+      "folders on each line, with a reachability tag and the hint that the server "
+      "reads them")
 def t_settings_page():
-    fresh(pre_el_b_root=os.path.join(TMP, "switched_off"))
+    fresh(pre_el_b_root=os.path.join(TMP, "switched_off"), pre_el2_a_root=PRE_A2)
     html = " ".join(signed_in().get("/view/settings").get_data(as_text=True).split())
     for ln in ("a", "b"):
-        assert 'id="s_%s_pre_el"' % ln in html and 'id="s_%s_post_el"' % ln in html, ln
-    assert html.count("Pre-EL image root folder") == 2, html.count("Pre-EL image root folder")
+        for f in ("pre_el", "pre_el2", "post_el"):
+            assert 'id="s_%s_%s"' % (ln, f) in html, (ln, f)
+    assert html.count("Pre-EL primary image root folder") == 2
+    assert html.count("Pre-EL secondary image root folder") == 2
     assert html.count("Post EL (after lamination) image root folder") == 2
     assert html.count("Read by the server every minute, not by FQC; the account the "
-                      "server runs as needs read access to the share.") == 4
-    assert "Pre-EL OK" in html and "Post EL OK" in html          # A's Pre-EL, B's Post EL
-    assert "Pre-EL NC" in html and "Unreachable: %s" % os.path.join(TMP, "switched_off") in html
-    assert "Pre-EL —" not in html and "Post EL —" in html        # A's Post EL is blank
+                      "server runs as needs read access to the share.") == 6
+    assert "Pre-EL primary OK" in html and "Post EL OK" in html  # A's primary, B's Post EL
+    assert "Pre-EL secondary OK" in html and "Pre-EL secondary —" in html   # A's set, B's not
+    assert "Pre-EL primary NC" in html and \
+        "Unreachable: %s" % os.path.join(TMP, "switched_off") in html
+    assert "Pre-EL primary —" not in html and "Post EL —" in html  # A's Post EL is blank
     assert "No Post EL folder configured for this line." in html
-    assert "body['pre_el_'+ln+'_root']" in html and "body['post_el_'+ln+'_root']" in html
+    assert "No Pre-EL secondary folder configured for this line." in html
+    for k in ("pre_el", "pre_el2", "post_el"):
+        assert "body['%s_'+ln+'_root']" % k in html, k
 
 
 @test("/api/evidence/sources lists Pre-EL and Post EL for each line, with their state")
 def t_sources_api():
-    fresh(pre_el_b_root=os.path.join(TMP, "switched_off"))
+    fresh(pre_el_b_root=os.path.join(TMP, "switched_off"), pre_el2_a_root=PRE_A2)
     rows = {r["id"]: r for r in signed_in().get("/api/evidence/sources").get_json()}
-    assert {"PRE-EL-A", "PRE-EL-B", "POST-EL-A", "POST-EL-B"} <= set(rows), sorted(rows)
-    assert rows["PRE-EL-A"]["state"] == "OK" and rows["PRE-EL-A"]["path"] == PRE_A
-    assert rows["PRE-EL-B"]["state"] == "NC"
+    assert {"PRE-EL1-A", "PRE-EL1-B", "PRE-EL2-A", "PRE-EL2-B", "POST-EL-A",
+            "POST-EL-B"} <= set(rows), sorted(rows)
+    assert rows["PRE-EL1-A"]["state"] == "OK" and rows["PRE-EL1-A"]["path"] == PRE_A
+    assert rows["PRE-EL1-B"]["state"] == "NC"
+    assert rows["PRE-EL2-A"]["state"] == "OK" and rows["PRE-EL2-A"]["type"] == "PRE_EL2_ROOT"
+    assert rows["PRE-EL2-B"]["state"] == "—"
     assert rows["POST-EL-A"]["state"] == "—" and rows["POST-EL-B"]["state"] == "OK"
-    assert rows["POST-EL-B"]["type"] == "POST_EL_ROOT" and rows["PRE-EL-A"]["line"] == "A"
-    assert "every minute" in rows["PRE-EL-A"]["rule"]
+    assert rows["POST-EL-B"]["type"] == "POST_EL_ROOT" and rows["PRE-EL1-A"]["line"] == "A"
+    assert "every minute" in rows["PRE-EL1-A"]["rule"]
+    assert rows["PRE-EL2-A"]["rule"].startswith("Secondary.")
 
 
 @test("the reachability probes are asked at once, not one after another - a "
@@ -652,12 +675,12 @@ def t_journey_cycle():
         "FQC", "Packed", "Challan", "Gate pass"], [x["stage"] for x in j]
     ng, rw, ok, post = j[2], j[3], j[4], j[5]
     assert (ng["value"], ng["tone"], ng["done"], ng["detail"], ng["tag"]) == \
-        ("NG", "t-rev", True, ["Cell Crack", "Line A"], "14-10-2026 13:07 · shift A"), ng
+        ("NG", "t-rev", True, ["Cell Crack", "Line A · primary"], "14-10-2026 13:07 · shift A"), ng
     assert (rw["value"], rw["done"], rw["detail"], rw["tag"]) == \
         ("Rework", True, ["after Cell Crack", "back at Pre-EL 14-10-2026 13:10"],
          "3 min"), rw
     assert (ok["value"], ok["tone"], ok["detail"], ok["tag"]) == \
-        ("Pass", "t-pass", ["re-shot 1", "Line A"], "14-10-2026 13:10 · shift A"), ok
+        ("Pass", "t-pass", ["re-shot 1", "Line A · primary"], "14-10-2026 13:10 · shift A"), ok
     assert (post["value"], post["tone"], post["detail"], post["tag"]) == \
         ("Pass", "t-pass", ["Line B"], "16-10-2026 01:12 · shift C (15-10)"), post
 
@@ -685,7 +708,7 @@ def t_journey_in_rework():
     put(PRE_A, "2026-10-15/晚班/Cell Crack", S_CROSS + ".jpg", "2026-10-15T22:02:25")
     run()
     ng, rw = el_part(S_CROSS)
-    assert (ng["value"], ng["detail"]) == ("NG", ["Cell Crack", "Line A"]), ng
+    assert (ng["value"], ng["detail"]) == ("NG", ["Cell Crack", "Line A · primary"]), ng
     assert (rw["stage"], rw["value"], rw["done"], rw["tag"], rw["tone"], rw["detail"]) == \
         ("Rework", "In rework", False, "pending", "t-rev",
          ["after Cell Crack", "no Pre-EL image since"]), rw
@@ -702,7 +725,7 @@ def t_journey_same_name_reshot():
     run()
     got = [(x["stage"], x["value"]) for x in el_part(S_CROSS)]
     assert got == [("Pre-EL", "NG"), ("Rework", "Rework"), ("Pre-EL", "Pass")], got
-    assert el_part(S_CROSS)[0]["detail"] == ["Ribbon short", "Line A"]
+    assert el_part(S_CROSS)[0]["detail"] == ["Ribbon short", "Line A · primary"]
 
 
 @test("an image re-filed under another verdict is ONE image: its latest filing "
@@ -719,15 +742,77 @@ def t_journey_refiled():
     assert got == [("Pre-EL", "NG"), ("Rework", "In rework")], got
 
 
-@test("the re-shot number orders the images before the time does")
+@test("time orders the images, not the re-shot number: each machine numbers its "
+      "own re-shots (Mukesh: 'here time is crucial')")
 def t_journey_order_rule():
     fresh()
     put(PRE_A, "2026-10-14/早班/OK", S_OLD + ".jpg", "2026-10-14T10:00:00")
     put(PRE_A, "2026-10-14/早班/Cell Crack", S_OLD + "_2.jpg", "2026-10-14T09:00:00")
     run()
     got = [(x["stage"], x["value"]) for x in el_part(S_OLD)]
-    assert got == [("Pre-EL", "Pass"), ("Pre-EL", "NG"), ("Rework", "In rework")], got
-    assert el_part(S_OLD)[1]["detail"] == ["Cell Crack", "re-shot 2", "Line A"]
+    assert got == [("Pre-EL", "NG"), ("Rework", "Rework"), ("Pre-EL", "Pass")], got
+    assert el_part(S_OLD)[0]["detail"] == ["Cell Crack", "re-shot 2", "Line A · primary"]
+
+
+@test("an NG at the primary Pre-EL, reworked, comes back through the SECONDARY: "
+      "both machines are read, their images put in order by time - one cycle")
+def t_two_machines_one_cycle():
+    fresh(pre_el2_a_root=PRE_A2)
+    # each machine names the module its own way - both files are <serial>.jpg
+    put(PRE_A, "2026-10-14/早班/Cell Crack", S_CRACK + ".jpg", "2026-10-14T10:00:00")
+    put(PRE_A2, "2026-10-14/早班/OK", S_CRACK + ".jpg", "2026-10-14T12:05:00")
+    assert run() == {"pre_el": 2}
+    rows = captures(S_CRACK)
+    assert [(r["unit"], r["verdict"], r["line"]) for r in rows] == \
+        [(1, "Cell Crack", "A"), (2, "OK", "A")], [dict(r) for r in rows]
+    got = [(x["stage"], x["value"], x["detail"]) for x in el_part(S_CRACK)]
+    assert got == [("Pre-EL", "NG", ["Cell Crack", "Line A · primary"]),
+                   ("Rework", "Rework", ["after Cell Crack", "back at Pre-EL 14-10-2026 12:05"]),
+                   ("Pre-EL", "Pass", ["Line A · secondary"])], got
+    s = elcap.summary("pre_el", rows)
+    assert (s["status"], s["units"]) == ("reworked", [1, 2]), s
+
+
+@test("the secondary's own NG goes back through the primary just the same")
+def t_two_machines_other_way():
+    fresh(pre_el2_a_root=PRE_A2)
+    put(PRE_A2, "2026-10-14/中班/Grid Burning", S_OLD + ".jpg", "2026-10-14T15:00:00")
+    put(PRE_A, "2026-10-14/中班/Cross", S_OLD + ".jpg", "2026-10-14T16:00:00")
+    put(PRE_A2, "2026-10-14/中班/OK", S_OLD + "_1.jpg", "2026-10-14T17:30:00")
+    run()
+    got = [(x["stage"], x["value"], x["detail"][-1]) for x in el_part(S_OLD)]
+    assert got == [("Pre-EL", "NG", "Line A · secondary"),
+                   ("Rework", "Rework", "back at Pre-EL 14-10-2026 16:00"),
+                   ("Pre-EL", "NG", "Line A · primary"),
+                   ("Rework", "Rework", "back at Pre-EL 14-10-2026 17:30"),
+                   ("Pre-EL", "Pass", "Line A · secondary")], got
+
+
+@test("a database whose el_capture predates the secondary machine gets the unit "
+      "column, and its rows are the primary's")
+def t_unit_migration():
+    fresh()
+    put(PRE_A, "2026-10-14/早班/OK", S_CRACK + ".jpg")
+    run()
+    with store.conn() as (cx, cur):          # the table exactly as it was on 15 Oct
+        cur.execute("CREATE TABLE el_old (capture_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "station TEXT NOT NULL, line TEXT NULL, serial TEXT NOT NULL, "
+                    "recapture INTEGER NOT NULL DEFAULT 0, verdict TEXT NOT NULL, "
+                    "path TEXT NOT NULL COLLATE NOCASE, file_time TEXT NOT NULL, "
+                    "seen_at TEXT NOT NULL, UNIQUE (station, path))")
+        cur.execute("INSERT INTO el_old SELECT capture_id, station, line, serial, recapture, "
+                    "verdict, path, file_time, seen_at FROM el_capture")
+        cur.execute("DROP TABLE el_capture")
+        cur.execute("ALTER TABLE el_old RENAME TO el_capture")
+    store._ready = False
+    store.ensure()
+    assert [(r["unit"], r["serial"]) for r in captures()] == [(1, S_CRACK)]
+    assert run() == {}, "the migrated rows must still be recognised"
+    with store.conn() as (cx, cur):
+        db.set_config(cur, {"pre_el2_a_root": PRE_A2})
+    put(PRE_A2, "2026-10-14/中班/OK", S_CROSS + ".jpg")
+    assert run() == {"pre_el": 1}
+    assert [(r["unit"], r["serial"]) for r in captures()] == [(1, S_CRACK), (2, S_CROSS)]
 
 
 @test("Post EL NG is a rejection: one step, NG in red with its reason, no Rework - "
@@ -776,12 +861,12 @@ def t_journey_lines():
     fresh(pre_el_b_root=PRE_A)
     put(PRE_A, "2026-10-14/早班/OK", S_CRACK + ".jpg", "2026-10-14T09:00:00")
     run()
-    assert el_part(S_CRACK)[0]["detail"] == []
+    assert el_part(S_CRACK)[0]["detail"] == ["primary"]
     with store.conn() as (cx, cur):
         db.set_config(cur, {"pre_el_b_root": PRE_B})
     put(PRE_B, "2026-10-14/中班/Cell Crack", S_CRACK + "_1.jpg", "2026-10-14T15:00:00")
     run()
-    assert el_part(S_CRACK)[1]["detail"] == ["Cell Crack", "re-shot 1", "Line B"]
+    assert el_part(S_CRACK)[1]["detail"] == ["Cell Crack", "re-shot 1", "Line B · primary"]
 
 
 @test("what a module's images add up to, per station: Pass first time, Pass after "
