@@ -67,7 +67,9 @@ _CHUNK = 500             # names per IN (...) list
 # OK is Pass; any other folder is NG. At Pre-EL an NG module goes for rework
 # and comes back to Pre-EL - NG, rework, Pre-EL again, until it passes. After
 # lamination a module cannot go back to the pre-lamination process, so an NG
-# at Post EL is a rejection: no rework, and a later image does not undo it.
+# at Post EL takes it off the line to Quality, who decide (Mukesh, 16 Oct: the
+# FQC way - a referral, not "rejected"): no rework, and a later image does not
+# undo the NG.
 
 _PASS = re.compile(r"^(ok|pass)$", re.I)        # the FQC screen's own test
 
@@ -99,7 +101,7 @@ def images(rows):
 # a module's state at a station, and how a person reads it
 STATUS_LABEL = {("pre_el", "pass"): "Pass", ("pre_el", "reworked"): "Pass after rework",
                 ("pre_el", "in_rework"): "In rework",
-                ("post_el", "pass"): "Pass", ("post_el", "ng"): "NG - rejected"}
+                ("post_el", "pass"): "Pass", ("post_el", "ng"): "NG"}
 
 
 def summary(station, rows):
@@ -107,8 +109,9 @@ def summary(station, rows):
 
     Pre-EL: 'pass' (never NG), 'reworked' (NG at least once, its last image
     OK) or 'in_rework' (its last image NG). Post EL: 'pass', or 'ng' the
-    moment any image is NG - a rejection stands. A module counts on the
-    factory day and shift of its FIRST image at the station."""
+    moment any image is NG - it is Quality's to decide then, not a later
+    image's. A module counts on the factory day and shift of its FIRST image
+    at the station."""
     imgs = images(rows)
     if not imgs:
         return None
@@ -417,8 +420,8 @@ def apply(cur, rows):
 
     An NG at Post EL also raises a Needs Review item (Mukesh, 16 Oct 2026):
     after lamination the module cannot be reworked, so it is taken off the line
-    and kept for Quality. One per module - raw_id is the serial - so a second
-    NG image of it raises nothing more, and neither does a later OK.
+    and Quality decide. One per module - raw_id is the serial - so a second NG
+    image of it raises nothing more, and neither does a later OK.
     Returns {station: rows written, 'post_el_ng': items raised}."""
     import db
     out = {}

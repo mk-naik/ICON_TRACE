@@ -215,8 +215,12 @@ no one signs twice. [enforcement unverified]
   a Rework step (read from the images: after which NG, and when the module was back at
   Pre-EL; "In rework" while its last image is NG), then the next Pre-EL image, until one
   passes. **After lamination a module cannot go back to the pre-lamination process, so
-  NG at Post EL is a rejection**: one Post EL step, NG in red with its reason, no Rework,
-  and a later image does not undo it. **Images are ordered by their time** ("here time
+  an NG at Post EL takes it off the line to Quality, who decide** (Mukesh, 16 Oct,
+  choosing the FQC way - a referral - over the word "rejected"): one Post EL step, NG
+  in red with its folder, no Rework, a later image does not undo the NG; then a Quality
+  Review step, read from its Needs Review item as FQC's Quality Decision is read from
+  its record - "awaiting Quality" while open, who decided and their reason once closed.
+  **Images are ordered by their time** ("here time
   is crucial"), across both Pre-EL machines - each names its own re-shots, so a
   re-shot number orders nothing between them; the order is only as good as the two EL
   PCs' clocks, so **ICON TRACE shows each EL machine's clock against the server's**
@@ -227,18 +231,19 @@ no one signs twice. [enforcement unverified]
   names a flagged machine. An image re-filed under another verdict (same machine,
   re-shot number and time) is one image, its latest filing standing. A station the
   serial was never captured at gives no step at all - not "pending". [built]
-- **A Post EL rejection raises a Needs Review item** (Mukesh, 16 Oct: "they physically
-  turn it off the line, keep it for quality review"): one per module, raised by the EL
-  poller with the image, under the Quality tab ("Post EL NG · rejected", its folder as
-  the reason), counted in the Needs Review badge and in "Awaiting Quality". Quality,
-  Admin or Super Admin closes it as reviewed, reason mandatory; the journey's Post EL
-  step then says who. Nothing else is blocked - the module's own state does not move.
-  [built]
+- **A Post EL NG raises a Needs Review item** (Mukesh, 16 Oct: "they physically turn it
+  off the line, keep it for quality review"): one per module, raised by the EL poller
+  with the image, under the Quality tab ("Post EL NG", its folder as the reason), counted
+  in the Needs Review badge and in "Awaiting Quality". Quality, Admin or Super Admin
+  closes it as reviewed, the mandatory reason being their decision; the journey's
+  Quality Review step then shows it. Nothing else is blocked - the module's own state
+  does not move. [built]
 - **EL Stations is a screen of its own** (Production section, after Production Entry;
   Mukesh, 16 Oct): every module first imaged at Pre-EL or Post EL in the period, one row
   each with both stations side by side, and per station what they add up to - Pre-EL
   scanned, passed first time (first-pass yield), reworked and passed, still in rework;
-  Post EL scanned, passed, rejected. **A module counts on the factory day and shift of
+  Post EL scanned, passed, NG (and how many await Quality's decision). **A module counts
+  on the factory day and shift of
   its FIRST image at a station**; its row shows all its images. Production Incharge,
   Admin and Super Admin see it to begin with; anyone else by user permission (section 9).
   Read-only. The Production Dashboard and the Management Overview show the same

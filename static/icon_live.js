@@ -1712,7 +1712,7 @@
       '</div></div><div class="card-b flush"><table><thead><tr><th>Station</th>' +
       '<th class="num">Scanned</th><th class="num">Pass first time</th>' +
       '<th class="num">Reworked, passed</th><th class="num">Still in rework</th>' +
-      '<th class="num">NG · rejected</th><th class="num">First-pass yield</th></tr></thead><tbody>' +
+      '<th class="num">NG</th><th class="num">First-pass yield</th></tr></thead><tbody>' +
       '<tr data-el="pre_el"><td style="font-weight:600">Pre-EL</td>' +
       (cfg.pre_el === false && !pre.scanned ? off :
         '<td class="num">' + n(pre.scanned) + '</td><td class="num">' + n(pre.pass) + '</td>' +
@@ -1721,8 +1721,11 @@
       '<tr data-el="post_el"><td style="font-weight:600">Post EL</td>' +
       (cfg.post_el === false && !post.scanned ? off :
         '<td class="num">' + n(post.scanned) + '</td><td class="num">' + n(post.pass) + '</td>' +
+        /* an NG at Post EL is Quality's to decide (16 Oct 2026): how many still wait */
         none + none + '<td class="num"' + (post.ng ? ' style="color:var(--fail);font-weight:700"' : '') +
-        '>' + n(post.ng) + '</td><td class="num">' + pct(post.pass, post.scanned) + '</td>') +
+        '>' + n(post.ng) + (post.awaiting ? ' <span style="font-weight:400;color:var(--ink3)">(' +
+        n(post.awaiting) + ' awaiting Quality)</span>' : '') +
+        '</td><td class="num">' + pct(post.pass, post.scanned) + '</td>') +
       '</tr></tbody></table></div>';
   }
   window.iconElCard = elDashCard;
@@ -8679,7 +8682,7 @@ function wireFqcAnomalies() {
     var kpis = document.querySelectorAll('#v-review .kpi');
     var dup = rows.filter(function (r) { return r.type === 'duplicate_scan'; }).length;
     var qual = rows.filter(function (r) { return r.type === 'quality_grade'; }).length;
-    /* a module rejected at Post EL is kept off the line for Quality too */
+    /* a module NG at Post EL is kept off the line for Quality to decide, too */
     var pel = rows.filter(function (r) { return r.type === 'post_el_ng'; }).length;
     if (kpis[0]) {
       var v0 = kpis[0].querySelector('.v'); if (v0) v0.textContent = dup;
@@ -8689,7 +8692,7 @@ function wireFqcAnomalies() {
       var v1 = kpis[1].querySelector('.v'); if (v1) v1.textContent = qual + pel;
       var d1 = kpis[1].querySelector('.d');
       if (d1) d1.textContent = pel ? qual + ' rejected, no grade yet · ' + pel +
-                                     ' rejected at Post EL' : 'rejected, no grade yet';
+                                     ' NG at Post EL' : 'rejected, no grade yet';
     }
     if (kpis[2]) {
       var l2 = kpis[2].querySelector('label'); if (l2) l2.textContent = 'Open items';
@@ -8703,7 +8706,7 @@ function wireFqcAnomalies() {
      unplanned modules there pushed the Quality and Duplicate items - the ones
      a person has to DECIDE - out of sight. */
   var REVIEW_TABS = {
-    /* a Post EL rejection is kept off the line for Quality (16 Oct 2026) */
+    /* a module NG at Post EL is kept off the line for Quality (16 Oct 2026) */
     'Quality': ['quality_grade', 'post_el_ng'],
     'Duplicate scan': ['duplicate_scan'],
     'Provisional': ['provisional_mismatch'],

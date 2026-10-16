@@ -250,7 +250,7 @@ def seed_screen():
     put(PRE_A, "2026-10-15/晚班/Cell Crack", IN_REWORK + ".jpg", "2026-10-15T22:02:25")
     put(POST_B, "2026-10-15/中班/Cell Crack", REJECTED + ".jpg", "2026-10-15T15:00:00")
     with store.conn() as (cx, cur):
-        # REJECTED's NG at Post EL is a rejection: a Needs Review item too
+        # REJECTED's NG at Post EL is Quality's to decide: a Needs Review item too
         assert elcap.run(db.get_config(cur), cur) == {"pre_el": 1, "post_el": 1,
                                                       "post_el_ng": 1}
 
@@ -280,13 +280,16 @@ def t_screen_on_page():
         pg.wait_for_timeout(300)
         k = {i: pg.text_content("#elK%d" % i) for i in range(1, 7)}
         assert k == {1: "2", 2: "0", 3: "2", 4: "2", 5: "1", 6: "1"}, k
+        assert pg.text_content("#elK6d") == "1 awaiting Quality’s decision", \
+            pg.text_content("#elK6d")
         assert "1 passed after rework · 1 still in rework" in pg.text_content("#elK3d")
         got = {r[0]: r for r in rows(pg)}
         assert set(got) == {BOTH, IN_REWORK, REJECTED}, got
         assert got[BOTH][2] == "Pass after rework" and got[BOTH][3] == "Ribbon short", got[BOTH]
         assert got[BOTH][5].endswith("(2 images) · primary + secondary"), got[BOTH]
         assert got[BOTH][4] == "1" and got[BOTH][6] == "Pass" and got[BOTH][9] == "A, B", got[BOTH]
-        assert got[REJECTED][2] == "—" and got[REJECTED][6] == "NG - rejected", got[REJECTED]
+        assert got[REJECTED][2] == "—" and got[REJECTED][6] == "NG awaiting Quality", \
+            got[REJECTED]
 
         pg.select_option("#elResult", "Pre-EL: In rework")
         pg.wait_for_function("document.querySelectorAll('#elRows tr').length === 1 && "
@@ -294,7 +297,7 @@ def t_screen_on_page():
                              % IN_REWORK, timeout=10000)
         opts = pg.eval_on_selector_all("#elResult option", "os => os.map(o => o.value)")
         assert opts == ["", "Pre-EL: Pass after rework", "Pre-EL: In rework", "Post EL: Pass",
-                        "Post EL: NG - rejected"], opts
+                        "Post EL: NG"], opts
 
         pg.click("#elRows button.lnk")
         pg.wait_for_selector("#searchOut .crumb:has-text('%s')" % IN_REWORK, timeout=10000)
@@ -313,7 +316,7 @@ def t_screen_on_page():
 def t_dashboards_on_page():
     seed_screen()
     want = {"pre_el": ["Pre-EL", "2", "0", "1", "1", "—", "0.0%"],
-            "post_el": ["Post EL", "2", "1", "—", "—", "1", "50.0%"]}
+            "post_el": ["Post EL", "2", "1", "—", "—", "1 (1 awaiting Quality)", "50.0%"]}
 
     def card(pg, view, card_id, frm, to, render):
         pg.evaluate("go(%r)" % view)
@@ -344,8 +347,9 @@ def t_dashboards_on_page():
         assert pg.errors == [], pg.errors
 
 
-@test("Needs Review: a Post EL rejection is under the Quality tab, red, 'Quality only' "
-      "for an Incharge; Quality closes it as reviewed with a reason and it is gone")
+@test("Needs Review: a Post EL NG is under the Quality tab, red, 'Quality only' for an "
+      "Incharge; Quality decide - close it with a reason - and it is gone; the journey's "
+      "Quality Review step then shows their decision")
 def t_post_el_review_on_page():
     seed_screen()
 
@@ -375,10 +379,10 @@ def t_post_el_review_on_page():
         got = quality_tab(pg)
         assert len(got) == 1, got
         r = got[0]
-        assert r["flag"] == "Post EL NG · rejected" and "t-fail" in r["tone"], r
+        assert r["flag"] == "Post EL NG" and "t-fail" in r["tone"], r
         assert r["stage"] == "Post EL · Line B" and r["detail"].startswith("Cell Crack at Post EL"), r
         assert r["action"] == "Reviewed…", r
-        assert "1 rejected at Post EL" in pg.text_content("#v-review .kpi:nth-child(2) .d"), \
+        assert "1 NG at Post EL" in pg.text_content("#v-review .kpi:nth-child(2) .d"), \
             pg.text_content("#v-review .kpi:nth-child(2)")
         pg.click("#rvRows tr:has-text('%s') button:has-text('Reviewed')" % REJECTED)
         pg.wait_for_selector("#mdl.on #revWhy", timeout=10000)
@@ -392,6 +396,14 @@ def t_post_el_review_on_page():
                                  "WHERE type='post_el_ng'")
         assert (row["status"], row["resolution"], row["reason"]) == \
             ("resolved", "reviewed", "crack confirmed under the light - scrapped"), dict(row)
+        pg.evaluate("go('search')")
+        pg.wait_for_selector("#qBox", state="visible", timeout=10000)
+        nodes = open_module(pg, REJECTED)
+        stages = [n["stage"] for n in nodes]
+        assert stages[stages.index("Post EL") + 1] == "Quality Review", stages
+        qr = nodes[stages.index("Quality Review")]
+        assert qr["value"] == "Reviewed" and \
+            qr["detail"][0] == "crack confirmed under the light - scrapped", qr
         assert pg.errors == [] and pi.errors == [], (pg.errors, pi.errors)
 
 

@@ -6401,7 +6401,8 @@ def api_prod_dashboard():
         # Pre-EL and Post EL, each module on the day and shift of its first
         # image there, under the same customer / model / wattage (16 Oct 2026)
         el = _el_kpi(_el_period(cur, frm, to, customer, model, wattage),
-                     clock.SHIFT_LETTER[shift_no] if shift_no else "")
+                     clock.SHIFT_LETTER[shift_no] if shift_no else "",
+                     awaiting=_el_awaiting(cur))
         el_cfg = db.get_config(cur)
 
     kpi = {k: ((kpi_row or {}).get(k) or 0) for k in keys}
@@ -6542,21 +6543,32 @@ def _el_period(cur, frm, to, customer="", model="", wattage=""):
     return out
 
 
-def _el_kpi(period, shift="", line=""):
+def _el_awaiting(cur):
+    """The modules NG at Post EL whose Needs Review item is still open - kept
+    off the line, Quality not decided yet."""
+    return {r["serial"] for r in store.rows(
+        cur, "SELECT serial FROM review_item WHERE type=%s AND status='open'",
+        (elcap.REVIEW_TYPE,))}
+
+
+def _el_kpi(period, shift="", line="", awaiting=frozenset()):
     """What each station's modules in the period add up to: Pre-EL scanned,
     passed the first time, reworked and passed, still in rework (first-pass
-    yield beside them); Post EL scanned, passed, rejected."""
+    yield beside them); Post EL scanned, passed, NG - and of those, how many
+    Quality have not decided yet."""
     def keep(s):
         return (not shift or s["shift"] == shift) and (not line or line in s["lines"])
     pre = [s for s in period["pre_el"].values() if keep(s)]
-    post = [s for s in period["post_el"].values() if keep(s)]
+    post = {serial: s for serial, s in period["post_el"].items() if keep(s)}
     n = lambda xs, st: sum(1 for s in xs if s["status"] == st)
     first, rw, ir = n(pre, "pass"), n(pre, "reworked"), n(pre, "in_rework")
     return {"pre_el": {"scanned": len(pre), "pass": first, "reworked": rw,
                        "in_rework": ir, "rework": rw + ir,
                        "fpy": round(first * 100.0 / len(pre), 1) if pre else None},
-            "post_el": {"scanned": len(post), "pass": n(post, "pass"),
-                        "ng": n(post, "ng")}}
+            "post_el": {"scanned": len(post), "pass": n(post.values(), "pass"),
+                        "ng": n(post.values(), "ng"),
+                        "awaiting": sum(1 for serial, s in post.items()
+                                        if s["status"] == "ng" and serial in awaiting)}}
 
 
 # the Result filter's options, in the order a person reads them
@@ -6607,6 +6619,7 @@ def api_el_stations():
                 master[r["serial"]] = r["model"]
         cfg = db.get_config(cur)
         clk = elcap.clocks(cur)
+        awaiting = _el_awaiting(cur)
 
     by = {}
     for c in caps:
@@ -6622,6 +6635,9 @@ def api_el_stations():
             "serial": serial, "model": master.get(serial),
             "in_master": serial in master,
             "pre": sums["pre_el"], "post": sums["post_el"],
+            # an NG at Post EL is Quality's to decide: still waiting, or done
+            "post_review": (("awaiting" if serial in awaiting else "decided")
+                            if sums["post_el"] and sums["post_el"]["status"] == "ng" else None),
             "lines": sorted({ln for s in sums.values() if s for ln in s["lines"]}),
             "last_at": max(s["last_at"] for s in sums.values() if s),
             "members": members,
@@ -6656,7 +6672,7 @@ def api_el_stations():
         del r["members"], r["results"]
     return jsonify({
         "ok": True, "from": frm, "to": to,
-        "kpi": _el_kpi(period, shift, line),
+        "kpi": _el_kpi(period, shift, line, awaiting),
         "rows": shown[:_EL_ROW_CAP], "total": len(shown), "cap": _EL_ROW_CAP,
         "facets": facets,
         # a station with no folder set reads 0 because nothing is scanned, not
@@ -8747,17 +8763,18 @@ def _pre_el_steps(imgs):
     return steps
 
 
-def _post_el_step(imgs, review=None):
+def _post_el_steps(imgs, review=None):
     """Post EL is one step. A laminated module cannot go back to the
-    pre-lamination process, so NG there is a rejection (Mukesh, 16 Oct 2026):
-    no Rework step, and a later image does not undo it - the module is kept off
-    the line for Quality (a Needs Review item, `review`, says who reviewed it).
-    Every image is listed when there is more than one."""
+    pre-lamination process, so an NG there takes it off the line to Quality,
+    who decide (Mukesh, 16 Oct 2026 - the FQC way, not "rejected"): no Rework
+    step, a later image does not undo the NG, and a Quality Review step follows,
+    read from the Needs Review item (`review`) as FQC's Quality Decision is
+    read from its record - awaiting Quality while it is open; who decided, and
+    their reason, once closed. Every image is listed when there is more than
+    one."""
     ngs = [i for i in imgs if not elcap.is_pass(i["verdict"])]
     at = ngs[0] if ngs else imgs[-1]
-    detail = [ngs[0]["verdict"], "rejected - kept off the line for Quality"] if ngs else []
-    if ngs and review and review.get("status") == "resolved":
-        detail.append("reviewed by %s" % (review.get("resolved_by") or "—"))
+    detail = [ngs[0]["verdict"]] if ngs else []
     if len(imgs) > 1:
         shown = imgs[-_EL_STEP_LINES:]
         if len(imgs) > len(shown):
@@ -8766,20 +8783,32 @@ def _post_el_step(imgs, review=None):
     lines = sorted({i["line"] for i in imgs if i["line"]})
     if lines:
         detail.append(" / ".join("Line " + ln for ln in lines))
-    return {"stage": "Post EL", "value": "NG" if ngs else "Pass", "done": True,
-            "detail": detail, "tag": _when_shift(at["file_time"]),
-            "tone": "t-fail" if ngs else "t-pass"}
+    steps = [{"stage": "Post EL", "value": "NG" if ngs else "Pass", "done": True,
+              "detail": detail, "tag": _when_shift(at["file_time"]),
+              "tone": "t-fail" if ngs else "t-pass"}]
+    if ngs and review and review.get("status") == "resolved":
+        steps.append({"stage": "Quality Review", "value": "Reviewed", "done": True,
+                      "detail": [review.get("reason") or "—",
+                                 "Quality: " + (review.get("resolved_by") or "—")],
+                      "tag": (_when_shift(review["resolved_at"])
+                              if review.get("resolved_at") else "—"),
+                      "tone": "t-mute"})
+    elif ngs:
+        steps.append({"stage": "Quality Review", "value": "—", "done": False,
+                      "detail": ["awaiting Quality", "kept off the line (Needs Review)"],
+                      "tag": "pending", "tone": "t-rev"})
+    return steps
 
 
 def _el_steps(caps, review=None):
     """The journey's EL steps from one serial's el_capture rows - Pre-EL, then
-    Post EL, in process order. A station the serial was never captured at
-    gives NO step - not "—", not "pending" - as Anomaly is added only when
-    found. Captures belong to the serial, not a build instance (an image
-    carries only the serial), so all of them count."""
+    Post EL (with Quality's review after an NG), in process order. A station
+    the serial was never captured at gives NO step - not "—", not "pending" -
+    as Anomaly is added only when found. Captures belong to the serial, not a
+    build instance (an image carries only the serial), so all of them count."""
     pre = elcap.images([c for c in caps if c["station"] == "pre_el"])
     post = elcap.images([c for c in caps if c["station"] == "post_el"])
-    return _pre_el_steps(pre) + ([_post_el_step(post, review)] if post else [])
+    return _pre_el_steps(pre) + (_post_el_steps(post, review) if post else [])
 
 
 @app.route("/api/trace/serial/<path:serial>")
@@ -8867,9 +8896,9 @@ def api_trace_serial(serial):
         el_caps = store.rows(cur, "SELECT capture_id, station, unit, line, recapture, "
                                   "verdict, file_time, seen_at FROM el_capture "
                                   "WHERE serial=%s", (s,))
-        # a Post EL rejection's Needs Review item - who reviewed it, once done
-        el_review = store.one(cur, "SELECT status, resolved_by FROM review_item "
-                                   "WHERE type=%s AND serial=%s",
+        # a Post EL NG's Needs Review item - Quality's decision, once made
+        el_review = store.one(cur, "SELECT status, resolved_by, resolved_at, reason "
+                                   "FROM review_item WHERE type=%s AND serial=%s",
                               (elcap.REVIEW_TYPE, s))
         cfg = db.get_config(cur)
 
@@ -11293,9 +11322,9 @@ def api_review_list():
             "ftr_failed": ("FTR anomaly · failed reading",
                 "tested, and every reading came back invalid"),
         }
-        # Post EL rejections (Mukesh, 16 Oct 2026): NG after lamination cannot be
-        # reworked - the module is taken off the line and kept for Quality's
-        # review. Raised by the EL poller, one a module; Quality's to close.
+        # Post EL NG (Mukesh, 16 Oct 2026): after lamination a module cannot be
+        # reworked - it is taken off the line and Quality decide. Raised by the
+        # EL poller, one a module; Quality's to close.
         for r in store.rows(cur, "SELECT r.*, s.model AS model, s.customer AS customer "
                                  "FROM review_item r LEFT JOIN serial s ON s.serial = "
                                  "r.serial AND s.build_instance = 1 WHERE r.type = %s "
@@ -11305,10 +11334,10 @@ def api_review_list():
             items.append({
                 "type": elcap.REVIEW_TYPE, "id": r["review_id"], "serial": r["serial"],
                 "model": r.get("model"), "customer": r.get("customer"),
-                "flag": "Post EL NG · rejected",
+                "flag": "Post EL NG",
                 "stage": "Post EL" + (" · Line " + r["line"] if r.get("line") else ""),
                 "detail": "%s at Post EL - after lamination it cannot be reworked; kept "
-                          "off the line for Quality's review" % (ng["verdict"] if ng else "NG"),
+                          "off the line for Quality to decide" % (ng["verdict"] if ng else "NG"),
                 "user": r.get("created_by"), "at": r.get("event_at") or r.get("created_at"),
                 "locked": viewer not in _QUALITY_ROLES, "evidence": None,
             })
@@ -11336,7 +11365,7 @@ def api_review_list():
 
 
 def _post_el_ng_image(cur, serial):
-    """The Post EL image that rejected this module - its first NG - or None."""
+    """The Post EL image that sent this module to Quality - its first NG - or None."""
     imgs = elcap.images(store.rows(
         cur, "SELECT capture_id, unit, line, recapture, verdict, file_time, seen_at "
              "FROM el_capture WHERE serial = %s AND station = 'post_el'", (serial,)))
@@ -11344,17 +11373,17 @@ def _post_el_ng_image(cur, serial):
 
 
 def _resolve_post_el_ng(cur, review_id, reason):
-    """Quality has looked at a module rejected at Post EL and kept off the
-    line: the item is closed as reviewed, with what they found and did as the
-    reason. Nothing else moves - a Post EL rejection does not change the
-    module's own state (DECISIONS 5)."""
+    """Quality have decided on a module NG at Post EL, kept off the line: the
+    item is closed as reviewed, their decision - what they found and did - as
+    the reason. Nothing else moves: the module's own state does not change
+    (DECISIONS 5)."""
     item = db.review_item_get(cur, review_id)
     if not item or item.get("type") != elcap.REVIEW_TYPE:
         raise _Refuse("No such review item.", 404)
     if item["status"] != "open":
         raise _Refuse("Review #%d is already resolved." % review_id)
-    _require_role(*_QUALITY_ROLES, why="Only Quality can close a Post EL rejection - "
-                  "the module is kept off the line for their review.")
+    _require_role(*_QUALITY_ROLES, why="Only Quality can decide on a module NG at "
+                  "Post EL - it is kept off the line for them.")
     at = clock.now().isoformat(timespec="seconds")
     cur.execute("UPDATE review_item SET status='resolved', resolved_by=%s, "
                 "resolved_at=%s, resolution='reviewed', reason=%s WHERE review_id=%s",

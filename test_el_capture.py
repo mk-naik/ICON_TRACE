@@ -657,7 +657,8 @@ def t_journey_none():
 
 def el_part(serial):
     """The journey's EL steps only."""
-    return [j for j in journey(serial) if j["stage"] in ("Pre-EL", "Rework", "Post EL")]
+    return [j for j in journey(serial)
+            if j["stage"] in ("Pre-EL", "Rework", "Post EL", "Quality Review")]
 
 
 @test("NG at Pre-EL is followed by a Rework step and the next Pre-EL image - Cell "
@@ -829,13 +830,17 @@ def t_journey_post_el_ng():
     put(POST_B, "2026-10-14/中班/OK", S_POST + "_1.jpg", "2026-10-14T16:30:00")
     run()
     got = el_part(S_POST)
-    assert [x["stage"] for x in got] == ["Post EL"], [x["stage"] for x in got]
-    post = got[0]
+    assert [x["stage"] for x in got] == ["Post EL", "Quality Review"], [x["stage"] for x in got]
+    post, q = got
     assert (post["value"], post["tone"], post["tag"]) == \
         ("NG", "t-fail", "14-10-2026 16:00 · shift B"), post
-    assert post["detail"] == ["Cell Crack", "rejected - kept off the line for Quality",
-                              "Cell Crack · 14-10-2026 16:00", "OK · 14-10-2026 16:30",
-                              "Line B"], post["detail"]
+    assert post["detail"] == ["Cell Crack", "Cell Crack · 14-10-2026 16:00",
+                              "OK · 14-10-2026 16:30", "Line B"], post["detail"]
+    # NG at Post EL is Quality's to decide - never "rejected" (Mukesh, 16 Oct)
+    assert not any("rejected" in d for d in post["detail"]), post["detail"]
+    assert (q["value"], q["done"], q["tag"], q["tone"], q["detail"]) == \
+        ("—", False, "pending", "t-rev",
+         ["awaiting Quality", "kept off the line (Needs Review)"]), q
 
 
 @test("Post EL with more than four images lists the four latest, the rest counted")
@@ -876,7 +881,8 @@ def t_journey_lines():
 
 
 @test("what a module's images add up to, per station: Pass first time, Pass after "
-      "rework, In rework; at Post EL Pass, or NG - rejected - once any image is NG")
+      "rework, In rework; at Post EL Pass, or NG - Quality's to decide - once any "
+      "image is NG")
 def t_summary():
     def rows(*vs):
         return [{"capture_id": i, "recapture": 0, "file_time": "2026-10-14T1%d:00:00" % i,
@@ -892,7 +898,7 @@ def t_summary():
     assert r["first_at"] == "2026-10-14T10:00:00" and r["lines"] == ["B"]
     r = s("post_el", rows("Cell Crack", "OK"))
     assert (r["status"], r["label"], r["reason"], r["reworks"]) == \
-        ("ng", "NG - rejected", "Cell Crack", 0), r
+        ("ng", "NG", "Cell Crack", 0), r
     assert s("post_el", rows("OK", " pass "))["status"] == "pass"
 
 
@@ -921,8 +927,8 @@ def t_journey_reads_table_only():
 
 def seed_day():
     """The 14th: a module reworked and passed (then Post EL OK), one passed
-    first time, one still in rework (C shift), one rejected at Post EL, one the
-    master does not have - and one first imaged on the 13th."""
+    first time, one still in rework (C shift), one NG at Post EL (Quality's to
+    decide), one the master does not have - and one first imaged on the 13th."""
     fresh()
     put(PRE_A, "2026-10-14/早班/Cell Crack", S_CRACK + ".jpg", "2026-10-14T09:00:00")
     put(PRE_A, "2026-10-14/早班/OK", S_CRACK + "_1.jpg", "2026-10-14T09:30:00")
@@ -950,7 +956,7 @@ def t_screen_api():
     assert code == 200 and d["ok"], d
     assert d["kpi"] == {"pre_el": {"scanned": 4, "pass": 2, "reworked": 1, "in_rework": 1,
                                    "rework": 2, "fpy": 50.0},
-                        "post_el": {"scanned": 2, "pass": 1, "ng": 1}}, d["kpi"]
+                        "post_el": {"scanned": 2, "pass": 1, "ng": 1, "awaiting": 1}}, d["kpi"]
     rows = {r["serial"]: r for r in d["rows"]}
     assert set(rows) == {S_CRACK, S_CROSS, S_OLD, S_POST, NOT_PLANNED}, sorted(rows)
     c = rows[S_CRACK]
@@ -958,8 +964,9 @@ def t_screen_api():
         ("Pass after rework", 1, "Cell Crack", 2), c["pre"]
     assert c["post"]["label"] == "Pass" and c["model"] == "ISEN625-G12R" and c["lines"] == ["A", "B"]
     p = rows[S_POST]
-    assert p["pre"] is None and (p["post"]["label"], p["post"]["reason"]) == \
-        ("NG - rejected", "Cell Crack"), p
+    assert p["pre"] is None and (p["post"]["label"], p["post"]["reason"],
+                                 p["post_review"]) == ("NG", "Cell Crack", "awaiting"), p
+    assert c["post_review"] is None, c
     assert rows[S_OLD]["pre"]["label"] == "In rework"
     assert rows[NOT_PLANNED]["in_master"] is False and rows[NOT_PLANNED]["model"] is None
     assert [r["serial"] for r in d["rows"]][0] == S_OLD, "newest activity first"
@@ -967,7 +974,7 @@ def t_screen_api():
                            "line": ["A", "B"],
                            "result": ["Pre-EL: Pass", "Pre-EL: Pass after rework",
                                       "Pre-EL: In rework", "Post EL: Pass",
-                                      "Post EL: NG - rejected"]}, d["facets"]
+                                      "Post EL: NG"]}, d["facets"]
     assert d["configured"] == {"pre_el": True, "post_el": True}
     # the 13th's module is the 13th's, its image on the 14th notwithstanding
     code, d13 = el_api(**{"from": "2026-10-13", "to": "2026-10-13"})
@@ -985,7 +992,7 @@ def t_screen_filters():
     assert d["facets"]["shift"] == ["A", "B", "C"], "its own pick must not hide its siblings"
     assert d["facets"]["station"] == ["pre_el"], d["facets"]
     assert d["kpi"]["pre_el"]["scanned"] == 1 and d["kpi"]["post_el"]["scanned"] == 0
-    _c, d = el_api(result="Post EL: NG - rejected", **day)
+    _c, d = el_api(result="Post EL: NG", **day)
     assert [r["serial"] for r in d["rows"]] == [S_POST], d["rows"]
     _c, d = el_api(station="post_el", **day)
     assert {r["serial"] for r in d["rows"]} == {S_CRACK, S_POST}, d["rows"]
@@ -1134,9 +1141,9 @@ def t_post_el_review_raised():
         assert cx.total_changes == before and cur.written == set()
 
 
-@test("Needs Review lists a Post EL rejection under Quality with its reason; Quality "
-      "closes it as reviewed, with a reason - an Incharge may not; the badge counts "
-      "it; the journey says who reviewed it")
+@test("Needs Review lists a Post EL NG under Quality with its folder; Quality decide - "
+      "close it as reviewed, with a reason - an Incharge may not; the badge counts it; "
+      "the journey's Quality Review step says who and why")
 def t_post_el_review_flow():
     fresh()
     put(POST_B, "2026-10-14/中班/Cell Crack", S_POST + ".jpg", "2026-10-14T16:00:00")
@@ -1149,9 +1156,10 @@ def t_post_el_review_flow():
     assert len(mine) == 1, mine
     it = mine[0]
     assert (it["serial"], it["flag"], it["stage"], it["locked"], it["model"]) == \
-        (S_POST, "Post EL NG · rejected", "Post EL · Line B", False, "ISEN625-G12R"), it
+        (S_POST, "Post EL NG", "Post EL · Line B", False, "ISEN625-G12R"), it
     assert it["detail"].startswith("Cell Crack at Post EL") and "kept off the line" in \
-        it["detail"], it["detail"]
+        it["detail"] and "Quality to decide" in it["detail"], it["detail"]
+    assert "rejected" not in it["detail"] + it["flag"], it
     assert [i for i in pi.get("/api/review").get_json()
             if i["type"] == "post_el_ng"][0]["locked"] is True
     with store.conn() as (cx, cur):
@@ -1176,9 +1184,12 @@ def t_post_el_review_flow():
     r = q.post("/api/review/resolve", json={"type": "post_el_ng", "id": it["id"],
                                            "reason": "again"})
     assert r.status_code == 400 and "already resolved" in r.get_json()["why"]
-    post = el_part(S_POST)[0]
-    assert post["detail"][:3] == ["Cell Crack", "rejected - kept off the line for Quality",
-                                  "reviewed by " + who["name"]], post["detail"]
+    post, q = el_part(S_POST)
+    assert post["detail"] == ["Cell Crack", "Line B"], post["detail"]
+    assert (q["stage"], q["value"], q["done"], q["tone"], q["detail"]) == \
+        ("Quality Review", "Reviewed", True, "t-mute",
+         ["crack confirmed - scrapped", "Quality: " + who["name"]]), q
+    assert q["tag"].startswith(clock.now().strftime("%d-%m-%Y")), q["tag"]
 
 
 # --------------------------------------------------------------------------

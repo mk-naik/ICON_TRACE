@@ -61,8 +61,9 @@ path)`, path compared without case). It is **never purged**: a row is not
 changed or deleted when its file is moved or deleted or its share goes away -
 it is the record that the module was captured there. Search & Trace's module
 journey (a step only where the serial has a row) and the EL Stations screen
-read it - Pass / NG, rework and rejection are worked out from the rows by
-`icon_el_capture.summary`, nothing stored; no request reads the shares. It is outside the change feed
+read it - Pass / NG and rework are worked out from the rows by
+`icon_el_capture.summary`, nothing stored (a Post EL NG also raises a `post_el_ng`
+Needs Review item for Quality); no request reads the shares. It is outside the change feed
 (`store.UNTRACKED`): the poller writes it all day and no screen refreshes on it.
 
 **`serial` is the spine.** One row per module, written once at allocation and

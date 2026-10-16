@@ -7780,3 +7780,20 @@ commit.
 - **Test:** `test_el_capture.py` +2 (54): ahead, 22 min behind (a late-filed image
   ignored), in step, a first pass's backlog not measured; the Settings lines and the EL
   Stations warnings.
+
+### 16 Oct 2026 - a Post EL NG is Quality's to decide, not "rejected"
+- **Decided (Mukesh):** of "keep 'rejected'" and "NG, Quality decides" (a suggestion he
+  passed on, mirroring FQC: a reject is a referral and Quality decides), he chose the
+  second.
+- **Change:** nothing says "rejected" for Post EL any more. Journey: the Post EL step is
+  NG (red) with its folder, then a **Quality Review** step from its Needs Review item -
+  "awaiting Quality" (pending) while open, then "Reviewed" with Quality's reason and name,
+  as FQC's Quality Decision step reads its record. `summary` labels it "NG"; `_el_kpi`
+  adds `awaiting` (NG modules whose item is still open); EL Stations: "Post EL NG" tile
+  with "N awaiting Quality's decision", each NG row "awaiting Quality" / "Quality
+  decided", Result "Post EL: NG"; both dashboards' card: column "NG", Post EL "N (M
+  awaiting Quality)"; Needs Review: "Post EL NG", "kept off the line for Quality to
+  decide", the KPI's "N NG at Post EL".
+- **Test:** `test_el_capture.py` (54) and `test_el_capture_ui.py` (7): the Quality Review
+  step awaiting and decided (in the browser too, after Quality closes the item), the
+  awaiting counts, "rejected" nowhere in the Post EL texts.

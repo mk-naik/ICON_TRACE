@@ -4,7 +4,8 @@
 
 <div class="note n-info"><span>&#9432;</span><span><b>OK is Pass; any other folder is
   NG.</b> At Pre-EL an NG module goes for rework and comes back until it passes. After
-  lamination a module cannot be reworked, so an NG at Post EL is <b>rejected</b>. A
+  lamination a module cannot be reworked, so an NG at Post EL takes it off the line to
+  <b>Quality, who decide</b> (Needs Review). A
   module counts on the factory day (06:00 to 06:00) and shift of its first image at a
   station. Read from the server's index of the EL folders, which it updates every
   minute.</span></div>
@@ -33,8 +34,8 @@
     <div class="d" id="elK4d">modules first imaged in the period</div></div>
   <div class="kpi k-pass"><label>Post EL pass</label><div class="v" id="elK5">&mdash;</div>
     <div class="d">OK at every image</div></div>
-  <div class="kpi k-fail"><label>Post EL NG &middot; rejected</label><div class="v" id="elK6">&mdash;</div>
-    <div class="d">no rework after lamination</div></div>
+  <div class="kpi k-fail"><label>Post EL NG</label><div class="v" id="elK6">&mdash;</div>
+    <div class="d" id="elK6d">&mdash;</div></div>
 </div>
 
 <div class="card" data-itable="el-stations" data-export="el-stations">
@@ -78,10 +79,13 @@
     sel.value = keep;
   }
 
-  function cell(st, s) {
+  function cell(st, s, review) {
     if (!s) return '<td style="color:var(--ink3)">&mdash;</td>';
+    /* an NG at Post EL is Quality's to decide: say whether they have */
+    var q = review === 'awaiting' ? ' <span class="hint">awaiting Quality</span>'
+          : review === 'decided' ? ' <span class="hint">Quality decided</span>' : '';
     return '<td><span class="tag ' + (TONE[st + ':' + s.status] || 't-mute') + '">' +
-           esc(s.label) + '</span></td>';
+           esc(s.label) + '</span>' + q + '</td>';
   }
 
   function draw(d) {
@@ -108,6 +112,7 @@
     $('elK4').textContent = post.scanned.toLocaleString();
     $('elK5').textContent = post.pass.toLocaleString();
     $('elK6').textContent = post.ng.toLocaleString();
+    $('elK6d').textContent = post.awaiting.toLocaleString() + ' awaiting Quality’s decision';
     $('elK1d').textContent = d.configured.pre_el ? 'modules first imaged in the period'
                            : 'no Pre-EL folder set (Admin › Stations & sources)';
     $('elK4d').textContent = d.configured.post_el ? 'modules first imaged in the period'
@@ -129,7 +134,7 @@
           ((p.units || []).indexOf(2) >= 0 ? ' · ' +
             ((p.units || []).length > 1 ? 'primary + secondary' : 'secondary') : '')
           : '') + '</td>' +
-        cell('post_el', q) + '<td>' + esc(q && q.reason || '') + '</td>' +
+        cell('post_el', q, r.post_review) + '<td>' + esc(q && q.reason || '') + '</td>' +
         '<td class="mono" style="font-size:11px">' + (q ? esc(when(q.last_at)) : '') + '</td>' +
         '<td>' + esc(r.lines.join(', ')) + '</td></tr>';
     }).join('') : '<tr data-empty><td colspan="10"><div class="empty-state"><p>' +
