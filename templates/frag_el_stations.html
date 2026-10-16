@@ -8,6 +8,7 @@
   module counts on the factory day (06:00 to 06:00) and shift of its first image at a
   station. Read from the server's index of the EL folders, which it updates every
   minute.</span></div>
+<div id="elClock"></div>
 
 <div class="filters">
   <div class="fld"><label>From</label><input type="date" id="elFrom"></div>
@@ -84,6 +85,11 @@
   }
 
   function draw(d) {
+    /* images are put in order by the EL PCs' own clocks - a machine whose clock is
+       off the server's is named, since its images may be out of order */
+    var cw = d.clock_warnings || [];
+    $('elClock').innerHTML = cw.length ? '<div class="note n-warn"><span>&#9888;</span><span>' +
+      cw.map(esc).join('<br>') + '</span></div>' : '';
     if (!$('elFrom').value) $('elFrom').value = d.from || '';
     if (!$('elTo').value) $('elTo').value = d.to || '';
     refill('elShift', d.facets.shift);

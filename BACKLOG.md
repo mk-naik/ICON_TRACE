@@ -7758,3 +7758,25 @@ commit.
   the item in a browser, an Incharge's "Quality only", Quality resolving it.
   `test_review.py`, `test_fqc_unplanned.py` (their count checks), `test_review_discard`,
   `test_inline_args_ui`, `test_fqc`, `test_icon_ingest` pass.
+
+### 16 Oct 2026 - each EL PC's clock is shown against the server's
+- **Why:** Pre-EL images from two PCs are put in order by their own clocks; a secondary
+  20 min slow turns "NG 10:00 primary, OK 10:15 secondary" into OK then NG - "In
+  rework" (a suggestion Mukesh passed on).
+- **Change:** `icon_el_capture.clocks()`: per machine, the smallest seen_at - file_time
+  over the images recorded as they came in the last day (a machine's first pass - a
+  backlog - is skipped); under -1 min = ahead, over 10 min = most likely behind.
+  Evidence Sources prints it under each Pre-EL / Post EL folder (warning colour when
+  flagged; "not measured yet" before any); `/api/el/stations` answers `clock_warnings`
+  and EL Stations shows them as a note.
+- **Measured on the real Line B machines (8090, testing):** primary 82 s, secondary 78 s
+  - both in step. Line B's secondary (its path in Settings, not here) was set on 8090
+  as a testing setup: 143 modules imaged on both machines in two days, 133 of them NG at the primary
+  first and back at the secondary a median 55 min later - the rework loop. With both
+  read, the 15th's Pre-EL reads 2,191 scanned, 1,882 first time (85.9%), 186 reworked
+  and passed, 123 still in rework (one machine alone said 3 and 164).
+- **Not changed:** a re-shot filed over the same path would not be recorded - checked on
+  both shares: no recorded file has been overwritten, so left as it is.
+- **Test:** `test_el_capture.py` +2 (54): ahead, 22 min behind (a late-filed image
+  ignored), in step, a first pass's backlog not measured; the Settings lines and the EL
+  Stations warnings.

@@ -6606,6 +6606,7 @@ def api_el_stations():
                                 % ",".join(["%s"] * len(part)), tuple(part)):
                 master[r["serial"]] = r["model"]
         cfg = db.get_config(cur)
+        clk = elcap.clocks(cur)
 
     by = {}
     for c in caps:
@@ -6661,6 +6662,12 @@ def api_el_stations():
         # a station with no folder set reads 0 because nothing is scanned, not
         # because nothing came through - the screen says which
         "configured": _el_configured(cfg),
+        # images are put in order by the EL PCs' own clocks: a machine whose clock
+        # is off the server's is named, since the order of its images may be wrong
+        "clock_warnings": ["%s%s: %s" % (elcap.source_label(st, unit),
+                                         ", Line %s" % ln if ln else "", elcap.clock_text(c))
+                           for (st, unit, ln), c in sorted(clk.items(), key=str)
+                           if c["flag"]],
     })
 
 
@@ -6880,7 +6887,8 @@ def view_fragment(name):
     if name == "settings":
         with store.conn() as (cx, cur):
             cfg = db.get_config(cur)
-        return render_template(allowed[name], **_settings_context(cfg))
+            clk = elcap.clocks(cur)
+        return render_template(allowed[name], **_settings_context(cfg, clk))
     if name == "indent-form":
         with store.conn() as (cx, cur):
             known = db.known_customers(cur)
@@ -6891,12 +6899,26 @@ def view_fragment(name):
     return render_template(allowed[name])
 
 
-def _settings_context(cfg):
+def _el_clock_view(cfg, clk):
+    """{line: {settings prefix: {"text", "warn"}}} - each configured EL machine's
+    clock against the server's (icon_el_capture.clocks), for its Settings field."""
+    out = {}
+    for ln in ev.LINES:
+        out[ln] = {}
+        for prefix, station, unit, _label in elcap.SOURCES:
+            if not _el_root_setting(cfg, prefix, ln):
+                continue
+            c = (clk or {}).get((station, unit, ln)) or (clk or {}).get((station, unit, None))
+            out[ln][prefix] = {"text": elcap.clock_text(c), "warn": bool(c and c["flag"])}
+    return out
+
+
+def _settings_context(cfg, clk=None):
     """Every variable frag_settings.html reads. Two routes render that fragment
     - /view/settings (inside v4) and the standalone /settings page, which
     includes it - so the context is built here, once. A variable added to one
     render and not the other turned /settings into a 500."""
-    return dict(cfg=cfg, probe=_evidence_probe(cfg),
+    return dict(cfg=cfg, probe=_evidence_probe(cfg), el_clock=_el_clock_view(cfg, clk),
                 bc_fonts=bc.TEXT_FONTS,
                 bc_text=bc.text_settings(cfg),
                 bc_bar=bc.bar_settings(cfg),

@@ -42,7 +42,8 @@
     <div class="hint">{{ probe[LN].pre_el_note }} Before lamination, the machine the
       line's flow goes to. Read by the server every minute, not by FQC; the account
       the server runs as needs read access to the share. Leave it blank and nothing
-      is scanned.</div></div>
+      is scanned.</div>
+    {% set ck = el_clock[LN].get('pre_el') %}{% if ck %}<div class="hint el-clock"{{ ' style="color:var(--review);font-weight:600"' | safe if ck.warn }}>{{ ck.text }}</div>{% endif %}</div>
   <div class="fld" style="grid-column:1/-1"><label>Pre-EL secondary image root folder</label>
     <input id="s_{{ ln }}_pre_el2" value="{{ cfg['pre_el2_' + ln + '_root'] }}"
            placeholder="\\PRE-EL2-{{ LN }}\el">
@@ -50,13 +51,15 @@
       takes the flow when the primary is busy or down, and a reworked module comes
       back through the other one, so both are read and their images put in order by
       time. Read by the server every minute, not by FQC; the account the server runs
-      as needs read access to the share. Leave it blank and nothing is scanned.</div></div>
+      as needs read access to the share. Leave it blank and nothing is scanned.</div>
+    {% set ck = el_clock[LN].get('pre_el2') %}{% if ck %}<div class="hint el-clock"{{ ' style="color:var(--review);font-weight:600"' | safe if ck.warn }}>{{ ck.text }}</div>{% endif %}</div>
   <div class="fld" style="grid-column:1/-1"><label>Post EL (after lamination) image root folder</label>
     <input id="s_{{ ln }}_post_el" value="{{ cfg['post_el_' + ln + '_root'] }}"
            placeholder="\\POST-EL-{{ LN }}\el">
     <div class="hint">{{ probe[LN].post_el_note }} Read by the server every
       minute, not by FQC; the account the server runs as needs read access to the
-      share. Leave it blank and nothing is scanned.</div></div>
+      share. Leave it blank and nothing is scanned.</div>
+    {% set ck = el_clock[LN].get('post_el') %}{% if ck %}<div class="hint el-clock"{{ ' style="color:var(--review);font-weight:600"' | safe if ck.warn }}>{{ ck.text }}</div>{% endif %}</div>
 
   <div class="fld" style="grid-column:1/-1"><label>Column positions in this
       tester&rsquo;s export</label>

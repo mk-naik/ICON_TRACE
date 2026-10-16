@@ -41,6 +41,9 @@ THE RULES THIS FILE DEFENDS
   9. An NG at Post EL raises one Needs Review item - the module is kept off
      the line for Quality, who close it with a reason.
 
+ 10. Each EL PC's clock is shown against the server's - images are put in
+     order by their time - and one that is off is flagged.
+
 Each test names the rule it defends, so a failure says which decision broke.
 """
 
@@ -1176,6 +1179,81 @@ def t_post_el_review_flow():
     post = el_part(S_POST)[0]
     assert post["detail"][:3] == ["Cell Crack", "rejected - kept off the line for Quality",
                                   "reviewed by " + who["name"]], post["detail"]
+
+
+# --------------------------------------------------------------------------
+# 10. the EL PCs' clocks
+# --------------------------------------------------------------------------
+
+def seed_clocks():
+    """Four machines, as the poller would have recorded them: (unit, line,
+    file_time, seen_at) - each machine's first pass three hours ago (a backlog),
+    then images recorded as they came."""
+    now = clock.now()
+    h = datetime.timedelta
+    iso = lambda t: t.isoformat(timespec="seconds")
+    first = now - h(hours=3)
+    rows = [
+        # Line B primary: its clock 3 min AHEAD - an image "taken" after it was seen
+        (1, "B", iso(first - h(days=1)), iso(first)),
+        (1, "B", iso(now - h(minutes=60) + h(minutes=3)), iso(now - h(minutes=60) + h(seconds=20))),
+        # Line B secondary: 22 min BEHIND (and one image filed late, 40 min)
+        (2, "B", iso(first - h(days=2)), iso(first)),
+        (2, "B", iso(now - h(minutes=52)), iso(now - h(minutes=30))),
+        (2, "B", iso(now - h(minutes=50)), iso(now - h(minutes=10))),
+        # Line A primary: in step - seen 30 s after it was taken
+        (1, "A", iso(first - h(hours=5)), iso(first)),
+        (1, "A", iso(now - h(minutes=5, seconds=30)), iso(now - h(minutes=5))),
+        # Line A secondary: only its first pass so far - two days of old images
+        (2, "A", iso(now - h(days=2)), iso(now - h(minutes=1))),
+        (2, "A", iso(now - h(hours=7)), iso(now - h(minutes=1))),
+    ]
+    with store.conn() as (cx, cur):
+        for i, (unit, line, ft, seen) in enumerate(rows):
+            cur.execute("INSERT INTO el_capture (station, unit, line, serial, recapture, "
+                        "verdict, path, file_time, seen_at) VALUES ('pre_el', %s, %s, %s, "
+                        "0, 'OK', %s, %s, %s)", (unit, line, "ICON625R12A16%05d" % i,
+                                                 "c:/clk/%d.jpg" % i, ft, seen))
+
+
+@test("each EL PC's clock against the server's, from the images recorded as they came: "
+      "ahead, 22 min behind, in step - and a machine with only its first pass's "
+      "backlog is not measured, so not flagged")
+def t_clocks():
+    fresh()
+    seed_clocks()
+    with store.conn() as (cx, cur):
+        c = elcap.clocks(cur)
+    assert (c[("pre_el", 1, "B")]["flag"], c[("pre_el", 1, "B")]["minutes"]) == ("ahead", 3), c
+    assert (c[("pre_el", 2, "B")]["flag"], c[("pre_el", 2, "B")]["minutes"],
+            c[("pre_el", 2, "B")]["n"]) == ("behind", 22, 2), c
+    assert c[("pre_el", 1, "A")]["flag"] is None, c
+    assert ("pre_el", 2, "A") not in c, "a first pass's backlog is not a clock reading"
+    assert "3 min AHEAD" in elcap.clock_text(c[("pre_el", 1, "B")])
+    assert "22 min BEHIND" in elcap.clock_text(c[("pre_el", 2, "B")])
+    assert elcap.clock_text(c[("pre_el", 1, "A")]).startswith("Clock in step")
+    assert elcap.clock_text(None).startswith("Clock not measured yet")
+
+
+@test("Evidence Sources shows each configured machine's clock under its folder, a "
+      "flagged one in the warning colour; EL Stations names the flagged machines")
+def t_clocks_shown():
+    fresh(pre_el_b_root=PRE_B, pre_el2_b_root=PRE_A2, pre_el2_a_root=PRE_A2.upper())
+    seed_clocks()
+    raw = signed_in().get("/view/settings").get_data(as_text=True)
+    html = " ".join(raw.split())
+    assert "Clock about 22 min BEHIND the server" in html, "no clock for B's secondary"
+    assert "Clock about 3 min AHEAD of the server" in html
+    assert "Clock in step with the server" in html                  # A's primary
+    assert "Clock not measured yet" in html                         # A's secondary
+    assert html.count('class="hint el-clock" style="color:var(--review);font-weight:600"') == 2
+    _c, d = el_api()
+    assert d["clock_warnings"] == [
+        "Pre-EL primary, Line B: Clock about 3 min AHEAD of the server - its images are put "
+        "in order by their time, so fix the EL PC's clock.",
+        "Pre-EL secondary, Line B: Clock about 22 min BEHIND the server (or every image is "
+        "filed late) - its images are put in order by their time, so check the EL PC's "
+        "clock."], d["clock_warnings"]
 
 
 if __name__ == "__main__":

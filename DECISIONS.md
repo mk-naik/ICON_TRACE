@@ -219,9 +219,14 @@ no one signs twice. [enforcement unverified]
   and a later image does not undo it. **Images are ordered by their time** ("here time
   is crucial"), across both Pre-EL machines - each names its own re-shots, so a
   re-shot number orders nothing between them; the order is only as good as the two EL
-  PCs' clocks. An image re-filed under another verdict (same machine, re-shot number
-  and time) is one image, its latest filing standing. A station the serial was never
-  captured at gives no step at all - not "pending". [built]
+  PCs' clocks, so **ICON TRACE shows each EL machine's clock against the server's**
+  (16 Oct): the smallest gap between an image's time and when the poller recorded it,
+  over the images recorded as they came in the last day (a first pass's backlog is no
+  reading) - under -1 min the PC is ahead, over 10 min most likely behind. Evidence
+  Sources says it under each folder, in the warning colour when flagged; EL Stations
+  names a flagged machine. An image re-filed under another verdict (same machine,
+  re-shot number and time) is one image, its latest filing standing. A station the
+  serial was never captured at gives no step at all - not "pending". [built]
 - **A Post EL rejection raises a Needs Review item** (Mukesh, 16 Oct: "they physically
   turn it off the line, keep it for quality review"): one per module, raised by the EL
   poller with the image, under the Quality tab ("Post EL NG · rejected", its folder as

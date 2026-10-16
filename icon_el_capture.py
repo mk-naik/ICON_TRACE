@@ -128,6 +128,67 @@ def summary(station, rows):
             "units": sorted({i.get("unit", 1) for i in imgs})}
 
 
+# ---- the EL PCs' clocks --------------------------------------------------------
+#
+# Images are put in order by their time, and that time is the EL PC's own clock -
+# two PCs on Pre-EL - never the server's. The poller records a file within about a
+# minute of its filing, so for an image recorded as it came (not in a machine's
+# FIRST pass, which takes two days' backlog at once), seen_at - file_time is the
+# filing delay plus that PC's lag behind the server, and its SMALLEST value over a
+# day is the lag itself, near enough. Below a minute negative: the PC's clock is
+# AHEAD. Over ten minutes: most likely BEHIND (or every image filed late).
+CLOCK_WINDOW_H = 24
+CLOCK_AHEAD_S = -60
+CLOCK_BEHIND_S = 600
+
+
+def clocks(cur, now=None):
+    """{(station, unit, line): {"gap_s", "n", "flag", "minutes"}} for every machine
+    with images recorded as they came in the last day; a machine with none (only
+    its first pass so far) is not measured, and not in the answer."""
+    now = now or clock.now()
+    since = (now - datetime.timedelta(hours=CLOCK_WINDOW_H)).isoformat(timespec="seconds")
+    cur.execute("SELECT station, unit, line, MIN(seen_at) AS first FROM el_capture "
+                "GROUP BY station, unit, line")
+    first = {(r["station"], r["unit"], r["line"]): r["first"] for r in cur.fetchall()}
+    cur.execute("SELECT station, unit, line, file_time, seen_at FROM el_capture "
+                "WHERE seen_at >= %s", (since,))
+    gaps = {}
+    for r in cur.fetchall():
+        key = (r["station"], r["unit"], r["line"])
+        if r["seen_at"] <= first.get(key, ""):
+            continue                       # that machine's first pass: a backlog
+        try:
+            g = (datetime.datetime.fromisoformat(r["seen_at"]) -
+                 datetime.datetime.fromisoformat(r["file_time"])).total_seconds()
+        except (TypeError, ValueError):
+            continue
+        gaps.setdefault(key, []).append(g)
+    out = {}
+    for key, gs in gaps.items():
+        g = min(gs)
+        out[key] = {"gap_s": int(g), "n": len(gs),
+                    "flag": ("ahead" if g < CLOCK_AHEAD_S else
+                             "behind" if g > CLOCK_BEHIND_S else None),
+                    "minutes": int(round(abs(g) / 60.0))}
+    return out
+
+
+def clock_text(c):
+    """What one machine's clock reading says, in words."""
+    if not c:
+        return "Clock not measured yet - it is, from the images recorded as they come."
+    if c["flag"] == "ahead":
+        return ("Clock about %d min AHEAD of the server - its images are put in order by "
+                "their time, so fix the EL PC's clock." % max(1, c["minutes"]))
+    if c["flag"] == "behind":
+        return ("Clock about %d min BEHIND the server (or every image is filed late) - "
+                "its images are put in order by their time, so check the EL PC's clock."
+                % c["minutes"])
+    return "Clock in step with the server (images reach the index within %d min)." % \
+        max(1, c["minutes"])
+
+
 def folder_key(path):
     """One spelling of a folder, for telling whether two settings name the same
     one: case, slash style and a trailing slash ignored. '' when blank."""
