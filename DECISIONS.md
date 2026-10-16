@@ -230,7 +230,9 @@ no one signs twice. [enforcement unverified]
   Sources says it under each folder, in the warning colour when flagged; EL Stations
   names a flagged machine. An image re-filed under another verdict (same machine,
   re-shot number and time) is one image, its latest filing standing. A station the
-  serial was never captured at gives no step at all - not "pending". [built]
+  serial was never captured at gives no step at all - not "pending". Search & Trace's
+  Full event log lists every Pre-EL / Post EL image too (which machine, its folder,
+  when taken, when found) and a Post EL NG's Needs Review item. [built]
 - **A Post EL NG raises a Needs Review item** (Mukesh, 16 Oct: "they physically turn it
   off the line, keep it for quality review"): one per module, raised by the EL poller
   with the image, under the Quality tab ("Post EL NG", its folder as the reason), counted

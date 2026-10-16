@@ -79,6 +79,8 @@ def t_fields_shown():
             tags = c.locator(".card-h .tag").all_text_contents()
             assert "Pre-EL primary —" in tags and "Pre-EL secondary —" in tags and \
                 "Post EL —" in tags, tags
+            # the folders are saved from their own card, not only from Plant's below
+            assert c.locator('.card-f button[onclick="setSave()"]').count() == 1, ln
             assert "Read by the server every minute, not by FQC" in text, text
         assert pg.errors == [], pg.errors
 

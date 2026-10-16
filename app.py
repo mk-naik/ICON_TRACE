@@ -8897,8 +8897,8 @@ def api_trace_serial(serial):
                                   "verdict, file_time, seen_at FROM el_capture "
                                   "WHERE serial=%s", (s,))
         # a Post EL NG's Needs Review item - Quality's decision, once made
-        el_review = store.one(cur, "SELECT status, resolved_by, resolved_at, reason "
-                                   "FROM review_item WHERE type=%s AND serial=%s",
+        el_review = store.one(cur, "SELECT status, resolved_by, resolved_at, reason, "
+                                   "created_at FROM review_item WHERE type=%s AND serial=%s",
                               (elcap.REVIEW_TYPE, s))
         cfg = db.get_config(cur)
 
@@ -9269,6 +9269,25 @@ def api_trace_serial(serial):
             log.append({"at": g["cancelled_at"], "stage": "Gate pass · Cancelled",
                         "reference": g["gp_no"], "detail": g.get("cancelled_reason") or "",
                         "user": g.get("cancelled_by") or "—"})
+    # every Pre-EL / Post EL image, as the poller recorded it - which machine,
+    # its folder, when it was taken (the EL PC's clock) and when it was found;
+    # the person who filed it is not known to ICON TRACE
+    for c in sorted(el_caps, key=lambda c: (c["file_time"] or "", c["capture_id"])):
+        machine = (("Line %s · " % c["line"]) if c["line"] else "") + (
+            elcap.UNIT_NAME.get(c.get("unit") or 1, "") if c["station"] == "pre_el"
+            else "Post EL")
+        log.append({"at": c["file_time"],
+                    "stage": "%s · %s" % (elcap.LABEL[c["station"]],
+                                          "Pass" if elcap.is_pass(c["verdict"]) else "NG"),
+                    "reference": machine,
+                    "detail": "%s%s · found %s" % (
+                        c["verdict"], " · re-shot %d" % c["recapture"] if c["recapture"] else "",
+                        (c["seen_at"] or "").replace("T", " ")[:16]),
+                    "user": "—"})
+    if el_review:
+        log.append({"at": el_review["created_at"], "stage": "Needs Review · Post EL NG",
+                    "reference": s, "detail": "kept off the line for Quality to decide",
+                    "user": "system"})
     log.sort(key=lambda r: str(r["at"] or ""))
 
     return jsonify({

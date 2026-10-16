@@ -79,7 +79,9 @@ def t_super_admin_edits_master():
         assert pg.locator("#ad-materials .ro-note").count() == 0
         tab(pg, "stations")
         pg.wait_for_selector("#v-settings button", timeout=10000)
-        assert pg.locator('#v-settings button[onclick="setSave()"]').is_enabled()
+        # one Save on each line card and one on Plant (16 Oct 2026) - every one live
+        saves = pg.locator('#v-settings button[onclick="setSave()"]')
+        assert saves.count() == 3 and all(saves.nth(i).is_enabled() for i in range(3))
         assert pg.locator("#ad-stations .ro-note").count() == 0
         assert not [t for t in pg.toasts if "Only Admin" in t], pg.toasts
         assert pg.errors == [], pg.errors
@@ -141,8 +143,10 @@ def t_admin_reads_master():
         tab(pg, "stations")
         pg.wait_for_selector("#v-settings button", timeout=10000)
         pg.wait_for_timeout(300)
-        save = pg.locator('#v-settings button[onclick="setSave()"]')
-        assert save.is_disabled() and save.get_attribute("title") == MASTER
+        saves = pg.locator('#v-settings button[onclick="setSave()"]')
+        assert saves.count() == 3
+        for i in range(3):
+            assert saves.nth(i).is_disabled() and saves.nth(i).get_attribute("title") == MASTER
         assert pg.locator("#v-settings input:enabled").count() == 0
         assert MASTER in pg.inner_text("#ad-stations .ro-note")
         # the save itself, forced past the disabled button: the server says

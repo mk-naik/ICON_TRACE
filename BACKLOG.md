@@ -7797,3 +7797,17 @@ commit.
 - **Test:** `test_el_capture.py` (54) and `test_el_capture_ui.py` (7): the Quality Review
   step awaiting and decided (in the browser too, after Quality closes the item), the
   awaiting counts, "rejected" nowhere in the Post EL texts.
+
+### 16 Oct 2026 - Full event log lists the EL images; a Save on each line card
+- **Reported (Mukesh):** "no screen shown, no Full event log, no dashboard reflection, no
+  way edit path". The EL Stations screen and the dashboards' EL card were there - the
+  open page had been loaded before the server restart (the Settings fragment is fetched
+  once at sign-in); F5 shows them. The other two were real.
+- **Change:** Search & Trace's Full event log adds one row per Pre-EL / Post EL image, in
+  time order (station and Pass / NG, the machine - "Line B · secondary" -, the folder,
+  re-shot, when the poller found it) and the Post EL NG's Needs Review row. Evidence
+  Sources: each line card has its own Save (it was one button below the Plant card, out
+  of sight of the folder fields) - the same save, both lines and the plant settings.
+- **Test:** `test_el_capture.py` +1 (55): the event log's EL rows and the review row;
+  `test_el_capture_ui.py` (7): a Save on each card; `test_master_data_ui.py`: all three
+  Saves live for a Super Admin, all three disabled with the reason for an Admin.

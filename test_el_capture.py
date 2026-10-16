@@ -692,6 +692,29 @@ def t_journey_cycle():
         ("Pass", "t-pass", ["Line B"], "16-10-2026 01:12 · shift C (15-10)"), post
 
 
+@test("the Full event log lists every EL image - which machine, its folder, when taken "
+      "and when found - and a Post EL NG's Needs Review item")
+def t_event_log():
+    fresh(pre_el2_a_root=PRE_A2)
+    put(PRE_A, "2026-10-14/早班/Cell Crack", S_CRACK + ".jpg", "2026-10-14T10:00:00")
+    put(PRE_A2, "2026-10-14/早班/OK", S_CRACK + ".jpg", "2026-10-14T12:05:00")
+    put(POST_B, "2026-10-14/中班/Grid Burning", S_CRACK + ".jpg", "2026-10-14T16:00:00")
+    run()
+    r = signed_in().get("/api/trace/serial/" + S_CRACK).get_json()
+    el = [(e["at"], e["stage"], e["reference"], e["detail"].split(" · found ")[0], e["user"])
+          for e in r["events"] if e["stage"].startswith(("Pre-EL", "Post EL", "Needs Review"))]
+    assert el[:3] == [
+        ("2026-10-14T10:00:00", "Pre-EL · NG", "Line A · primary", "Cell Crack", "—"),
+        ("2026-10-14T12:05:00", "Pre-EL · Pass", "Line A · secondary", "OK", "—"),
+        ("2026-10-14T16:00:00", "Post EL · NG", "Line B · Post EL", "Grid Burning", "—")], el
+    assert el[3][1:] == ("Needs Review · Post EL NG", S_CRACK,
+                         "kept off the line for Quality to decide", "system"), el
+    found = [e["detail"] for e in r["events"] if e["stage"] == "Pre-EL · NG"][0]
+    assert " · found " in found, found
+    stamps = [e["at"] for e in r["events"]]
+    assert stamps == sorted(stamps), "the log is in time order"
+
+
 @test("NG, rework, NG, rework, Pass: the loop repeats until the module passes")
 def t_journey_loop():
     fresh()
