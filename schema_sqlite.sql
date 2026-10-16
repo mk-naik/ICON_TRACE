@@ -955,7 +955,12 @@ CREATE TABLE IF NOT EXISTS material (
   pot         TEXT NULL,              -- 'A' | 'B' of the potting mix
   default_make TEXT NULL,             -- one of makes: pre-selected, and recorded when a file is silent
   updated_at  TEXT NULL,
-  updated_by  TEXT NULL
+  updated_by  TEXT NULL,
+  -- taken off the master (Remove): no longer offered or matched, but the row
+  -- stays - its number is never reused and a batch that recorded it names it
+  removed_at  TEXT NULL,
+  removed_by  TEXT NULL,
+  removed_reason TEXT NULL
 ) ;
 
 -- Cell efficiency is a property of the CELL, not of the module, and the list

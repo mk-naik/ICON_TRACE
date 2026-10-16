@@ -1584,6 +1584,7 @@ def boot_private():
         # that the table is the master and the file is never read again
         db.seed_materials(cur)
         mats = db.materials(cur)
+        mats_removed = db.materials(cur, removed=True)
         cell_eff = db.cell_efficiencies(cur)
         try:
             cfg_ceiling = int(db.get_config(cur).get("pallet_ceiling") or 36)
@@ -1627,6 +1628,8 @@ def boot_private():
                   for i in M.all_items()],
         # the bill of materials, which used to live only in the browser
         "materials": mats, "mat_cats": mat_cats, "cell_eff": cell_eff,
+        # taken off the master: offered nowhere, listed under Materials as removed
+        "materials_removed": mats_removed,
         # what a pallet can physically hold; the screen offers up to this
         "config": {"pallet_ceiling": int(cfg_ceiling or 36)},
         "counts": {"serials": counts["serial"], "invoices": counts["invoice"],
@@ -5176,6 +5179,10 @@ def export_traceability():
                     who = c["name"] if c else (g["customer"] or "")
                 rows.append(dict(base, start=first, end=last, qty=g["n"], customer=who,
                                  rework=bool(g["rework"]), bom=bom_of(g["alloc_id"])))
+        # a material taken off the master since keeps its column where a batch in
+        # the period recorded it - a recorded fact is never left off the sheet
+        recorded = {n for r in rows for n in (r.get("bom") or {})}
+        catalog += [m for m in db.materials(cur, removed=True) if m["n"] in recorded]
     data = TX.build(rows, catalog, MM.MAT_CATS, models.BY_CODE, dfrom, dto)
     _log_print("export.traceability", "production_entry", "%s to %s" % (dfrom, dto))
     return Response(data,
@@ -7060,7 +7067,88 @@ def api_materials():
     with store.conn() as (cx, cur):
         db.seed_materials(cur)
         return jsonify({"materials": db.materials(cur),
+                        "removed": db.materials(cur, removed=True),
                         "cell_eff": db.cell_efficiencies(cur)})
+
+
+def _dmy(ts):
+    """'16-10-2026' from a stored timestamp - the way a refusal names a day."""
+    try:
+        return datetime.datetime.fromisoformat(str(ts)).strftime("%d-%m-%Y")
+    except (TypeError, ValueError):
+        return str(ts or "")[:10]
+
+
+def _material_use(cur, n, shown=5):
+    """How many batches recorded material n, and the first few by number."""
+    c = store.one(cur, "SELECT COUNT(*) AS c FROM allocation_material "
+                       "WHERE material_no=%s", (n,))["c"]
+    first = store.rows(cur, "SELECT a.alloc_id, a.date_produced FROM allocation_material am "
+                            "JOIN allocation a ON a.alloc_id=am.alloc_id "
+                            "WHERE am.material_no=%s ORDER BY a.alloc_id LIMIT %s",
+                       (n, shown))
+    return {"batches": c, "examples": [batch_no(r) for r in first]}
+
+
+def _removed_material_refusal(cur, numbers, keep=()):
+    """A batch's bill of materials may not name a material taken off the master -
+    a page opened before the removal still offers it. `keep`: what the batch
+    being edited already recorded, which the edit may keep (its history)."""
+    nums = sorted({int(x) for x in numbers} - {int(x) for x in keep})
+    if not nums:
+        return None
+    gone = store.rows(cur, "SELECT n, name, size, removed_at, removed_by FROM material "
+                           "WHERE removed_at IS NOT NULL AND n IN (%s) ORDER BY n"
+                      % ", ".join(["%s"] * len(nums)), nums)
+    if not gone:
+        return None
+    g = gone[0]
+    return ("%s (%s, material %d) was removed from the master on %s by %s and cannot "
+            "go on a batch any more. Reload the page (F5) and choose again."
+            % (g["name"], g["size"] or "—", g["n"],
+               _dmy(g["removed_at"]), g["removed_by"]))
+
+
+@app.route("/api/material/<int:n>/use")
+@require_role(*_R_MASTER)
+def api_material_use(n):
+    """What removing material n would do, said before it is done: how many batches
+    recorded it (they keep naming it)."""
+    with store.conn() as (cx, cur):
+        m = store.one(cur, "SELECT n, removed_at FROM material WHERE n=%s", (n,))
+        if not m:
+            return jsonify({"ok": False, "why": "No material %d." % n}), 404
+        return jsonify(dict(ok=True, n=n, removed=bool(m["removed_at"]),
+                            **_material_use(cur, n)))
+
+
+@app.route("/api/material/<int:n>", methods=["DELETE"])
+@require_role(*_R_MASTER)
+def api_material_remove(n):
+    """Take a material off the master (Mukesh, 16 Oct 2026: "no option to remove
+    added items"). It is no longer listed, offered in Planning or matched by the
+    traceability import. The row is kept: its number is never reused, and a batch
+    that recorded it still names it (Search & Trace, the traceability report).
+    Super Admin, reason mandatory, audited."""
+    d = request.get_json(silent=True) or {}
+    reason = (d.get("reason") or "").strip()
+    if not reason:
+        return jsonify({"ok": False, "why": "A reason is required to remove a material."}), 400
+    with store.conn() as (cx, cur):
+        db.seed_materials(cur)
+        m = store.one(cur, "SELECT * FROM material WHERE n=%s", (n,))
+        if not m:
+            return jsonify({"ok": False, "why": "No material %d." % n}), 404
+        if m["removed_at"]:
+            return jsonify({"ok": False, "why": "%s (%s) was already removed, on %s by %s."
+                            % (m["name"], m["size"] or "—",
+                               _dmy(m["removed_at"]), m["removed_by"])}), 409
+        use = _material_use(cur, n)
+        db.remove_material(cur, n, actor(), reason)
+        db.audit(cur, actor(), "material.remove", "material", n,
+                 {"name": m["name"], "size": m["size"], "reason": reason,
+                  "batches": use["batches"]})
+    return jsonify({"ok": True, "n": n, "batches": use["batches"]})
 
 
 @app.route("/api/material", methods=["POST"])
@@ -7098,6 +7186,14 @@ def api_material_save(n=None):
         db.seed_materials(cur)
         if n is None:
             n = db.next_material_no(cur)
+        else:
+            gone = store.one(cur, "SELECT removed_at, removed_by FROM material "
+                                  "WHERE n=%s AND removed_at IS NOT NULL", (n,))
+            if gone:
+                return jsonify({"ok": False, "why":
+                    "Material %d was removed from the master on %s by %s - it cannot "
+                    "be edited. Reload the page (F5)."
+                    % (n, _dmy(gone["removed_at"]), gone["removed_by"])}), 409
         m["n"] = n
         db.save_material(cur, m, actor())
         db.audit(cur, actor(), "material.save", "material", n,
@@ -7450,6 +7546,9 @@ def api_allocation_create():
             mats = [(int(m.get("material_no")), m) for m in d.get("materials") or []]
         except (TypeError, ValueError, AttributeError):
             return jsonify({"ok": False, "why": "Allocation contains an invalid material row."}), 400
+        refusal = _removed_material_refusal(cur, [n for n, _m in mats])
+        if refusal:
+            return jsonify({"ok": False, "why": refusal}), 400
 
         made_on, made_shift = _alloc_date_shift()
         aid = store.insert(cur, "allocation", {
@@ -7734,6 +7833,17 @@ def api_allocation_update(alloc_id):
                                       exclude_alloc=alloc_id)
         if refusal:
             return jsonify({"ok": False, "why": refusal}), 400
+        try:
+            mat_nos = [int(m.get("material_no")) for m in d.get("materials") or []]
+        except (TypeError, ValueError, AttributeError):
+            return jsonify({"ok": False, "why": "Allocation contains an invalid material row."}), 400
+        # what the batch already recorded it may keep, removed since or not
+        refusal = _removed_material_refusal(cur, mat_nos, keep=[
+            r["material_no"] for r in store.rows(
+                cur, "SELECT material_no FROM allocation_material WHERE alloc_id=%s",
+                (alloc_id,))])
+        if refusal:
+            return jsonify({"ok": False, "why": refusal}), 400
         import icon_challan_import as CI
         # an edit is not a new issue - it keeps when it was first allocated
         made_on, made_shift = old["date_produced"], old["shift"]
@@ -7902,13 +8012,21 @@ def api_allocation_copy_source():
                 return jsonify({"ok": False, "why":
                     "%s has no bill of materials recorded, so there is nothing "
                     "to copy." % batch_no(src)}), 400
-        mats = store.rows(cur, "SELECT material_no, vendor, efficiency, batch "
-                               "FROM allocation_material WHERE alloc_id=%s "
-                               "ORDER BY material_no", (src["alloc_id"],))
+        mats = store.rows(cur, "SELECT am.material_no, am.vendor, am.efficiency, am.batch, "
+                               "m.name, m.size, m.removed_at "
+                               "FROM allocation_material am "
+                               "LEFT JOIN material m ON m.n=am.material_no "
+                               "WHERE am.alloc_id=%s ORDER BY am.material_no",
+                          (src["alloc_id"],))
+    # a material taken off the master since is not copied onto a new batch - it
+    # could not be seen on the form to be taken out again - and the screen says so
+    keep = ("material_no", "vendor", "efficiency", "batch")
     return jsonify({"ok": True, "batch_no": batch_no(src), "alloc_id": src["alloc_id"],
                     "indent_no": src["indent_no"], "line_no": src["line_no"],
                     "date_produced": src["date_produced"],
-                    "materials": [dict(r) for r in mats]})
+                    "materials": [{k: r[k] for k in keep} for r in mats if not r["removed_at"]],
+                    "not_copied": [{"material_no": r["material_no"], "name": r["name"],
+                                    "size": r["size"]} for r in mats if r["removed_at"]]})
 
 
 @app.route("/api/allocation/<int:alloc_id>/detail")
@@ -8838,8 +8956,13 @@ def api_trace_serial(serial):
                               "JOIN indent i ON i.indent_id=il.indent_id "
                               "WHERE il.indent_line_id=%s",
                          (first["indent_line_id"],)) if first["indent_line_id"] else None
-        materials = store.rows(cur, "SELECT * FROM allocation_material "
-                                    "WHERE alloc_id=%s ORDER BY material_no",
+        # each with the master's own description, so a material taken off the
+        # master since (Remove) is still named on the batch that recorded it
+        materials = store.rows(cur, "SELECT am.*, m.name, m.size, m.uom, m.cat, "
+                                    "m.grp, m.is_cell, m.note, m.removed_at "
+                                    "FROM allocation_material am "
+                                    "LEFT JOIN material m ON m.n=am.material_no "
+                                    "WHERE am.alloc_id=%s ORDER BY am.material_no",
                                (first["alloc_id"],)) if first["alloc_id"] else []
         fqc = store.rows(cur, "SELECT * FROM fqc_record WHERE serial=%s "
                               "ORDER BY at", (s,))

@@ -2108,6 +2108,9 @@ def _mat_out(r):
             m[key] = r[key]
     if r["default_make"]:
         m["default_make"] = r["default_make"]
+    if r["removed_at"]:
+        m["removed"] = {"at": r["removed_at"], "by": r["removed_by"],
+                        "reason": r["removed_reason"]}
     return m
 
 
@@ -2145,6 +2148,7 @@ def seed_materials(cur):
     if cur.execute("SELECT COUNT(*) AS n FROM material").fetchone()["n"]:
         ensure_material_additions(cur)
         ensure_material_defaults(cur)
+        ensure_material_removals(cur)
         return 0
     for m in MM.MATERIALS:
         rec = _mat_in(m)
@@ -2160,8 +2164,10 @@ def seed_materials(cur):
 
 # materials added to the catalog after databases were already seeded: a database
 # is its own master, so these are inserted - once, if absent - rather than
-# re-seeding. Round 37: the 15 mm Lead Bending Tape (alternative to the 20 mm).
-_ADDED_MATERIALS = (31, 32, 33, 34)
+# re-seeding. Round 37: the 15 mm Lead Bending Tape (alternative to the 20 mm);
+# the frame's 790 mm mounting holes. (32 and 33, the 0.41 / 0.42 mm edge ribbon,
+# were here too - taken off again, see ensure_material_removals.)
+_ADDED_MATERIALS = (31, 34)
 
 
 def ensure_material_additions(cur):
@@ -2179,7 +2185,7 @@ def ensure_material_additions(cur):
     # LOOK first: this runs on every boot read, and a write statement - even one
     # that changes no row - is a change as far as the change feed is concerned.
     # (n, the group its existing member joins, the added member it needs)
-    for n, grp, partner in ((21, "LBT", 31), (14, "SICE", 32), (8, "FRM", 34)):
+    for n, grp, partner in ((21, "LBT", 31), (8, "FRM", 34)):
         t = cur.execute("SELECT grp FROM material WHERE n=%s", (n,)).fetchone()
         if t is not None and not (t["grp"] or "") and (partner in have or added):
             cur.execute("UPDATE material SET grp=%s WHERE n=%s", (grp, n))
@@ -2219,6 +2225,68 @@ def ensure_material_defaults(cur):
     return done
 
 
+# Mukesh, 16 Oct 2026: the edge ribbon's 0.41 and 0.42 mm "variants" came from the
+# traceability file - and the file was wrong (the shift incharge filled the sizes
+# in). The edge ribbon is the master's 4.0 x 0.40 mm (14) again: 32 and 33 come off
+# the master, and a batch that recorded one is moved to 14 (his call: "move to the
+# standard"). Each is matched on what it is, not on its number alone - a database
+# where a person's material holds 32 never had the ribbon there.
+_EDGE = "String Inter Connector — Edge"
+_UNDONE_MATERIALS = ((32, _EDGE, "4.0 x 0.41 mm", 14),
+                     (33, _EDGE, "4.0 x 0.42 mm", 14))
+_UNDONE_REASON = ("Edge ribbon %s: added from the traceability file, whose sizes the "
+                  "shift incharge filled in wrong (Mukesh, 16 Oct 2026). The edge "
+                  "ribbon is 4.0 x 0.40 mm; %s.")
+
+
+def ensure_material_removals(cur):
+    """LOOK first - this runs on every boot read, and a write that changes no
+    row is still a change as far as the change feed is concerned."""
+    done = 0
+    for n, name, size, to in _UNDONE_MATERIALS:
+        t = cur.execute("SELECT name, size, removed_at FROM material WHERE n=%s",
+                        (n,)).fetchone()
+        if t is None or t["removed_at"] or t["name"] != name or t["size"] != size:
+            continue
+        moved = [r["alloc_id"] for r in cur.execute(
+            "SELECT alloc_id FROM allocation_material WHERE material_no=%s ORDER BY alloc_id",
+            (n,)).fetchall()]
+        for aid in moved:
+            if cur.execute("SELECT 1 FROM allocation_material WHERE alloc_id=%s "
+                           "AND material_no=%s", (aid, to)).fetchone():
+                cur.execute("DELETE FROM allocation_material WHERE alloc_id=%s "
+                            "AND material_no=%s", (aid, n))
+            else:
+                cur.execute("UPDATE allocation_material SET material_no=%s "
+                            "WHERE alloc_id=%s AND material_no=%s", (to, aid, n))
+        reason = _UNDONE_REASON % (size, (
+            "the %d batch%s that recorded it moved there" % (len(moved), "" if len(moved) == 1 else "es")
+            if moved else "no batch had recorded it"))
+        remove_material(cur, n, "system", reason)
+        audit(cur, "system", "material.remove", "material", n,
+              {"name": name, "size": size, "reason": reason,
+               "batches_moved": moved, "moved_to": to})
+        done += 1
+    # the edge ribbon is one material again, not one of three alternatives
+    t = cur.execute("SELECT grp FROM material WHERE n=14").fetchone()
+    if (t is not None and t["grp"] == "SICE" and not cur.execute(
+            "SELECT 1 FROM material WHERE grp='SICE' AND n<>14 AND removed_at IS NULL"
+            ).fetchone()):
+        cur.execute("UPDATE material SET grp=NULL WHERE n=14")
+    return done
+
+
+def remove_material(cur, n, actor, reason):
+    """Take material n off the master. Stamped, never deleted: its number stays
+    taken (next_material_no reads every row), and a batch that recorded it still
+    names it. Its group is left as it is - a batch that recorded it reads it as
+    that group's member, not as a gap beside it."""
+    cur.execute("UPDATE material SET removed_at=%s, removed_by=%s, removed_reason=%s "
+                "WHERE n=%s AND removed_at IS NULL",
+                (clock.now().isoformat(timespec="seconds"), actor, reason, n))
+    return cur.rowcount
+
+
 def add_cell_efficiencies(cur, values):
     """Add efficiency values to the master list that it does not have yet, keeping
     the list in numeric order (23.3% before 25%). The traceability import uses
@@ -2240,8 +2308,12 @@ def add_cell_efficiencies(cur, values):
     return new
 
 
-def materials(cur):
-    cur.execute("SELECT * FROM material ORDER BY n")
+def materials(cur, removed=False):
+    """The material master: what Planning offers and the traceability import
+    matches against. removed=True: the materials taken off it instead, each
+    with who, when and why - kept, so a batch that recorded one still names it."""
+    cur.execute("SELECT * FROM material WHERE removed_at IS %sNULL ORDER BY n"
+                % ("NOT " if removed else ""))
     return [_mat_out(r) for r in cur.fetchall()]
 
 

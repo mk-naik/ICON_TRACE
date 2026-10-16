@@ -149,7 +149,9 @@ def t_one_column_each():
     assert row["Cell Make"] == "Lion Solar" and row["Cell Efficiency"] == "25.7%"
     assert row["Cell Invoice/Batch no"] == "ID20260701"
     assert row["String Inter Connector — Centre"].startswith("Geba Copper"), row["String Inter Connector — Centre"]
-    assert row["String Inter Connector — Edge"].endswith("4.0 x 0.42 mm"), row["String Inter Connector — Edge"]
+    # one edge ribbon in the master again (Mukesh, 16 Oct 2026: the file's 0.42 was the
+    # incharge's mistake) - nothing to tell apart, so the make stands alone
+    assert row["String Inter Connector — Edge"] == "Dhash", row["String Inter Connector — Edge"]
     assert row["Lead Bending Tape"] == "H.B. Fuller · 15 mm width", row["Lead Bending Tape"]
     assert row["Back Label"] == "Kvell" and row["Barcode Label"] == "Kvell" and row["Pallet Packing"] == "Manmohan"
     assert row["Cell Type"] == "G12R" and row["Bus Bar"] == "16 BB"

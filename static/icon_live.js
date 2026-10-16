@@ -1014,6 +1014,57 @@
     window[name] = w;
   });
 
+  /* v4's material renderers - Admin > Materials, the consumption BOM and
+     Planning's bill of materials - concatenate the master and the planner's
+     choices straight into HTML: a material name, a make, a batch number read
+     off the traceability Excel. That was harmless while Admin > Materials only
+     ever showed v4's own rows; it shows the master now (16 Oct 2026), and a
+     batch number copied from a file reaches Planning's panel. MATERIALS,
+     MAT_SEL and CELL_EFF are also what the edit form and every save read, so
+     they cannot be escaped in place (a make with an "&" would be saved back as
+     "&amp;"): each v4 render gets escaped COPIES for its synchronous run and
+     the real objects back the moment it returns. Installed here, before the
+     wrappers added at sign-in, so this is the innermost one. */
+  function _escDeep(v) {
+    if (typeof v === 'string') return fqcEsc(v);
+    if (Array.isArray(v)) return v.map(_escDeep);
+    if (v && typeof v === 'object') {
+      var o = {};
+      Object.keys(v).forEach(function (k) { o[k] = _escDeep(v[k]); });
+      return o;
+    }
+    return v;
+  }
+
+  /* Everything v4 compares a material's text with is escaped alongside it -
+     the categories too: "Labels & packing" escaped on the material but not in
+     MAT_CATS matched nothing, and the back labels and junction boxes fell
+     off the panel. */
+  function _withEscapedMaster(fn, self, args) {
+    var arrays = [];
+    ['MATERIALS', 'CELL_EFF', 'MAT_CATS'].forEach(function (name) {
+      if (Array.isArray(window[name])) arrays.push([window[name], window[name].slice()]);
+    });
+    var sel = typeof MAT_SEL !== 'undefined' ? MAT_SEL : undefined;
+    function fill(arr, vals) { arr.length = 0; vals.forEach(function (x) { arr.push(x); }); }
+    try {
+      arrays.forEach(function (a) { fill(a[0], a[1].map(_escDeep)); });
+      if (sel !== undefined) window.MAT_SEL = _escDeep(sel);
+      return fn.apply(self, args);
+    } finally {
+      arrays.forEach(function (a) { fill(a[0], a[1]); });
+      if (sel !== undefined) window.MAT_SEL = sel;
+    }
+  }
+
+  ['renderMaterials', 'renderConsumption', 'renderMatPanel'].forEach(function (name) {
+    var v4 = window[name];
+    if (typeof v4 !== 'function' || v4.__escaped) return;
+    var w = function () { return _withEscapedMaster(v4, this, arguments); };
+    w.__escaped = true;
+    window[name] = w;
+  });
+
   /* v4's Drafts screen (still its own sample data) likewise shows "all
      sections" to a role named exactly 'Admin'. A Super Admin sees what an
      Admin sees. */
@@ -1045,6 +1096,11 @@
         var why = m && masterRefusal(m[1]);
         if (why) _masterLock(b, why);
       });
+    /* Remove a material: the same rule as editing one */
+    var rmWhy = masterRefusal('material');
+    if (rmWhy) {
+      admin.querySelectorAll('[data-mat-remove]').forEach(function (b) { _masterLock(b, rmWhy); });
+    }
     if (_isSuperAdmin()) return;
     /* cell efficiencies and the evidence-source settings are master data
        too, behind the same Super-Admin-only gates */
@@ -1551,6 +1607,8 @@
       MATERIALS.length = 0;
       B.materials.forEach(function (m) { MATERIALS.push(m); });
     }
+    /* taken off the master (Remove): listed under Materials, offered nowhere */
+    window.MATERIALS_REMOVED = B.materials_removed || [];
     if (B.mat_cats && typeof MAT_CATS !== 'undefined' && B.mat_cats.length) {
       MAT_CATS.length = 0;
       B.mat_cats.forEach(function (c) { MAT_CATS.push(c); });
@@ -1559,6 +1617,13 @@
       CELL_EFF.length = 0;
       B.cell_eff.forEach(function (e) { CELL_EFF.push(e); });
     }
+    /* v4 drew Admin > Materials and the consumption BOM from its own array at
+       start-up, before the lines above filled it - and nothing drew them again,
+       so after every reload Materials listed v4's rows, not the master: a
+       material added since (the 15 mm tape, the 790 frame, one a person added)
+       was not on it, so it could not be edited or removed (16 Oct 2026). */
+    try { if (typeof renderMaterials === 'function') renderMaterials(); } catch (e) {}
+    try { if (typeof renderConsumption === 'function') renderConsumption(); } catch (e) {}
 
     /* PROD is what v4's Management Overview and Production Dashboard read,
        through mgRows() and prodRows(). Replace the array and both screens
@@ -2241,6 +2306,7 @@
     if (typeof wireScreenTables === 'function') wireScreenTables();
     if (typeof wireMaterialMaster === 'function') wireMaterialMaster();
     if (typeof wireMatDefaults === 'function') wireMatDefaults();
+    if (typeof wireMaterialRemove === 'function') wireMaterialRemove();
     if (typeof wireResets === 'function') wireResets();
     if (typeof wireExports === 'function') wireExports();
     if (typeof invoiceRealParse === 'function') invoiceRealParse();
@@ -5437,6 +5503,177 @@ function wireFqcAnomalies() {
       });
   }
 
+  /* ---- Material master: Remove (16 Oct 2026) -----------------------
+   * Mukesh: "there is no option to remove added items in BOM via the Admin
+   * screen, only to add". A material is taken OFF the master, never deleted:
+   * it is no longer listed, offered in Planning or matched by the
+   * traceability import, but its row stays - the number is never reused, and
+   * a batch that recorded it still names it (Search & Trace, the report).
+   * The server decides (Super Admin, reason mandatory, audited); this asks
+   * for the reason after saying what the removal will and will not touch. */
+  function wireMaterialRemove() {
+    if (typeof renderMaterials !== 'function' || renderMaterials.__remove) return;
+    var v4 = renderMaterials;
+    var w = function () {
+      var out = v4.apply(this, arguments);
+      try { matRemoveDecorate(); } catch (e) {}
+      /* v4's redraw also rewrites the efficiency chips, plain - put back the
+         x that makes them editable (it was lost after every material save) */
+      var chips = document.getElementById('effChips');
+      if (chips && chips.__wired) { try { renderEffChips(); } catch (e) {} }
+      return out;
+    };
+    w.__remove = true;
+    window.renderMaterials = w;
+    try { matRemoveDecorate(); } catch (e) {}
+  }
+
+  function matRemoveDecorate() {
+    var rows = document.getElementById('matRows');
+    if (!rows) return;
+    rows.querySelectorAll('button[onclick^="editRecord(\'material\',"]').forEach(function (b) {
+      if (b.parentNode.querySelector('[data-mat-remove]')) return;
+      var m = (b.getAttribute('onclick') || '').match(/editRecord\('material',\s*(\d+)\)/);
+      if (!m) return;
+      var r = document.createElement('button');
+      r.className = 'btn btn-ghost btn-sm';
+      r.style.marginLeft = '4px';
+      r.setAttribute('data-mat-remove', m[1]);
+      r.setAttribute('onclick', 'iconMaterialRemove(' + m[1] + ')');
+      r.textContent = 'Remove…';
+      b.parentNode.style.whiteSpace = 'nowrap';
+      b.parentNode.appendChild(r);
+    });
+    /* the ones taken off, under the table - their numbers are the gaps in it */
+    var gone = window.MATERIALS_REMOVED || [];
+    var cnt = document.getElementById('matCount');
+    if (cnt && typeof MATERIALS !== 'undefined') {
+      cnt.textContent = MATERIALS.length + ' materials' +
+        (gone.length ? ' · ' + gone.length + ' removed' : '');
+    }
+    var card = rows.closest('.card');
+    if (!card) return;
+    var host = document.getElementById('matRemoved');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'matRemoved';
+      var foot = card.querySelector(':scope > .card-f');
+      card.insertBefore(host, foot || null);
+    }
+    host.innerHTML = !gone.length ? '' :
+      '<div class="card-b" style="border-top:1px solid var(--line)">' +
+      '<div style="font-size:11px;font-weight:700;color:var(--ink3);text-transform:uppercase;' +
+      'letter-spacing:.6px;margin-bottom:6px">Removed from the master (' + gone.length + ')</div>' +
+      '<div class="hint" style="margin-bottom:6px">Not offered in Planning or matched by the ' +
+      'traceability import. A batch that recorded one still names it; its number is never ' +
+      'given to another material.</div>' +
+      '<table><tbody>' + gone.map(function (m) {
+        var r = m.removed || {};
+        return '<tr><td class="num" style="color:var(--ink3);width:34px">' + m.n + '</td>' +
+          '<td style="font-weight:600">' + fqcEsc(m.name) +
+          '<div class="mono" style="font-size:11px;font-weight:400;white-space:nowrap">' +
+          fqcEsc(m.size || '') + '</div></td><td style="font-size:11.5px;color:var(--ink3)">' +
+          fqcEsc(String(r.at || '').replace('T', ' ').slice(0, 16)) + ' · ' + fqcEsc(r.by || '') +
+          '<div>' + fqcEsc(r.reason || '') + '</div></td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  /* After a removal: the master as the server now has it, in place (v4 closes
+     over MATERIALS), and any choice on a Planning form that named the removed
+     material dropped - Planning would otherwise post it, to be refused. */
+  function matReloadMaster() {
+    return api('materials').then(function (d) {
+      if (!d || !d.materials) return;
+      MATERIALS.length = 0;
+      d.materials.forEach(function (m) { MATERIALS.push(m); });
+      window.MATERIALS_REMOVED = d.removed || [];
+      var live = {};
+      MATERIALS.forEach(function (m) { live[m.n] = 1; });
+      if (typeof MAT_CHOICE !== 'undefined') {
+        Object.keys(MAT_CHOICE).forEach(function (g) {
+          if (!live[MAT_CHOICE[g]]) delete MAT_CHOICE[g];
+        });
+      }
+      if (typeof MAT_SEL !== 'undefined' && MAT_SEL) {
+        Object.keys(MAT_SEL).forEach(function (n) { if (!live[n]) delete MAT_SEL[n]; });
+      }
+      try { renderMaterials(); } catch (e) {}
+      try { renderConsumption(); } catch (e) {}
+      try { renderMatPanel(); } catch (e) {}
+    });
+  }
+
+  window.iconMaterialRemove = function (n) {
+    var why = masterRefusal('material');
+    if (why) { if (typeof toast === 'function') toast(why); return; }
+    var m = (MATERIALS || []).filter(function (x) { return x.n === n; })[0];
+    var host = document.getElementById('mdlGeneric');
+    var mdl = document.getElementById('mdl');
+    if (!m || !host || !mdl) return;
+    api('material/' + n + '/use').then(function (u) {
+      if (!u || u.ok === false) { if (typeof toast === 'function') toast((u && u.why) || 'Not found.'); return; }
+      var title = document.getElementById('mdlTitle');
+      var sub = document.getElementById('mdlSub');
+      if (title) title.textContent = 'Remove material ' + n;
+      if (sub) sub.textContent = m.name + ' · ' + (m.size || '');
+      if (typeof modalMode === 'function') modalMode(true);
+      var used = u.batches || 0;
+      var alts = m.group ? MATERIALS.filter(function (x) {
+        return x.group === m.group && x.n !== n; }) : [];
+      host.innerHTML =
+        '<div class="card" style="margin:0"><div class="card-b">' +
+        '<div class="note ' + (used ? 'n-warn' : 'n-info') + '" style="margin:0 0 12px">' +
+        '<span>' + (used ? '!' : 'ℹ') + '</span><span>' +
+        (used
+          ? '<b>' + used + ' batch' + (used === 1 ? '' : 'es') + ' recorded it</b> (' +
+            fqcEsc((u.examples || []).join(', ')) + (used > (u.examples || []).length ? ', …' : '') +
+            '). They keep it: Search &amp; Trace and the traceability report still name it. ' +
+            'From now on Planning does not offer it and the traceability import does not ' +
+            'match it - a file that names it is reported as not agreeing with the master.'
+          : 'No batch recorded it. It leaves the list, Planning and the traceability import.') +
+        (alts.length ? '<div style="margin-top:6px">Its alternatives stay: ' +
+          alts.map(function (a) { return fqcEsc(a.name + ' · ' + (a.size || '')); }).join('; ') +
+          '.</div>' : '') +
+        ' Its number, ' + n + ', is never given to another material.</span></div>' +
+        '<div class="fld"><label>Why is it being removed? (required)</label>' +
+        '<textarea id="matRmWhy" rows="3" placeholder="e.g. added from the traceability ' +
+        'file, which was filled in wrong"></textarea></div>' +
+        '</div><div class="card-f">' +
+        '<button class="btn btn-primary" onclick="iconMaterialRemoveGo(' + n + ')">Remove</button>' +
+        '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+        '<span class="hint" style="margin-left:auto">Recorded with your name and the reason.</span>' +
+        '</div></div>';
+      mdl.classList.add('on');
+      var box = document.getElementById('matRmWhy');
+      if (box) box.focus();
+    }).catch(function (e) {
+      if (typeof toast === 'function') toast('Could not check material ' + n + ' — ' + e.message);
+    });
+  };
+
+  window.iconMaterialRemoveGo = function (n) {
+    var box = document.getElementById('matRmWhy');
+    var why = box ? box.value.trim() : '';
+    if (!why) {
+      if (typeof toast === 'function') toast('Say why it is being removed.');
+      if (box) box.focus();
+      return;
+    }
+    api('material/' + n, { method: 'DELETE', body: JSON.stringify({ reason: why }) })
+      .then(function (d) {
+        if (!d || d.ok === false) { if (typeof toast === 'function') toast((d && d.why) || 'Not removed.'); return; }
+        if (typeof closeModal === 'function') closeModal();
+        return matReloadMaster().then(function () {
+          if (typeof toast === 'function')
+            toast('Material ' + n + ' removed' + (d.batches ? ' — the ' + d.batches +
+              ' batch' + (d.batches === 1 ? '' : 'es') + ' that recorded it still name it.' : '.'));
+        });
+      })
+      .catch(function (e) {
+        if (typeof toast === 'function') toast('Not removed — ' + e.message);
+      });
+  };
+
   /* A cell material's usual efficiency is pre-selected in Planning, so the
      common case is one less dropdown. The operator can still change it, and
      the make is still theirs to choose - the gate on Load into master is
@@ -6245,13 +6482,18 @@ function wireFqcAnomalies() {
              'No materials were recorded against this batch.</td></tr>';
     }
     return d.materials.map(function (am) {
-      var m = byNo[am.material_no] || {};
+      /* the master's row, or - taken off the master since - the description
+         the server sends with the recorded row */
+      var m = byNo[am.material_no] ||
+        { name: am.name, size: am.size, uom: am.uom, removed: !!am.removed_at };
       var made = am.vendor
         ? '<div style="font-weight:600;font-size:11.5px">' + fqcEsc(am.vendor) + '</div>'
         : '<div style="font-weight:600;font-size:11.5px;color:var(--review)">' +
           'not recorded</div>';
       return '<tr><td style="font-size:11px;color:var(--ink3);line-height:1.35">' +
         fqcEsc(m.name || ('Material ' + am.material_no)) +
+        (m.removed ? ' <span class="tag t-mute" title="Taken off the material master since; ' +
+          'this batch recorded it">removed</span>' : '') +
         (m.size ? '<br><span class="mono" style="font-size:10px">' +
                   fqcEsc(m.size) + '</span>' : '') +
         '</td><td style="text-align:right">' + made +
@@ -6286,17 +6528,31 @@ function wireFqcAnomalies() {
        was never recorded is visible as a gap rather than simply absent */
     var list = (typeof materialsFor === 'function' && d.model)
       ? materialsFor(d.model) : [];
+    /* a recorded material the master no longer has, from the description the
+       server sends with the recorded row */
+    function fromRecord(m) {
+      return { n: m.material_no, name: m.name || ('Material ' + m.material_no),
+               size: m.size || DASH, uom: m.uom || '', cat: m.cat || 'Recorded',
+               group: m.grp || undefined, cell: !!m.is_cell, note: m.note || undefined,
+               removed: !!m.removed_at };
+    }
     if (!list.length && typeof MATERIALS !== 'undefined') {
       list = d.materials.map(function (m) {
         return MATERIALS.filter(function (x) { return x.n === m.material_no; })[0] ||
-               { n: m.material_no, name: 'Material ' + m.material_no,
-                 size: DASH, uom: '', cat: 'Recorded' };
+               fromRecord(m);
       });
     }
+    /* taken off the master since (Remove), so materialsFor() leaves it out -
+       but this batch recorded it, and a bill that drops a recorded row lies */
+    var inList = {};
+    list.forEach(function (x) { inList[x.n] = 1; });
+    d.materials.forEach(function (m) {
+      if (m.removed_at && !inList[m.material_no]) list.push(fromRecord(m));
+    });
 
     var seen = {}, out = '', shown = 0;
-    /* Of a group of alternatives (20 / 15 mm tape, the 0.40 / 0.41 / 0.42
-       ribbon) the row is the member that was RECORDED - not v4's default
+    /* Of a group of alternatives (20 / 15 mm tape, the frame's mounting
+       holes) the row is the member that was RECORDED - not v4's default
        choice, which would call a 15 mm tape "not recorded" because the 20 mm
        one has no make. Only when none was recorded is the default shown, as
        the gap it is. */
@@ -6319,6 +6575,8 @@ function wireFqcAnomalies() {
       var per = (typeof qpmLabel === 'function' ? qpmLabel(mm, d.model) : mm.qpm);
       shown++;
       return '<tr><td style="font-weight:600">' + fqcEsc(mm.name) +
+        (mm.removed ? ' <span class="tag t-mute" title="Taken off the material master since; ' +
+          'this batch recorded it">removed</span>' : '') +
         (mm.note ? '<div class="hint">' + fqcEsc(mm.note) + '</div>' : '') +
         '</td><td class="mono" style="font-size:11px">' +
           fqcEsc(mm.size || DASH) + '</td>' +
@@ -6983,6 +7241,7 @@ function wireFqcAnomalies() {
     wireScreenTables();
     wireMaterialMaster();
     wireMatDefaults();
+    wireMaterialRemove();
     wireSourcesRedraw();
     mergeEvidenceSources();
     if (landing === 'admin' && hashParts[1]) openAdminTab(hashParts[1]);
@@ -7724,8 +7983,18 @@ function wireFqcAnomalies() {
           fqcEsc(d.batch_no) + ' (indent ' + fqcEsc(d.indent_no) + ', item ' +
           d.line_no + '). ' + (shown ? 'Check them before loading.' :
           'They appear once the serial range is entered.');
+        /* what that batch recorded and the master has since removed - not
+           copied, and said, so the gap is chosen again rather than missed */
+        var left = d.not_copied || [];
+        if (left.length) {
+          msg += ' <b>Not copied</b> - removed from the material master since: ' +
+            left.map(function (m) {
+              return fqcEsc((m.name || 'Material ' + m.material_no) +
+                            (m.size ? ' · ' + m.size : ''));
+            }).join('; ') + '. Choose its replacement below.';
+        }
         toast('Materials copied from ' + d.batch_no + '.');
-        planCopyNote('n-ok', msg);
+        planCopyNote(left.length ? 'n-warn' : 'n-ok', msg);
       })
       .catch(function (e) {
         var m = 'Could not read the batch: ' + e.message;

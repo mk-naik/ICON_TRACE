@@ -229,11 +229,15 @@ def t_full_bom():
     assert (b[6]["vendor"], b[6]["batch"]) == ("Kibing,Borosil", "KBM-260408,9000025061"), b[6]
     assert (b[7]["vendor"], b[7]["batch"]) == ("Borosil", "9000025061"), b[7]
     assert (b[12]["vendor"], b[12]["batch"]) == ("Geba Copper,Dhash", "113166"), b[12]
-    # one ribbon column fills Centre AND Edge: "<centre> AND <edge>", batches shared
-    # the edge ribbon is stated as 4.0X0.42, so it is the 0.42 VARIANT (material 33)
-    assert b[13]["vendor"] == "Geba Copper" and b[33]["vendor"] == "Dhash", (b[13], b.get(33))
-    assert 14 not in b and 32 not in b, "another thickness of the edge ribbon was recorded"
-    assert b[13]["batch"] == b[33]["batch"] == "109255,109980"
+    # one ribbon column fills Centre AND Edge: "<centre> AND <edge>", batches shared.
+    # The file states the edge ribbon as 4.0X0.42 - the incharge's mistake (Mukesh,
+    # 16 Oct 2026): the master's edge ribbon, 4.0 x 0.40 mm (14), is what is
+    # recorded, and the size the file states is a note
+    assert b[13]["vendor"] == "Geba Copper" and b[14]["vendor"] == "Dhash", (b[13], b.get(14))
+    assert 32 not in b and 33 not in b, "a 0.41 / 0.42 edge ribbon was recorded"
+    assert b[13]["batch"] == b[14]["batch"] == "109255,109980"
+    edge = [n for n in out["notes"] if n["kind"] == "size" and n["material"].endswith("Edge")]
+    assert edge and "4.0 x 0.40 mm" in edge[0]["detail"], out["notes"]
     assert b[9]["vendor"] == "Alishan,Sheetsol" and b[19]["vendor"] == "RCPV"
     assert b[20]["vendor"] == "H.B. Fuller" and b[22]["vendor"] == "H.B. Fuller"
     assert b[16]["vendor"] == "Fasto" and b[17]["vendor"] == b[18]["vendor"] == "Fasto"
@@ -256,14 +260,23 @@ def t_alternatives():
         assert nums == [want], (text, nums)
     out, _, _ = bom_of(workbook(jb="GNEX (0.3M) 30A"))
     assert 11 in by_no(out) and 10 not in by_no(out), "0.3 mtr junction box not chosen"
-    # the edge ribbon is ONE material in three thicknesses (variants, chosen by size)
+    # the edge ribbon is ONE material, 4.0 x 0.40 mm (Mukesh, 16 Oct 2026: the 0.41 /
+    # 0.42 the file states were the incharge's mistake, not variants). Whatever the
+    # file states, the master's is recorded; a thickness that differs is a note
     edge = {m["size"]: m["n"] for m in cat if m["name"].endswith("Edge")}
-    assert edge == {"4.0 x 0.40 mm": 14, "4.0 x 0.41 mm": 32, "4.0 x 0.42 mm": 33}, edge
-    assert all(m.get("group") == "SICE" for m in cat if m["name"].endswith("Edge")), "not variants"
-    for thick, want in (("0.40", 14), ("0.41", 32), ("0.42", 33)):
+    assert edge == {"4.0 x 0.40 mm": 14}, edge
+    assert not [m for m in cat if m["name"].endswith("Edge") and m.get("group")], "still a group"
+    for thick in ("0.40", "0.41", "0.42"):
         out, _, _ = bom_of(workbook(sic="DHASH 6.0X0.40 AND DHASH 4.0X%s" % thick))
         got = [n for n in (14, 32, 33) if n in by_no(out)]
-        assert got == [want] and not [n for n in out["notes"] if n["kind"] != "default"], (thick, got, out["notes"])
+        other = [n for n in out["notes"] if n["kind"] != "default"]
+        assert got == [14], (thick, got)
+        if thick == "0.40":
+            assert not other, (thick, other)
+        else:
+            assert [(n["kind"], n["material"]) for n in other] == \
+                [("size", "String Inter Connector — Edge")], (thick, other)
+            assert "differs from the master's (4.0 x 0.40 mm)" in other[0]["detail"], other
 
 
 @test("the frame's mounting holes are a variant: the file's 790, 1400, 1094 picks the 790 frame, "
@@ -276,7 +289,8 @@ def t_frame_holes():
         o = T.bom_materials(bom, cat, wattage=625, known_efficiencies=[])
         got = [x["material_no"] for x in o["rows"] if x["material_no"] in (8, 34)]
         assert got == [want], (sizes, got)
-        assert not [n for n in o["notes"] if n["kind"] == "size"], (sizes, o["notes"])
+        assert not [n for n in o["notes"] if n["kind"] == "size"
+                    and n["material"] == "Aluminium Frame"], (sizes, o["notes"])
     bom = dict(r0["ranges"][0]["bom"], sizes="800, 1400, 1094 MM")
     o = T.bom_materials(bom, cat, wattage=625, known_efficiencies=[])
     assert [x["material_no"] for x in o["rows"] if x["material_no"] in (8, 34)] == [8]
@@ -384,7 +398,10 @@ def t_parse_summary():
     data = workbook(rows=[{}, {"start": S(8), "end": S(14), "fr": "ALUVOLTECH (2278*1134*30 MM)"}])
     s = parse_up(c, data).get_json()["bom_summary"]
     notes = {(n["kind"], n["material"]): n["ranges"] for n in s["notes"]}
-    assert notes == {("file_error", "Aluminium Frame"): 1}, notes      # the edge variants (0.42) match the master
+    # the file's 4.0X0.42 edge ribbon is not the master's 0.40 - the incharge's
+    # mistake (Mukesh, 16 Oct 2026) - and both ranges state it
+    assert notes == {("file_error", "Aluminium Frame"): 1,
+                     ("size", "String Inter Connector — Edge"): 2}, notes
 
 
 @test("re-importing a backfilled range REFRESHES its BOM from the file - the repair "
@@ -461,12 +478,17 @@ def t_real_file():
         neweff.update(out["new_efficiencies"])
         for n in out["notes"]:
             kinds[n["kind"]] = kinds.get(n["kind"], 0) + 1
-            assert n["kind"] in ("default", "file_error"), n   # no unknown makes, no missing materials, no stray size
+            # no unknown makes, no missing materials; the one size that differs is the
+            # edge ribbon the incharge wrote as 0.41 / 0.42 (Mukesh, 16 Oct 2026)
+            assert n["kind"] in ("default", "file_error") or (
+                n["kind"] == "size" and n["material"].endswith("Edge")
+                and (n["text"] or "").endswith(("4.0X0.42", "4.0X0.41"))), n
         assert len(out["rows"]) >= 18, (rg["start"], len(out["rows"]))
         got = by_no(out)           # in no column of the file: the master's default makes
         assert got[29]["vendor"] == "Kvell" and got[30]["vendor"] == "Manmohan", rg["start"]
     assert neweff == {"23.3%", "25.8%"}, neweff
     assert kinds.get("file_error") == 1, kinds        # the one 2278-wide frame on a G12R module
+    assert kinds.get("size") == 52, kinds             # 51 ranges say 4.0X0.42, one 4.0X0.41
     rg = [x for x in r["ranges"] if x["start"] == "ICON625R1293030001"][0]
     b = by_no(T.bom_materials(rg["bom"], cat, wattage=625, known_efficiencies=known))
     assert (b[5]["vendor"], b[5]["efficiency"]) == ("Lion Solar", "25.6%"), b[5]

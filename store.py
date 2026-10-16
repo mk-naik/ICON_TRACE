@@ -246,6 +246,13 @@ def _migrate(cx, text):
     if cols("material") and "default_make" not in cols("material"):
         cx.execute("ALTER TABLE material ADD COLUMN default_make TEXT")
 
+    # 16 Oct 2026: a material can be taken off the master (Admin > Materials >
+    # Remove). The row stays - its number is never reused and a batch that
+    # recorded it still names it.
+    for name in ("removed_at", "removed_by", "removed_reason"):
+        if cols("material") and name not in cols("material"):
+            cx.execute("ALTER TABLE material ADD COLUMN %s TEXT" % name)
+
     # 16 Oct 2026: a line has two Pre-EL machines - which one took the image.
     # Rows recorded before are the primary's: it was the only one read.
     if cols("el_capture") and "unit" not in cols("el_capture"):

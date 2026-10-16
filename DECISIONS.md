@@ -461,8 +461,32 @@ The Drafts screen is still v4 sample data.
   Centre AND Edge, potting Part A AND B). [built]
 - Alternatives follow the size the file states. **Variants of a material live in
   the master as a group of alternatives** the planner chooses from: Lead Bending
-  Tape 20 / 15 mm (group LBT), Junction Box 0.4 / 0.3 mtr (JB), and the **Edge
-  string ribbon 4.0 x 0.40 / 0.41 / 0.42 mm** (SICE; materials 14, 32, 33). [built]
+  Tape 20 / 15 mm (group LBT), Junction Box 0.4 / 0.3 mtr (JB). [built]
+- **The edge string ribbon is ONE material, 4.0 x 0.40 mm (14)** (Mukesh, 16 Oct:
+  the file's sizes were the shift incharge's mistake in filling it, "not us"). Its
+  0.41 / 0.42 "variants" (32, 33), added on 2 Oct because the September file named
+  them, came off the master: an existing database removes them once, as "system"
+  with the reason, and a batch that recorded one is moved to 14 (his choice: "move
+  to the standard" - none had, on the plant's database). A file that states 0.41 /
+  0.42 is a size the master disagrees with: warned before anything is recorded (52
+  of the September file's 275 ranges), the master's 0.40 recorded. [built]
+- **A material can be taken off the master** (Admin > Materials > Remove; Mukesh,
+  16 Oct: "no option to remove added items, able to just add"). Super Admin, reason
+  mandatory, audited; the dialog first says how many batches recorded it. It is no
+  longer listed, offered in Planning or matched by the import - but the row stays:
+  its number is never given to another material, and a batch that recorded it
+  still names it (Search & Trace's bill, tagged "removed"; the traceability
+  report's column). A new batch naming it is refused by name (a page opened before
+  the removal still offers it); an edited batch may keep what it recorded; Copy
+  from batch leaves it out and says so. Its group is left as it is, so a batch
+  reads it as that group's member. The removed ones are listed under the table
+  with who, when and why. There is no restore. [built]
+- **[open]** "Cell size" (Mukesh, 16 Oct, among what to undo): no cell size was ever
+  changed from the file - materials 1 and 5 are v4's own (182.2 x 183.75, 182.2 x
+  210), never edited; the file's cell size is only compared with them, a
+  difference being a note. The one cell change the file makes is the efficiency
+  list: 25.8% was added from it (the September file also states 23.3%). Whether
+  that is what he means.
 - **A size that belongs to another module type is a FILE error, never a master
   error**: the G2X (M10R) frame 2278x1134x30 cannot exist on a G12R module, so the
   master (2382x1134x30) stands, the range is recorded with it, and the screen says
@@ -477,10 +501,10 @@ The Drafts screen is still v4 sample data.
   while the row is still the seeded one - a person's edit is never put back.
   [built]
 - **A bill of materials on screen shows the variant that was RECORDED.** Of a group
-  of alternatives (Lead Bending Tape 20/15 mm, Edge ribbon 0.40/0.41/0.42, Junction
+  of alternatives (Lead Bending Tape 20/15 mm, the frame's mounting holes, Junction
   Box) Search & Trace > View full details lists the member(s) with a recorded row;
-  v4's default member (20 mm, 0.40) is shown only when none was recorded, as the gap
-  it is. [built]
+  v4's default member (20 mm) is shown only when none was recorded, as the gap it
+  is. [built]
 - **The frame's mounting holes are variants of the frame** (group FRM, G12R):
   `2382 x 1134 x 30 mm · holes 1000, 1400, 1094 mm` (material 8, the model master's
   value) and `... · holes 790, 1400, 1094 mm` (34, what the September file states).

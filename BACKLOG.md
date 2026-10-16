@@ -7811,3 +7811,57 @@ commit.
 - **Test:** `test_el_capture.py` +1 (55): the event log's EL rows and the review row;
   `test_el_capture_ui.py` (7): a Save on each card; `test_master_data_ui.py`: all three
   Saves live for a Super Admin, all three disabled with the reason for an Admin.
+
+### 16 Oct 2026 - Remove a material (Admin > Materials); the list is the master after a reload
+- **Reported (Mukesh):** "There no option to remove added items in BOM via admin screen
+  able to just add".
+- **Found too:** after every reload Admin > Materials listed v4's own built-in rows, not
+  the master - v4 drew the table at start-up, before the boot payload filled MATERIALS,
+  and nothing drew it again. So 31-34 (added from the traceability file) and any material
+  a person added were not on the list, nor their Edit. After a material save the
+  efficiency chips lost their x as well.
+- **Change:** `material.removed_at / removed_by / removed_reason` (store migration);
+  `db.materials()` is the live master, `removed=True` the removed ones;
+  `DELETE /api/material/<n>` (Super Admin, reason mandatory, audited `material.remove`) and
+  `GET /api/material/<n>/use` (how many batches recorded it). The row stays: number never
+  reused, group left as it is. Refused: a new batch naming a removed material (an edit may
+  keep what its batch recorded); editing a removed one. Copy from batch leaves it out
+  (`not_copied`, said on screen). Search & Trace's payload carries each recorded material's
+  own description, so a removed one is still named ("removed" tag); the traceability report
+  keeps its column where recorded. Admin > Materials: Remove... on each row (disabled with
+  the reason for anyone else), the dialog says how many batches recorded it and asks why;
+  removed ones listed under the table. applyBoot redraws Materials and the consumption BOM
+  from the master; the chips keep their x.
+- **Found on the way (stored XSS):** v4's three material renderers - Materials, the
+  consumption BOM, Planning's bill of materials - concatenate names, sizes, makes and the
+  planner's batch text straight into HTML. Harmless while Materials showed v4's own rows;
+  `test_stored_xss` caught it the moment it showed the master, and a batch number from the
+  traceability Excel reached Planning's panel already (Copy from batch). Each v4 render
+  now gets escaped COPIES of MATERIALS / MAT_SEL / CELL_EFF and the raw objects back when
+  it returns (they are also the save's source - escaping in place would save "&amp;").
+  Proved both ways: with the wrapper off, name, size, make and batch payloads all ran.
+- **Test:** `test_material_remove.py` (9, new); `test_boot_payload.py` (the new
+  `materials_removed` key); `test_stored_xss.py` passes again.
+
+### 16 Oct 2026 - the edge ribbon is one material again (0.41 / 0.42 mm undone)
+- **Decided (Mukesh):** the BOM specs added from the traceability Excel came from the
+  shift incharge's mistakes in filling it ("not us"); undo them, and warn when the file and
+  the master disagree. Of what the file had added he named the edge ribbon 0.41 / 0.42 mm;
+  batches that recorded one: "move to the standard".
+- **Change:** 32 / 33 out of the seed (`icon_materials`) and `_ADDED_MATERIALS`; 14 is no
+  longer in group SICE. `db.ensure_material_removals` (on boot reads, LOOK first, once):
+  each matched by name and size - a database where 32 is somebody's own material is left
+  alone -, its batches moved to 14 (a batch holding both keeps one row), removed as
+  "system" with the reason, audited; 14's group cleared. A file stating 0.41 / 0.42 is then
+  a size the master disagrees with: the amber "Bill of materials" warning on the import
+  screen before anything is recorded, the master's 0.40 recorded - 52 of the September
+  file's 275 ranges.
+- **On the plant's data (the 8090 copy of 8080's database):** no batch had recorded 32 or
+  33 (14: 191 batches), so nothing moves.
+- **Not changed:** "cell size", his other answer - no cell size was ever changed from the
+  file (materials 1 and 5 are v4's, never edited); asked (DECISIONS section 12, [open]). The
+  15 mm tape (31) and the 790 frame (34), 182 backfilled batches each, stay.
+- **Test:** `test_material_remove.py` (the undo once, a fresh master, a foreign 32);
+  `test_bom_match.py` (edge recorded as 14 with a size note; the real file's 52);
+  `test_bom_match_ui.py` (no thickness to choose in Planning, the warning on the import
+  screen, Search & Trace shows 0.40); `test_trace_export.py` (the Edge column is the make).

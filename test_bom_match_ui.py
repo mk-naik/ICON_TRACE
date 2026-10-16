@@ -68,11 +68,13 @@ def t_planning_defaults():
             const a = r && r.querySelector('.mat-alt');
             return a ? Array.from(a.options).map(o => o.text) : null; }""")
         assert alt and len(alt) == 2 and any("20 mm" in t for t in alt) and any("15 mm" in t for t in alt), alt
+        # the edge ribbon is ONE material again, 4.0 x 0.40 mm - the 0.41 / 0.42 "variants"
+        # were read off a file the incharge filled in wrong (Mukesh, 16 Oct 2026)
         edge = pg.evaluate("""() => { const r = Array.from(document.querySelectorAll('#matPanel .matrow'))
             .find(x => /Edge/.test(x.textContent) && /String Inter Connector/.test(x.textContent));
-            const a = r && r.querySelector('.mat-alt');
-            return a ? Array.from(a.options).map(o => o.text) : null; }""")
-        assert edge and len(edge) == 3 and all(any(t in e for e in edge) for t in ("0.40", "0.41", "0.42")), edge
+            return r ? {alt: !!r.querySelector('.mat-alt'),
+                        size: (r.querySelector('.mat-sz') || {}).textContent || ''} : null; }""")
+        assert edge and not edge["alt"] and "4.0 x 0.40 mm" in edge["size"], edge
         frame = pg.evaluate("""() => { const r = Array.from(document.querySelectorAll('#matPanel .matrow'))
             .find(x => /Aluminium Frame/.test(x.textContent));
             const a = r && r.querySelector('.mat-alt');
@@ -113,6 +115,9 @@ def t_import_notes_and_refresh():
         body = pg.inner_text("#peImpBody")
         assert "will be added" in body and "25.8%" in body, body[:500]
         assert "file looks wrong" in body.lower() and "Aluminium Frame" in body and "G2X" in body, body[:900]
+        # the file's 4.0X0.42 edge ribbon is not the master's - warned, before recording
+        assert "does not agree" in body and "4.0X0.42" in body and \
+            "differs from the master's (4.0 x 0.40 mm)" in body, body[:1500]
         pg.check("#peImpBackfill")
         pg.wait_for_timeout(300)
         pg.click("#peImpApply")
@@ -147,7 +152,8 @@ def full_details(serial):
 
 
 @test("Search & Trace > View full details shows the variant that was RECORDED: the 15 mm "
-      "tape and the 0.42 ribbon, not the 20 mm / 0.40 default with 'not recorded'")
+      "tape, not the 20 mm default with 'not recorded' - and the edge ribbon as the "
+      "master's 0.40 (the file's 0.42 was the incharge's mistake)")
 def t_trace_shows_recorded_variant():
     c = BM.client()
     p = BM.parse_up(c, BM.workbook()).get_json()
@@ -156,7 +162,7 @@ def t_trace_shows_recorded_variant():
     lt = [r for k, r in rows.items() if k.startswith("Lead Bending Tape")]
     assert len(lt) == 1 and "15 mm" in lt[0][1] and "H.B. Fuller" in lt[0][4], lt
     edge = [r for k, r in rows.items() if k.startswith("String Inter Connector") and "Edge" in k]
-    assert len(edge) == 1 and "0.42" in edge[0][1] and "Dhash" in edge[0][4], edge
+    assert len(edge) == 1 and "4.0 x 0.40 mm" in edge[0][1] and "Dhash" in edge[0][4], edge
     assert not any("not recorded" in " ".join(r) for k, r in rows.items()
                    if k.startswith(("Lead Bending", "String Inter Connector"))), rows
     assert rows["Barcode Label"][4] == "Kvell" and rows["Pallet Packing"][4] == "Manmohan", rows
@@ -175,7 +181,8 @@ def t_trace_real_serial():
     rows = full_details("ICON625R1293022642")
     blank = [k for k, r in rows.items() if "not recorded" in " ".join(r)]
     assert not blank, blank
-    assert "0.42" in [r for k, r in rows.items() if "Edge" in k and k.startswith("String")][0][1]
+    # the file says 4.0X0.42 here; the master's edge ribbon is what is recorded
+    assert "4.0 x 0.40 mm" in [r for k, r in rows.items() if "Edge" in k and k.startswith("String")][0][1]
     assert "15 mm" in [r for k, r in rows.items() if k.startswith("Lead Bending")][0][1]
 
 

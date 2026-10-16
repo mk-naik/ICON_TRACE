@@ -66,7 +66,10 @@ TOP_KEYS = {"live", "build", "db_file", "indents", "challan_seq", "prod",
             # Round 30: the change sequence this payload is current as of.
             # Added deliberately - the page uses it as the mark the change
             # feed counts from, so it belongs with the data, not beside it.
-            "change_seq"}
+            "change_seq",
+            # 16 Oct 2026: the materials taken off the master (Remove), which
+            # Admin > Materials lists under its table. Added deliberately.
+            "materials_removed"}
 NESTED = {"challan_seq": {"fy", "next"}, "config": {"pallet_ceiling"},
           "counts": {"serials", "invoices", "challans", "boxes", "indents",
                     "needs_review", "drafts"},
@@ -184,6 +187,7 @@ def t_api_boot():
         assert set(d[k][0]) == want, (k, set(d[k][0]))
     assert isinstance(d["prod"], list) and isinstance(d["shifts"], list)
     assert isinstance(d["materials"], list) and isinstance(d["cell_eff"], list)
+    assert isinstance(d["materials_removed"], list)
     # any role with a session - a session is the bar, not a screen
     op = APP.app.test_client()
     AUTH.test_login(op, role="Quality")

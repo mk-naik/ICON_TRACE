@@ -275,6 +275,7 @@ python test_upload_drop.py          6 tests · dropping a file onto Production E
 python test_review_discard.py      8 tests · Needs Review: discard junk / unplanned scans, twins, bulk, anomaly flow (Chromium)
 python test_trace_export.py       10 tests · traceability report as Excel: month / range / one day, one material per column
 python test_material_defaults.py   5 tests · a material's default make; Barcode Label / Pallet Packing
+python test_material_remove.py     9 tests · Remove a material (kept for its batches, never reused, refused on a new batch); the edge ribbon one material again; Admin > Materials from the master; markup in the master never runs (Chromium)
 python test_incharge_master.py     9 tests · shift incharge master: individuals, several per entry joined with ',' (Chromium)
 python test_challan_cancel_ui.py   2 tests · Cancel button: Admin only, asks reason + authenticator code
 python test_anonymous_routes.py   3 tests · every /api route answers 401 with no session (allow-list: /api/session)
