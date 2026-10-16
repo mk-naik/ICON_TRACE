@@ -250,7 +250,9 @@ def seed_screen():
     put(PRE_A, "2026-10-15/晚班/Cell Crack", IN_REWORK + ".jpg", "2026-10-15T22:02:25")
     put(POST_B, "2026-10-15/中班/Cell Crack", REJECTED + ".jpg", "2026-10-15T15:00:00")
     with store.conn() as (cx, cur):
-        assert elcap.run(db.get_config(cur), cur) == {"pre_el": 1, "post_el": 1}
+        # REJECTED's NG at Post EL is a rejection: a Needs Review item too
+        assert elcap.run(db.get_config(cur), cur) == {"pre_el": 1, "post_el": 1,
+                                                      "post_el_ng": 1}
 
 
 @test("EL Stations on the page: after Production Entry for a Production Incharge, its "
@@ -340,6 +342,57 @@ def t_dashboards_on_page():
         pg.click("#mgElCard button:has-text('Open EL Stations')")
         pg.wait_for_selector("#v-elst.on", timeout=10000)
         assert pg.errors == [], pg.errors
+
+
+@test("Needs Review: a Post EL rejection is under the Quality tab, red, 'Quality only' "
+      "for an Incharge; Quality closes it as reviewed with a reason and it is gone")
+def t_post_el_review_on_page():
+    seed_screen()
+
+    def review_rows(pg):
+        return pg.evaluate("""() => Array.from(document.querySelectorAll('#rvRows tr'))
+            .filter(tr => tr.style.display !== 'none' && tr.cells.length > 2)
+            .map(tr => ({serial: tr.cells[1].textContent.trim(),
+                         flag: tr.cells[2].textContent.trim(),
+                         tone: (tr.cells[2].querySelector('.tag') || {}).className || '',
+                         stage: tr.cells[3].textContent.trim(),
+                         detail: tr.cells[4].textContent.trim(),
+                         action: tr.cells[6].textContent.trim()}))""")
+
+    def quality_tab(pg):
+        pg.evaluate("go('review')")
+        pg.wait_for_function("document.querySelectorAll('#rvRows tr').length > 0", timeout=15000)
+        pg.click("#v-review .card-h .seg button:has-text('Quality')")
+        pg.wait_for_timeout(400)
+        return [r for r in review_rows(pg) if r["serial"] == REJECTED]
+
+    with H.browser() as b:
+        pi = H.open_page(b, None, role="Production Incharge")
+        got = quality_tab(pi)
+        assert len(got) == 1 and got[0]["action"] == "Quality only", got
+
+        pg = H.open_page(b, None, role="Quality")
+        got = quality_tab(pg)
+        assert len(got) == 1, got
+        r = got[0]
+        assert r["flag"] == "Post EL NG · rejected" and "t-fail" in r["tone"], r
+        assert r["stage"] == "Post EL · Line B" and r["detail"].startswith("Cell Crack at Post EL"), r
+        assert r["action"] == "Reviewed…", r
+        assert "1 rejected at Post EL" in pg.text_content("#v-review .kpi:nth-child(2) .d"), \
+            pg.text_content("#v-review .kpi:nth-child(2)")
+        pg.click("#rvRows tr:has-text('%s') button:has-text('Reviewed')" % REJECTED)
+        pg.wait_for_selector("#mdl.on #revWhy", timeout=10000)
+        pg.fill("#revWhy", "crack confirmed under the light - scrapped")
+        pg.click("#mdl.on .card-f .btn-primary")
+        pg.wait_for_function("""(s) => !Array.from(document.querySelectorAll('#rvRows tr'))
+            .some(tr => tr.style.display !== 'none' && tr.textContent.indexOf(s) >= 0)""",
+                             arg=REJECTED, timeout=15000)
+        with store.conn() as (cx, cur):
+            row = store.one(cur, "SELECT status, resolution, reason FROM review_item "
+                                 "WHERE type='post_el_ng'")
+        assert (row["status"], row["resolution"], row["reason"]) == \
+            ("resolved", "reviewed", "crack confirmed under the light - scrapped"), dict(row)
+        assert pg.errors == [] and pi.errors == [], (pg.errors, pi.errors)
 
 
 if __name__ == "__main__":

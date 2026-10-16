@@ -8679,13 +8679,17 @@ function wireFqcAnomalies() {
     var kpis = document.querySelectorAll('#v-review .kpi');
     var dup = rows.filter(function (r) { return r.type === 'duplicate_scan'; }).length;
     var qual = rows.filter(function (r) { return r.type === 'quality_grade'; }).length;
+    /* a module rejected at Post EL is kept off the line for Quality too */
+    var pel = rows.filter(function (r) { return r.type === 'post_el_ng'; }).length;
     if (kpis[0]) {
       var v0 = kpis[0].querySelector('.v'); if (v0) v0.textContent = dup;
     }
     if (kpis[1]) {
       var l1 = kpis[1].querySelector('label'); if (l1) l1.textContent = 'Awaiting Quality';
-      var v1 = kpis[1].querySelector('.v'); if (v1) v1.textContent = qual;
-      var d1 = kpis[1].querySelector('.d'); if (d1) d1.textContent = 'rejected, no grade yet';
+      var v1 = kpis[1].querySelector('.v'); if (v1) v1.textContent = qual + pel;
+      var d1 = kpis[1].querySelector('.d');
+      if (d1) d1.textContent = pel ? qual + ' rejected, no grade yet · ' + pel +
+                                     ' rejected at Post EL' : 'rejected, no grade yet';
     }
     if (kpis[2]) {
       var l2 = kpis[2].querySelector('label'); if (l2) l2.textContent = 'Open items';
@@ -8699,7 +8703,8 @@ function wireFqcAnomalies() {
      unplanned modules there pushed the Quality and Duplicate items - the ones
      a person has to DECIDE - out of sight. */
   var REVIEW_TABS = {
-    'Quality': ['quality_grade'],
+    /* a Post EL rejection is kept off the line for Quality (16 Oct 2026) */
+    'Quality': ['quality_grade', 'post_el_ng'],
     'Duplicate scan': ['duplicate_scan'],
     'Provisional': ['provisional_mismatch'],
     'Not in master': ['not_in_master_unplanned', 'not_in_master_malformed'],
@@ -8750,8 +8755,8 @@ function wireFqcAnomalies() {
     var esc = reviewEsc;
     body.innerHTML = shown.map(function (r) {
       var when = (r.at || '').replace('T', ' ').slice(0, 16);
-      var flagTag = '<span class="tag ' + (r.type === 'quality_grade' ? 't-fail' : 't-rev') +
-        '">' + esc(r.flag) + '</span>';
+      var flagTag = '<span class="tag ' + (r.type === 'quality_grade' || r.type === 'post_el_ng'
+        ? 't-fail' : 't-rev') + '">' + esc(r.flag) + '</span>';
       var action;
       if (r.locked) {
         action = '<span class="hint">Quality only</span>';
@@ -8768,6 +8773,11 @@ function wireFqcAnomalies() {
       } else if (r.type === 'duplicate_scan') {
         action = '<button class="btn btn-ghost btn-sm" onclick="reviewOpenDuplicate(' +
           r.id + ')">Resolve</button>';
+      } else if (r.type === 'post_el_ng') {
+        /* Quality has looked at the module kept off the line: one reason - what
+           they found and did - and it closes as reviewed */
+        action = '<button class="btn btn-ghost btn-sm" onclick="reviewOpenIngest(' +
+          r.id + ')" title="Say what was found and done with the module">Reviewed…</button>';
       } else if (r.type === 'not_in_master_unplanned') {
         /* Nothing to resolve by hand: it closes itself the moment the serial
            is in the master, and whatever FQC decided carries on from there. */

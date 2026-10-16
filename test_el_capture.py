@@ -38,6 +38,9 @@ THE RULES THIS FILE DEFENDS
      Incharge, Admin and Super Admin may open it, others by user permission -
      and the accounts that existed before it are given it once, by role.
 
+  9. An NG at Post EL raises one Needs Review item - the module is kept off
+     the line for Quality, who close it with a reason.
+
 Each test names the rule it defends, so a failure says which decision broke.
 """
 
@@ -827,7 +830,7 @@ def t_journey_post_el_ng():
     post = got[0]
     assert (post["value"], post["tone"], post["tag"]) == \
         ("NG", "t-fail", "14-10-2026 16:00 · shift B"), post
-    assert post["detail"] == ["Cell Crack", "rejected - no rework after lamination",
+    assert post["detail"] == ["Cell Crack", "rejected - kept off the line for Quality",
                               "Cell Crack · 14-10-2026 16:00", "OK · 14-10-2026 16:30",
                               "Line B"], post["detail"]
 
@@ -1096,6 +1099,83 @@ def t_dashboard_el():
     s = el(shift="C")["el"]
     assert (s["pre_el"]["scanned"], s["pre_el"]["in_rework"], s["post_el"]["scanned"]) == \
         (1, 1, 0), s
+
+
+# --------------------------------------------------------------------------
+# 9. a Post EL rejection goes to Needs Review
+# --------------------------------------------------------------------------
+
+@test("an NG at Post EL raises one Needs Review item for Quality - once a module, and "
+      "quietly; an OK, or an NG at Pre-EL, raises none")
+def t_post_el_review_raised():
+    fresh()
+    put(POST_B, "2026-10-14/中班/Cell Crack", S_POST + ".jpg", "2026-10-14T16:00:00")
+    put(POST_B, "2026-10-14/中班/OK", S_CROSS + ".jpg", "2026-10-14T16:05:00")
+    put(PRE_A, "2026-10-14/早班/Cell Crack", S_CRACK + ".jpg")
+    assert run() == {"pre_el": 1, "post_el": 2, "post_el_ng": 1}
+    with store.conn() as (cx, cur):
+        items = store.rows(cur, "SELECT * FROM review_item WHERE type='post_el_ng'")
+    assert [(i["serial"], i["status"], i["source"], i["line"], i["event_at"], i["raw_id"],
+             i["created_by"]) for i in items] == \
+        [(S_POST, "open", "el_capture", "B", "2026-10-14T16:00:00", "post_el_ng|" + S_POST,
+          "system")], [dict(i) for i in items]
+    # another NG image of it, and a later OK: nothing more - the rejection stands
+    put(POST_B, "2026-10-14/中班/Grid Burning", S_POST + "_1.jpg", "2026-10-14T16:30:00")
+    put(POST_B, "2026-10-14/晚班/OK", S_POST + "_2.jpg", "2026-10-14T22:30:00")
+    assert run() == {"post_el": 2}
+    with store.conn() as (cx, cur):
+        assert store.one(cur, "SELECT COUNT(*) AS n FROM review_item WHERE "
+                              "type='post_el_ng'")["n"] == 1
+        before = cx.total_changes
+        assert elcap.run(db.get_config(cur), cur) == {}
+        assert cx.total_changes == before and cur.written == set()
+
+
+@test("Needs Review lists a Post EL rejection under Quality with its reason; Quality "
+      "closes it as reviewed, with a reason - an Incharge may not; the badge counts "
+      "it; the journey says who reviewed it")
+def t_post_el_review_flow():
+    fresh()
+    put(POST_B, "2026-10-14/中班/Cell Crack", S_POST + ".jpg", "2026-10-14T16:00:00")
+    run()
+    q = APP.app.test_client()
+    who = AUTH.test_login(q, role="Quality")
+    pi = APP.app.test_client()
+    AUTH.test_login(pi, role="Production Incharge")
+    mine = [i for i in q.get("/api/review").get_json() if i["type"] == "post_el_ng"]
+    assert len(mine) == 1, mine
+    it = mine[0]
+    assert (it["serial"], it["flag"], it["stage"], it["locked"], it["model"]) == \
+        (S_POST, "Post EL NG · rejected", "Post EL · Line B", False, "ISEN625-G12R"), it
+    assert it["detail"].startswith("Cell Crack at Post EL") and "kept off the line" in \
+        it["detail"], it["detail"]
+    assert [i for i in pi.get("/api/review").get_json()
+            if i["type"] == "post_el_ng"][0]["locked"] is True
+    with store.conn() as (cx, cur):
+        counts = db.review_open_counts(cur)
+    assert counts["total"] == 1, counts          # the badge counts it
+
+    r = pi.post("/api/review/resolve", json={"type": "post_el_ng", "id": it["id"],
+                                            "reason": "looked at it"})
+    assert r.status_code == 403, r.get_json()
+    r = q.post("/api/review/resolve", json={"type": "post_el_ng", "id": it["id"],
+                                           "reason": "  "})
+    assert r.status_code == 400, r.get_json()
+    r = q.post("/api/review/resolve", json={"type": "post_el_ng", "id": it["id"],
+                                           "reason": "crack confirmed - scrapped"})
+    assert r.status_code == 200 and r.get_json()["resolution"] == "reviewed", r.get_json()
+    assert not [i for i in q.get("/api/review").get_json() if i["type"] == "post_el_ng"]
+    with store.conn() as (cx, cur):
+        assert db.review_open_counts(cur)["total"] == counts["total"] - 1
+        row = store.one(cur, "SELECT * FROM review_item WHERE type='post_el_ng'")
+    assert (row["status"], row["resolution"], row["reason"], row["resolved_by"]) == \
+        ("resolved", "reviewed", "crack confirmed - scrapped", who["name"]), dict(row)
+    r = q.post("/api/review/resolve", json={"type": "post_el_ng", "id": it["id"],
+                                           "reason": "again"})
+    assert r.status_code == 400 and "already resolved" in r.get_json()["why"]
+    post = el_part(S_POST)[0]
+    assert post["detail"][:3] == ["Cell Crack", "rejected - kept off the line for Quality",
+                                  "reviewed by " + who["name"]], post["detail"]
 
 
 if __name__ == "__main__":

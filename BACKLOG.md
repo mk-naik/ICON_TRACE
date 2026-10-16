@@ -7740,3 +7740,21 @@ commit.
   may serve both lines; the probe, sources and Settings fields. `test_el_capture_ui.py`
   (6): the secondary's field and tag on the page; the journey and EL Stations with the
   re-shot on the secondary.
+
+### 16 Oct 2026 - a Post EL rejection raises a Needs Review item for Quality
+- **Decided (Mukesh):** "Raise a Needs Review. They physically turned off the line, keep
+  in for quality review." (It was left [open] in DECISIONS 5.)
+- **Change:** the EL poller raises `post_el_ng` with the NG image (`db.ingest_review_item`,
+  raw_id = the serial, so one per module, checked first, quiet); `/api/review` lists it
+  ("Post EL NG · rejected", its folder as the reason, Post EL · Line), locked for anyone
+  but Quality / Admin / Super Admin, who close it as "reviewed" with a mandatory reason
+  (`_resolve_post_el_ng`, audited); it counts in the Needs Review badge
+  (`review_open_counts` total) and in "Awaiting Quality". The page: Quality tab, red tag,
+  "Reviewed…" (the one-reason popup), "Quality only" for others. The journey's Post EL
+  step says "kept off the line for Quality", then who reviewed it. Nothing is blocked.
+- **Test:** `test_el_capture.py` +2 (52): raised once a module and quietly, not for an OK or
+  a Pre-EL NG; listed, locked by role, resolved by Quality only with a reason, gone from
+  the list and the badge, the journey's "reviewed by". `test_el_capture_ui.py` +1 (7):
+  the item in a browser, an Incharge's "Quality only", Quality resolving it.
+  `test_review.py`, `test_fqc_unplanned.py` (their count checks), `test_review_discard`,
+  `test_inline_args_ui`, `test_fqc`, `test_icon_ingest` pass.

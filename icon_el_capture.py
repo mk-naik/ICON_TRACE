@@ -347,10 +347,19 @@ def pick_new(cur, files):
     return out
 
 
+REVIEW_TYPE = "post_el_ng"
+
+
 def apply(cur, rows):
     """Write what pick_new() found - each row checked absent first, so a pass
     with nothing new writes nothing at all (db.ingest_review_item's rule).
-    Returns {station: rows written}."""
+
+    An NG at Post EL also raises a Needs Review item (Mukesh, 16 Oct 2026):
+    after lamination the module cannot be reworked, so it is taken off the line
+    and kept for Quality. One per module - raw_id is the serial - so a second
+    NG image of it raises nothing more, and neither does a later OK.
+    Returns {station: rows written, 'post_el_ng': items raised}."""
+    import db
     out = {}
     seen = clock.stamp()
     for r in rows:
@@ -360,8 +369,15 @@ def apply(cur, rows):
             "ON CONFLICT (station, path) DO NOTHING",
             (r["station"], r["unit"], r["line"], r["serial"], r["recapture"],
              r["verdict"], r["path"], r["file_time"], seen))
-        if cur.rowcount:
-            out[r["station"]] = out.get(r["station"], 0) + 1
+        if not cur.rowcount:
+            continue
+        out[r["station"]] = out.get(r["station"], 0) + 1
+        if r["station"] == "post_el" and not is_pass(r["verdict"]) and \
+                db.ingest_review_item(cur, REVIEW_TYPE, r["serial"],
+                                      "%s|%s" % (REVIEW_TYPE, r["serial"]),
+                                      "el_capture", line=r["line"],
+                                      event_at=r["file_time"]):
+            out[REVIEW_TYPE] = out.get(REVIEW_TYPE, 0) + 1
     return out
 
 

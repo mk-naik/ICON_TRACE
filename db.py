@@ -1440,7 +1440,10 @@ def review_open_counts(cur):
     scan_events = _store.one(cur, "SELECT COUNT(*) AS n FROM review_item WHERE "
                                   "type IN ('ss_skip', 'looked_up_no_decision', "
                                   "'ftr_junk', 'ftr_failed') AND status='open'")["n"]
-    return {"total": quality + dup + prov + not_master + scan_events,
+    # a module rejected at Post EL, kept off the line for Quality (16 Oct 2026)
+    post_el = _store.one(cur, "SELECT COUNT(*) AS n FROM review_item WHERE "
+                              "type='post_el_ng' AND status='open'")["n"]
+    return {"total": quality + dup + prov + not_master + scan_events + post_el,
             "duplicate_scan": dup, "not_in_master": not_master}
 
 

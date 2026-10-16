@@ -222,8 +222,13 @@ no one signs twice. [enforcement unverified]
   PCs' clocks. An image re-filed under another verdict (same machine, re-shot number
   and time) is one image, its latest filing standing. A station the serial was never
   captured at gives no step at all - not "pending". [built]
-  **[open]** whether a Post EL rejection should also stop the module (FQC, packing) or
-  raise a Needs Review item - today it is shown, not enforced.
+- **A Post EL rejection raises a Needs Review item** (Mukesh, 16 Oct: "they physically
+  turn it off the line, keep it for quality review"): one per module, raised by the EL
+  poller with the image, under the Quality tab ("Post EL NG · rejected", its folder as
+  the reason), counted in the Needs Review badge and in "Awaiting Quality". Quality,
+  Admin or Super Admin closes it as reviewed, reason mandatory; the journey's Post EL
+  step then says who. Nothing else is blocked - the module's own state does not move.
+  [built]
 - **EL Stations is a screen of its own** (Production section, after Production Entry;
   Mukesh, 16 Oct): every module first imaged at Pre-EL or Post EL in the period, one row
   each with both stations side by side, and per station what they add up to - Pre-EL

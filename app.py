@@ -8725,14 +8725,17 @@ def _pre_el_steps(imgs):
     return steps
 
 
-def _post_el_step(imgs):
+def _post_el_step(imgs, review=None):
     """Post EL is one step. A laminated module cannot go back to the
     pre-lamination process, so NG there is a rejection (Mukesh, 16 Oct 2026):
-    no Rework step, and a later image does not undo it. Every image is listed
-    when there is more than one."""
+    no Rework step, and a later image does not undo it - the module is kept off
+    the line for Quality (a Needs Review item, `review`, says who reviewed it).
+    Every image is listed when there is more than one."""
     ngs = [i for i in imgs if not elcap.is_pass(i["verdict"])]
     at = ngs[0] if ngs else imgs[-1]
-    detail = [ngs[0]["verdict"], "rejected - no rework after lamination"] if ngs else []
+    detail = [ngs[0]["verdict"], "rejected - kept off the line for Quality"] if ngs else []
+    if ngs and review and review.get("status") == "resolved":
+        detail.append("reviewed by %s" % (review.get("resolved_by") or "—"))
     if len(imgs) > 1:
         shown = imgs[-_EL_STEP_LINES:]
         if len(imgs) > len(shown):
@@ -8746,7 +8749,7 @@ def _post_el_step(imgs):
             "tone": "t-fail" if ngs else "t-pass"}
 
 
-def _el_steps(caps):
+def _el_steps(caps, review=None):
     """The journey's EL steps from one serial's el_capture rows - Pre-EL, then
     Post EL, in process order. A station the serial was never captured at
     gives NO step - not "—", not "pending" - as Anomaly is added only when
@@ -8754,7 +8757,7 @@ def _el_steps(caps):
     carries only the serial), so all of them count."""
     pre = elcap.images([c for c in caps if c["station"] == "pre_el"])
     post = elcap.images([c for c in caps if c["station"] == "post_el"])
-    return _pre_el_steps(pre) + ([_post_el_step(post)] if post else [])
+    return _pre_el_steps(pre) + ([_post_el_step(post, review)] if post else [])
 
 
 @app.route("/api/trace/serial/<path:serial>")
@@ -8842,6 +8845,10 @@ def api_trace_serial(serial):
         el_caps = store.rows(cur, "SELECT capture_id, station, unit, line, recapture, "
                                   "verdict, file_time, seen_at FROM el_capture "
                                   "WHERE serial=%s", (s,))
+        # a Post EL rejection's Needs Review item - who reviewed it, once done
+        el_review = store.one(cur, "SELECT status, resolved_by FROM review_item "
+                                   "WHERE type=%s AND serial=%s",
+                              (elcap.REVIEW_TYPE, s))
         cfg = db.get_config(cur)
 
     bno = batch_no(alloc) if alloc else "—"
@@ -8978,7 +8985,7 @@ def api_trace_serial(serial):
 
     # Pre-EL (each image, with its rework loops), then Post EL - only where
     # the module was captured
-    journey.extend(_el_steps(el_caps))
+    journey.extend(_el_steps(el_caps, el_review))
 
     anomaly = ev.find_anomaly(cfg, s)
     if anomaly:
@@ -11264,6 +11271,25 @@ def api_review_list():
             "ftr_failed": ("FTR anomaly · failed reading",
                 "tested, and every reading came back invalid"),
         }
+        # Post EL rejections (Mukesh, 16 Oct 2026): NG after lamination cannot be
+        # reworked - the module is taken off the line and kept for Quality's
+        # review. Raised by the EL poller, one a module; Quality's to close.
+        for r in store.rows(cur, "SELECT r.*, s.model AS model, s.customer AS customer "
+                                 "FROM review_item r LEFT JOIN serial s ON s.serial = "
+                                 "r.serial AND s.build_instance = 1 WHERE r.type = %s "
+                                 "AND r.status = 'open' ORDER BY r.review_id DESC",
+                            (elcap.REVIEW_TYPE,)):
+            ng = _post_el_ng_image(cur, r["serial"])
+            items.append({
+                "type": elcap.REVIEW_TYPE, "id": r["review_id"], "serial": r["serial"],
+                "model": r.get("model"), "customer": r.get("customer"),
+                "flag": "Post EL NG · rejected",
+                "stage": "Post EL" + (" · Line " + r["line"] if r.get("line") else ""),
+                "detail": "%s at Post EL - after lamination it cannot be reworked; kept "
+                          "off the line for Quality's review" % (ng["verdict"] if ng else "NG"),
+                "user": r.get("created_by"), "at": r.get("event_at") or r.get("created_at"),
+                "locked": viewer not in _QUALITY_ROLES, "evidence": None,
+            })
         unmatched = [dict(r) for r in db.review_items_unmatched(cur, list(_INGEST_LABELS))]
         # a module whose every reading came back invalid (probe, jig, polarity) is
         # ALSO in "FTR anomaly - failed reading"; say so on its Not in master row
@@ -11285,6 +11311,36 @@ def api_review_list():
             })
     items.sort(key=lambda x: x.get("at") or "", reverse=True)
     return jsonify(items)
+
+
+def _post_el_ng_image(cur, serial):
+    """The Post EL image that rejected this module - its first NG - or None."""
+    imgs = elcap.images(store.rows(
+        cur, "SELECT capture_id, unit, line, recapture, verdict, file_time, seen_at "
+             "FROM el_capture WHERE serial = %s AND station = 'post_el'", (serial,)))
+    return next((i for i in imgs if not elcap.is_pass(i["verdict"])), None)
+
+
+def _resolve_post_el_ng(cur, review_id, reason):
+    """Quality has looked at a module rejected at Post EL and kept off the
+    line: the item is closed as reviewed, with what they found and did as the
+    reason. Nothing else moves - a Post EL rejection does not change the
+    module's own state (DECISIONS 5)."""
+    item = db.review_item_get(cur, review_id)
+    if not item or item.get("type") != elcap.REVIEW_TYPE:
+        raise _Refuse("No such review item.", 404)
+    if item["status"] != "open":
+        raise _Refuse("Review #%d is already resolved." % review_id)
+    _require_role(*_QUALITY_ROLES, why="Only Quality can close a Post EL rejection - "
+                  "the module is kept off the line for their review.")
+    at = clock.now().isoformat(timespec="seconds")
+    cur.execute("UPDATE review_item SET status='resolved', resolved_by=%s, "
+                "resolved_at=%s, resolution='reviewed', reason=%s WHERE review_id=%s",
+                (actor(), at, reason, review_id))
+    db.audit(cur, actor(), "review.resolve", "serial", item["serial"],
+             {"review_id": review_id, "type": elcap.REVIEW_TYPE,
+              "resolution": "reviewed", "reason": reason})
+    return {"ok": True, "review_id": review_id, "resolution": "reviewed"}
 
 
 def _iso_ts(ts):
@@ -11472,6 +11528,18 @@ def api_review_resolve():
             with store.conn() as (cx, cur):
                 out = _resolve_ingest_item(cur, review_id, d.get("resolution"),
                                            reason)
+        except _Refuse as e:
+            return jsonify({"ok": False, "why": e.why}), e.code
+        return jsonify(out)
+
+    if item_type == elcap.REVIEW_TYPE:
+        try:
+            review_id = int(d.get("id"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "why": "No such review item."}), 404
+        try:
+            with store.conn() as (cx, cur):
+                out = _resolve_post_el_ng(cur, review_id, reason)
         except _Refuse as e:
             return jsonify({"ok": False, "why": e.why}), e.code
         return jsonify(out)

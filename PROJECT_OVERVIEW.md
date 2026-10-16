@@ -279,8 +279,8 @@ python test_incharge_master.py     9 tests · shift incharge master: individuals
 python test_challan_cancel_ui.py   2 tests · Cancel button: Admin only, asks reason + authenticator code
 python test_anonymous_routes.py   3 tests · every /api route answers 401 with no session (allow-list: /api/session)
 python test_factory_day_defaults_ui.py 3 tests · after midnight the counting screens open on the factory day (Chromium, pinned clock)
-python test_el_capture.py         50 tests · Pre-EL (two machines) / Post EL: the index, one folder one machine, the rework loop, EL Stations, the dashboards
-python test_el_capture_ui.py       6 tests · Pre-EL / Post EL folders in Settings, the journey, EL Stations, the dashboards' card (Chromium)
+python test_el_capture.py         52 tests · Pre-EL (two machines) / Post EL: the index, one folder one machine, the rework loop, EL Stations, the dashboards, Post EL rejections to Needs Review
+python test_el_capture_ui.py       7 tests · Pre-EL / Post EL folders in Settings, the journey, EL Stations, the dashboards' card, a Post EL rejection in Needs Review (Chromium)
 ```
 
 The JS tests read their functions out of `icon_live.js`, so they test what
