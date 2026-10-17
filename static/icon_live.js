@@ -1795,6 +1795,66 @@
   }
   window.iconElCard = elDashCard;
 
+  /* EL in the dashboards' own widgets (Mukesh, 17 Oct 2026: "dash donut not
+     included, Where the plant stands, Stage funnel, other must show
+     information"). All from the same /api/prod/dashboard answer.
+
+     The donuts' "not yet produced" slice, split by where the EL stations have
+     those modules: a production entry is filed per shift, so a module built
+     today is not produced until it is in. Each module stays in one slice. */
+  var EL_DARK_RED = '#8E1F15';
+  function elNotProduced(d, total, label) {
+    var w = d && d.el_wip;
+    if (!w || !(w.on_line || w.in_rework || w.post_ng)) {
+      return [{ n: label, v: total, c: C.grey }];
+    }
+    return [
+      { n: 'Through EL, production not entered yet', v: w.on_line, c: C.teal },
+      { n: 'In rework at Pre-EL', v: w.in_rework, c: C.purple },
+      { n: 'NG at Post EL, with Quality', v: w.post_ng, c: EL_DARK_RED },
+      { n: label + ', not on the line yet', c: C.grey,
+        v: Math.max(0, total - w.on_line - w.in_rework - w.post_ng) }
+    ];
+  }
+
+  /* the Stage funnel's Pre-EL and Post EL steps - a station with no folder
+     set and nothing scanned is left out rather than drawn as a zero */
+  function elFunnelSteps(d) {
+    var e = d && d.el, cfg = (d && d.el_configured) || {};
+    if (!e) return [];
+    var out = [];
+    if (!(cfg.pre_el === false && !e.pre_el.scanned)) {
+      out.push({ n: 'Pre-EL', v: e.pre_el.scanned || 0, c: C.purple,
+                 t: (e.pre_el.pass || 0).toLocaleString() + ' passed first time' });
+    }
+    if (!(cfg.post_el === false && !e.post_el.scanned)) {
+      out.push({ n: 'Post EL', v: e.post_el.scanned || 0, c: C.teal,
+                 t: (e.post_el.ng || 0).toLocaleString() + ' NG' });
+    }
+    return out;
+  }
+
+  /* "Where the plant stands" - a Pre-EL and a Post EL row */
+  function elSectionRows(d) {
+    var e = d && d.el, cfg = (d && d.el_configured) || {};
+    if (!e) return [];
+    var pre = e.pre_el, post = e.post_el, rows = [];
+    if (cfg.pre_el === false && !pre.scanned) {
+      rows.push(['Pre-EL', 'no folder set (Admin › Stations &amp; sources)', '—', 'off', 'elst']);
+    } else {
+      rows.push(['Pre-EL', 'First-pass yield · ' + (pre.in_rework || 0).toLocaleString() +
+        ' still in rework', pre.fpy == null ? '—' : pre.fpy.toFixed(1) + '%',
+        pre.in_rework ? 'warn' : 'ok', 'elst']);
+    }
+    if (cfg.post_el === false && !post.scanned) {
+      rows.push(['Post EL', 'no folder set (Admin › Stations &amp; sources)', '—', 'off', 'elst']);
+    } else {
+      rows.push(['Post EL', 'NG awaiting Quality’s decision', (post.awaiting || 0).toLocaleString(),
+        post.awaiting ? 'warn' : 'ok', 'elst']);
+    }
+    return rows;
+  }
+
   // --- MANAGEMENT OVERVIEW ---
   function wireMgmt() {
     if (window.__mgmtWired) return;
@@ -1893,6 +1953,9 @@
          fixed examples ("Serials in Needs Review 5, 20-08 11:22"). */
       var blocked = [
         ['Rejects awaiting Quality’s GY/BGY call', 'FQC', awaiting, '', 'review'],
+        /* NG at Post EL: off the line, Quality decide (16 Oct 2026) */
+        ['NG at Post EL, awaiting Quality’s decision', 'Quality', (prod.el && prod.el.post_el &&
+          prod.el.post_el.awaiting) || 0, '', 'review'],
         ['Passed modules on hold', 'Quality', held, '', 'hold'],
         ['Downtime events still open', 'Production', openLoss,
           prod.open_loss && prod.open_loss.oldest ? fmtDay(prod.open_loss.oldest.slice(0, 10)) +
@@ -1918,9 +1981,8 @@
            {n:'Packed, awaiting dispatch', v:pk.c_packed || 0, c:C.navy},
            {n:'Passed FQC, not packed', v:pk.c_passed || 0, c:C.blue},
            {n:'Rejected at FQC', v:pk.c_rej || 0, c:C.red},
-           {n:'Produced, not yet at FQC', v:pk.c_running || 0, c:C.amber},
-           {n:'Allocated, not yet produced', v:pk.c_unproduced || 0, c:C.grey}
-         ];
+           {n:'Produced, not yet at FQC', v:pk.c_running || 0, c:C.amber}
+         ].concat(elNotProduced(prod, pk.c_unproduced || 0, 'Allocated, not yet produced'));
          var moved = slices.reduce(function (a, x) { return a + x.v; }, 0);
          drawDonut('mgDonut', 'mgLegend', slices,
            (moved / 1000).toFixed(1) + 'k', 'modules');
@@ -2012,7 +2074,8 @@
       var dispMods = (disp.disp_today && disp.disp_today.modules) || 0;
       var SECT = [
         ['Planning', 'Serials allocated', alloc.toLocaleString(), 'ok', 'plan'],
-        ['Production', 'Produced this period', made.toLocaleString(), 'ok', 'proddash'],
+        ['Production', 'Produced this period', made.toLocaleString(), 'ok', 'proddash']
+      ].concat(elSectionRows(prod), [
         ['Loss of production', 'Events still open', String(openLoss), openLoss ? 'bad' : 'ok', 'loss'],
         ['FQC', 'Yield', yieldPc === null ? '—' : yieldPc.toFixed(2) + '%',
           yieldPc === null || yieldPc >= 97 ? 'ok' : 'warn', 'dash'],
@@ -2020,10 +2083,12 @@
         ['Packing', 'Boxes awaiting challan', fgBoxes.toLocaleString(), fgBoxes ? 'warn' : 'ok', 'packdash'],
         ['Dispatch', 'Dispatched this period', dispMods.toLocaleString(), 'ok', 'disp'],
         ['Hold & deviation', 'Modules on hold', held.toLocaleString(), held ? 'bad' : 'ok', 'hold']
-      ].filter(function (r) { return typeof can !== 'function' || can(r[4]); });
+      ]).filter(function (r) { return typeof can !== 'function' || can(r[4]); });
       el('mgSections', SECT.map(function (r) {
-        var tag = r[3] === 'ok' ? 't-pass' : r[3] === 'warn' ? 't-rev' : 't-fail';
-        var lbl = r[3] === 'ok' ? 'On track' : r[3] === 'warn' ? 'Watch' : 'Action';
+        var tag = r[3] === 'ok' ? 't-pass' : r[3] === 'warn' ? 't-rev' :
+                  r[3] === 'off' ? 't-mute' : 't-fail';
+        var lbl = r[3] === 'ok' ? 'On track' : r[3] === 'warn' ? 'Watch' :
+                  r[3] === 'off' ? 'Not set up' : 'Action';
         return '<tr><td style="font-weight:600">' + r[0] + '</td><td>' + r[1] + '</td>' +
           '<td class="num" style="font-weight:700">' + r[2] + '</td>' +
           '<td><span class="tag ' + tag + '">' + lbl + '</span></td>' +
@@ -3148,9 +3213,9 @@ function wireFqcAnomalies() {
           drawDonut('pdDonut', 'pdLegend', [
             {n:'Passed FQC', v:passed, c:C.navy},
             {n:'Rejected at FQC', v:rej, c:C.red},
-            {n:'Produced, not yet at FQC', v:running, c:C.amber},
-            {n:'Not yet produced', v:remaining, c:C.grey}
-          ], (alloc/1000).toFixed(1)+'k', 'allocated');
+            {n:'Produced, not yet at FQC', v:running, c:C.amber}
+          ].concat(elNotProduced(d, remaining, 'Not yet produced')),
+          (alloc/1000).toFixed(1)+'k', 'allocated');
         }
 
         /* v4's funnel, fed real counts - it was left empty. Each step is
@@ -3159,13 +3224,17 @@ function wireFqcAnomalies() {
            the bars are drawn against the largest. */
         var fun = document.getElementById('pdFunnel');
         if (fun) {
-          var steps = [{n:'Allocated',v:alloc,c:'#72859A'},{n:'Produced',v:prod,c:'#E08A1E'},
+          /* Pre-EL and Post EL sit between Allocated and Produced: a module is
+             imaged at both on the line, before its production entry is filed */
+          var steps = [{n:'Allocated',v:alloc,c:'#72859A'}].concat(elFunnelSteps(d), [
+            {n:'Produced',v:prod,c:'#E08A1E'},
             {n:'FQC done',v:fqc,c:'#4E8FC0'},{n:'Passed',v:passed,c:'#1B4D7A'},
-            {n:'Packed',v:packed,c:'#2A8A66'},{n:'Dispatched',v:disp,c:'#177A47'}];
+            {n:'Packed',v:packed,c:'#2A8A66'},{n:'Dispatched',v:disp,c:'#177A47'}]);
           var top = Math.max.apply(null, steps.map(function (x) { return x.v; }));
           fun.innerHTML = top ? steps.map(function(x) {
             var pc = x.v / top * 100;
-            return '<div class="fstep"><div class="fl">' + x.n + '</div>' +
+            return '<div class="fstep"' + (x.t ? ' title="' + fqcEsc(x.t) + '"' : '') + '>' +
+              '<div class="fl">' + x.n + '</div>' +
               '<div class="ft"><i style="width:' + pc.toFixed(1) + '%;background:' + x.c + '"></i></div>' +
               '<div class="fv">' + x.v.toLocaleString() + '</div>' +
               '<div class="fp">' + pc.toFixed(0) + '%</div></div>';
@@ -3200,27 +3269,57 @@ function wireFqcAnomalies() {
           if (e.kind === 'P') rowsBy[kk].down += e.minutes || 0;
           rowsBy[kk].lost += lossModules(e).lost;
         });
+        /* Pre-EL per line and shift (17 Oct 2026) - a shift on the line whose
+           production entry is not filed yet still shows what Pre-EL saw */
+        (d.el_lines || []).forEach(function (e) {
+          var kk = key(pdLineName(e.line), e.shift);
+          if (!rowsBy[kk]) {
+            rowsBy[kk] = { line: pdLineName(e.line), shift: e.shift, produced: 0, scrap: 0,
+                           plan: ideal, down: 0, lost: 0, elOnly: true };
+            order.push(kk);
+          }
+          rowsBy[kk].el = e;
+        });
         order.sort(function (a, b) {
           var x = rowsBy[a], y = rowsBy[b];
           return (x.line || '~') < (y.line || '~') ? -1 : (x.line || '~') > (y.line || '~') ? 1
                : x.shift - y.shift;
         });
         var tBody = document.getElementById('pdLineRows');
+        var tHead = tBody && tBody.parentNode.querySelector('thead tr');
+        if (tHead && !tHead.querySelector('[data-pd-el]')) {
+          tHead.insertAdjacentHTML('beforeend', '<th data-pd-el style="width:150px" ' +
+            'title="Modules first imaged at Pre-EL on this line and shift, and how many ' +
+            'passed the first time">Pre-EL first pass</th>');
+        }
+        var elCell = function (e) {
+          if (!e || !e.scanned) return '<td style="color:var(--ink3)">—</td>';
+          var pc = e.pass / e.scanned * 100;
+          return '<td title="' + e.pass + ' of ' + e.scanned + ' passed the first time; ' +
+            e.reworked + ' passed after rework, ' + e.in_rework + ' still in rework">' +
+            pdBar(pc, true) + '<div class="mono" style="font-size:10.5px;color:var(--ink3)">' +
+            e.pass.toLocaleString() + ' of ' + e.scanned.toLocaleString() + '</div></td>';
+        };
         if (tBody) {
           tBody.innerHTML = order.length ? order.map(function (kk) {
             var r = rowsBy[kk], s = SHIFT_LETTER[r.shift] || r.shift;
             var line = r.line ? '<span class="s' + r.line.charAt(0) + '">' + fqcEsc(r.line) + '</span>'
               : '<span style="color:var(--ink3)" title="No production entry names the line ' +
                 'for these modules yet - they are counted from their FQC scan">not recorded</span>';
-            var plan = r.plan ? pdBar(r.produced / r.plan * 100, r.produced >= r.plan * 0.95) : '—';
+            /* a shift only Pre-EL has seen so far has no production entry yet -
+               not "0% against plan" */
+            var plan = (r.elOnly && !r.produced) ? '<span style="color:var(--ink3)" ' +
+                'title="No production entry for this line and shift yet">—</span>'
+              : r.plan ? pdBar(r.produced / r.plan * 100, r.produced >= r.plan * 0.95) : '—';
             return '<tr><td>' + line + '</td><td class="s' + s + '">' + s + '</td>' +
               '<td class="num">' + r.produced.toLocaleString() + '</td>' +
               '<td class="num"' + (r.scrap ? ' style="color:var(--fail)"' : '') + '>' + r.scrap + '</td>' +
               '<td class="num"' + (r.down ? ' style="color:var(--review)"' : '') + '>' + r.down + '</td>' +
               '<td class="num">' + r.lost + '</td>' +
               '<td title="' + r.produced + ' produced against an ideal ' + r.plan +
-              ' a shift (Loss of Production, unconfirmed)">' + plan + '</td></tr>';
-          }).join('') : pdEmpty(7, 'Nothing produced under these filters.');
+              ' a shift (Loss of Production, unconfirmed)">' + plan + '</td>' +
+              elCell(r.el) + '</tr>';
+          }).join('') : pdEmpty(8, 'Nothing produced under these filters.');
         }
 
         /* Customer-wise position - v4's table, left empty until now.

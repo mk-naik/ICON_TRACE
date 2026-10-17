@@ -348,6 +348,84 @@ def t_not_in_master_on_page():
         assert pg.errors == [], pg.errors
 
 
+def allocate_on(day, serials):
+    """An allocation made on `day` (08:00) holding these serials, none produced."""
+    with store.conn() as (cx, cur):
+        iid = store.insert(cur, "indent", {"indent_no": "EL-UI/1", "indent_date": day,
+                                           "customer": "STOCK", "build_type": "make_to_stock",
+                                           "created_by": "test"})
+        lid = store.insert(cur, "indent_line", {"indent_id": iid, "line_no": 1,
+                                                "item_description": "625", "model": "ISEN625-G12R",
+                                                "wattage": 625, "qty": 100, "dcr": "DCR"})
+        aid = store.insert(cur, "allocation", {
+            "indent_line_id": lid, "model": "ISEN625-G12R", "wattage": 625,
+            "date_produced": day, "shift": 1, "qty": len(serials), "seq_from": 1,
+            "seq_to": len(serials), "created_at": day + "T08:00:00", "created_by": "test"})
+        for s in serials:
+            cur.execute("UPDATE serial SET alloc_id=%s WHERE serial=%s", (aid, s))
+
+
+@test("EL in the dashboards' own widgets (17 Oct 2026): the Stage funnel has Pre-EL and "
+      "Post EL between Allocated and Produced; both donuts split 'not yet produced' by "
+      "where the EL stations have it; Where the plant stands has a Pre-EL and a Post EL "
+      "row; Needs a decision the Post EL NG; Line & shift a Pre-EL first-pass column")
+def t_dashboard_widgets_on_page():
+    seed_screen()
+    allocate_on("2026-10-15", [BOTH, IN_REWORK, REJECTED, NEITHER])
+    legend = """(id) => Object.fromEntries(Array.from(document.querySelectorAll('#' + id + ' .lg'))
+        .map(x => [x.querySelectorAll('span')[0].textContent, x.querySelector('b').textContent]))"""
+    with H.browser() as b:
+        pg = H.open_page(b, None, role="Production Incharge")
+        pg.evaluate("go('proddash')")
+        pg.wait_for_timeout(500)
+        pg.evaluate("""() => { document.getElementById('pdFrom').value = '2026-10-15';
+                        document.getElementById('pdTo').value = '2026-10-15'; renderProd(); }""")
+        pg.wait_for_function("""() => Array.from(document.querySelectorAll('#pdFunnel .fstep'))
+            .some(s => s.querySelector('.fl').textContent === 'Pre-EL' &&
+                       s.querySelector('.fv').textContent === '2')""", timeout=15000)
+        funnel = pg.evaluate("""() => Array.from(document.querySelectorAll('#pdFunnel .fstep'))
+            .map(s => [s.querySelector('.fl').textContent, s.querySelector('.fv').textContent])""")
+        assert [f[0] for f in funnel] == ["Allocated", "Pre-EL", "Post EL", "Produced", "FQC done",
+                                          "Passed", "Packed", "Dispatched"], funnel
+        assert funnel[1] == ["Pre-EL", "2"] and funnel[2] == ["Post EL", "2"], funnel
+        got = pg.evaluate(legend, "pdLegend")
+        want = {"Through EL, production not entered yet": "1", "In rework at Pre-EL": "1",
+                "NG at Post EL, with Quality": "1", "Not yet produced, not on the line yet": "1"}
+        assert all(got.get(k) == v for k, v in want.items()), got
+        head = pg.evaluate("""() => Array.from(document.querySelectorAll(
+            '#pdLineRows')[0].parentNode.querySelectorAll('thead th')).map(t => t.textContent)""")
+        assert head[-1] == "Pre-EL first pass", head
+        cells = pg.evaluate("""() => Array.from(document.querySelectorAll('#pdLineRows tr'))
+            .map(tr => Array.from(tr.cells).map(c => c.textContent.trim()))""")
+        el_cells = sorted((r[0], r[1], r[-1]) for r in cells if len(r) > 7)
+        assert el_cells == [("A-Line", "A", "0%0 of 1"), ("A-Line", "C", "0%0 of 1")], cells
+        assert all(r[-2] == "—" for r in cells if len(r) > 7), \
+            "a shift with no production entry yet is not '0% against plan'"
+
+        pg.evaluate("go('mgmt')")
+        pg.wait_for_timeout(500)
+        pg.evaluate("""() => { document.getElementById('mgFrom').value = '2026-10-15';
+                        document.getElementById('mgTo').value = '2026-10-15'; renderMgmt(); }""")
+        # the first render was on today's (empty) dates - wait for the 15th's
+        pg.wait_for_function("""() => document.getElementById('mgLegend').textContent
+            .indexOf('In rework at Pre-EL') >= 0 &&
+            document.getElementById('mgSections').textContent.indexOf('1 still in rework') >= 0""",
+                             timeout=15000)
+        got = pg.evaluate(legend, "mgLegend")
+        assert got.get("In rework at Pre-EL") == "1" and \
+            got.get("Allocated, not yet produced, not on the line yet") == "1", got
+        sect = {r[0]: r for r in pg.evaluate("""() => Array.from(document.querySelectorAll(
+            '#mgSections tr')).map(tr => Array.from(tr.cells).map(c => c.textContent.trim()))""")}
+        assert sect["Pre-EL"][1:4] == ["First-pass yield · 1 still in rework", "0.0%", "Watch"], sect
+        assert sect["Post EL"][1:4] == ["NG awaiting Quality’s decision", "1", "Watch"], sect
+        order = list(sect)
+        assert order.index("Pre-EL") == order.index("Production") + 1, order
+        blocked = pg.text_content("#mgBlocked")
+        if pg.evaluate("can('review')"):
+            assert "NG at Post EL, awaiting Quality’s decision" in blocked, blocked
+        assert pg.errors == [], pg.errors
+
+
 @test("the Production Dashboard and the Management Overview show an EL stations card "
       "under their KPI tiles with the period's figures; its button opens EL Stations")
 def t_dashboards_on_page():

@@ -1038,9 +1038,22 @@ def t_screen_filters():
     assert d["kpi"]["pre_el"]["scanned"] == 1 and d["kpi"]["post_el"]["scanned"] == 0
     _c, d = el_api(result="Post EL: NG", **day)
     assert [r["serial"] for r in d["rows"]] == [S_POST], d["rows"]
+    # the tiles count what the filters select - Result and Station too (17 Oct 2026,
+    # Mukesh: "this not change with filter")
+    assert d["kpi"]["pre_el"]["scanned"] == 0, d["kpi"]
+    assert d["kpi"]["post_el"] == {"scanned": 1, "pass": 0, "ng": 1, "awaiting": 1}, d["kpi"]
+    _c, d = el_api(result="Pre-EL: In rework", **day)
+    assert [r["serial"] for r in d["rows"]] == [S_OLD], d["rows"]
+    assert d["kpi"]["pre_el"] == {"scanned": 1, "pass": 0, "reworked": 0, "in_rework": 1,
+                                  "rework": 1, "fpy": 0.0}, d["kpi"]
     _c, d = el_api(station="post_el", **day)
     assert {r["serial"] for r in d["rows"]} == {S_CRACK, S_POST}, d["rows"]
     assert d["facets"]["shift"] == ["B"], d["facets"]
+    assert d["kpi"]["pre_el"]["scanned"] == 0 and d["kpi"]["post_el"]["scanned"] == 2, d["kpi"]
+    _c, d = el_api(station="pre_el", result="Pre-EL: Pass after rework", **day)
+    assert [r["serial"] for r in d["rows"]] == [S_CRACK], d["rows"]
+    assert (d["kpi"]["pre_el"]["scanned"], d["kpi"]["pre_el"]["reworked"],
+            d["kpi"]["post_el"]["scanned"]) == (1, 1, 0), d["kpi"]
     _c, d = el_api(line="A", **day)
     assert S_POST not in {r["serial"] for r in d["rows"]} and len(d["rows"]) == 4, d["rows"]
     code, d = el_api(station="nowhere", **day)
@@ -1153,6 +1166,50 @@ def t_dashboard_el():
     s = el(shift="C")["el"]
     assert (s["pre_el"]["scanned"], s["pre_el"]["in_rework"], s["post_el"]["scanned"]) == \
         (1, 1, 0), s
+
+
+def allocate_on(day, serials):
+    """An allocation made on `day` (08:00, A shift) holding these serials - none
+    produced: no production entry, no FQC."""
+    with store.conn() as (cx, cur):
+        iid = store.insert(cur, "indent", {"indent_no": "EL-T/1", "indent_date": day,
+                                           "customer": "STOCK", "build_type": "make_to_stock",
+                                           "created_by": "test"})
+        lid = store.insert(cur, "indent_line", {"indent_id": iid, "line_no": 1,
+                                                "item_description": "625", "model": "ISEN625-G12R",
+                                                "wattage": 625, "qty": 100, "dcr": "DCR"})
+        aid = store.insert(cur, "allocation", {
+            "indent_line_id": lid, "model": "ISEN625-G12R", "wattage": 625,
+            "date_produced": day, "shift": 1, "qty": len(serials), "seq_from": 1,
+            "seq_to": len(serials), "created_at": day + "T08:00:00", "created_by": "test"})
+        for s in serials:
+            cur.execute("UPDATE serial SET alloc_id=%s WHERE serial=%s", (aid, s))
+
+
+@test("the dashboards' widgets get EL (17 Oct 2026): the period's allocation not produced "
+      "yet, split by where the EL stations have it - through EL, in rework at Pre-EL, NG at "
+      "Post EL, the rest not on the line - and Pre-EL per line and shift")
+def t_dashboard_el_widgets():
+    seed_day()
+    allocate_on("2026-10-14", [S_CRACK, S_CROSS, S_OLD, S_POST, S_STRAY, S_WAIT])
+    r = signed_in().get("/api/prod/dashboard", query_string={"from": "2026-10-14",
+                                                             "to": "2026-10-14"})
+    d = r.get_json()
+    assert r.status_code == 200 and d["kpi"]["c_unproduced"] == 6, d["kpi"]
+    # S_CRACK, S_CROSS and S_STRAY passed; S_OLD is NG at its last Pre-EL image;
+    # S_POST is NG at Post EL; S_WAIT has no image at all
+    assert d["el_wip"] == {"on_line": 3, "in_rework": 1, "post_ng": 1}, d["el_wip"]
+    # each module on the line and shift of its first Pre-EL image on the 14th - the
+    # one the master lacks too; S_STRAY's first image was on the 13th
+    assert d["el_lines"] == [
+        {"line": "A", "shift": 1, "scanned": 2, "pass": 1, "reworked": 1, "in_rework": 0},
+        {"line": "A", "shift": 2, "scanned": 1, "pass": 1, "reworked": 0, "in_rework": 0},
+        {"line": "A", "shift": 3, "scanned": 1, "pass": 0, "reworked": 0, "in_rework": 1}], \
+        d["el_lines"]
+    c = signed_in().get("/api/prod/dashboard", query_string={
+        "from": "2026-10-14", "to": "2026-10-14", "shift": "C"}).get_json()
+    assert c["el_lines"] == [{"line": "A", "shift": 3, "scanned": 1, "pass": 0,
+                              "reworked": 0, "in_rework": 1}], c["el_lines"]
 
 
 # --------------------------------------------------------------------------

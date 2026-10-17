@@ -6403,13 +6403,23 @@ def api_prod_dashboard():
         open_loss = store.one(cur,
             "SELECT COUNT(*) AS n, MIN(created_at) AS oldest "
             "FROM loss_event WHERE end_time IS NULL AND status<>'cancelled'")
+        # Of the period's allocation not produced yet, where the EL stations
+        # have it (17 Oct 2026, Mukesh: the dashboards' donut must show EL). A
+        # production entry is filed per shift, so a module built today reads
+        # "not produced" until it is in: through EL, in rework at Pre-EL, or NG
+        # at Post EL with Quality - the rest has not reached the line.
+        el_wip = _el_wip(cur, [r["serial"] for r in store.rows(
+            cur, "SELECT serial FROM module_ev WHERE " + inp("alloc_at") +
+                 " AND prod_at IS NULL AND EXISTS (SELECT 1 FROM el_capture e "
+                 "WHERE e.serial = module_ev.serial)")])
         cur.execute("DROP TABLE IF EXISTS temp.module_ev")
         facets = _module_facets(cur, frm, to, shift_no, customer, model, wattage)
         # Pre-EL and Post EL, each module on the day and shift of its first
         # image there, under the same customer / model / wattage (16 Oct 2026)
-        el = _el_kpi(_el_period(cur, frm, to, customer, model, wattage),
-                     clock.SHIFT_LETTER[shift_no] if shift_no else "",
-                     awaiting=_el_awaiting(cur))
+        el_shift = clock.SHIFT_LETTER[shift_no] if shift_no else ""
+        el_period = _el_period(cur, frm, to, customer, model, wattage)
+        el = _el_kpi(el_period, el_shift, awaiting=_el_awaiting(cur))
+        el_lines = _el_by_line_shift(el_period, el_shift)
         el_cfg = db.get_config(cur)
 
     kpi = {k: ((kpi_row or {}).get(k) or 0) for k in keys}
@@ -6480,6 +6490,8 @@ def api_prod_dashboard():
         "facets": facets,
         "el": el,
         "el_configured": _el_configured(el_cfg),
+        "el_wip": el_wip,
+        "el_lines": el_lines,
     })
 
 
@@ -6548,6 +6560,44 @@ def _el_period(cur, frm, to, customer="", model="", wattage=""):
             mine[serial] = s
         out[station] = mine
     return out
+
+
+def _el_wip(cur, serials):
+    """Modules the EL stations have imaged, by where that leaves them: NG at Post
+    EL (Quality's to decide), in rework at Pre-EL (its last image NG), or
+    through EL - by the stations' own summary (icon_el_capture.summary), so a
+    re-filed image counts once, as on EL Stations."""
+    by = {}
+    for r in _el_rows_for(cur, serials):
+        by.setdefault(r["serial"], {}).setdefault(r["station"], []).append(r)
+    out = {"post_ng": 0, "in_rework": 0, "on_line": 0}
+    for st in by.values():
+        post = elcap.summary("post_el", st.get("post_el", []))
+        pre = elcap.summary("pre_el", st.get("pre_el", []))
+        if post and post["status"] == "ng":
+            out["post_ng"] += 1
+        elif pre and pre["status"] == "in_rework":
+            out["in_rework"] += 1
+        else:
+            out["on_line"] += 1
+    return out
+
+
+def _el_by_line_shift(period, shift=""):
+    """Pre-EL per line and shift (the line and shift of each module's first
+    image there): scanned, passed first time, reworked and passed, in rework -
+    the Production Dashboard's Line & shift table."""
+    cells = {}
+    for s in period["pre_el"].values():
+        if shift and s["shift"] != shift:
+            continue
+        for ln in (s["lines"] or [""]):
+            c = cells.setdefault((ln, clock.shift_number(s["shift"])),
+                                 {"scanned": 0, "pass": 0, "reworked": 0, "in_rework": 0})
+            c["scanned"] += 1
+            c[s["status"]] += 1
+    return [dict(v, line=k[0], shift=k[1])
+            for k, v in sorted(cells.items(), key=lambda x: (x[0][0] or "~", x[0][1] or 0))]
 
 
 def _el_awaiting(cur):
@@ -6675,11 +6725,18 @@ def api_el_stations():
     }
     shown = sorted((r for r in rows if row_ok(r)), key=lambda r: r["last_at"],
                    reverse=True)
+    # the tiles count the modules the filters select - Station and Result too
+    # (17 Oct 2026, Mukesh: "this not change with filter"); Shift and Line are
+    # asked of each station's first image, as before
+    picked = {r["serial"] for r in rows if not result or result in r["results"]}
+    kpi_period = {st: ({s: v for s, v in period[st].items() if s in picked}
+                       if not station or station == st else {})
+                  for st, _l in elcap.STATIONS}
     for r in shown:
         del r["members"], r["results"]
     return jsonify({
         "ok": True, "from": frm, "to": to,
-        "kpi": _el_kpi(period, shift, line, awaiting),
+        "kpi": _el_kpi(kpi_period, shift, line, awaiting),
         "rows": shown[:_EL_ROW_CAP], "total": len(shown), "cap": _EL_ROW_CAP,
         "facets": facets,
         # a station with no folder set reads 0 because nothing is scanned, not

@@ -251,7 +251,21 @@ no one signs twice. [enforcement unverified]
   Read-only. A module the serial master does not have (imaged before it was planned, or
   one the master has not caught up with) is listed as "not in the master"; its serial
   still opens Search & Trace, which says it is not in the master and shows what the EL
-  stations recorded - its steps and its images (17 Oct). The Production Dashboard and the Management Overview show the same
+  stations recorded - its steps and its images (17 Oct). **Its tiles count what the
+  filters select** - Station and Result too, not only the dates, Shift and Line (17 Oct,
+  Mukesh: "this not change with filter").
+- **EL in the dashboards' own widgets** (Mukesh, 17 Oct: "dash donut not included, Where
+  the plant stands, Stage funnel, other must show information"), all from the dashboard's
+  own answer and period: the **Stage funnel** has Pre-EL and Post EL between Allocated and
+  Produced (a module is imaged at both before its production entry is filed); both
+  **donuts** split "not yet produced" by where the EL stations have those modules -
+  through EL with production not entered yet, in rework at Pre-EL, NG at Post EL with
+  Quality, the rest not on the line yet - each module still in one slice; **Where the
+  plant stands** has a Pre-EL row (first-pass yield, "Watch" while any module is in
+  rework) and a Post EL row (NG awaiting Quality); **Needs a decision** lists the Post EL
+  NG awaiting Quality; **Line & shift performance** has a Pre-EL first-pass column per
+  line and shift, and a shift only Pre-EL has seen reads "—" against plan, not 0%. A
+  station with no folder set says so ("Not set up") rather than showing 0. [built] The Production Dashboard and the Management Overview show the same
   figures in an "EL stations" card under their KPI tiles, under their own period and
   shift; their customer, model and wattage narrow it to modules in the master. [built]
 

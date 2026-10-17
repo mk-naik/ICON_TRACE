@@ -7889,3 +7889,21 @@ commit.
   menu has EL Stations, the not-in-master serial opens with its steps and images. Both
   runners print a failure on a cp1252 console instead of crashing (one run crashed so,
   the failure unseen; nine runs since are clean).
+
+### 17 Oct 2026 - EL Stations' tiles follow every filter; EL in the dashboards' widgets
+- **Reported (Mukesh, a screenshot of the EL Stations tiles):** "this not change with
+  filter, dash donut not included, Where the plant stands, Stage funnel other must show
+  information".
+- **Cause (tiles):** `_el_kpi` was given the dates, Shift and Line only - picking a Station
+  or a Result narrowed the rows and left the tiles as they were.
+- **Change:** the tiles count the modules the filters select (`api_el_stations`: the
+  Result's modules, the Station's station only). `/api/prod/dashboard` adds `el_wip` (of
+  the period's allocation not produced yet: through EL / in rework at Pre-EL / NG at Post
+  EL, by `icon_el_capture.summary`, so a re-filed image counts once) and `el_lines` (Pre-EL
+  per line and shift). The page: the Stage funnel's Pre-EL and Post EL steps; both donuts'
+  "not yet produced" split; Where the plant stands' Pre-EL and Post EL rows ("Not set up"
+  for a station with no folder); Needs a decision's Post EL NG; Line & shift's Pre-EL
+  first-pass column (a shift only Pre-EL has seen: "—" against plan, not 0%).
+- **Test:** `test_el_capture.py` +1 (57) and the filter test's tiles; `test_el_capture_ui.py`
+  +1 (9): the funnel, both donuts' legends, the two section rows, Needs a decision, the
+  line table's column - waiting for the chosen day's figures, not the first render's.
