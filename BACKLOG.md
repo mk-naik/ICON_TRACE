@@ -7931,3 +7931,22 @@ commit.
 - **Test:** `test_el_capture.py` +3 (60): waiting vs continuous by time, a continuous image
   filed as NG later (Pre-EL in rework, Post EL to Quality), the 20261017 folders, the clock
   skip; the "waiting" tests now pin the time. `test_el_capture_ui.py` +1 (10).
+
+### 17 Oct 2026 - an EL reason with a "/" in its name is recorded whole
+- **Found (Mukesh's photo of the EL software's defect list, and a Claude chat review of
+  it):** "Lead Open/Cross" and "Cell issue/ribbon bold" are one reason each on the machine;
+  Windows writes them as a folder inside a folder, and the poller recorded the inner
+  folder alone - "Cross", "Ribbon bold". Checked on the shares (7 days): Pre-EL Line B
+  108 + 59 Lead Open\Cross, 1 "ell issue\Ribbon bold"; the Final EL Line A 578
+  "Lead OPEN\ Cross" (a stray space), 391 "Cell issue\Ribbon bold".
+- **Change:** `icon_el_capture.verdict_of`: the folders between the shift folder and the
+  image, joined with "/", each part trimmed. `store._el_nested_verdicts` reads the rows
+  already recorded whole again from their own path, once (app_config
+  `el_nested_verdicts` holds how many): 84 on 8090's icontrace.db, 72 on the real-data
+  copy - every "Cross" / "cross" was "Lead Open/Cross" / "Lead open/cross".
+- **Not changed:** FQC's own reading of its EL folder (icon_evidence.read_el) still takes
+  the inner folder, and the folder map FQC attaches defects from is untouched - both are
+  FQC behaviour, put to Mukesh with the defect master.
+- **Test:** `test_el_capture.py` +2 (62): nested reasons recorded whole (a stray space
+  trimmed), old rows read whole once and not again; the filing test's nested
+  expectation updated.

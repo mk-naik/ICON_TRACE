@@ -218,7 +218,14 @@ no one signs twice. [enforcement unverified]
   it under a verdict later, that filing stands - same machine, re-shot number and time.
   A continuous image is no clock reading (it waits by the PC's own clock), so a machine
   running only continuous is not clock-checked. A date folder may also be spelled
-  20261017 (Post EL Line A's PC). [built] **[open]** FQC's own EL (normal mode on 17 Oct)
+  20261017 (Post EL Line A's PC). [built]
+- **A reason with a "/" in its name is recorded whole** (17 Oct, the machine's own list
+  photographed by Mukesh): Windows writes "Lead Open/Cross" and "Cell issue/ribbon bold"
+  as a folder inside a folder, and only the inner one ("Cross") was recorded. The
+  reason is every folder between the shift folder and the image, joined with "/", each
+  part trimmed. Images already recorded were read whole again from their own path, once
+  (app_config `el_nested_verdicts`). FQC's own reading of its EL folder is unchanged.
+  [built] **[open]** FQC's own EL (normal mode on 17 Oct)
   is read by FQC as before: if it runs continuous, FQC sees no verdict for its images -
   whether such an image is a clean EL for an FQC pass is Mukesh's call.
 - **At an EL station OK is Pass; any other folder is NG** (Mukesh, 16 Oct) - SR too: it

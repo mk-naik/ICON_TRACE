@@ -187,8 +187,8 @@ def t_recorded():
             r["file_time"]) for r in captures()}
     assert got == {
         ("pre_el", "A", S_CRACK, 0, "Cell Crack", "2026-10-14T09:15:00"),
-        ("pre_el", "A", S_CROSS, 0, "Cross", "2026-10-14T15:40:07"),
-        ("pre_el", "A", S_CROSS, 2, "Cross", "2026-10-14T15:52:00"),
+        ("pre_el", "A", S_CROSS, 0, "Lead Open/Cross", "2026-10-14T15:40:07"),
+        ("pre_el", "A", S_CROSS, 2, "Lead Open/Cross", "2026-10-14T15:52:00"),
         ("pre_el", "A", S_OLD, 0, "OK", "2026-09-17T01:12:56"),
         ("post_el", "B", S_POST, 0, "OK", "2026-10-14T10:02:00"),
     }, got
@@ -319,6 +319,47 @@ def t_yyyymmdd_folders():
     run()
     assert {(r["serial"], r["verdict"]) for r in captures()} == {
         (S_POST, "OK"), (S_CRACK, "Cell Crack")}, [dict(r) for r in captures()]
+
+
+@test("a reason with a '/' in its name is a folder inside a folder on disk - 'Lead Open/Cross', "
+      "'Cell issue/ribbon bold' (the machine's own list, 17 Oct 2026) - and is recorded whole, "
+      "each part trimmed, never as its last half")
+def t_nested_reason():
+    fresh()
+    put(PRE_A, "2026-10-14/早班/Lead Open/Cross", S_CRACK + ".jpg", "2026-10-14T09:00:00")
+    put(PRE_A, "2026-10-14/中班/Lead OPEN/ Cross", S_CROSS + ".jpg", "2026-10-14T15:00:00")
+    put(PRE_A, "2026-10-14/中班/Cell issue/Ribbon bold", S_OLD + ".jpg", "2026-10-14T15:30:00")
+    run()
+    got = {r["serial"]: r["verdict"] for r in captures()}
+    assert got == {S_CRACK: "Lead Open/Cross", S_CROSS: "Lead OPEN/Cross",
+                   S_OLD: "Cell issue/Ribbon bold"}, got
+    assert el_part(S_CRACK)[0]["detail"][0] == "Lead Open/Cross", el_part(S_CRACK)
+
+
+@test("images recorded before by their last half ('Cross') are read whole again from their own "
+      "path, once - nothing else about them changes, and a second start changes nothing")
+def t_nested_rederived():
+    fresh()
+    nested = os.path.join("x:", os.sep, "el", "2026-10-14", "早班", "Lead OPEN", " Cross", S_CRACK + ".jpg")
+    plain = os.path.join("x:", os.sep, "el", "2026-10-14", "早班", "Cell Crack", S_CROSS + ".jpg")
+    with store.conn() as (cx, cur):
+        for i, (serial, verdict, path) in enumerate(((S_CRACK, " Cross", nested),
+                                                     (S_CROSS, "Cell Crack", plain))):
+            cur.execute("INSERT INTO el_capture (station, unit, line, serial, recapture, verdict, "
+                        "path, file_time, seen_at) VALUES ('pre_el', 1, 'A', %s, 0, %s, %s, "
+                        "'2026-10-14T09:00:00', '2026-10-14T09:01:00')", (serial, verdict, path))
+        cur.execute("DELETE FROM app_config WHERE k='el_nested_verdicts'")   # as before the fix
+    store._ready = False
+    store.ensure()
+    got = {r["serial"]: (r["verdict"], r["path"], r["file_time"]) for r in captures()}
+    assert got[S_CRACK] == ("Lead OPEN/Cross", nested, "2026-10-14T09:00:00"), got
+    assert got[S_CROSS] == ("Cell Crack", plain, "2026-10-14T09:00:00"), got
+    with store.conn() as (cx, cur):
+        assert store.one(cur, "SELECT v FROM app_config WHERE k='el_nested_verdicts'")["v"] == "1"
+        cur.execute("UPDATE el_capture SET verdict='Cross' WHERE serial=%s", (S_CRACK,))
+    store._ready = False
+    store.ensure()                                 # done once: not done again
+    assert captures(S_CRACK)[0]["verdict"] == "Cross"
 
 
 @test("a tree with no shift level still counts: date / OK / serial.jpg is filed")

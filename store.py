@@ -225,6 +225,36 @@ def _table_ddl(text, table):
     return m.group(0) if m else None
 
 
+_EL_DAY_DIR = re.compile(r"^(\d{4}-\d{2}-\d{2}|\d{2}-\d{2}-\d{4}|\d{8})$")
+
+
+def _el_nested_verdicts(cx):
+    """17 Oct 2026, once: a verdict whose name has a '/' in it ('Lead Open/
+    Cross', 'Cell issue/ribbon bold') is a folder inside a folder on disk, and
+    the poller recorded only the inner one ('Cross'). Each row keeps its whole
+    path, so the whole name is read back from there - the folders between the
+    shift folder and the file, joined with '/' (icon_el_capture.verdict_of).
+    Nothing else about a row changes; done once, then marked in app_config."""
+    if cx.execute("SELECT 1 FROM app_config WHERE k='el_nested_verdicts'").fetchone():
+        return
+    fixed = 0
+    for cid, path, verdict in cx.execute(
+            "SELECT capture_id, path, verdict FROM el_capture").fetchall():
+        parts = re.split(r"[\\/]+", path or "")
+        days = [i for i, p in enumerate(parts) if _EL_DAY_DIR.match(p.strip())]
+        if not days:
+            continue
+        below = parts[days[-1] + 1:-1]           # shift, then the verdict folder(s)
+        if len(below) < 3:
+            continue                             # one verdict folder: nothing to join
+        whole = "/".join(p.strip() for p in below[1:] if p.strip())
+        if whole and whole != verdict:
+            cx.execute("UPDATE el_capture SET verdict=? WHERE capture_id=?", (whole, cid))
+            fixed += 1
+    cx.execute("INSERT INTO app_config (k, v) VALUES ('el_nested_verdicts', ?)", (str(fixed),))
+    cx.commit()
+
+
 def _migrate(cx, text):
     """What CREATE TABLE IF NOT EXISTS cannot do.
 
@@ -263,6 +293,8 @@ def _migrate(cx, text):
     # Rows recorded before were all filed by an operator.
     if cols("el_capture") and "mode" not in cols("el_capture"):
         cx.execute("ALTER TABLE el_capture ADD COLUMN mode TEXT")
+    if cols("el_capture"):
+        _el_nested_verdicts(cx)
 
     # pre-shared or post-shared, recorded at allocation
     if cols("allocation") and "alloc_type" not in cols("allocation"):

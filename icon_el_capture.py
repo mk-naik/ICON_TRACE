@@ -272,6 +272,21 @@ def _filed(path, depth):
     return True
 
 
+def verdict_of(path, depth):
+    """The reason an image is filed under: the folder it sits in - and, when it
+    sits one level deeper, the folders below the shift folder joined with '/'.
+
+    The EL software names a verdict folder from its defect list, and a name
+    with a '/' in it ('Lead Open/Cross', 'Cell issue/ribbon bold' - the
+    machine's own list, Mukesh's photo, 17 Oct 2026) is written by Windows as a
+    folder inside a folder. The leaf alone ('Cross', 'ribbon bold') is half the
+    name: 578 + 391 images a week on the Final EL, 108 + 59 on Pre-EL Line B
+    were recorded that way. Each part is trimmed (' Cross' is on disk)."""
+    folders = os.path.normpath(path).split(os.sep)[:-1]
+    names = folders[-(depth - 1):] if depth >= 3 else folders[-1:]
+    return "/".join(n.strip() for n in names if n.strip()) or "OK"
+
+
 def _reachable(station, unit, line, root):
     """Is the folder there? An unreachable one is logged when it goes, once,
     and when it comes back - not every minute in between."""
@@ -323,9 +338,7 @@ def scan(cfg, now=None):
         for day in icon_ingest._el_day_dirs(root, DAYS):
             for path, mtime, depth in _walk(day.path):
                 if _filed(path, depth):
-                    # exactly as read_el() reads a verdict
-                    verdict = os.path.basename(os.path.dirname(path)).strip() or "OK"
-                    mode = None
+                    verdict, mode = verdict_of(path, depth), None
                 elif depth == 1 and now - mtime >= CONTINUOUS_AFTER_S:
                     verdict, mode = "OK", "continuous"
                 else:
