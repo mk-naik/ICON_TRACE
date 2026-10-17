@@ -326,6 +326,34 @@ def t_el_nested_and_spellings():
         shutil.rmtree(day, ignore_errors=True)
 
 
+@test("FQC reads a reason below the shift folder by NAME: an image copied into a 'New folder' "
+      "reads as what it was filed under, never '晚班/OK'; a copied shift folder with no reason "
+      "under it is not filed")
+def t_el_copied_folder():
+    serial = "ICON625R1290220494"
+    c = setup(ss_rows=ROWS + [row(serial, "2026-09-07 10:30:00", "630.0")])
+    day = os.path.join(EL_ROOT, "2026-10-18")
+    with store.conn() as (cx, cur):
+        store.insert(cur, "serial", {
+            "serial": serial, "build_instance": 1, "model": "ISEN625-G12R",
+            "wattage": WATT, "customer": "STOCK", "dcr": "DCR",
+            "format_version": 2, "date_produced": "2026-09-07",
+            "shift": 1, "sequence": 494, "state": "planned"})
+    try:
+        here = os.path.join(day, "New folder", "晚班", "OK")
+        os.makedirs(here)
+        img = os.path.join(here, serial + ".jpg")
+        open(img, "w").close()
+        ev_ = c.get("/api/fqc/lookup?serial=" + serial).get_json()["evidence"]
+        assert ev_.get("el") == "OK" and ev_.get("el_state") == "OK", ev_
+        os.remove(img)
+        open(os.path.join(day, "New folder", "晚班", serial + ".jpg"), "w").close()
+        ev_ = c.get("/api/fqc/lookup?serial=" + serial).get_json()["evidence"]
+        assert not ev_.get("el") and ev_.get("el_state") == "NA", ev_
+    finally:
+        shutil.rmtree(day, ignore_errors=True)
+
+
 @test("a named defect is recorded alongside the EL's, not instead of it")
 def t_defect_named_plus_el():
     c = setup()

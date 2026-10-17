@@ -255,6 +255,31 @@ def _el_nested_verdicts(cx):
     cx.commit()
 
 
+def _el_verdicts_below_shift(cx):
+    """18 Oct 2026, once: a reason is read below the shift folder found by its
+    NAME (icon_defects.verdict_from). Copies of shift folders in a 'New folder'
+    (Final EL Line A) and a date folder copied into a shift folder (Pre-EL Line B)
+    were recorded as '晚班/OK', '2026-09-26/早班/OK' - a pass read as an NG. Each
+    row's reason is read again from its own path; one whose image is not under a
+    reason at all is left as it was. Marked in app_config with how many."""
+    if cx.execute("SELECT 1 FROM app_config WHERE k='el_verdicts_below_shift'").fetchone():
+        return
+    fixed = 0
+    for cid, path, verdict in cx.execute(
+            "SELECT capture_id, path, verdict FROM el_capture").fetchall():
+        parts = re.split(r"[\\/]+", path or "")
+        days = [i for i, p in enumerate(parts) if _EL_DAY_DIR.match(p.strip())]
+        if not days:
+            continue
+        whole = icon_defects.verdict_from(parts[days[0] + 1:-1])
+        if whole and whole != verdict:
+            cx.execute("UPDATE el_capture SET verdict=? WHERE capture_id=?", (whole, cid))
+            fixed += 1
+    cx.execute("INSERT INTO app_config (k, v) VALUES ('el_verdicts_below_shift', ?)",
+               (str(fixed),))
+    cx.commit()
+
+
 def _migrate(cx, text):
     """What CREATE TABLE IF NOT EXISTS cannot do.
 
@@ -295,6 +320,7 @@ def _migrate(cx, text):
         cx.execute("ALTER TABLE el_capture ADD COLUMN mode TEXT")
     if cols("el_capture"):
         _el_nested_verdicts(cx)
+        _el_verdicts_below_shift(cx)
 
     # 17 Oct 2026, the EL Defect Master: where each reason is filed
     if cols("defect_master") and "stations" not in cols("defect_master"):

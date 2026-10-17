@@ -238,7 +238,7 @@ python icon_invoice_parser.py --selftest
 python test_box_number.py          32 tests · box numbering, grade letters
 python test_evidence.py            41 tests · two lines of SS and EL, NC vs NA
 python test_defects.py             11 tests · one defect list: every EL spelling on disk, stations, an old database gains rows
-python test_fqc.py                 59 tests · pass/reject, the wattage floor, what a record may hold, the EL Defect Master
+python test_fqc.py                 60 tests · pass/reject, the wattage floor, what a record may hold, the EL Defect Master
 python test_indent.py               7 tests · one number, and an edit that cannot empty it
 python test_packing.py             33 tests · the gate that keeps a reject off a truck
 python test_repack.py              29 tests · a printed box number is never edited
@@ -281,7 +281,7 @@ python test_incharge_master.py     9 tests · shift incharge master: individuals
 python test_challan_cancel_ui.py   2 tests · Cancel button: Admin only, asks reason + authenticator code
 python test_anonymous_routes.py   3 tests · every /api route answers 401 with no session (allow-list: /api/session)
 python test_factory_day_defaults_ui.py 3 tests · after midnight the counting screens open on the factory day (Chromium, pinned clock)
-python test_el_capture.py         68 tests · continuous mode at Pre-EL / Final EL an alert, Pre-EL (two machines) / Post EL / Final EL (FQC's folders): the index, one folder one machine, the rework loop, EL Stations, the dashboards, a Post EL NG to Needs Review for Quality, the EL PCs' clocks, the Full event log, continuous mode, 20261017 date folders, a reason with a / in its name
+python test_el_capture.py         70 tests · continuous mode at Pre-EL / Final EL an alert, Pre-EL (two machines) / Post EL / Final EL (FQC's folders): the index, one folder one machine, the rework loop, EL Stations, the dashboards, a Post EL NG to Needs Review for Quality, the EL PCs' clocks, the Full event log, continuous mode, 20261017 date folders, a reason with a / in its name
 python test_el_capture_ui.py      12 tests · the continuous-mode alert, Final EL on EL Stations and in Settings, Pre-EL / Post EL folders in Settings, the journey, EL Stations, the dashboards' card, a Post EL NG in Needs Review, a Save on each line card, a serial not in the master, EL in the dashboards' funnel, donuts and tables, continuous mode (Chromium)
 python test_el_analysis.py        13 tests · EL Analysis: windows, counting, reasons, change, splits, first-pass yield, journeys across stations, the modules behind a figure, the gate, the Excel preface
 python test_el_analysis_ui.py      5 tests · EL Analysis on the page: one station's charts and tables, every figure opening its modules, all three side by side, filters, Excel (Chromium)

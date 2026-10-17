@@ -8059,3 +8059,26 @@ commit.
   and dynamic dropdowns, first-pass yield, all three with journeys, drill-downs, the gate,
   the later-screen grant, the export preface. `test_el_analysis_ui.py` (5, Chromium).
   `test_screen_view_gates.py`: the two routes and the fragment in the reviewed map.
+
+### 18 Oct 2026 - an EL reason is read below the shift folder found by its name
+- **Found (a read of 30 days of history from the real shares, into a scratch copy):**
+  reasons such as "晚班/OK", "早班/low eff", "2026-09-26/早班/OK". Final EL Line A has
+  copies of shift folders in a "New folder" inside date folders (2026-10-03/New folder/
+  晚班/OK/...), Pre-EL Line B a date and shift folder copied into a shift folder
+  (2026-09-26/早班/2026-09-26/早班/OK/...) - 4,685 and 345 copies of images already
+  recorded from the normal folders.
+- **Cause:** 9c62e08 / 26de31a read a reason by POSITION - everything below the first
+  folder under the date folder. A copy's reason became "晚班/OK": a pass read as an NG
+  with a junk reason, counted twice (its identity differed by the verdict). FQC too
+  (icon_evidence.el_verdict, on production since the 18 Oct deploy): a module whose
+  newest image is such a copy would read "晚班/OK". Before 26de31a FQC took the leaf.
+- **Change:** `icon_defects.verdict_from` - what lies below the LAST shift folder (早班 /
+  中班 / 晚班) or date folder in the path; with no shift folder, the first folder is the
+  shift as before. Used by the poller (`_filed`, `verdict_of`; an image straight in a
+  copied shift folder is not filed, and continuous after five minutes like any other),
+  by FQC (`el_verdict`; no reason under the shift folder = not filed, NA), and by
+  `store._el_verdicts_below_shift`, which re-reads every recorded row from its path once.
+- **Test:** `test_el_capture.py` +2 (70): copies in a New folder and a nested date folder
+  read below their shift folder, a copy of a recorded image not recorded again; old rows
+  re-read once. `test_fqc.py` +1 (60): a copy in a New folder reads OK; a copied shift
+  folder with no reason is NA.

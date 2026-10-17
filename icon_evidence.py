@@ -596,9 +596,11 @@ def el_verdict(path):
     file), the folder the image sits in is the verdict, as it always was."""
     parts = re.split(r"[\\/]+", os.path.normpath(path))[:-1]
     days = [i for i, p in enumerate(parts) if _EL_DAY.match(p.strip())]
-    below = parts[days[-1] + 1:] if days else parts[-1:]
-    names = below[1:] if len(below) >= 3 else below[-1:]
-    return "/".join(n.strip() for n in names if n.strip())
+    below = parts[days[0] + 1:] if days else parts[-1:]
+    # below the shift folder found by its NAME - a copy in a 'New folder' or a
+    # date folder copied into a shift folder reads as its reason, never as
+    # '晚班/OK' (icon_defects.verdict_from, 18 Oct 2026)
+    return icon_defects.verdict_from(below) or ""
 
 
 def read_el(cfg, serial, line=None):
@@ -630,7 +632,7 @@ def read_el(cfg, serial, line=None):
             continue
         try:
             match = _el_search(root, serial)
-            if match and _unfiled(match):
+            if match and (_unfiled(match) or not el_verdict(match)):
                 # There IS an image - the module has been seen - but the EL
                 # operator has not filed it under a verdict yet. No verdict is
                 # not a clean one and not a defect: NA, with the image still

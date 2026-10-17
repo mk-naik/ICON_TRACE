@@ -1688,6 +1688,51 @@ def t_continuous_alert_shown():
     assert "Final EL, Line B ran in CONTINUOUS mode" in html
 
 
+@test("a copy of a shift folder - in a 'New folder', or a date folder copied into a shift "
+      "folder (both on the real shares) - is read below its shift folder by NAME: a pass stays "
+      "a pass, a nested reason stays whole, and a copy of an image already recorded is not "
+      "recorded again")
+def t_copied_shift_folders():
+    fresh()
+    at = "2026-10-14T09:00:00"
+    put(PRE_A, "2026-10-14/早班/OK", S_CRACK + ".jpg", at)
+    put(PRE_A, "2026-10-14/New folder/早班/OK", S_CRACK + ".jpg", at)           # its copy
+    put(PRE_A, "2026-10-14/早班/2026-10-14/早班/Cell Crack", S_CROSS + ".jpg", "2026-10-14T09:10:00")
+    put(PRE_A, "2026-10-14/New folder/晚班/Lead OPEN/ Cross", S_OLD + ".jpg", "2026-10-14T09:20:00")
+    assert run() == {"pre_el": 3}, "the copy of an image already there was recorded again"
+    got = {r["serial"]: r["verdict"] for r in captures()}
+    assert got == {S_CRACK: "OK", S_CROSS: "Cell Crack", S_OLD: "Lead OPEN/Cross"}, got
+
+
+@test("rows recorded before a reason was read below the shift folder by name are read again "
+      "from their own path, once - one whose image is under no reason is left as it was")
+def t_below_shift_rederived():
+    fresh()
+    rows = ((os.path.join(PRE_A, "2026-10-03", "New folder", "晚班", "OK", S_CRACK + ".jpg"),
+             "晚班/OK", None),
+            (os.path.join(PRE_A, "2026-09-26", "早班", "2026-09-26", "早班", "Cell Crack",
+                          S_CROSS + ".jpg"), "2026-09-26/早班/Cell Crack", None),
+            (os.path.join(PRE_A, "2026-10-03", "早班", S_OLD + ".jpg"), "OK", "continuous"))
+    with store.conn() as (cx, cur):
+        for i, (path, verdict, mode) in enumerate(rows):
+            cur.execute("INSERT INTO el_capture (station, unit, line, serial, recapture, verdict, "
+                        "path, file_time, seen_at, mode) VALUES ('pre_el', 1, 'A', %s, 0, %s, %s, "
+                        "'2026-10-03T09:00:00', '2026-10-03T09:01:00', %s)",
+                        ([S_CRACK, S_CROSS, S_OLD][i], verdict, path, mode))
+        cur.execute("DELETE FROM app_config WHERE k='el_verdicts_below_shift'")
+    store._ready = False
+    store.ensure()
+    with store.conn() as (cx, cur):
+        got = {r["serial"]: r["verdict"] for r in store.rows(cur, "SELECT serial, verdict FROM el_capture")}
+        flag = store.one(cur, "SELECT v FROM app_config WHERE k='el_verdicts_below_shift'")["v"]
+    assert got == {S_CRACK: "OK", S_CROSS: "Cell Crack", S_OLD: "OK"}, got
+    assert flag == "2", flag
+    store._ready = False
+    store.ensure()                      # once: the flag stands, nothing is read again
+    with store.conn() as (cx, cur):
+        assert store.one(cur, "SELECT v FROM app_config WHERE k='el_verdicts_below_shift'")["v"] == "2"
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")   # a FAIL naming a folder like
     # 早班 must print on a cp1252 console, not crash the run

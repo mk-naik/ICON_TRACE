@@ -370,7 +370,14 @@ def _filed(path, depth):
     if depth == 1:
         key = icon_defects.normalize(os.path.basename(os.path.dirname(path)))
         return key == "ok" or key in icon_defects.FOLDER_MAP
-    return True
+    # a copy of a shift folder somewhere deeper (New folder\晚班\x.jpg) is not
+    # filed until its image is under a reason below that shift folder
+    return icon_defects.verdict_from(_below_day(path, depth)) is not None
+
+
+def _below_day(path, depth):
+    """The folders between the date folder and the file - `depth` of them."""
+    return os.path.normpath(path).split(os.sep)[:-1][-depth:] if depth else []
 
 
 def verdict_of(path, depth):
@@ -382,10 +389,10 @@ def verdict_of(path, depth):
     machine's own list, Mukesh's photo, 17 Oct 2026) is written by Windows as a
     folder inside a folder. The leaf alone ('Cross', 'ribbon bold') is half the
     name: 578 + 391 images a week on the Final EL, 108 + 59 on Pre-EL Line B
-    were recorded that way. Each part is trimmed (' Cross' is on disk)."""
-    folders = os.path.normpath(path).split(os.sep)[:-1]
-    names = folders[-(depth - 1):] if depth >= 3 else folders[-1:]
-    return "/".join(n.strip() for n in names if n.strip()) or "OK"
+    were recorded that way. Each part is trimmed (' Cross' is on disk). The shift
+    folder is found by its name (icon_defects.verdict_from): a copy of a shift
+    folder in a 'New folder' is read below it, not as '晚班/OK'."""
+    return icon_defects.verdict_from(_below_day(path, depth)) or "OK"
 
 
 def _reachable(station, unit, line, root):
@@ -440,7 +447,8 @@ def scan(cfg, now=None):
             for path, mtime, depth in _walk(day.path):
                 if _filed(path, depth):
                     verdict, mode = verdict_of(path, depth), None
-                elif depth == 1 and now - mtime >= CONTINUOUS_AFTER_S:
+                elif (depth == 1 or os.path.basename(os.path.dirname(path)).strip()
+                      in icon_defects.SHIFT_FOLDERS) and now - mtime >= CONTINUOUS_AFTER_S:
                     verdict, mode = "OK", "continuous"
                 else:
                     continue          # being decided now; a later pass has it

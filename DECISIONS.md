@@ -225,7 +225,16 @@ no one signs twice. [enforcement unverified]
   reason is every folder between the shift folder and the image, joined with "/", each
   part trimmed. Images already recorded were read whole again from their own path, once
   (app_config `el_nested_verdicts`). FQC reads its own EL folder the same way since the
-  EL Defect Master (below) - "Lead OPEN/Cross", no longer "Cross". [built]
+  EL Defect Master (below) - "Lead OPEN/Cross", no longer "Cross". **The shift folder is
+  found by its NAME** (早班 / 中班 / 晚班, or a date folder; 18 Oct): copies of shift folders
+  sit in a "New folder" inside some date folders (Final EL Line A), and a date and shift
+  folder inside a shift folder (Pre-EL Line B) - 4,685 and 345 copies of images already
+  there, in 30 days of history. Read by position, a copy's reason was "晚班/OK", a pass
+  read as an NG - by the poller, and by FQC for a module whose newest image was a copy.
+  The reason is what lies below the last shift or date folder in the path; a copy of an
+  image already recorded is that image (not recorded again); an image in a copied shift
+  folder with no reason under it is not filed. Rows recorded before were read again from
+  their own path, once (app_config `el_verdicts_below_shift`). [built]
   **Pre-EL and Final EL must run in NORMAL mode, never continuous** (Mukesh, 17 Oct, the
   EL Defect Master: Pre-EL because a module can be reworked and a person must decide,
   Final EL because it is the end of the process); Post EL may run continuous. So at those

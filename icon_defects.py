@@ -66,6 +66,41 @@ def normalize(raw):
     return "/".join(p for p in parts if p)
 
 
+# The EL machines' shift folders - 早班, 中班, 晚班 (morning, middle, night) on every
+# EL share - and a date folder's spellings (2026-10-17, 17-10-2026, 20261017).
+SHIFT_FOLDERS = ("早班", "中班", "晚班")
+_DAY_NAME = re.compile(r"^(\d{4}-\d{2}-\d{2}|\d{2}-\d{2}-\d{4}|\d{8})$")
+
+
+def verdict_from(folders):
+    """The reason an EL image is filed under, from the folders between its date
+    folder and the file: what lies BELOW the last shift folder (or date folder)
+    found by its NAME, each part trimmed, joined with '/' ('Lead OPEN/Cross' is
+    a folder inside a folder). None when nothing does - the image is still in a
+    shift folder, not filed under a reason.
+
+    By name, not by position (18 Oct 2026, a read of 30 days of history): on
+    Final EL Line A someone put copies of whole shift folders in a 'New folder'
+    inside a date folder (2026-10-03/New folder/晚班/OK/...), and on Pre-EL Line B
+    a date and shift folder sits inside a shift folder (2026-09-26/早班/2026-09-26/
+    早班/OK/...). Read by position, the copy's reason was '晚班/OK' - a pass read
+    as an NG. With no shift folder in the path (a tree with no shift level) the
+    first folder is taken as the shift, as before, and a single folder is the
+    reason itself."""
+    names = [n.strip() for n in folders if n and n.strip()]
+    cut = None
+    for k, n in enumerate(names):
+        if n in SHIFT_FOLDERS or _DAY_NAME.match(n):
+            cut = k
+    if cut is not None:
+        rest = names[cut + 1:]
+    elif len(names) >= 2:
+        rest = names[1:]
+    else:
+        rest = names
+    return "/".join(rest) or None
+
+
 def _title(raw):
     return " ".join(w[:1].upper() + w[1:].lower()
                      for w in re.sub(r"\s+", " ", raw).strip().split(" "))
