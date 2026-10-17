@@ -639,7 +639,7 @@ def t_settings_fqc_as_pre_el():
         "pre_el_b_root": FQC_EL.upper().replace("\\", "/") + "/", "unit": "9"})
     assert r.status_code == 400, r.get_json()
     why = r.get_json()["why"]
-    assert "FQC EL folder of Line B" in why and "Pre-EL primary folder of Line B" in why, why
+    assert "Final EL (FQC) folder of Line B" in why and "Pre-EL primary folder of Line B" in why, why
     assert stored("pre_el_b_root") == "" and stored("unit") == "2"
 
 
@@ -652,7 +652,7 @@ def t_settings_other_clashes():
     assert r.status_code == 400 and "Post EL folder of Line B" in r.get_json()["why"], \
         r.get_json()
     r = c.post("/api/settings", json={"post_el_a_root": FQC_EL + "\\"})
-    assert r.status_code == 400 and "FQC EL folder of Line A" in r.get_json()["why"], \
+    assert r.status_code == 400 and "Final EL (FQC) folder of Line A" in r.get_json()["why"], \
         r.get_json()
     # the primary and the secondary are two machines, so two folders
     r = c.post("/api/settings", json={"pre_el_a_root": PRE_A, "pre_el2_b_root": PRE_A})
@@ -1115,7 +1115,8 @@ def t_screen_api():
     assert code == 200 and d["ok"], d
     assert d["kpi"] == {"pre_el": {"scanned": 4, "pass": 2, "reworked": 1, "in_rework": 1,
                                    "rework": 2, "fpy": 50.0},
-                        "post_el": {"scanned": 2, "pass": 1, "ng": 1, "awaiting": 1}}, d["kpi"]
+                        "post_el": {"scanned": 2, "pass": 1, "ng": 1, "awaiting": 1},
+                        "final_el": {"scanned": 0, "pass": 0, "ng": 0}}, d["kpi"]
     rows = {r["serial"]: r for r in d["rows"]}
     assert set(rows) == {S_CRACK, S_CROSS, S_OLD, S_POST, NOT_PLANNED}, sorted(rows)
     c = rows[S_CRACK]
@@ -1134,7 +1135,7 @@ def t_screen_api():
                            "result": ["Pre-EL: Pass", "Pre-EL: Pass after rework",
                                       "Pre-EL: In rework", "Post EL: Pass",
                                       "Post EL: NG"]}, d["facets"]
-    assert d["configured"] == {"pre_el": True, "post_el": True}
+    assert d["configured"] == {"pre_el": True, "post_el": True, "final_el": False}
     # the 13th's module is the 13th's, its image on the 14th notwithstanding
     code, d13 = el_api(**{"from": "2026-10-13", "to": "2026-10-13"})
     assert [r["serial"] for r in d13["rows"]] == [S_STRAY], d13["rows"]
@@ -1181,7 +1182,7 @@ def t_screen_dates():
     code, d = el_api()
     assert code == 200 and d["from"] == d["to"] == clock.shift_day().isoformat(), d
     assert d["rows"] == [] and d["kpi"]["pre_el"]["scanned"] == 0
-    assert d["configured"] == {"pre_el": True, "post_el": True}
+    assert d["configured"] == {"pre_el": True, "post_el": True, "final_el": False}
     code, d = el_api(**{"from": "14-10-2026"})
     assert code == 400, d
 
@@ -1190,7 +1191,7 @@ def t_screen_dates():
 def t_screen_unconfigured():
     fresh(post_el_b_root="")
     _c, d = el_api()
-    assert d["configured"] == {"pre_el": True, "post_el": False}, d["configured"]
+    assert d["configured"] == {"pre_el": True, "post_el": False, "final_el": False},         d["configured"]
 
 
 @test("EL Stations: more modules than the cap - the newest are sent, the total said")
@@ -1270,7 +1271,8 @@ def t_dashboard_el():
 
     d = el()
     _c, screen = el_api(c, **{"from": "2026-10-14", "to": "2026-10-14"})
-    assert d["el"] == screen["kpi"], (d["el"], screen["kpi"])
+    # Pre-EL and Post EL: Final EL is EL Stations' alone so far (17 Oct 2026)
+    assert d["el"] == {k: screen["kpi"][k] for k in ("pre_el", "post_el")},         (d["el"], screen["kpi"])
     assert d["el_configured"] == {"pre_el": True, "post_el": True}
     # a model (or customer, or wattage) narrows to modules the master has
     m = el(model="ISEN625-G12R")["el"]
@@ -1495,6 +1497,112 @@ def t_clocks_shown():
         "Pre-EL secondary, Line B: Clock about 22 min BEHIND the server (or every image is "
         "filed late) - its images are put in order by their time, so check the EL PC's "
         "clock."], d["clock_warnings"]
+
+
+# --------------------------------------------------------------------------
+# 11. Final EL - FQC's own EL folder, indexed as a station (17 Oct 2026, the EL
+#     Defect Master: one station, one map)
+# --------------------------------------------------------------------------
+
+FIN_A = os.path.join(TMP, "final_a")
+FIN_B = os.path.join(TMP, "final_b")
+
+
+def seed_final():
+    """Final EL as the plant files it: Line A from the single-line el_root (as FQC
+    reads it), Line B its own; the machines' own spellings - a reason inside a
+    reason, a typo, a leading space - and a folder no list has."""
+    for d in (FIN_A, FIN_B):
+        shutil.rmtree(d, ignore_errors=True)
+    fresh(el_root=FIN_A, el_b_root=FIN_B, pre_el_a_root="", post_el_b_root="")
+    put(FIN_A, "2026-10-14/早班/DARK BUSBAR", S_CRACK + ".jpg", "2026-10-14T09:00:00")
+    put(FIN_A, "2026-10-14/早班/OK", S_CRACK + "_1.jpg", "2026-10-14T09:40:00")
+    put(FIN_A, "2026-10-14/早班/OK", S_POST + ".jpg", "2026-10-14T10:00:00")
+    put(FIN_B, "2026-10-14/中班/Lead Open/Cross", S_CROSS + ".jpg", "2026-10-14T15:00:00")
+    put(FIN_B, "2026-10-14/中班/Grid Buring", S_STRAY + ".jpg", "2026-10-14T15:10:00")
+    put(FIN_B, "2026-10-14/中班/ NO IMEAGE", S_OLD + ".jpg", "2026-10-14T15:20:00")
+    put(FIN_B, "2026-10-14/中班/Corner Chipped", S_WAIT + ".jpg", "2026-10-14T15:30:00")
+
+
+@test("Final EL is FQC's own EL folder of each line (Line A's from the single-line "
+      "setting, as FQC reads it), indexed as a station - every spelling recorded as on "
+      "disk, each resolving to its reason; a folder no list has is kept, never guessed")
+def t_final_el_indexed():
+    import icon_defects
+    seed_final()
+    assert sorted(r[:3] for r in elcap.roots({"el_root": FIN_A, "el_b_root": FIN_B})) == \
+        [("final_el", 1, "A"), ("final_el", 1, "B")]
+    got = run()
+    assert got == {"final_el": 7}, got
+    by = {(r["serial"], r["recapture"]): r for r in captures()}
+    assert all(r["station"] == "final_el" and r["unit"] == 1 for r in by.values())
+    assert by[(S_CRACK, 0)]["line"] == "A" and by[(S_CROSS, 0)]["line"] == "B"
+    want = {S_CROSS: ("Lead Open/Cross", "DF-LEADOPENCROSS"),
+            S_STRAY: ("Grid Buring", "DF-GRIDBURNING"),
+            S_OLD: ("NO IMEAGE", "DF-NOIMAGE"),
+            S_WAIT: ("Corner Chipped", None)}
+    for serial, (verdict, code) in want.items():
+        v = by[(serial, 0)]["verdict"]
+        assert v == verdict, (serial, v)
+        assert icon_defects.FOLDER_MAP.get(icon_defects.normalize(v)) == code, (serial, v)
+    # an NG at Final EL is FQC's to decide: no Needs Review item of its own
+    with store.conn() as (cx, cur):
+        assert store.one(cur, "SELECT COUNT(*) AS n FROM review_item")["n"] == 0
+    assert run() == {}, "a second pass wrote again"
+
+
+@test("Final EL: one folder for both lines is one machine - walked once, its images "
+      "lineless; FQC's folder can never also be a Pre-EL or Post EL one")
+def t_final_el_one_machine():
+    seed_final()
+    with store.conn() as (cx, cur):
+        db.set_config(cur, {"el_root": "", "el_a_root": FIN_A, "el_b_root": FIN_A + "\\"})
+    assert [r[:3] for r in elcap.roots({"el_a_root": FIN_A, "el_b_root": FIN_A + "\\"})] == \
+        [("final_el", 1, None)]
+    assert run() == {"final_el": 3}
+    assert {r["line"] for r in captures()} == {None}
+    r = signed_in().post("/api/settings", json={"pre_el_b_root": FIN_A.upper()})
+    assert r.status_code == 400 and "Final EL (FQC) folder" in r.get_json()["why"], \
+        r.get_json()
+
+
+@test("EL Stations has Final EL beside Pre-EL and Post EL: its tiles, its column (its "
+      "newest image, as FQC reads it), its Result and Station filters; the dashboards' "
+      "EL figures stay Pre-EL and Post EL")
+def t_final_el_screen():
+    seed_final()
+    run()
+    code, d = el_api(**{"from": "2026-10-14", "to": "2026-10-14"})
+    assert code == 200 and d["ok"], d
+    assert d["kpi"]["final_el"] == {"scanned": 6, "pass": 2, "ng": 4}, d["kpi"]
+    assert d["configured"]["final_el"] is True
+    rows = {r["serial"]: r for r in d["rows"]}
+    c = rows[S_CRACK]["final"]
+    assert (c["label"], c["reason"], c["images"]) == ("Pass", None, 2), c
+    x = rows[S_CROSS]["final"]
+    assert (x["label"], x["reason"]) == ("NG", "Lead Open/Cross"), x
+    assert rows[S_CROSS]["pre"] is None and rows[S_CROSS]["post"] is None
+    assert d["facets"]["station"] == ["final_el"], d["facets"]
+    assert "Final EL: NG" in d["facets"]["result"], d["facets"]
+    _c, d = el_api(result="Final EL: NG", **{"from": "2026-10-14", "to": "2026-10-14"})
+    assert {r["serial"] for r in d["rows"]} == {S_CROSS, S_STRAY, S_OLD, S_WAIT}, d["rows"]
+    assert d["kpi"]["final_el"] == {"scanned": 4, "pass": 0, "ng": 4}, d["kpi"]
+    r = signed_in().get("/api/prod/dashboard",
+                        query_string={"from": "2026-10-14", "to": "2026-10-14"}).get_json()
+    assert set(r["el"]) == {"pre_el", "post_el"} and \
+        set(r["el_configured"]) == {"pre_el", "post_el"}, (r["el"], r["el_configured"])
+
+
+@test("the Full event log lists a serial's Final EL images by machine; the journey's "
+      "FQC step is still FQC's own")
+def t_final_el_event_log():
+    seed_final()
+    run()
+    d = signed_in().get("/api/trace/serial/" + S_CRACK).get_json()
+    rows = [e for e in d.get("events", d.get("log", [])) if "Final EL" in e.get("stage", "")]
+    assert [(e["stage"], e["reference"]) for e in rows] == \
+        [("Final EL · NG", "Line A · Final EL"), ("Final EL · Pass", "Line A · Final EL")], rows
+    assert not [s for s in d.get("journey", []) if s.get("stage") == "Final EL"]
 
 
 if __name__ == "__main__":

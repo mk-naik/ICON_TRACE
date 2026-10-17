@@ -259,6 +259,19 @@ no one signs twice. [enforcement unverified]
   "ell issue/Ribbon bold" (1 image, Pre-EL Line B secondary) is a key: it IS spelled so
   on disk (first byte 0x65, read twice on 17 Oct), but the approved scope left it out as
   a reader bug - so it is recorded under its own name until Mukesh says.
+- **Final EL is a third EL station, and its folders are FQC's** (Decision 4 of the EL
+  Defect Master, 17 Oct). The scope asked for `final_el_a_root` / `final_el_b_root`
+  settings; Final EL IS FQC's own EL folder, and a second setting for the same folder
+  would be refused by "one folder is one machine" above (or, allowed, index FQC's images
+  twice and let the two settings drift apart). So the poller reads Settings' "Final EL
+  (FQC) image root folder" of each line (Line A falling back to the single-line one, as
+  FQC does) - one folder, read by FQC for a serial and indexed every minute as
+  `final_el`; Line A's or B's starts the moment it is set, no code change. A Final EL
+  module's state is what its NEWEST image says, as FQC reads it; an NG there raises
+  nothing of its own - FQC decides. EL Stations has Final EL beside Pre-EL and Post EL
+  (tiles, column, Station and Result filters); the Full event log lists its images. The
+  journey keeps FQC's step as the Final EL one. The dashboards' EL figures stay Pre-EL
+  and Post EL until the EL analysis brings Final EL there. [built]
 - **At an EL station OK is Pass; any other folder is NG** (Mukesh, 16 Oct) - SR too: it
   is the NG of a module the stringer reworked, a folder of its own so they can be
   counted. **At Pre-EL

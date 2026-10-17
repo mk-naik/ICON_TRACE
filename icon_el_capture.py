@@ -1,7 +1,8 @@
 """
-ICON TRACE - the Pre-EL and Post EL images, indexed for the module journey.
+ICON TRACE - the Pre-EL, Post EL and Final EL images, indexed for the module
+journey and EL Stations.
 
-Unit-2 has three EL stations. FQC's own (Settings: EL image root folder) is
+Unit-2 has three EL stations. FQC's own (Settings: Final EL (FQC) image root folder) is
 read by icon_evidence when FQC looks a serial up. The other two are never
 looked up - nobody types a serial at either:
 
@@ -12,6 +13,14 @@ looked up - nobody types a serial at either:
 so the server finds their images itself, by walking the folders every minute
 as icon_ingest does for the FQC EL, and keeps one row per image in el_capture.
 Search & Trace reads that table, never the shares.
+
+Final EL IS FQC's own EL (17 Oct 2026, the EL Defect Master: "one station, one
+map"): its folders are FQC's - Settings' Final EL (FQC) image root folder, per line - and
+the poller indexes them too, as the station 'final_el', so EL Stations and the
+analysis read every station's images from one table. FQC still reads a serial's
+image off the share when it looks it up (icon_evidence.read_el); the index is
+not FQC's evidence. One folder is one machine (Settings refuses FQC's folder as
+a Pre-EL or Post EL one), so nothing is indexed twice.
 
 Both stations file an image the way the FQC EL does:
 
@@ -41,7 +50,7 @@ import icon_ingest
 log = logging.getLogger("icontrace.el_capture")
 
 # (station, its name on screen), in process order - the journey's order too
-STATIONS = (("pre_el", "Pre-EL"), ("post_el", "Post EL"))
+STATIONS = (("pre_el", "Pre-EL"), ("post_el", "Post EL"), ("final_el", "Final EL"))
 LABEL = dict(STATIONS)
 
 # Every EL folder the server reads: (settings prefix, station, unit, its name).
@@ -53,6 +62,9 @@ LABEL = dict(STATIONS)
 SOURCES = (("pre_el", "pre_el", 1, "Pre-EL primary"),
            ("pre_el2", "pre_el", 2, "Pre-EL secondary"),
            ("post_el", "post_el", 1, "Post EL"))
+# ... and Final EL, one machine a line, whose folders are FQC's (roots()), not
+# settings of their own
+FINAL_LABEL = "Final EL"
 UNIT_NAME = {1: "primary", 2: "secondary"}
 
 DAYS = 2                 # the newest date folders walked, as icon_ingest's SS skip
@@ -101,7 +113,8 @@ def images(rows):
 # a module's state at a station, and how a person reads it
 STATUS_LABEL = {("pre_el", "pass"): "Pass", ("pre_el", "reworked"): "Pass after rework",
                 ("pre_el", "in_rework"): "In rework",
-                ("post_el", "pass"): "Pass", ("post_el", "ng"): "NG"}
+                ("post_el", "pass"): "Pass", ("post_el", "ng"): "NG",
+                ("final_el", "pass"): "Pass", ("final_el", "ng"): "NG"}
 
 
 def summary(station, rows):
@@ -110,8 +123,9 @@ def summary(station, rows):
     Pre-EL: 'pass' (never NG), 'reworked' (NG at least once, its last image
     OK) or 'in_rework' (its last image NG). Post EL: 'pass', or 'ng' the
     moment any image is NG - it is Quality's to decide then, not a later
-    image's. A module counts on the factory day and shift of its FIRST image
-    at the station."""
+    image's. Final EL: what its NEWEST image says, as FQC reads it
+    (icon_evidence.read_el takes the newest) - the decision is FQC's. A module
+    counts on the factory day and shift of its FIRST image at the station."""
     imgs = images(rows)
     if not imgs:
         return None
@@ -120,6 +134,9 @@ def summary(station, rows):
         status = ("pass" if not ngs else
                   "reworked" if is_pass(imgs[-1]["verdict"]) else "in_rework")
         reason = ngs[-1]["verdict"] if ngs else None
+    elif station == "final_el":
+        status = "pass" if is_pass(imgs[-1]["verdict"]) else "ng"
+        reason = imgs[-1]["verdict"] if status == "ng" else None
     else:
         status = "ng" if ngs else "pass"
         reason = ngs[0]["verdict"] if ngs else None
@@ -205,15 +222,21 @@ def folder_key(path):
 
 
 def roots(cfg):
-    """(station, unit, line, folder) for every configured EL folder (SOURCES).
+    """(station, unit, line, folder) for every configured EL folder (SOURCES),
+    then Final EL's - FQC's own EL folder of each line, as FQC reads it
+    (icon_evidence.sources: Line A falls back to the single-line el_root).
 
     One folder set for the same machine on BOTH lines is one machine serving
     both. It is walked once, and its images carry no line (None): an image's
     line is what the folder says, never guessed from its serial."""
-    out = []
+    pairs = []
     for prefix, station, unit, _label in SOURCES:
-        a = (cfg.get("%s_a_root" % prefix) or "").strip()
-        b = (cfg.get("%s_b_root" % prefix) or "").strip()
+        pairs.append((station, unit, (cfg.get("%s_a_root" % prefix) or "").strip(),
+                      (cfg.get("%s_b_root" % prefix) or "").strip()))
+    final = {s["line"]: s["el_root"] for s in ev.sources(cfg) if s.get("el_root")}
+    pairs.append(("final_el", 1, final.get("A", ""), final.get("B", "")))
+    out = []
+    for station, unit, a, b in pairs:
         if a and b and folder_key(a) == folder_key(b):
             out.append((station, unit, None, a))
             continue
@@ -224,6 +247,8 @@ def roots(cfg):
 
 
 def source_label(station, unit):
+    if station == "final_el":
+        return FINAL_LABEL
     return next(lab for _p, st, u, lab in SOURCES if st == station and u == unit)
 
 
@@ -327,8 +352,8 @@ CONTINUOUS_AFTER_S = 300
 def scan(cfg, now=None):
     """Every image the EL operator has filed under a verdict - and every image a
     machine in continuous mode left in its shift folder - in the newest two date
-    folders of each configured Pre-EL and Post EL folder, read from the shares
-    alone, no database. A folder that cannot be read is skipped; the others are
+    folders of each configured Pre-EL, Post EL and Final EL folder, read from the
+    shares alone, no database. A folder that cannot be read is skipped; the others are
     still walked."""
     now = time.time() if now is None else now
     out = []

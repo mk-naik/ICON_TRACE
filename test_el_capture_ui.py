@@ -96,7 +96,7 @@ def t_refused_then_saved():
         pg.wait_for_function("document.getElementById('s_msg').textContent.length > 0",
                              timeout=10000)
         msg = pg.inner_text("#s_msg")
-        assert msg.startswith("Not saved - ") and "FQC EL folder of Line B" in msg, msg
+        assert msg.startswith("Not saved - ") and "Final EL (FQC) folder of Line B" in msg, msg
         with store.conn() as (cx, cur):
             assert db.get_config(cur)["pre_el_b_root"] == ""
 
@@ -289,7 +289,7 @@ def t_screen_on_page():
         assert set(got) == {BOTH, IN_REWORK, REJECTED}, got
         assert got[BOTH][2] == "Pass after rework" and got[BOTH][3] == "Ribbon short", got[BOTH]
         assert got[BOTH][5].endswith("(2 images) · primary + secondary"), got[BOTH]
-        assert got[BOTH][4] == "1" and got[BOTH][6] == "Pass" and got[BOTH][9] == "A, B", got[BOTH]
+        assert got[BOTH][4] == "1" and got[BOTH][6] == "Pass" and got[BOTH][12] == "A, B", got[BOTH]
         assert got[REJECTED][2] == "—" and got[REJECTED][6] == "NG awaiting Quality", \
             got[REJECTED]
 
@@ -450,6 +450,44 @@ def t_continuous_on_page():
         post = [n for n in nodes if n["stage"] == "Post EL"][0]
         assert post["value"] == "Pass" and any("continuous mode" in x for x in post["detail"]), post
         assert pg.errors == [], pg.errors
+
+
+@test("Final EL on the page (17 Oct 2026): FQC's own EL folder is the Final EL station - "
+      "its field says so in Settings, and EL Stations has its tiles and its column, a "
+      "nested reason read whole")
+def t_final_el_on_page():
+    seed_journey()
+    shutil.rmtree(FQC_EL, ignore_errors=True)
+    try:
+        put(FQC_EL, "2026-10-15/中班/OK", BOTH + ".jpg", "2026-10-15T17:30:00")
+        put(FQC_EL, "2026-10-15/中班/Lead OPEN/ Cross", NEITHER + ".jpg", "2026-10-15T17:40:00")
+        with store.conn() as (cx, cur):
+            assert elcap.run(db.get_config(cur), cur) == {"final_el": 2}
+        with H.browser() as b:
+            pg = H.open_page(b, "elst")
+            pg.wait_for_selector("#v-elst.on #elRows", timeout=10000)
+            pg.fill("#elFrom", "2026-10-15")
+            pg.fill("#elTo", "2026-10-15")
+            pg.wait_for_function("document.getElementById('elK7').textContent === '2'",
+                                 timeout=10000)
+            assert (pg.text_content("#elK8"), pg.text_content("#elK9")) == ("1", "1")
+            head = pg.eval_on_selector_all("#v-elst thead th", "ts => ts.map(t => t.textContent)")
+            assert head[9:12] == ["Final EL", "Final EL reason", "Final EL image"], head
+            row = pg.evaluate("""(s) => { const tr = Array.from(document.querySelectorAll('#elRows tr'))
+                .find(t => t.textContent.indexOf(s) >= 0);
+                return Array.from(tr.cells).map(c => c.textContent.trim()); }""", NEITHER)
+            assert (row[9], row[10], row[12]) == ("NG", "Lead OPEN/Cross", "B"), row
+            opts = pg.eval_on_selector_all("#elStation option", "os => os.map(o => o.textContent)")
+            assert "Final EL" in opts and opts[0] == "All stations", opts
+
+            st = stations(b)
+            label = card(st, "B").locator("label:has-text('Final EL (FQC) image root folder')")
+            assert label.count() == 1, "no Final EL field on Line B's card"
+            assert "Final EL OK" in card(st, "B").locator(".card-h .tag").all_text_contents()
+            assert pg.errors == [] and st.errors == [], (pg.errors, st.errors)
+    finally:
+        shutil.rmtree(FQC_EL, ignore_errors=True)
+        os.makedirs(FQC_EL, exist_ok=True)
 
 
 @test("the Production Dashboard and the Management Overview show an EL stations card "

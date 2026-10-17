@@ -859,7 +859,7 @@ CREATE TABLE IF NOT EXISTS ftr_reading (
 -- disappears - it is the record that the module was captured there.
 CREATE TABLE IF NOT EXISTS el_capture (
   capture_id  INTEGER PRIMARY KEY AUTOINCREMENT,
-  station     TEXT NOT NULL,         -- 'pre_el' | 'post_el'
+  station     TEXT NOT NULL,         -- 'pre_el' | 'post_el' | 'final_el' (FQC's EL folders)
   unit        INTEGER NOT NULL DEFAULT 1,  -- which machine: 1 the primary (Post
                                       -- EL's only one), 2 the secondary Pre-EL
   line        TEXT NULL,             -- 'A' | 'B'; NULL when one folder serves

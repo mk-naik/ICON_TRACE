@@ -7983,3 +7983,29 @@ commit.
   old ones, stations, a folder on no list and `ell issue`, an existing database gaining
   the rows with an Admin's retirement kept. `test_fqc.py` +1 (59): a nested
   `Lead OPEN\ Cross`, `Grid Buring` and ` NO IMEAGE` read by FQC, each filing its code.
+
+### 17 Oct 2026 - Final EL indexed as a third EL station (FQC's own folders)
+- **Asked (EL Defect Master, scope item 3 / Decision 4):** Final EL as a captured station,
+  its card on Stations & sources, "make sure one folder configured twice does not index
+  twice".
+- **Deviation, and why:** no `final_el_a_root` / `final_el_b_root` settings. Final EL is
+  FQC's EL folder (Mukesh, 17 Oct: Final EL B's share is Line B's FQC EL folder),
+  and Settings refuses one folder as two machines (DECISIONS 5), so a separate setting
+  could not even be saved with the same path - or, allowed, would index FQC's images
+  twice. `icon_el_capture.roots()` reads FQC's folders (icon_evidence.sources: Line A
+  falls back to el_root) as `final_el`; one folder for both lines is one machine.
+- **Change:** `STATIONS` + final_el; `summary()`: its newest image, as FQC reads it;
+  no Needs Review item for a Final EL NG. EL Stations: tiles, column, filters
+  (`_el_kpi`, `_EL_RESULTS`); dashboards keep Pre-EL / Post EL (`_el_period(stations=)`).
+  Settings: the field is "Final EL (FQC) image root folder", its tag "Final EL", its
+  clock under it. Full event log names the Final EL machine.
+- **Checked on real data (a scratch copy of 8090's database, the real shares read
+  only):** one pass records 9,044 Final EL images (two days) in 0.2 s after a 1.3 s scan
+  of all six folders; every verdict on them maps to a code; EL Stations answers today
+  (5,268 modules) in 0.36 s, two days (10,713) in 0.68 s - the 5,000-row cap now bites
+  on a single day, the screen says so ("narrow the dates"). Chromium: tiles, columns,
+  Settings card, no page errors.
+- **Test:** `test_el_capture.py` +4 (66): roots from FQC's settings, every spelling
+  recorded and resolving (nested, typo, leading space, a folder no list has), one folder
+  both lines, EL Stations' Final EL, the event log; 4 assertions gained `final_el`.
+  `test_el_capture_ui.py` +1 (11): EL Stations and Settings in Chromium.

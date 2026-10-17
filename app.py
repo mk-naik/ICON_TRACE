@@ -6417,8 +6417,10 @@ def api_prod_dashboard():
         # Pre-EL and Post EL, each module on the day and shift of its first
         # image there, under the same customer / model / wattage (16 Oct 2026)
         el_shift = clock.SHIFT_LETTER[shift_no] if shift_no else ""
-        el_period = _el_period(cur, frm, to, customer, model, wattage)
+        el_period = _el_period(cur, frm, to, customer, model, wattage,
+                               stations=("pre_el", "post_el"))
         el = _el_kpi(el_period, el_shift, awaiting=_el_awaiting(cur))
+        el.pop("final_el", None)        # Final EL is EL Stations' (17 Oct 2026), not yet here
         el_lines = _el_by_line_shift(el_period, el_shift)
         el_cfg = db.get_config(cur)
 
@@ -6489,7 +6491,8 @@ def api_prod_dashboard():
         "models": [r["model"] for r in models_rows],
         "facets": facets,
         "el": el,
-        "el_configured": _el_configured(el_cfg),
+        "el_configured": {k: v for k, v in _el_configured(el_cfg).items()
+                          if k in ("pre_el", "post_el")},
         "el_wip": el_wip,
         "el_lines": el_lines,
     })
@@ -6517,13 +6520,15 @@ def _el_rows_for(cur, serials, station=None):
     return out
 
 
-def _el_period(cur, frm, to, customer="", model="", wattage=""):
+def _el_period(cur, frm, to, customer="", model="", wattage="", stations=None):
     """{station: {serial: summary}} - the modules whose FIRST image at the
     station is on a factory day from frm to to (either may be blank), each
     summary (icon_el_capture.summary, from ALL its images there) carrying that
     image's factory day and shift. The dashboards' customer, model and wattage
     narrow it to modules in the master that match, as their own figures are
-    narrowed; with none set, a module the master does not have yet counts too."""
+    narrowed; with none set, a module the master does not have yet counts too.
+    `stations` limits it (the dashboards read Pre-EL and Post EL only); a station
+    left out is an empty dict, never a missing key."""
     day = clock.shift_day_sql("file_time")
     w, a = [], []
     if frm:
@@ -6543,6 +6548,9 @@ def _el_period(cur, frm, to, customer="", model="", wattage=""):
               " AND %s)" % " AND ".join(m)) if m else ""
     out = {}
     for station, _label in elcap.STATIONS:
+        if stations and station not in stations:
+            out[station] = {}
+            continue
         seen = [r["serial"] for r in store.rows(
             cur, "SELECT DISTINCT serial FROM el_capture WHERE station = %s" +
                  "".join(" AND " + x for x in w) + narrow, tuple([station] + a + ma))]
@@ -6612,11 +6620,13 @@ def _el_kpi(period, shift="", line="", awaiting=frozenset()):
     """What each station's modules in the period add up to: Pre-EL scanned,
     passed the first time, reworked and passed, still in rework (first-pass
     yield beside them); Post EL scanned, passed, NG - and of those, how many
-    Quality have not decided yet."""
+    Quality have not decided yet; Final EL scanned, passed, NG (its newest
+    image - FQC decides)."""
     def keep(s):
         return (not shift or s["shift"] == shift) and (not line or line in s["lines"])
     pre = [s for s in period["pre_el"].values() if keep(s)]
     post = {serial: s for serial, s in period["post_el"].items() if keep(s)}
+    final = [s for s in period.get("final_el", {}).values() if keep(s)]
     n = lambda xs, st: sum(1 for s in xs if s["status"] == st)
     first, rw, ir = n(pre, "pass"), n(pre, "reworked"), n(pre, "in_rework")
     return {"pre_el": {"scanned": len(pre), "pass": first, "reworked": rw,
@@ -6625,14 +6635,17 @@ def _el_kpi(period, shift="", line="", awaiting=frozenset()):
             "post_el": {"scanned": len(post), "pass": n(post.values(), "pass"),
                         "ng": n(post.values(), "ng"),
                         "awaiting": sum(1 for serial, s in post.items()
-                                        if s["status"] == "ng" and serial in awaiting)}}
+                                        if s["status"] == "ng" and serial in awaiting)},
+            "final_el": {"scanned": len(final), "pass": n(final, "pass"),
+                         "ng": n(final, "ng")}}
 
 
 # the Result filter's options, in the order a person reads them
 _EL_RESULTS = [(st, status, "%s: %s" % (elcap.LABEL[st], elcap.STATUS_LABEL[(st, status)]))
                for st, status in (("pre_el", "pass"), ("pre_el", "reworked"),
                                   ("pre_el", "in_rework"), ("post_el", "pass"),
-                                  ("post_el", "ng"))]
+                                  ("post_el", "ng"), ("final_el", "pass"),
+                                  ("final_el", "ng"))]
 _EL_ROW_CAP = 5000
 
 
@@ -6640,7 +6653,8 @@ _EL_ROW_CAP = 5000
 @require_screen_view("elst")
 def api_el_stations():
     """The EL Stations screen: per station, what the period's modules add up
-    to, and one row per module - its Pre-EL and Post EL story side by side.
+    to, and one row per module - its Pre-EL, Post EL and Final EL story side by
+    side (Final EL, FQC's own EL, joined 17 Oct 2026).
 
     A module is listed when its first image at a station is in the period
     (From / To, factory days; today when neither is given); its row shows ALL
@@ -6664,7 +6678,7 @@ def api_el_stations():
 
     with store.conn() as (cx, cur):
         period = _el_period(cur, frm, to)
-        listed = set(period["pre_el"]) | set(period["post_el"])
+        listed = set(period["pre_el"]) | set(period["post_el"]) | set(period["final_el"])
         caps = _el_rows_for(cur, listed)
         master = {}
         names = sorted(listed)
@@ -6691,7 +6705,7 @@ def api_el_stations():
         rows.append({
             "serial": serial, "model": master.get(serial),
             "in_master": serial in master,
-            "pre": sums["pre_el"], "post": sums["post_el"],
+            "pre": sums["pre_el"], "post": sums["post_el"], "final": sums["final_el"],
             # an NG at Post EL is Quality's to decide: still waiting, or done
             "post_review": (("awaiting" if serial in awaiting else "decided")
                             if sums["post_el"] and sums["post_el"]["status"] == "ng" else None),
@@ -6983,10 +6997,11 @@ def _el_clock_view(cfg, clk):
     """{line: {settings prefix: {"text", "warn"}}} - each configured EL machine's
     clock against the server's (icon_el_capture.clocks), for its Settings field."""
     out = {}
+    finals = {s["line"]: s["el_root"] for s in ev.sources(cfg) if s.get("el_root")}
     for ln in ev.LINES:
         out[ln] = {}
-        for prefix, station, unit, _label in elcap.SOURCES:
-            if not _el_root_setting(cfg, prefix, ln):
+        for prefix, station, unit, _label in elcap.SOURCES + (("el", "final_el", 1, ""),):
+            if not (finals.get(ln) if prefix == "el" else _el_root_setting(cfg, prefix, ln)):
                 continue
             c = (clk or {}).get((station, unit, ln)) or (clk or {}).get((station, unit, None))
             out[ln][prefix] = {"text": elcap.clock_text(c), "warn": bool(c and c["flag"])}
@@ -7034,15 +7049,15 @@ def _el_root_setting(cfg, prefix, ln):
 
 def _el_configured(cfg):
     """{station: is any of its folders set, on any line?} - a station with none
-    reads 0 because nothing is scanned, and the screens say so."""
-    return {st: any(_el_root_setting(cfg, p, ln) for p, s2, _u, _l in elcap.SOURCES
-                    if s2 == st for ln in ev.LINES)
+    reads 0 because nothing is scanned, and the screens say so. Final EL's are
+    FQC's EL folders (icon_el_capture.roots)."""
+    return {st: any(r[0] == st for r in elcap.roots(cfg))
             for st, _label in elcap.STATIONS}
 
 
 # (probe key, what it is) - the Sun Simulator, FQC's EL, then the folders the
 # server reads (icon_el_capture.SOURCES)
-_PROBED = (("ss", "Sun Simulator"), ("el", "EL folder"),
+_PROBED = (("ss", "Sun Simulator"), ("el", "Final EL (FQC) folder"),
            ("pre_el", "Pre-EL primary folder"), ("pre_el2", "Pre-EL secondary folder"),
            ("post_el", "Post EL folder"))
 
@@ -7092,7 +7107,8 @@ def api_evidence_sources():
             ("SS", (s or {}).get("ss_path"), "SUNSIM_CSV",
              "CSV, read by column position"),
             ("EL", (s or {}).get("el_root"), "ELVI_ROOT",
-             "Folder name is the verdict"),
+             "Final EL: read by FQC for a serial, and by the server every minute "
+             "(EL Stations); folder name is the verdict"),
             ("PRE-EL1", _el_root_setting(cfg, "pre_el", ln), "PRE_EL_ROOT",
              "Primary. Read by the server every minute; folder name is the verdict"),
             ("PRE-EL2", _el_root_setting(cfg, "pre_el2", ln), "PRE_EL2_ROOT",
@@ -7316,7 +7332,7 @@ def _el_folders_clash(cfg):
     FQC image as a Pre-EL capture (and the primary's as the secondary's). The
     same folder for ONE machine on both lines is allowed - one machine serving
     both lines. Compared without case or a trailing slash."""
-    named = [("FQC EL", s["line"], s["el_root"]) for s in ev.sources(cfg)]
+    named = [("Final EL (FQC)", s["line"], s["el_root"]) for s in ev.sources(cfg)]
     for prefix, _st, _u, label in elcap.SOURCES:
         named.extend((label, ln, _el_root_setting(cfg, prefix, ln))
                      for ln in ev.LINES)
@@ -9010,7 +9026,7 @@ def _el_records(cur, s):
 
 
 def _el_log(s, caps, review):
-    """The Full event log's rows for every Pre-EL / Post EL image, as the poller
+    """The Full event log's rows for every Pre-EL / Post EL / Final EL image, as the poller
     recorded it - which machine, its folder, when it was taken (the EL PC's
     clock) and when it was found; the person who filed it is not known to ICON
     TRACE - and the Post EL NG's Needs Review item."""
@@ -9018,7 +9034,7 @@ def _el_log(s, caps, review):
     for c in sorted(caps, key=lambda c: (c["file_time"] or "", c["capture_id"])):
         machine = (("Line %s · " % c["line"]) if c["line"] else "") + (
             elcap.UNIT_NAME.get(c.get("unit") or 1, "") if c["station"] == "pre_el"
-            else "Post EL")
+            else elcap.LABEL[c["station"]])
         out.append({"at": c["file_time"],
                     "stage": "%s · %s" % (elcap.LABEL[c["station"]],
                                           "Pass" if elcap.is_pass(c["verdict"]) else "NG"),

@@ -1,11 +1,12 @@
 <div class="pg"><h2>EL Stations</h2>
-  <p>Pre-EL and Post EL &middot; every module imaged, its rework, its rejections</p>
+  <p>Pre-EL, Post EL and Final EL &middot; every module imaged, its rework, its rejections</p>
   <div class="pg-act"><button class="btn btn-ghost" onclick="elstLoad()">Refresh</button></div></div>
 
 <div class="note n-info"><span>&#9432;</span><span><b>OK is Pass; any other folder is
   NG.</b> At Pre-EL an NG module goes for rework and comes back until it passes. After
   lamination a module cannot be reworked, so an NG at Post EL takes it off the line to
-  <b>Quality, who decide</b> (Needs Review). A
+  <b>Quality, who decide</b> (Needs Review). Final EL is FQC&rsquo;s own EL: its
+  newest image is what FQC reads, and an NG there is FQC&rsquo;s to decide. A
   module counts on the factory day (06:00 to 06:00) and shift of its first image at a
   station. Read from the server's index of the EL folders, which it updates every
   minute.</span></div>
@@ -15,7 +16,7 @@
   <div class="fld"><label>From</label><input type="date" id="elFrom"></div>
   <div class="fld"><label>To</label><input type="date" id="elTo"></div>
   <div class="fld"><label>Shift</label><select id="elShift"><option value="">All shifts</option></select></div>
-  <div class="fld"><label>Station</label><select id="elStation"><option value="">Both stations</option></select></div>
+  <div class="fld"><label>Station</label><select id="elStation"><option value="">All stations</option></select></div>
   <div class="fld"><label>Result</label><select id="elResult"><option value="">All results</option></select></div>
   <div class="fld"><label>Line</label><select id="elLine"><option value="">Both lines</option></select></div>
   <div class="sp"><button class="btn btn-ghost" onclick="elstReset()">Reset</button></div>
@@ -37,6 +38,14 @@
   <div class="kpi k-fail"><label>Post EL NG</label><div class="v" id="elK6">&mdash;</div>
     <div class="d" id="elK6d">&mdash;</div></div>
 </div>
+<div class="grid g3" style="margin-bottom:14px">
+  <div class="kpi"><label>Final EL scanned</label><div class="v" id="elK7">&mdash;</div>
+    <div class="d" id="elK7d">modules first imaged in the period</div></div>
+  <div class="kpi k-pass"><label>Final EL pass</label><div class="v" id="elK8">&mdash;</div>
+    <div class="d">newest image OK</div></div>
+  <div class="kpi k-fail"><label>Final EL NG</label><div class="v" id="elK9">&mdash;</div>
+    <div class="d">newest image NG &middot; FQC decides</div></div>
+</div>
 
 <div class="card" data-itable="el-stations" data-export="el-stations">
   <div class="card-h"><h3>Modules</h3>
@@ -48,7 +57,8 @@
   <div class="scroll"><table>
     <thead><tr><th>Serial</th><th>Model</th><th>Pre-EL</th><th>Pre-EL reason</th>
       <th class="num">Reworks</th><th>Pre-EL images</th><th>Post EL</th>
-      <th>Post EL reason</th><th>Post EL image</th><th>Line</th></tr></thead>
+      <th>Post EL reason</th><th>Post EL image</th><th>Final EL</th>
+      <th>Final EL reason</th><th>Final EL image</th><th>Line</th></tr></thead>
     <tbody id="elRows"></tbody></table></div>
 </div>
 
@@ -61,10 +71,11 @@
   }
   function $(id) { return document.getElementById(id); }
   function when(t) { return t ? (typeof fmtIST === 'function' ? fmtIST(t) : t) : ''; }
-  var LABEL = { pre_el: 'Pre-EL', post_el: 'Post EL' };
+  var LABEL = { pre_el: 'Pre-EL', post_el: 'Post EL', final_el: 'Final EL' };
   var TONE = { 'pre_el:pass': 't-pass', 'pre_el:reworked': 't-pass',
                'pre_el:in_rework': 't-rev', 'post_el:pass': 't-pass',
-               'post_el:ng': 't-fail' };
+               'post_el:ng': 't-fail', 'final_el:pass': 't-pass',
+               'final_el:ng': 't-fail' };
   var busy = false, again = false;
 
   /* each dropdown offers what the rows hold under every OTHER filter, and
@@ -107,7 +118,7 @@
     refill('elResult', d.facets.result);
     refill('elLine', d.facets.line, function (v) { return 'Line ' + v; });
 
-    var pre = d.kpi.pre_el, post = d.kpi.post_el;
+    var pre = d.kpi.pre_el, post = d.kpi.post_el, fin = d.kpi.final_el;
     $('elK1').textContent = pre.scanned.toLocaleString();
     $('elK2').textContent = pre.pass.toLocaleString();
     $('elK2d').textContent = pre.fpy === null ? 'first-pass yield —'
@@ -119,13 +130,18 @@
     $('elK5').textContent = post.pass.toLocaleString();
     $('elK6').textContent = post.ng.toLocaleString();
     $('elK6d').textContent = post.awaiting.toLocaleString() + ' awaiting Quality’s decision';
+    $('elK7').textContent = fin.scanned.toLocaleString();
+    $('elK8').textContent = fin.pass.toLocaleString();
+    $('elK9').textContent = fin.ng.toLocaleString();
     $('elK1d').textContent = d.configured.pre_el ? 'modules first imaged in the period'
                            : 'no Pre-EL folder set (Admin › Stations & sources)';
     $('elK4d').textContent = d.configured.post_el ? 'modules first imaged in the period'
                            : 'no Post EL folder set (Admin › Stations & sources)';
+    $('elK7d').textContent = d.configured.final_el ? 'modules first imaged in the period'
+                           : 'no Final EL (FQC) folder set (Admin › Stations & sources)';
 
     $('elRows').innerHTML = d.rows.length ? d.rows.map(function (r) {
-      var p = r.pre, q = r.post;
+      var p = r.pre, q = r.post, f = r.final;
       return '<tr><td class="mono"><button class="lnk" onclick="qTry(' +
           (typeof jsArg === 'function' ? jsArg(r.serial) : JSON.stringify(r.serial)) +
           ')" title="Open its journey in Search &amp; Trace">' + esc(r.serial) + '</button></td>' +
@@ -142,8 +158,11 @@
           : '') + '</td>' +
         cell('post_el', q, r.post_review) + '<td>' + esc(q && q.reason || '') + '</td>' +
         '<td class="mono" style="font-size:11px">' + (q ? esc(when(q.last_at)) : '') + '</td>' +
+        cell('final_el', f) + '<td>' + esc(f && f.reason || '') + '</td>' +
+        '<td class="mono" style="font-size:11px">' + (f ? esc(when(f.last_at)) +
+          (f.images > 1 ? ' (' + f.images + ' images)' : '') : '') + '</td>' +
         '<td>' + esc(r.lines.join(', ')) + '</td></tr>';
-    }).join('') : '<tr data-empty><td colspan="10"><div class="empty-state"><p>' +
+    }).join('') : '<tr data-empty><td colspan="13"><div class="empty-state"><p>' +
       'No module was first imaged at an EL station in this period' +
       ($('elShift').value || $('elStation').value || $('elResult').value || $('elLine').value
         ? ' under these filters' : '') + '.</p></div></td></tr>';
@@ -165,14 +184,14 @@
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (!d.ok) {
-          $('elRows').innerHTML = '<tr data-empty><td colspan="10"><div class="note n-bad">' +
+          $('elRows').innerHTML = '<tr data-empty><td colspan="13"><div class="note n-bad">' +
             esc(d.why || 'The server refused it.') + '</div></td></tr>';
           return;
         }
         draw(d);
       })
       .catch(function (e) {
-        $('elRows').innerHTML = '<tr data-empty><td colspan="10"><div class="note n-bad">' +
+        $('elRows').innerHTML = '<tr data-empty><td colspan="13"><div class="note n-bad">' +
           'Could not load: ' + esc(e) + '</div></td></tr>';
       })
       .then(function () { busy = false; if (again) { again = false; window.elstLoad(); } });

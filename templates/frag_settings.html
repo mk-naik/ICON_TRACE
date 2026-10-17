@@ -21,7 +21,7 @@
 <div class="card"><div class="card-h"><h3>Line {{ LN }}</h3>
   <div class="ch-r">
     <span class="tag {{ 't-pass' if probe[LN].ss=='OK' else ('t-mute' if probe[LN].ss=='—' else 't-rev') }}">SS {{ probe[LN].ss }}</span>
-    <span class="tag {{ 't-pass' if probe[LN].el=='OK' else ('t-mute' if probe[LN].el=='—' else 't-rev') }}">EL {{ probe[LN].el }}</span>
+    <span class="tag {{ 't-pass' if probe[LN].el=='OK' else ('t-mute' if probe[LN].el=='—' else 't-rev') }}">Final EL {{ probe[LN].el }}</span>
     <span class="tag {{ 't-pass' if probe[LN].pre_el=='OK' else ('t-mute' if probe[LN].pre_el=='—' else 't-rev') }}">Pre-EL primary {{ probe[LN].pre_el }}</span>
     <span class="tag {{ 't-pass' if probe[LN].pre_el2=='OK' else ('t-mute' if probe[LN].pre_el2=='—' else 't-rev') }}">Pre-EL secondary {{ probe[LN].pre_el2 }}</span>
     <span class="tag {{ 't-pass' if probe[LN].post_el=='OK' else ('t-mute' if probe[LN].post_el=='—' else 't-rev') }}">Post EL {{ probe[LN].post_el }}</span>
@@ -31,11 +31,14 @@
     <input id="s_{{ ln }}_ss" value="{{ cfg['ss_' + ln + '_csv_path'] }}"
            placeholder="\\SS-{{ LN }}\share\results.csv">
     <div class="hint">{{ probe[LN].ss_note }}</div></div>
-  <div class="fld" style="grid-column:1/-1"><label>EL image root folder</label>
+  <div class="fld" style="grid-column:1/-1"><label>Final EL (FQC) image root folder</label>
     <input id="s_{{ ln }}_el" value="{{ cfg['el_' + ln + '_root'] }}"
            placeholder="\\EL-{{ LN }}\output">
     <div class="hint">{{ probe[LN].el_note }} The folder a file sits in is the
-      operator&rsquo;s verdict.</div></div>
+      operator&rsquo;s verdict. FQC reads it when a serial is looked up, and the
+      server indexes it every minute as the Final EL station (EL Stations) - one
+      folder, read the same way by both.</div>
+    {% set ck = el_clock[LN].get('el') %}{% if ck %}<div class="hint el-clock"{{ ' style="color:var(--review);font-weight:600"' | safe if ck.warn }}>{{ ck.text }}</div>{% endif %}</div>
   <div class="fld" style="grid-column:1/-1"><label>Pre-EL primary image root folder</label>
     <input id="s_{{ ln }}_pre_el" value="{{ cfg['pre_el_' + ln + '_root'] }}"
            placeholder="\\PRE-EL-{{ LN }}\el">
