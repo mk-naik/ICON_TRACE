@@ -7865,3 +7865,27 @@ commit.
   `test_bom_match.py` (edge recorded as 14 with a size note; the real file's 52);
   `test_bom_match_ui.py` (no thickness to choose in Planning, the warning on the import
   screen, Search & Trace shows 0.40); `test_trace_export.py` (the Edge column is the make).
+
+### 17 Oct 2026 - Search & Trace shows the EL images of a serial the master does not have
+- **Reported (Mukesh):** "remove BOM material showing in UI, screen for EL still missing
+  etc. check again all things in chromium".
+- **Checked in Chromium** on a copy of 8090's database, signed in with mknaik's exact role
+  and screen permissions: EL Stations in the menu after Production Entry, every screen
+  without a script error, EL Stations' figures (16 Oct: 2,092 Pre-EL, 87.1% first time),
+  both dashboards' EL card on the dashboard's dates, Stations & sources (a Save per line
+  card, the clock lines), Admin > Materials (Remove on every row, a removal end to end, the
+  0.41 / 0.42 ribbons under Removed), Planning's one edge ribbon, View full details, the
+  import warning on the September file - 23 checks. The 8080 server (production) still
+  runs the 15 Oct code: none of the 16 Oct work is on it.
+- **Found:** EL Stations lists every module the EL PCs imaged, and links each serial to
+  Search & Trace - which, for a serial the master lacks, said only "not in the serial
+  master" and hid its images. On 8090 that was most of today's modules (its database is a
+  16 Oct snapshot).
+- **Change:** `/api/trace/serial` answers such a serial (still 404, still "not in the
+  serial master") with `el: {journey, events}` when the EL index has images of it -
+  `_el_records` / `_el_log`, shared with the normal journey; the page shows the note, then
+  an "EL stations" card (the same steps) and the Full event log.
+- **Test:** `test_el_capture.py` +1 (56); `test_el_capture_ui.py` +1 (8): a Super Admin's
+  menu has EL Stations, the not-in-master serial opens with its steps and images. Both
+  runners print a failure on a cp1252 console instead of crashing (one run crashed so,
+  the failure unseen; nine runs since are clean).

@@ -715,6 +715,27 @@ def t_event_log():
     assert stamps == sorted(stamps), "the log is in time order"
 
 
+@test("a serial NOT in the master that the EL PCs imaged: Search & Trace still says it is "
+      "not in the master - and shows the EL steps and images it does have (EL Stations "
+      "links it there); a serial with no images says only that")
+def t_not_in_master_el():
+    fresh()
+    put(PRE_A, "2026-10-14/早班/Cell Crack", NOT_PLANNED + ".jpg", "2026-10-14T10:00:00")
+    put(PRE_A, "2026-10-14/中班/OK", NOT_PLANNED + ".jpg", "2026-10-14T15:00:00")
+    run()
+    c = signed_in()
+    r = c.get("/api/trace/serial/" + NOT_PLANNED)
+    d = r.get_json()
+    assert r.status_code == 404 and d["ok"] is False and "not in the serial master" in d["why"], d
+    assert d["serial"] == NOT_PLANNED, d
+    assert [(x["stage"], x["value"]) for x in d["el"]["journey"]] == [
+        ("Pre-EL", "NG"), ("Rework", "Rework"), ("Pre-EL", "Pass")], d["el"]["journey"]
+    assert [(e["stage"], e["reference"]) for e in d["el"]["events"]] == [
+        ("Pre-EL · NG", "Line A · primary"), ("Pre-EL · Pass", "Line A · primary")], d["el"]["events"]
+    r = c.get("/api/trace/serial/ICON625R12A1522998").get_json()
+    assert "el" not in r and "not in the serial master" in r["why"], r
+
+
 @test("NG, rework, NG, rework, Pass: the loop repeats until the module passes")
 def t_journey_loop():
     fresh()
@@ -1291,6 +1312,8 @@ def t_clocks_shown():
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")   # a FAIL naming a folder like
+    # 早班 must print on a cp1252 console, not crash the run
     width = max(len(n) for n, _ in _results)
     passed = failed = 0
     try:

@@ -313,6 +313,41 @@ def t_screen_on_page():
         assert q.errors == [], q.errors
 
 
+GHOST = "ICON625R12A1522915"           # imaged at Pre-EL, not in the master
+
+
+@test("a Super Admin has EL Stations in the menu; its link for a module NOT in the master "
+      "opens Search & Trace, which says so - and shows what the EL stations recorded, "
+      "the steps and the images, instead of nothing")
+def t_not_in_master_on_page():
+    seed_screen()
+    put(PRE_A, "2026-10-15/晚班/Cell Crack", GHOST + ".jpg", "2026-10-15T22:10:00")
+    put(PRE_A, "2026-10-15/晚班/OK", GHOST + ".jpg", "2026-10-15T22:40:00")
+    with store.conn() as (cx, cur):
+        elcap.run(db.get_config(cur), cur)
+    with H.browser() as b:
+        pg = H.open_page(b, None)                                  # a Super Admin
+        order = pg.evaluate("""() => Array.from(document.querySelectorAll('#sidenav .nav-i'))
+            .filter(b => b.offsetParent !== null).map(b => b.getAttribute('data-v'))""")
+        assert "elst" in order and order.index("elst") == order.index("prodentry") + 1, order
+        pg.click('#sidenav [data-v="elst"]')
+        pg.wait_for_selector("#v-elst.on #elRows", timeout=10000)
+        pg.fill("#elFrom", "2026-10-15")
+        pg.fill("#elTo", "2026-10-15")
+        pg.wait_for_function("document.getElementById('elRows').textContent.indexOf('%s') >= 0"
+                             % GHOST, timeout=10000)
+        pg.click('#elRows button.lnk:has-text("%s")' % GHOST)
+        pg.wait_for_selector("#searchOut .card h3:has-text('EL stations')", timeout=10000)
+        assert "not in the serial master" in pg.text_content("#searchOut .note")
+        stages = pg.eval_on_selector_all("#searchOut .chain .node label",
+                                         "ls => ls.map(l => l.textContent)")
+        assert stages == ["Pre-EL", "Rework", "Pre-EL"], stages
+        log = pg.evaluate("""() => Array.from(document.querySelectorAll('#searchOut .work tbody tr'))
+            .map(tr => tr.cells[1].textContent.trim())""")
+        assert log == ["Pre-EL · NG", "Pre-EL · Pass"], log
+        assert pg.errors == [], pg.errors
+
+
 @test("the Production Dashboard and the Management Overview show an EL stations card "
       "under their KPI tiles with the period's figures; its button opens EL Stations")
 def t_dashboards_on_page():
@@ -410,6 +445,8 @@ def t_post_el_review_on_page():
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")   # a FAIL naming a folder like
+    # 早班 must print on a cp1252 console, not crash the run
     passed = failed = 0
     try:
         for name, fn in _results:

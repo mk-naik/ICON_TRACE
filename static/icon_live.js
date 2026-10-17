@@ -6723,8 +6723,8 @@ function wireFqcAnomalies() {
      the pallet, the challan (BACKLOG 2: "every title clickable, linking into
      Search") */
   var JOURNEY_LINKS = { 'Allocated': /^BAT-/, 'Packed': /^ISPL/, 'Challan': /^IS-/ };
-  function traceSerialHtml(d) {
-    var journey = d.journey.map(function (j) {
+  function journeyNodes(steps) {
+    return (steps || []).map(function (j) {
       var v = j.value || DASH, re = JOURNEY_LINKS[j.stage];
       return '<div class="node' + (j.done ? ' done' : '') + '">' +
         '<label>' + fqcEsc(j.stage) + '</label>' +
@@ -6732,6 +6732,47 @@ function wireFqcAnomalies() {
         '<div class="nd">' + (j.detail || []).map(fqcEsc).join('<br>') + '</div>' +
         '<div class="ns">' + traceTag(j.tag || '', j.tone) + '</div></div>';
     }).join('');
+  }
+
+  var EVENT_COLS = [
+    { cls: 'mono', get: function (e) { return typeof fmtIST === 'function' ? fmtIST(e.at || DASH) : fqcEsc(e.at || DASH); } },
+    { get: function (e) { return fqcEsc(e.stage || DASH); } },
+    { cls: 'mono', get: function (e) { return fqcEsc(e.reference || DASH); } },
+    { get: function (e) { return fqcEsc(e.detail || DASH); } },
+    { get: function (e) { return fqcEsc(e.user || DASH); } }
+  ];
+
+  function eventLogCard(events) {
+    return '<div class="card"><div class="card-h">' +
+      '<h3>Full event log</h3><div class="ch-r">' +
+      traceTag(events.length + (events.length === 1 ? ' event' : ' events')) +
+      '<button class="btn btn-ghost btn-sm" onclick="exportNote()">Export</button>' +
+      '</div></div>' +
+      '<div class="card-b flush"><table><thead><tr><th>Timestamp</th>' +
+      '<th>Stage</th><th>Reference</th><th>Detail</th><th>User</th></tr></thead>' +
+      '<tbody>' + traceRows(events, EVENT_COLS,
+        'Nothing has been recorded against this module yet.', 5) +
+      '</tbody></table></div></div>';
+  }
+
+  /* A serial the master does not have, which the EL PCs imaged - a module on
+     the line before it was planned, or one the master has not caught up with.
+     EL Stations lists it and links here; "not in the serial master" alone hid
+     the images the system holds (17 Oct 2026). The note stays, and below it what
+     the EL stations recorded: the same steps and event rows a planned module's
+     journey shows. */
+  function traceElOnlyHtml(d) {
+    var e = d.el || {};
+    return '<div class="crumb">Module <b>' + fqcEsc(d.serial) + '</b></div>' +
+      '<div class="card"><div class="card-h"><h3>EL stations</h3><div class="ch-r">' +
+      traceTag('not in the serial master', 't-rev') + '</div></div>' +
+      '<div class="card-b"><div class="chain">' + journeyNodes(e.journey) +
+      '</div></div></div>' +
+      '<div class="work">' + eventLogCard(e.events || []) + '</div>';
+  }
+
+  function traceSerialHtml(d) {
+    var journey = journeyNodes(d.journey);
 
     return '' +
     '<div class="crumb">Module <b>' + fqcEsc(d.serial) + '</b></div>' +
@@ -6747,21 +6788,7 @@ function wireFqcAnomalies() {
       (d.item_code ? ' · ' + fqcEsc(d.item_code) : '') +
       ' · currently <b>' + fqcEsc(d.state) + '</b></span></div></div>' +
 
-    '<div class="work"><div class="card"><div class="card-h">' +
-      '<h3>Full event log</h3><div class="ch-r">' +
-      traceTag(d.events.length + (d.events.length === 1 ? ' event' : ' events')) +
-      '<button class="btn btn-ghost btn-sm" onclick="exportNote()">Export</button>' +
-      '</div></div>' +
-      '<div class="card-b flush"><table><thead><tr><th>Timestamp</th>' +
-      '<th>Stage</th><th>Reference</th><th>Detail</th><th>User</th></tr></thead>' +
-      '<tbody>' + traceRows(d.events, [
-        { cls: 'mono', get: function (e) { return typeof fmtIST === 'function' ? fmtIST(e.at || DASH) : fqcEsc(e.at || DASH); } },
-        { get: function (e) { return fqcEsc(e.stage || DASH); } },
-        { cls: 'mono', get: function (e) { return fqcEsc(e.reference || DASH); } },
-        { get: function (e) { return fqcEsc(e.detail || DASH); } },
-        { get: function (e) { return fqcEsc(e.user || DASH); } }
-      ], 'Nothing has been recorded against this module yet.', 5) +
-      '</tbody></table></div></div>' +
+    '<div class="work">' + eventLogCard(d.events) +
 
     '<div class="card"><div class="card-h"><h3>Build instances</h3>' +
       '<div class="ch-r">' + traceTag('key: serial + build_instance') +
@@ -6863,7 +6890,10 @@ function wireFqcAnomalies() {
       .then(function (d) {
         lastTrace = d.ok ? d : null;
         if (d.ok) out.innerHTML = traceSerialHtml(d);
-        else traceNote(out, 'n-bad', fqcEsc(d.why));
+        else {
+          traceNote(out, 'n-bad', fqcEsc(d.why));
+          if (d.el) out.insertAdjacentHTML('beforeend', traceElOnlyHtml(d));
+        }
         if (window.iconTable) window.iconTable.wireAll();
       })
       .catch(function (e) {

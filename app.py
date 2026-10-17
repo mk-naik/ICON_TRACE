@@ -8929,6 +8929,44 @@ def _el_steps(caps, review=None):
     return _pre_el_steps(pre) + (_post_el_steps(post, review) if post else [])
 
 
+def _el_records(cur, s):
+    """The Pre-EL and Post EL images the poller found for serial s
+    (icon_el_capture) - read from the table, never from the shares - and a Post
+    EL NG's Needs Review item, Quality's decision once made."""
+    caps = store.rows(cur, "SELECT capture_id, station, unit, line, recapture, "
+                           "verdict, file_time, seen_at FROM el_capture "
+                           "WHERE serial=%s", (s,))
+    review = store.one(cur, "SELECT status, resolved_by, resolved_at, reason, "
+                            "created_at FROM review_item WHERE type=%s AND serial=%s",
+                       (elcap.REVIEW_TYPE, s))
+    return caps, review
+
+
+def _el_log(s, caps, review):
+    """The Full event log's rows for every Pre-EL / Post EL image, as the poller
+    recorded it - which machine, its folder, when it was taken (the EL PC's
+    clock) and when it was found; the person who filed it is not known to ICON
+    TRACE - and the Post EL NG's Needs Review item."""
+    out = []
+    for c in sorted(caps, key=lambda c: (c["file_time"] or "", c["capture_id"])):
+        machine = (("Line %s · " % c["line"]) if c["line"] else "") + (
+            elcap.UNIT_NAME.get(c.get("unit") or 1, "") if c["station"] == "pre_el"
+            else "Post EL")
+        out.append({"at": c["file_time"],
+                    "stage": "%s · %s" % (elcap.LABEL[c["station"]],
+                                          "Pass" if elcap.is_pass(c["verdict"]) else "NG"),
+                    "reference": machine,
+                    "detail": "%s%s · found %s" % (
+                        c["verdict"], " · re-shot %d" % c["recapture"] if c["recapture"] else "",
+                        (c["seen_at"] or "").replace("T", " ")[:16]),
+                    "user": "—"})
+    if review:
+        out.append({"at": review["created_at"], "stage": "Needs Review · Post EL NG",
+                    "reference": s, "detail": "kept off the line for Quality to decide",
+                    "user": "system"})
+    return out
+
+
 @app.route("/api/trace/serial/<path:serial>")
 @require_screen_view("search")
 def api_trace_serial(serial):
@@ -8945,9 +8983,20 @@ def api_trace_serial(serial):
         rows = store.rows(cur, "SELECT * FROM serial WHERE serial=%s "
                                "ORDER BY build_instance", (s,))
         if not rows:
-            return jsonify({"ok": False, "why":
-                "%s is not in the serial master. Nothing has been allocated "
-                "under that number." % s}), 404
+            out = {"ok": False, "why":
+                   "%s is not in the serial master. Nothing has been allocated "
+                   "under that number." % s}
+            # ... but the EL PCs may have imaged it - a module on the line before
+            # it was planned, or one the master has not caught up with. EL
+            # Stations lists it and links here, so its images are shown as the
+            # evidence they are rather than hidden behind "not found" (17 Oct 2026)
+            caps, review = _el_records(cur, s)
+            if caps:
+                out["serial"] = s
+                out["el"] = {"journey": _el_steps(caps, review),
+                             "events": sorted(_el_log(s, caps, review),
+                                              key=lambda r: str(r["at"] or ""))}
+            return jsonify(out), 404
 
         first = dict(rows[0])
         alloc = store.one(cur, "SELECT * FROM allocation WHERE alloc_id=%s",
@@ -9014,15 +9063,7 @@ def api_trace_serial(serial):
                  "entity_id IN (%s) ORDER BY at, audit_id"
                  % ",".join("%s" for _ in boxes),
             tuple(str(b["box_id"]) for b in boxes)) if boxes else []
-        # the Pre-EL and Post EL images the poller found (icon_el_capture) -
-        # read from the table, never from the shares
-        el_caps = store.rows(cur, "SELECT capture_id, station, unit, line, recapture, "
-                                  "verdict, file_time, seen_at FROM el_capture "
-                                  "WHERE serial=%s", (s,))
-        # a Post EL NG's Needs Review item - Quality's decision, once made
-        el_review = store.one(cur, "SELECT status, resolved_by, resolved_at, reason, "
-                                   "created_at FROM review_item WHERE type=%s AND serial=%s",
-                              (elcap.REVIEW_TYPE, s))
+        el_caps, el_review = _el_records(cur, s)
         cfg = db.get_config(cur)
 
     bno = batch_no(alloc) if alloc else "—"
@@ -9392,25 +9433,7 @@ def api_trace_serial(serial):
             log.append({"at": g["cancelled_at"], "stage": "Gate pass · Cancelled",
                         "reference": g["gp_no"], "detail": g.get("cancelled_reason") or "",
                         "user": g.get("cancelled_by") or "—"})
-    # every Pre-EL / Post EL image, as the poller recorded it - which machine,
-    # its folder, when it was taken (the EL PC's clock) and when it was found;
-    # the person who filed it is not known to ICON TRACE
-    for c in sorted(el_caps, key=lambda c: (c["file_time"] or "", c["capture_id"])):
-        machine = (("Line %s · " % c["line"]) if c["line"] else "") + (
-            elcap.UNIT_NAME.get(c.get("unit") or 1, "") if c["station"] == "pre_el"
-            else "Post EL")
-        log.append({"at": c["file_time"],
-                    "stage": "%s · %s" % (elcap.LABEL[c["station"]],
-                                          "Pass" if elcap.is_pass(c["verdict"]) else "NG"),
-                    "reference": machine,
-                    "detail": "%s%s · found %s" % (
-                        c["verdict"], " · re-shot %d" % c["recapture"] if c["recapture"] else "",
-                        (c["seen_at"] or "").replace("T", " ")[:16]),
-                    "user": "—"})
-    if el_review:
-        log.append({"at": el_review["created_at"], "stage": "Needs Review · Post EL NG",
-                    "reference": s, "detail": "kept off the line for Quality to decide",
-                    "user": "system"})
+    log.extend(_el_log(s, el_caps, el_review))
     log.sort(key=lambda r: str(r["at"] or ""))
 
     return jsonify({

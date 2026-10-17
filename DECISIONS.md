@@ -248,7 +248,10 @@ no one signs twice. [enforcement unverified]
   on the factory day and shift of
   its FIRST image at a station**; its row shows all its images. Production Incharge,
   Admin and Super Admin see it to begin with; anyone else by user permission (section 9).
-  Read-only. The Production Dashboard and the Management Overview show the same
+  Read-only. A module the serial master does not have (imaged before it was planned, or
+  one the master has not caught up with) is listed as "not in the master"; its serial
+  still opens Search & Trace, which says it is not in the master and shows what the EL
+  stations recorded - its steps and its images (17 Oct). The Production Dashboard and the Management Overview show the same
   figures in an "EL stations" card under their KPI tiles, under their own period and
   shift; their customer, model and wattage narrow it to modules in the master. [built]
 
