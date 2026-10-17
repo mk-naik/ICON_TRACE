@@ -60,7 +60,12 @@ def test(name):
 
 # The unified list (icon_defects.py), whatever order the screen sorts it in -
 # 'Other' is added by Mukesh after the rest, so it stays last no matter what.
-ALL_DEFECTS = sorted(set(l for _c, l, _s in icon_defects.DEFECT_MASTER) - {"Other"}) + ["Other"]
+# FQC's list: the reasons filed at Final EL (FQC's own share) and FQC's visual ones -
+# not a reason only Pre-EL files (Terminal Bending), 17 Oct 2026
+ALL_DEFECTS = sorted(set(l for c, l, _s in icon_defects.DEFECT_MASTER
+                         if {"final_el", "visual"} &
+                         set(icon_defects.STATIONS[c].split(","))) - {"Other"}) + ["Other"]
+assert "Terminal Bending" not in ALL_DEFECTS and "Dark Busbar" in ALL_DEFECTS
 
 # On the OLD 45-entry hard-coded list, missing from the unified one for no
 # reason - production has filed all three (BACKLOG evidence).

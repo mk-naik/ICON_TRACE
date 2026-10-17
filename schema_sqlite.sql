@@ -749,7 +749,11 @@ CREATE TABLE IF NOT EXISTS defect_master (
   code        TEXT PRIMARY KEY,       -- 'DF-BURNING'
   label       TEXT NOT NULL,          -- 'Burning' - Title Case, except OK
   source_hint TEXT NOT NULL,          -- 'el' | 'visual' | 'both'
-  active      INTEGER NOT NULL DEFAULT 1
+  active      INTEGER NOT NULL DEFAULT 1,
+  -- where it is filed (17 Oct 2026, the EL Defect Master): the stations whose
+  -- machines' lists carry it and 'visual' for FQC's own list, in that order,
+  -- comma-joined - 'pre_el,final_el,visual'. A reason may be on several.
+  stations    TEXT
 ) ;
 
 -- The EL share files a rejected module's images under a category FOLDER,

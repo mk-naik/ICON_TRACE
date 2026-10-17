@@ -296,6 +296,10 @@ def _migrate(cx, text):
     if cols("el_capture"):
         _el_nested_verdicts(cx)
 
+    # 17 Oct 2026, the EL Defect Master: where each reason is filed
+    if cols("defect_master") and "stations" not in cols("defect_master"):
+        cx.execute("ALTER TABLE defect_master ADD COLUMN stations TEXT")
+
     # pre-shared or post-shared, recorded at allocation
     if cols("allocation") and "alloc_type" not in cols("allocation"):
         cx.execute("ALTER TABLE allocation ADD COLUMN alloc_type TEXT")
@@ -589,22 +593,33 @@ def _loss_on_factory_day(cx):
 
 
 def _seed_defects(cx):
-    """Fill defect_master and defect_folder_map from icon_defects.py, once.
+    """Fill defect_master and defect_folder_map from icon_defects.py.
 
-    Never touches either table again once it has a row - a defect list is a
-    master the moment it exists, the same rule seed_materials (db.py)
-    follows, and for the same reason: re-seeding on every restart would undo
-    whatever's been corrected (a code retired, a folder spelling added)
-    since."""
+    An empty table is filled whole. One that has rows only GAINS what the
+    list has added since - a code or a folder spelling it lacks (17 Oct 2026:
+    the EL Defect Master's eleven reasons and every spelling the six machines
+    file) - and a reason with no stations yet gets them, its source_hint with
+    them. A row that exists is never changed otherwise: a defect list is a
+    master the moment it exists, the same rule seed_materials (db.py) follows,
+    and re-seeding it on every restart would undo whatever has been corrected
+    (a code retired, a folder re-pointed) since."""
     def cols(t):
         return {r[1] for r in cx.execute("PRAGMA table_info(%s)" % t)}
     if "code" not in cols("defect_master"):
         return
-    if cx.execute("SELECT 1 FROM defect_master LIMIT 1").fetchone():
-        return
+    has_stations = "stations" in cols("defect_master")
     for code, label, source_hint in icon_defects.DEFECT_MASTER:
-        cx.execute("INSERT INTO defect_master (code, label, source_hint) "
-                   "VALUES (?, ?, ?)", (code, label, source_hint))
+        stations = icon_defects.STATIONS.get(code) or None
+        if has_stations:
+            cx.execute("INSERT OR IGNORE INTO defect_master (code, label, source_hint, "
+                       "stations) VALUES (?, ?, ?, ?)",
+                       (code, label, source_hint, stations))
+            cx.execute("UPDATE defect_master SET stations=?, source_hint=? "
+                       "WHERE code=? AND stations IS NULL",
+                       (stations, source_hint, code))
+        else:
+            cx.execute("INSERT OR IGNORE INTO defect_master (code, label, source_hint) "
+                       "VALUES (?, ?, ?)", (code, label, source_hint))
     for raw, code in icon_defects.FOLDER_NAMES.items():
         key = icon_defects.normalize(raw)
         cx.execute("INSERT OR IGNORE INTO defect_folder_map "

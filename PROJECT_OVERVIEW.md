@@ -237,7 +237,8 @@ del icontrace.db                   start clean
 python icon_invoice_parser.py --selftest
 python test_box_number.py          32 tests · box numbering, grade letters
 python test_evidence.py            41 tests · two lines of SS and EL, NC vs NA
-python test_fqc.py                 54 tests · pass/reject, the wattage floor, what a record may hold
+python test_defects.py             11 tests · one defect list: every EL spelling on disk, stations, an old database gains rows
+python test_fqc.py                 59 tests · pass/reject, the wattage floor, what a record may hold, the EL Defect Master
 python test_indent.py               7 tests · one number, and an edit that cannot empty it
 python test_packing.py             33 tests · the gate that keeps a reject off a truck
 python test_repack.py              29 tests · a printed box number is never edited
@@ -253,7 +254,7 @@ the page is running. `ui_harness.py` starts the app on a throwaway database;
 they need `pip install playwright` and `playwright install chromium`, not Node:
 
 ```
-python test_fqc_screen.py          15 tests · the defect list, Space = Pass, and what Recent gradings shows
+python test_fqc_screen.py          17 tests · the defect list, Space = Pass, and what Recent gradings shows
 python test_search_invoice.py      16 tests · Search & Trace opens empty; every number the system issues is found
 python test_indent_export.py        4 tests · one row per indent item, through /api/export/xlsx
 python test_fqc_unplanned.py        40 tests · FQC on a serial the master does not have yet

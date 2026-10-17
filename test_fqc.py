@@ -288,6 +288,44 @@ def t_el_folder_not_on_list_needs_a_defect():
         shutil.rmtree(folder, ignore_errors=True)
 
 
+@test("FQC reads a reason filed as a folder inside a folder WHOLE, and the EL "
+      "Defect Master's spellings (a typo, a leading space) file their codes")
+def t_el_nested_and_spellings():
+    # Final EL A files 'Lead OPEN/ Cross' as Lead OPEN \ ' Cross' (17 Oct 2026);
+    # FQC read only 'Cross'. One station, one map: FQC reads it as the poller does.
+    cases = (("ICON625R1290220491", ("Lead OPEN", " Cross"), "Lead OPEN/Cross",
+              "DF-LEADOPENCROSS"),
+             ("ICON625R1290220492", ("Grid Buring",), "Grid Buring", "DF-GRIDBURNING"),
+             ("ICON625R1290220493", (" NO IMEAGE",), "NO IMEAGE", "DF-NOIMAGE"))
+    c = setup(ss_rows=ROWS + [row(s, "2026-09-07 10:2%d:00" % i, "630.0")
+                              for i, (s, _f, _v, _c) in enumerate(cases)])
+    day = os.path.join(EL_ROOT, "2026-10-17")
+    try:
+        for i, (serial, folders, _v, _c) in enumerate(cases):
+            here = os.path.join(day, "早班", *folders)
+            os.makedirs(here, exist_ok=True)
+            open(os.path.join(here, serial + ".jpg"), "w").close()
+            with store.conn() as (cx, cur):
+                store.insert(cur, "serial", {
+                    "serial": serial, "build_instance": 1, "model": "ISEN625-G12R",
+                    "wattage": WATT, "customer": "STOCK", "dcr": "DCR",
+                    "format_version": 2, "date_produced": "2026-09-07",
+                    "shift": 1, "sequence": 491 + i, "state": "planned"})
+        for serial, _f, verdict, code in cases:
+            d = c.get("/api/fqc/lookup?serial=" + serial).get_json()
+            got = (d.get("evidence") or {}).get("el") or d.get("el")
+            assert got == verdict, "%s: FQC read the EL as %r, not %r" % (serial, got, verdict)
+            # the EL's own folder files a defect, so a rejection needs no pick
+            r = c.post("/api/fqc", json={"serial": serial, "outcome": "reject"})
+            assert r.status_code == 200, r.get_json()
+            rec = fqc_row(serial)
+            assert rec["defect_el_raw"] == verdict, rec
+            assert defect_codes(rec["fqc_id"], "el") == [code], \
+                (serial, defect_codes(rec["fqc_id"], "el"))
+    finally:
+        shutil.rmtree(day, ignore_errors=True)
+
+
 @test("a named defect is recorded alongside the EL's, not instead of it")
 def t_defect_named_plus_el():
     c = setup()

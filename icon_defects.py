@@ -17,6 +17,15 @@ used, to the code it means - normalize() is what makes " low eff" and
 
 Labels are Title Case - first letter of each word upper, the rest lower -
 except OK, which is not a defect at all and is excluded here.
+
+17 Oct 2026, the EL Defect Master (Mukesh, approved from Claude chat): one
+list for every EL machine in the plant. A folder survey of the six machines
+on the LAN (Pre-EL Line B primary and secondary, Post EL A and B, Final EL A
+and B - Final EL is FQC's own share) over 11-17 Oct added eleven reasons and
+every spelling filed under them. Spellings are the maintenance person's typos
+on each machine's list ('Grid Buring', 'Terminel bending', ' NO IMEAGE'):
+each stays a key exactly as it is on disk, the reason carries a clean label,
+and nothing on a share is renamed. Each reason names the STATIONS it is on.
 """
 import re
 
@@ -31,6 +40,8 @@ _CODE_OVERRIDES = {
     "Ribbon Short": "DF-RIBSHORT",
     "String Short": "DF-STRSHORT",
     "Chip Cut": "DF-CHIPCUT",
+    "SR (Stringer Rework)": "DF-SR",
+    "No Image (Jig/Probe or JB)": "DF-NOIMAGE",
 }
 
 
@@ -44,8 +55,15 @@ def normalize(raw):
     """Collapse whitespace and case so a folder name is looked up the same
     way regardless of how it happened to be typed or filed - production has
     already filed 'low eff' both with and without a leading space, and
-    'No Power' the same way."""
-    return re.sub(r"\s+", " ", (raw or "")).strip().lower()
+    'No Power' the same way.
+
+    A reason with a '/' in it is a folder inside a folder on disk (Final EL
+    A's 'Lead OPEN' holds ' Cross'), and the whole name is read back with each
+    part trimmed ('Lead OPEN/Cross') - so each part is normalised on its own,
+    and 'Lead OPEN/ Cross' and 'Lead OPEN/Cross' are one key."""
+    parts = [re.sub(r"\s+", " ", p).strip().lower()
+             for p in (raw or "").split("/")]
+    return "/".join(p for p in parts if p)
 
 
 def _title(raw):
@@ -80,6 +98,20 @@ _BOTH = {'Cell Crack', 'Ribbon Short', 'Other'}
 _EL_ONLY = ['Burning', 'Cross', 'Bussing miss', 'Cell Short', 'Lead OPEN',
             'low eff', 'No Power', 'PATCHES']
 
+# The reasons the 17 Oct 2026 survey found that the list did not have, with a
+# clean label each (the spellings on disk are under FOLDER_NAMES). Grid, Edge
+# and plain Burning are three defects; Terminal Bending (Pre-EL: the terminal
+# bent for the laminator, straightened for the junction box) and Output
+# Terminal Issue (Final EL, after the JB is fitted) are two; SR is the NG of a
+# module the stringer reworked; DARK BUSBAR was added to the Final EL lists
+# with Humesh's approval; NO IMEAGE is a jig/probe not connected or a JB fault
+# - the image cannot tell which, so its label names both (counted as a defect
+# until Humesh says otherwise).
+_EL_2026_10 = ['Dark Busbar', 'Grid Burning', 'Edge Burning', 'Lead Open/Cross',
+               'SR (Stringer Rework)', 'Cell Issue/Ribbon Bold',
+               'No Image (Jig/Probe or JB)', 'Cell Particle', 'Terminal Bending',
+               'Output Terminal Issue', 'Ribbon Missing']
+
 DEFECT_MASTER = []
 _seen = set()
 for _label in _VISUAL:
@@ -94,6 +126,64 @@ for _raw in _EL_ONLY:
     if _code not in _seen:
         DEFECT_MASTER.append((_code, _label, 'el'))
         _seen.add(_code)
+for _label in _EL_2026_10:
+    _code = _code_for(_label)
+    if _code not in _seen:
+        DEFECT_MASTER.append((_code, _label, 'el'))
+        _seen.add(_code)
+
+# Where each reason is filed (Decision 1, 17 Oct 2026): the EL stations whose
+# machines' lists carry it - read off the shares, a folder each - and 'visual'
+# for the FQC operator's own list. A reason may be on several. The codes Round
+# 35 read off the Final EL Line A share (FQC's) are Final EL's; Post EL has
+# filed only OK so far (it runs continuous), so no reason names it yet - a
+# folder it makes later still maps by its name (FOLDER_MAP is one map for every
+# station). Output Terminal Issue is a Final EL defect (Mukesh) that Pre-EL
+# secondary's list also carries; both are named.
+STATION_ORDER = ('pre_el', 'post_el', 'final_el', 'visual')
+_ON = {
+    'DF-DARKBUSBAR': ('final_el',),
+    'DF-PATCHES': ('final_el',),
+    'DF-NOIMAGE': ('final_el',),
+    'DF-BURNING': ('final_el',),
+    'DF-CROSS': ('final_el',),
+    'DF-LEADOPEN': ('final_el',),
+    'DF-NOPOWER': ('final_el',),
+    'DF-TERMINALBENDING': ('pre_el',),
+    'DF-LOWEFF': ('pre_el', 'final_el'),
+    'DF-GRIDBURNING': ('pre_el', 'final_el'),
+    'DF-EDGEBURNING': ('pre_el', 'final_el'),
+    'DF-LEADOPENCROSS': ('pre_el', 'final_el'),
+    'DF-SR': ('pre_el', 'final_el'),
+    'DF-CELLISSUERIBBONBOLD': ('pre_el', 'final_el'),
+    'DF-BUSSINGMISS': ('pre_el', 'final_el'),
+    'DF-CELLPARTICLE': ('pre_el', 'final_el'),
+    'DF-CELLSHORT': ('pre_el', 'final_el'),
+    'DF-RIBBONMISSING': ('pre_el', 'final_el'),
+    'DF-OUTPUTTERMINALISSUE': ('pre_el', 'final_el'),
+    'DF-CELLCRACK': ('pre_el', 'final_el', 'visual'),
+    'DF-RIBSHORT': ('pre_el', 'final_el', 'visual'),
+    'DF-STRSHORT': ('pre_el', 'final_el', 'visual'),
+    'DF-OTHER': ('pre_el', 'final_el', 'visual'),
+    # 'Dust partical' is Foreign Particle (Mukesh): a particle in before
+    # lamination cannot come out after - the station keeps Pre-EL's
+    # encapsulated case apart from FQC's surface one in any chart
+    'DF-FOREIGNPARTICLE': ('pre_el', 'final_el', 'visual'),
+}
+
+
+def _hint(stations):
+    el = any(s != 'visual' for s in stations)
+    return 'both' if el and 'visual' in stations else 'el' if el else 'visual'
+
+
+# code -> 'pre_el,final_el,visual' (STATION_ORDER), what defect_master.stations
+# holds; source_hint is what it always was, now worked out from it
+STATIONS = {}
+for _i, (_code, _label, _h) in enumerate(DEFECT_MASTER):
+    _st = _ON.get(_code, ('visual',) if _h == 'visual' else ())
+    STATIONS[_code] = ",".join(s for s in STATION_ORDER if s in _st)
+    DEFECT_MASTER[_i] = (_code, _label, _hint(_st) if _st else _h)
 
 # raw folder name, exactly as filed -> the code it means. Every spelling
 # production has actually used is here, keyed by normalize() so a lookup
@@ -114,5 +204,47 @@ FOLDER_NAMES = {
     'PATCHES': 'DF-PATCHES',
     'Ribbon Short': 'DF-RIBSHORT',
     'Other': 'DF-OTHER',
+
+    # The EL Defect Master, 17 Oct 2026: every spelling filed 11-17 Oct on the
+    # six machines on the LAN, exactly as it is on disk (a leading space is part
+    # of the name; a '/' is a folder inside a folder). Final EL A / B are FQC's
+    # Line A / B folders; Pre-EL is Line B's two machines - Line A's are not on
+    # the LAN yet, and their spellings map when they come, by this list.
+    'DARK BUSBAR': 'DF-DARKBUSBAR',               # Final EL A, B
+    'Low efficiency': 'DF-LOWEFF',                # Final EL A, B; Pre-EL secondary
+    'Low effciency': 'DF-LOWEFF',                 # Pre-EL primary
+    'Grid burning': 'DF-GRIDBURNING',             # Final EL A
+    'Grid Buring': 'DF-GRIDBURNING',              # Final EL B
+    'Grid Burning': 'DF-GRIDBURNING',             # Pre-EL
+    'Patches': 'DF-PATCHES',                      # Final EL A, B
+    'Lead OPEN/ Cross': 'DF-LEADOPENCROSS',       # Final EL A (' Cross' inside)
+    'Lead Open/Cross': 'DF-LEADOPENCROSS',        # Final EL B; Pre-EL secondary
+    'Lead open/cross': 'DF-LEADOPENCROSS',        # Pre-EL primary
+    'other': 'DF-OTHER',                          # Pre-EL
+    'SR': 'DF-SR',                                # Pre-EL; Final EL A, B
+    'Edge burning': 'DF-EDGEBURNING',             # Final EL A
+    'Edge Burning': 'DF-EDGEBURNING',             # Final EL B; Pre-EL
+    'cell crack': 'DF-CELLCRACK',                 # Pre-EL primary
+    ' Cell Crack': 'DF-CELLCRACK',                # Final EL B
+    'Cell issue/Ribbon bold': 'DF-CELLISSUERIBBONBOLD',   # Final EL A
+    'Dust partical': 'DF-FOREIGNPARTICLE',        # Pre-EL; Final EL B
+    'String Short': 'DF-STRSHORT',                # Pre-EL secondary
+    'String short': 'DF-STRSHORT',                # Pre-EL primary
+    'string short': 'DF-STRSHORT',                # Final EL A
+    ' NO IMEAGE': 'DF-NOIMAGE',                   # Final EL B
+    'Bussing Miss': 'DF-BUSSINGMISS',             # Pre-EL secondary; Final EL B
+    'bussing miss': 'DF-BUSSINGMISS',             # Final EL A
+    'BUSSING MISS': 'DF-BUSSINGMISS',             # Final EL A
+    'Cell partical': 'DF-CELLPARTICLE',           # Pre-EL; Final EL A, B
+    'Ribbon short': 'DF-RIBSHORT',                # Pre-EL; Final EL A, B
+    'Terminel bending': 'DF-TERMINALBENDING',     # Pre-EL primary
+    'OUTPUT TERMINAL ISSU': 'DF-OUTPUTTERMINALISSUE',     # Pre-EL secondary
+    'Cell short': 'DF-CELLSHORT',                 # Pre-EL primary; Final EL A
+    'Ribbon Missing': 'DF-RIBBONMISSING',         # Pre-EL secondary
+    'Ribbon missing': 'DF-RIBBONMISSING',         # Pre-EL primary; Final EL A
+    # NOT seeded: 'ell issue/Ribbon bold' (1 image, Pre-EL secondary). It IS
+    # spelled so on disk (first byte 0x65, read 17 Oct 2026), but the approved
+    # scope leaves it out; until Mukesh says otherwise it is recorded under its
+    # own name, a folder the list does not have - shown, never dropped.
 }
 FOLDER_MAP = {normalize(k): v for k, v in FOLDER_NAMES.items()}

@@ -7950,3 +7950,36 @@ commit.
 - **Test:** `test_el_capture.py` +2 (62): nested reasons recorded whole (a stray space
   trimmed), old rows read whole once and not again; the filing test's nested
   expectation updated.
+
+### 17 Oct 2026 - the EL Defect Master: one reason list for every EL machine
+- **Asked (Mukesh, the "EL Defect Master - final" approved from Claude chat):** one
+  defect list for every EL machine, a station on each reason, the eleven reasons and every
+  spelling the survey found, Final EL (= FQC's share) on the same map at once.
+- **Checked first:** a read-only walk of every configured EL folder, 11-17 Oct - Final EL
+  A and B (FQC's Line A / B folders), Pre-EL Line B primary and secondary, Post EL A and B
+  (only OK: continuous). 38 spellings, all now mapping; `Lead OPEN/ Cross` has a space
+  inside (the inner folder is " Cross"). The scope's "`ell issue` is a reader bug - find
+  the dropped character": nothing dropped it - the folder under Pre-EL secondary's shift
+  folder IS `ell issue` (first byte 0x65, found by two independent walks), holding
+  `Ribbon bold\ICON625R12A1422995.jpg`. Left unseeded as the scope says, and put to
+  Mukesh (DECISIONS 5 [open]).
+- **Cause of the split:** FQC took the inner folder ("Cross") and its folder map had only
+  Round 35's 14 spellings: on the plant's database 230 FQC records read "Cross" -> DF-CROSS
+  and ~3,100 carry an EL reading with no code ("Ribbon bold" 1,097, "Low efficiency"
+  950, "DARK BUSBAR" 579, "Grid burning" 347, "Edge burning" 115, "SR" 26).
+- **Change:** `icon_defects`: 11 codes (DF-DARKBUSBAR, -GRIDBURNING, -EDGEBURNING,
+  -LEADOPENCROSS, -SR, -CELLISSUERIBBONBOLD, -NOIMAGE, -CELLPARTICLE, -TERMINALBENDING,
+  -OUTPUTTERMINALISSUE, -RIBBONMISSING), 32 spellings, `STATIONS` per code;
+  `normalize()` trims each part of a "/" name. `defect_master.stations` (schema + store
+  migration). `store._seed_defects` now ADDS what a database lacks (codes, spellings,
+  stations where none) and changes no existing row. `icon_evidence.el_verdict`: FQC reads
+  a nested reason whole. `/api/fqc/defects` serves Final EL's and the visual reasons.
+- **Lead Open/Cross (scope item 4) - decided: left as filed.** An FQC record is the
+  decision on what was shown that day; the 230 DF-CROSS records keep it. New readings
+  are "Lead OPEN/Cross" -> DF-LEADOPENCROSS. DF-CROSS / DF-LEADOPEN stay on the list. An
+  analysis counting FQC's history should read DF-CROSS before 17 Oct as Lead Open/Cross.
+  Whether to give the ~3,100 old records their EL code now is [open].
+- **Test:** `test_defects.py` +5 (11): every surveyed spelling, the eleven codes and the
+  old ones, stations, a folder on no list and `ell issue`, an existing database gaining
+  the rows with an Admin's retirement kept. `test_fqc.py` +1 (59): a nested
+  `Lead OPEN\ Cross`, `Grid Buring` and ` NO IMEAGE` read by FQC, each filing its code.

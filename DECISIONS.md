@@ -224,10 +224,41 @@ no one signs twice. [enforcement unverified]
   as a folder inside a folder, and only the inner one ("Cross") was recorded. The
   reason is every folder between the shift folder and the image, joined with "/", each
   part trimmed. Images already recorded were read whole again from their own path, once
-  (app_config `el_nested_verdicts`). FQC's own reading of its EL folder is unchanged.
-  [built] **[open]** FQC's own EL (normal mode on 17 Oct)
+  (app_config `el_nested_verdicts`). FQC reads its own EL folder the same way since the
+  EL Defect Master (below) - "Lead OPEN/Cross", no longer "Cross". [built]
+  **[open]** FQC's own EL (normal mode on 17 Oct)
   is read by FQC as before: if it runs continuous, FQC sees no verdict for its images -
   whether such an image is a clean EL for an FQC pass is Mukesh's call.
+- **One defect list for every EL machine: the EL Defect Master** (Mukesh, 17 Oct,
+  approved from Claude chat; a folder survey of the six EL machines on the LAN, 11-17
+  Oct). `defect_master` / `defect_folder_map` stay the one list; each reason names the
+  **stations** it is filed at (`pre_el`, `post_el`, `final_el`, `visual` - several may
+  apply). Eleven reasons were added: Dark Busbar (added to the Final EL lists with
+  Humesh's approval), Grid Burning, Edge Burning (three defects with plain Burning),
+  Lead Open/Cross, SR (the NG of a module the stringer reworked), Cell Issue/Ribbon
+  Bold, No Image (a jig/probe not connected or a JB fault - the image cannot tell which,
+  so its label names both; counted as a defect until Humesh says otherwise), Cell
+  Particle, Terminal Bending (Pre-EL: bent for the laminator, straightened for the JB),
+  Output Terminal Issue (Final EL, after the JB is fitted - a different defect), Ribbon
+  Missing. "Dust partical" is Foreign Particle (in before lamination, it cannot come
+  out after; the station keeps Pre-EL's case apart from FQC's). Every spelling filed on
+  disk is a key exactly as it is there - the maintenance person's typos ("Grid Buring",
+  "Terminel bending", " NO IMEAGE" with its leading space) included; nothing on a share
+  is renamed; no code was changed or removed. A folder no list has is recorded under its
+  own name, never dropped or guessed. **Final EL is FQC's own share, so FQC uses the
+  same map at once** (one station, one map): it reads a nested reason whole, and the
+  new spellings file their codes on an FQC record - an EL "DARK BUSBAR" now satisfies a
+  rejection's "needs a defect". FQC's picker offers the reasons filed at Final EL and its
+  own visual ones (not Terminal Bending, Pre-EL's alone). An existing database gains the
+  new rows at start-up; a row it already has is never changed. **FQC records already
+  filed are left as filed** (records are not rewritten): 230 on the plant's database read
+  "Cross" (the leaf of Lead OPEN/Cross) and carry DF-CROSS, and about 3,100 carry an EL
+  reading no code matched then ("Ribbon bold" 1,097, "Low efficiency" 950, "DARK
+  BUSBAR" 579, "Grid burning" 347, ...). [built] **[open]** whether those old FQC
+  records should be given their EL code now (an added row, audited), and whether
+  "ell issue/Ribbon bold" (1 image, Pre-EL Line B secondary) is a key: it IS spelled so
+  on disk (first byte 0x65, read twice on 17 Oct), but the approved scope left it out as
+  a reader bug - so it is recorded under its own name until Mukesh says.
 - **At an EL station OK is Pass; any other folder is NG** (Mukesh, 16 Oct) - SR too: it
   is the NG of a module the stringer reworked, a folder of its own so they can be
   counted. **At Pre-EL

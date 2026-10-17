@@ -11954,9 +11954,17 @@ def api_fqc_defects():
     """The unified defect list (icon_defects.py / defect_master) - the
     screen's picker matches against this, never a name typed free-hand.
     Operators cannot mint new defect names; "Other" (+ a note) is the
-    escape hatch for anything not on this list."""
+    escape hatch for anything not on this list.
+
+    FQC sits at Final EL, so its list is the reasons filed there and its own
+    visual ones (defect_master.stations, 17 Oct 2026) - a reason only Pre-EL
+    files (Terminal Bending: the terminal bent for the laminator) is not one
+    an FQC operator picks."""
     with store.conn() as (cx, cur):
-        return jsonify({"defects": db.defects(cur)})
+        return jsonify({"defects": [
+            d for d in db.defects(cur)
+            if not d.get("stations") or
+            {"final_el", "visual"} & set(d["stations"].split(","))]})
 
 
 @app.route("/api/fqc/anomalies")

@@ -2360,8 +2360,9 @@ def set_cell_efficiencies(cur, values):
 
 def defects(cur, active_only=True):
     """The unified defect list - every code FQC or the EL ingest can match
-    against, whichever vocabulary (el/visual/both) it came from."""
-    sql = "SELECT code, label, source_hint, active FROM defect_master"
+    against, whichever vocabulary (el/visual/both) it came from, and the
+    stations it is filed at ('pre_el,final_el,visual')."""
+    sql = "SELECT code, label, source_hint, active, stations FROM defect_master"
     if active_only:
         sql += " WHERE active=1"
     sql += " ORDER BY label"

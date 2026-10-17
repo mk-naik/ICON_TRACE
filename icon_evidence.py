@@ -579,6 +579,28 @@ def _unfiled(path):
     return not (key == "ok" or key in icon_defects.FOLDER_MAP)
 
 
+_EL_DAY = re.compile(r"^(\d{4}-\d{2}-\d{2}|\d{2}-\d{2}-\d{4}|\d{8})$")
+
+
+def el_verdict(path):
+    """The reason an EL image is filed under, WHOLE: the folders between the
+    shift folder and the image, each trimmed, joined with '/'.
+
+    The EL software names a verdict folder from the machine's own list, and a
+    name with a '/' in it ('Lead OPEN/ Cross', 'Cell issue/Ribbon bold' on
+    Final EL Line A, FQC's share) is written by Windows as a folder inside a
+    folder - FQC used to read only the inner one, 'Cross' (17 Oct 2026, the EL
+    Defect Master: one station, one map - FQC reads its share as the poller
+    reads every other EL folder, icon_el_capture.verdict_of). The date folder
+    is found by its name; under none, or with no shift level (date / verdict /
+    file), the folder the image sits in is the verdict, as it always was."""
+    parts = re.split(r"[\\/]+", os.path.normpath(path))[:-1]
+    days = [i for i, p in enumerate(parts) if _EL_DAY.match(p.strip())]
+    below = parts[days[-1] + 1:] if days else parts[-1:]
+    names = below[1:] if len(below) >= 3 else below[-1:]
+    return "/".join(n.strip() for n in names if n.strip())
+
+
 def read_el(cfg, serial, line=None):
     """EL verdict comes from the folder the image was filed under.
 
@@ -622,8 +644,7 @@ def read_el(cfg, serial, line=None):
                                 % s["label"]}
             if match:
                 return {"state": OK,
-                        "verdict": os.path.basename(os.path.dirname(match)).strip()
-                                  or "OK",
+                        "verdict": el_verdict(match) or "OK",
                         "path": match,
                         "line": s["line"], "source": s["label"],
                         "note": "Folder name is the operator's verdict "
