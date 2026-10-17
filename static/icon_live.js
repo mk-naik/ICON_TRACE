@@ -1795,6 +1795,113 @@
   }
   window.iconElCard = elDashCard;
 
+  /* Top EL defects (the EL Insight Roadmap, phase 5): the five busiest reasons at
+     each EL station over a window of the card's own - the last hour, 8 hours,
+     today, 7 days - each with its change on the window before and its trend; a
+     reason opens EL Analysis on it. Only for an account that has EL Analysis.
+     Read again when the window changes, or a minute after it was last read. */
+  var EL_TOP_WIN = { '1h': '1 hour', '8h': '8 hours', today: 'Today', '7d': '7 days' };
+  var EL_TOP_ST = [['pre_el', 'Pre-EL'], ['post_el', 'Post EL'], ['final_el', 'Final EL']];
+  function elTopWin() {
+    try { var w = localStorage.getItem('icon.eltop'); if (EL_TOP_WIN[w]) return w; } catch (e) { /* default */ }
+    return 'today';
+  }
+  function elTopSpark(vals) {
+    var n = vals.length, max = Math.max.apply(null, vals.concat([1])), pts = [];
+    if (n < 2) return '';
+    for (var i = 0; i < n; i++) {
+      pts.push((i * 88 / (n - 1)).toFixed(1) + ',' + (20 - vals[i] * 18 / max).toFixed(1));
+    }
+    return '<svg viewBox="0 0 90 22" width="90" height="22" aria-hidden="true">' +
+      '<polyline points="' + pts.join(' ') + '" fill="none" stroke="#BE3325" stroke-width="1.6"/></svg>';
+  }
+  function elTopCard(viewId, cardId, afterId) {
+    if (typeof can !== 'function' || !can('elan')) return;
+    var view = document.getElementById(viewId);
+    if (!view) return;
+    var card = document.getElementById(cardId);
+    if (!card) {
+      var after = document.getElementById(afterId) || view.querySelector('.grid.g5');
+      if (!after) return;
+      card = document.createElement('div');
+      card.className = 'card';
+      card.id = cardId;
+      after.parentNode.insertBefore(card, after.nextSibling);
+    }
+    var win = elTopWin();
+    if (card.__busy || (card.__win === win && Date.now() - (card.__at || 0) < 60000)) return;
+    card.__busy = true;
+    fetch('/api/el/analysis?window=' + win + '&flows=0', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        card.__busy = false;
+        card.__win = win;
+        card.__at = Date.now();
+        var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+        var n = function (v) { return Number(v || 0).toLocaleString('en-IN'); };
+        var head = '<div class="card-h"><h3>Top EL defects</h3><div class="ch-r">' +
+          Object.keys(EL_TOP_WIN).map(function (w) {
+            return '<button class="btn btn-sm ' + (w === win ? 'btn-primary' : 'btn-ghost') +
+              '" onclick="iconElTopSet(\'' + w + '\')">' + EL_TOP_WIN[w] + '</button>'; }).join('') +
+          ' <button class="btn btn-ghost btn-sm" onclick="if (window.elanOpen) elanOpen({station: \'\', window: \'' +
+          win + '\'})">Open EL Analysis ›</button></div></div>';
+        if (!d.ok) {
+          card.innerHTML = head + '<div class="card-b"><div class="note n-bad"><span>&#9888;</span><span>' +
+            esc(d.why || 'The server refused it.') + '</span></div></div>';
+          return;
+        }
+        var cfg = {};
+        (d.stations || []).forEach(function (s) { cfg[s.id] = s.configured; });
+        var cols = EL_TOP_ST.map(function (pair) {
+          var st = pair[0], b = d.blocks[st], t = b.tiles, body;
+          if (!cfg[st] && !t.decided && !t.continuous) {
+            body = '<div class="hint">No folder set (Admin › Stations &amp; sources).</div>';
+          } else if (!t.decided) {
+            body = '<div class="hint">' + (t.continuous ? n(t.continuous) + ' images passed by the machine ' +
+              '(continuous) — no operator decided any, so no NG figure.' : 'No image in this window.') + '</div>';
+          } else if (!b.reasons.length) {
+            body = '<div class="hint">' + n(t.decided) + ' inspected, no NG image' + (t.continuous ? ' · ' +
+              n(t.continuous) + ' more passed by the machine (continuous), counted apart' : '') + '.</div>';
+          } else {
+            body = '<table style="width:100%;font-size:12px"><tbody>' + b.reasons.slice(0, 5).map(function (r) {
+              var ch = r.change == null ? '<span style="color:var(--ink3)">—</span>' :
+                r.change > 0 ? '<span style="color:var(--fail);font-weight:700">▲ ' + n(r.change) + '</span>' :
+                r.change < 0 ? '<span style="color:var(--pass);font-weight:700">▼ ' + n(-r.change) + '</span>' :
+                '<span style="color:var(--ink3)">=</span>';
+              return '<tr style="cursor:pointer" title="Open EL Analysis on ' + esc(r.label) + '" onclick="if (window.elanOpen) elanOpen({station: \'' +
+                st + '\', window: \'' + win + '\', reason: ' + jsArg(r.key) + '})">' +
+                '<td style="padding:4px 0">' + esc(r.label) + (r['new'] ? ' <span class="tag t-rev">new</span>' : '') + '</td>' +
+                '<td class="num" style="padding:4px 6px"><b>' + n(r.images) + '</b></td>' +
+                '<td class="num" style="padding:4px 6px;color:var(--ink3)">' + (r.share == null ? '' : r.share + '%') + '</td>' +
+                '<td class="num" style="padding:4px 6px">' + ch + '</td>' +
+                '<td style="padding:4px 0;text-align:right">' + elTopSpark(b.trend.map(function (x) { return x.r[r.key] || 0; })) +
+                '</td></tr>';
+            }).join('') + '</tbody></table>';
+          }
+          return '<div><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+            '<b style="font-size:12.5px">' + pair[1] + '</b>' + (t.decided ? '<span class="tag ' + (t.ng ? 't-fail' : 't-pass') +
+            '">NG ' + (t.ng_rate == null ? '—' : t.ng_rate + '%') + ' of ' + n(t.decided) + '</span>' : '') + '</div>' + body + '</div>';
+        });
+        card.innerHTML = head + '<div class="card-b"><div class="grid g3">' + cols.join('') + '</div>' +
+          '<div class="hint" style="margin-top:8px">' + esc(d.window.label) + ' · NG images by reason · change on the ' +
+          'window of the same length before · a reason opens EL Analysis on it. Stations are never added together.</div></div>';
+      })
+      .catch(function (e) {
+        card.__busy = false;
+        card.innerHTML = '<div class="card-h"><h3>Top EL defects</h3></div><div class="card-b"><div class="note n-bad">' +
+          '<span>&#9888;</span><span>Could not load: ' + String(e).replace(/</g, '&lt;') + '</span></div></div>';
+      });
+  }
+  window.iconElTop = elTopCard;
+  window.iconElTopSet = function (w) {
+    try { localStorage.setItem('icon.eltop', w); } catch (e) { /* this view only */ }
+    [['v-mgmt', 'mgElTop', 'mgElCard'], ['v-proddash', 'pdElTop', 'pdElCard']].forEach(function (x) {
+      var c = document.getElementById(x[1]);
+      if (c) { c.__at = 0; elTopCard(x[0], x[1], x[2]); }
+    });
+  };
+
   /* EL in the dashboards' own widgets (Mukesh, 17 Oct 2026: "dash donut not
      included, Where the plant stands, Stage funnel, other must show
      information"). All from the same /api/prod/dashboard answer.
@@ -1927,6 +2034,7 @@
     ]).then(function(results) {
       var prod = results[0], fqc = results[1], disp = results[2];
       elDashCard('v-mgmt', 'mgElCard', prod);
+      elTopCard('v-mgmt', 'mgElTop', 'mgElCard');
 
       var pk = prod.kpi || {};
       var alloc = pk.alloc || 0, made = pk.prod || 0, atFqc = pk.fqc || 0,
@@ -3441,6 +3549,7 @@ function wireFqcAnomalies() {
                      f.customer, { facet: !!fc });
         _dashCascade('pdModel', fc ? fc.model : (d.models || []), 'All', f.model, { facet: !!fc });
         if (window.iconElCard) window.iconElCard('v-proddash', 'pdElCard', d);
+        if (window.iconElTop) window.iconElTop('v-proddash', 'pdElTop', 'pdElCard');
         if (window.iconTable) window.iconTable.wireAll();
       })
       .catch(function (err) {

@@ -191,6 +191,18 @@ def machine_label(station, unit, line):
                         "Line %s" % line if line else "both lines")
 
 
+_PASS = {}
+
+
+def _is_pass(verdict):
+    """icon_el_capture.is_pass, remembered: a window holds a few dozen folder
+    names over hundreds of thousands of images."""
+    r = _PASS.get(verdict)
+    if r is None:
+        r = _PASS[verdict] = elcap.is_pass(verdict)
+    return r
+
+
 class Img(object):
     __slots__ = ("station", "unit", "line", "serial", "verdict", "t", "b", "shift",
                  "machine", "ng", "rkey", "rlabel", "rnew", "model", "customer")
@@ -230,7 +242,7 @@ def _decided(cx, stations, start, end, w, reason_of, master):
         i.b = int((i.t - w0).total_seconds() // step)
         i.shift = clock.SHIFT_LETTER[clock.shift_of(i.t.hour)]
         i.machine = machine_key(st, unit, line)
-        i.ng = not elcap.is_pass(verdict)
+        i.ng = not _is_pass(verdict)
         if i.ng:
             i.rkey, i.rlabel, i.rnew = reason_of(verdict)
         else:
@@ -318,7 +330,7 @@ def _previous(cur, stations, w, p, reason_of):
     for r in cur.fetchall():
         o = out[r["station"]]
         o["decided"] += r["n"]
-        if elcap.is_pass(r["verdict"]):
+        if _is_pass(r["verdict"]):
             continue
         o["ng_all"] += r["n"]
         key, label, _new = reason_of(r["verdict"])
@@ -388,19 +400,33 @@ def _facets(imgs, p):
     never drops the value already picked (DECISIONS 8)."""
     f = {"line": set(), "shift": set(), "machine": {}, "model": set(), "customer": set(),
          "reason": {}}
+    active = [d for d in _DIMS if p[d]]
+    value = {"line": lambda i: i.line, "shift": lambda i: i.shift,
+             "machine": lambda i: i.machine, "model": lambda i: i.model,
+             "customer": lambda i: i.customer}
+    machines = {}
     for i in imgs:
-        if _ok(i, p, "line") and i.line:
-            f["line"].add(i.line)
-        if _ok(i, p, "shift"):
-            f["shift"].add(i.shift)
-        if _ok(i, p, "machine"):
-            f["machine"][i.machine] = machine_label(i.station, i.unit, i.line)
-        if _ok(i, p, "model") and i.model:
-            f["model"].add(i.model)
-        if _ok(i, p, "customer") and i.customer:
-            f["customer"].add(i.customer)
-        if i.ng and _ok(i, p):
+        # which of the filters that are set this image fails: none - it counts
+        # for every dropdown; one - only for that one's own; more - for none
+        miss = None
+        for d in active:
+            if value[d](i) != p[d]:
+                if miss is not None:
+                    miss = False
+                    break
+                miss = d
+        if miss is False:
+            continue
+        for d in (_DIMS if miss is None else (miss,)):
+            v = value[d](i)
+            if d == "machine":
+                machines[v] = i
+            elif v:
+                f[d].add(v)
+        if miss is None and i.ng:
             f["reason"][i.rkey] = (i.rlabel, i.rnew)
+    for k, i in machines.items():
+        f["machine"][k] = machine_label(i.station, i.unit, i.line)
     for k in ("line", "shift", "model", "customer"):
         if p[k]:
             f[k].add(p[k])
@@ -584,7 +610,7 @@ def _journeys(cx, serials, reason_of):
                 continue                # a filing stands over the machine's pass
             keep[ident] = r
         for st, unit, line, serial, rc, verdict, ft, mode in keep.values():
-            ng = mode != "continuous" and not elcap.is_pass(verdict)
+            ng = mode != "continuous" and not _is_pass(verdict)
             out.setdefault(serial, {}).setdefault(st, []).append({
                 "t": ft, "verdict": verdict, "ng": ng, "cont": mode == "continuous",
                 "line": line, "unit": unit,
@@ -704,7 +730,9 @@ def params(args):
          "from": g("from"), "to": g("to"), "line": g("line").upper(),
          "shift": g("shift").upper(), "machine": g("machine"), "reason": g("reason"),
          "model": g("model"), "customer": g("customer"),
-         "kind": g("kind") or "ng", "flow": g("flow"), "sub": g("sub"), "bucket": g("bucket")}
+         "kind": g("kind") or "ng", "flow": g("flow"), "sub": g("sub"), "bucket": g("bucket"),
+         # the modules' journeys across stations - left out by a dashboard card
+         "flows": g("flows") != "0"}
     if p["station"] and p["station"] not in STATION_IDS:
         raise Refused("No such EL station: %s." % p["station"])
     if p["window"] not in WINDOW_LABEL:
@@ -754,7 +782,7 @@ def analyse(cx, cur, p, now, cfg):
     tiles, Pareto, trend, shifts, machines and lines; with all three stations,
     the modules' journeys across them too."""
     w, stations, reason_of, master, imgs = _scope(cx, cur, p, now, cfg)
-    base = [i for i in imgs if _ok(i, p)]
+    base = [i for i in imgs if _ok(i, p)] if any(p[d] for d in _DIMS) else imgs
     cont = _continuous(cur, stations, w, p)
     prev = _previous(cur, stations, w, p, reason_of)
     coverage = _coverage(cur)
@@ -781,7 +809,7 @@ def analyse(cx, cur, p, now, cfg):
         "blocks": blocks,
         "coverage": coverage,
     }
-    if not p["station"]:
+    if not p["station"] and p["flows"]:
         out["flows"] = _flows(cx, base, p, reason_of)[0]
     return out
 

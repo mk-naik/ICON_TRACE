@@ -8105,3 +8105,22 @@ commit.
   reach, nothing twice, the gate and the audit; an old continuous run raises no alert;
   the alert tests use recent image times. `test_el_capture_ui.py` +1 (13): the card's
   reach, a read started from it, its result.
+
+### 18 Oct 2026 - Top EL defects on the dashboards; EL Analysis quicker and honest on small bars
+- **Asked:** the roadmap's phase 5 - "a Top EL defects card on the Production Dashboard and
+  the Management Overview ... window buttons for 1 hour, 8 hours, today and 7 days ... the
+  card opens EL Analysis on the same window" - and Mukesh's "integrate in existing".
+- **Change:** `icon_live.js` `elTopCard` (after each dashboard's EL stations card): per
+  station the five busiest reasons, share, change, a sparkline; its own window (kept per
+  browser); a reason opens `elanOpen({station, window, reason})`; shown only when
+  `can('elan')`; read again on a window change or after a minute. `/api/el/analysis`
+  takes `flows=0` (no journeys across stations - the card does not need them).
+  `icon_el_analysis`: pass/NG of a folder name remembered, the dropdowns read in one pass
+  checking only the filters set, no filtering at all when none is - 30 days of all three
+  stations 5.8 s -> 3.4 s on the real history. EL Analysis: an NG rate over fewer than 20
+  images in a bar is a hollow point off the line (tonight's C shift read 40% on a few
+  images).
+- **Test:** `test_el_analysis.py` +1 (14): flows=0 gives the same figures without the
+  journeys. `test_el_analysis_ui.py` +1 (6): the card's stations, the 7-day window, a
+  reason opening EL Analysis on it, no card for an incharge an Admin took EL Analysis
+  from; the small-bar rates hollow. `test_dashboards_e2e.py` 28, unchanged.

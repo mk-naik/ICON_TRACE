@@ -102,7 +102,10 @@ def t_single():
         assert got["Inspected"] == "5" and got["NG rate"] == "40%", got
         assert got["First-pass yield"] == "50%" and got["Top reason"] in ("Cell Crack", "Grid Burning"), got
         assert pg.locator('#v-elan [data-chart="stack"] rect.seg').count() == 2
-        assert pg.locator('#v-elan [data-chart="stack"] path.rate').count() == 1
+        # a handful of images a bar: the NG rate is drawn as hollow points, off the line -
+        # 1 NG of 2 images is no trend
+        assert pg.locator('#v-elan [data-chart="stack"] path.rate').count() == 0
+        assert pg.locator('#v-elan [data-chart="stack"] circle.dot.thin').count() >= 1
         assert pg.locator('#v-elan [data-chart="donut"] circle.seg').count() == 2
         assert pg.locator('#v-elan [data-chart="pareto"] tbody tr').count() == 2
         assert pg.locator('#v-elan [data-chart="shift"] table').count() == 1
@@ -145,7 +148,7 @@ def t_compare():
         pg.click('#elaStation button[data-st=""]')
         pg.wait_for_selector("#v-elan .ela-st", timeout=10000)
         assert pg.locator("#v-elan .ela-st").count() == 3
-        assert pg.locator('#v-elan [data-chart="rates"] path').count() >= 2
+        assert pg.locator('#v-elan [data-chart="rates"] circle.dot').count() >= 2
         heads = pg.eval_on_selector_all("#v-elan .ela-st h3 button", "bs => bs.map(b => b.textContent)")
         assert heads == ["Pre-EL ›", "Post EL ›", "Final EL ›"], heads
         post = pg.text_content('#v-elan .ela-st[data-st="post_el"]')
@@ -186,6 +189,44 @@ def t_filters_export():
             pg.click("#v-elan .pg-act button >> text='Export to Excel'")
         assert dl.value.suggested_filename.startswith("icontrace_el_analysis_"), dl.value.suggested_filename
         assert pg.errors == [], pg.errors
+
+
+@test("the dashboards' Top EL defects card: each station's busiest reasons for a window of "
+      "its own, with their change and trend; a reason opens EL Analysis on it; only for an "
+      "account that has EL Analysis")
+def t_dashboard_card():
+    import icon_auth
+    world()
+    with H.browser() as b:
+        pg = H.open_page(b, "proddash", role="Production Incharge")
+        pg.wait_for_selector("#pdElTop .grid.g3", timeout=15000)
+        cols = pg.eval_on_selector_all("#pdElTop .grid.g3 > div > div:first-child b",
+                                       "bs => bs.map(b => b.textContent)")
+        assert cols == ["Pre-EL", "Post EL", "Final EL"], cols
+        text = pg.text_content("#pdElTop")
+        assert "passed by the machine" in text, text          # Post EL: continuous only
+        rows = pg.locator("#pdElTop tr[onclick]")
+        assert rows.count() >= 4, rows.count()
+        pg.click("#pdElTop button >> text='7 days'")
+        pg.wait_for_function("document.querySelector('#pdElTop .btn-primary').textContent === '7 days'",
+                             timeout=10000)
+        pg.click("#pdElTop tr[title='Open EL Analysis on Cell Crack']")
+        pg.wait_for_selector("#v-elan.on .ela-tiles", timeout=15000)
+        pg.wait_for_function("document.getElementById('elaReason').value === 'DF-CELLCRACK'",
+                             timeout=10000)
+        assert pg.eval_on_selector("#elaStation button.on", "b => b.textContent") == "Pre-EL"
+        assert pg.eval_on_selector("#elaWindow button.on", "b => b.textContent") == "7 days"
+        assert pg.errors == [], pg.errors
+        # an incharge an Admin has taken EL Analysis from has no such card
+        login = AUTH.make_user("Production Incharge")["login_id"]
+        boss = AUTH.make_user("Super Admin")["login_id"]
+        with store.conn() as (cx, cur):
+            icon_auth.set_screen_perms(cur, boss, login, {"elan": {"view": False, "write": False}})
+        q = H.open_page(b, "proddash", role="Production Incharge", login_id=login)
+        q.wait_for_selector("#pdElCard", timeout=15000)
+        q.wait_for_timeout(800)
+        assert q.locator("#pdElTop").count() == 0, "a card for an account without EL Analysis"
+        assert q.errors == [], q.errors
 
 
 @test("a role without EL Analysis has no such screen")

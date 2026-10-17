@@ -328,6 +328,17 @@ def t_compare_flows():
 # 5. every figure opens its modules
 # --------------------------------------------------------------------------
 
+@test("a dashboard card asks without the journeys across stations (flows=0) - the same "
+      "figures, read quicker")
+def t_no_flows():
+    fresh()
+    cap("pre_el", S(80), "SR", "2026-10-17T09:00:00")
+    cap("final_el", S(80), "SR", "2026-10-17T13:00:00")
+    with_f, without = run(window="today"), run(window="today", flows="0")
+    assert "flows" in with_f and "flows" not in without
+    assert with_f["blocks"] == without["blocks"]
+
+
 @test("a bar, a reason, a cell or a journey lists its modules, one row a module, newest first")
 def t_drill():
     fresh()

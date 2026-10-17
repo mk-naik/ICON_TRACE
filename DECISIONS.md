@@ -387,7 +387,14 @@ no one signs twice. [enforcement unverified]
   apart and is in no NG rate; a reason is read through the one defect list when the
   figures are read. The same people as EL Stations, anyone else by user permission. The
   index holds what the poller has read since it began (the newest two date folders a
-  minute); a window reaching earlier says so. [built]
+  minute); a window reaching earlier says so. An NG rate over fewer than 20 images in a bar
+  is drawn hollow and left off the line - 3 NG of 7 images is no trend. [built]
+- **Top EL defects on the dashboards** (the roadmap's phase 5, 18 Oct): the Production
+  Dashboard and the Management Overview show, under their EL stations card, each
+  station's five busiest reasons over a window of the card's own - 1 hour, 8 hours, today,
+  7 days - with share, change on the window before and a trend line; a reason opens EL
+  Analysis on that station, window and reason. Only for an account that has EL Analysis;
+  stations never added. [built]
 
 ## 6. Quality, Needs Review, duplicate scans
 
