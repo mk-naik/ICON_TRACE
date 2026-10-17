@@ -258,6 +258,12 @@ def _migrate(cx, text):
     if cols("el_capture") and "unit" not in cols("el_capture"):
         cx.execute("ALTER TABLE el_capture ADD COLUMN unit INTEGER NOT NULL DEFAULT 1")
 
+    # 17 Oct 2026: an EL machine in CONTINUOUS mode passes every module itself and
+    # leaves the image in the shift folder - recorded as passed, 'continuous'.
+    # Rows recorded before were all filed by an operator.
+    if cols("el_capture") and "mode" not in cols("el_capture"):
+        cx.execute("ALTER TABLE el_capture ADD COLUMN mode TEXT")
+
     # pre-shared or post-shared, recorded at allocation
     if cols("allocation") and "alloc_type" not in cols("allocation"):
         cx.execute("ALTER TABLE allocation ADD COLUMN alloc_type TEXT")

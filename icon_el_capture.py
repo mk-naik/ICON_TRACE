@@ -128,7 +128,9 @@ def summary(station, rows):
             "reworks": len(ngs) if station == "pre_el" else 0,
             "first_at": imgs[0]["file_time"], "last_at": imgs[-1]["file_time"],
             "lines": sorted({i["line"] for i in imgs if i["line"]}),
-            "units": sorted({i.get("unit", 1) for i in imgs})}
+            "units": sorted({i.get("unit", 1) for i in imgs}),
+            # passed by the machine in continuous mode - no person decided these
+            "continuous": sum(1 for i in imgs if i.get("mode") == "continuous")}
 
 
 # ---- the EL PCs' clocks --------------------------------------------------------
@@ -154,13 +156,17 @@ def clocks(cur, now=None):
     cur.execute("SELECT station, unit, line, MIN(seen_at) AS first FROM el_capture "
                 "GROUP BY station, unit, line")
     first = {(r["station"], r["unit"], r["line"]): r["first"] for r in cur.fetchall()}
-    cur.execute("SELECT station, unit, line, file_time, seen_at FROM el_capture "
+    cur.execute("SELECT station, unit, line, file_time, seen_at, mode FROM el_capture "
                 "WHERE seen_at >= %s", (since,))
     gaps = {}
     for r in cur.fetchall():
         key = (r["station"], r["unit"], r["line"])
         if r["seen_at"] <= first.get(key, ""):
             continue                       # that machine's first pass: a backlog
+        if r["mode"] == "continuous":
+            # recorded once CONTINUOUS_AFTER_S old by the PC's own clock - the gap
+            # is that wait, whatever the clock says, so it measures nothing
+            continue
         try:
             g = (datetime.datetime.fromisoformat(r["seen_at"]) -
                  datetime.datetime.fromisoformat(r["file_time"])).total_seconds()
@@ -288,25 +294,47 @@ def _file_time(mtime):
             .replace(tzinfo=None).isoformat(timespec="seconds"))
 
 
-def scan(cfg):
-    """Every image the EL operator has filed under a verdict, in the newest two
-    date folders of each configured Pre-EL and Post EL folder - read from the
-    shares alone, no database. A folder that cannot be read is skipped; the
-    others are still walked."""
+# ---- continuous mode (Mukesh, 17 Oct 2026) -------------------------------------
+#
+# Every EL machine runs in one of two modes. NORMAL: it waits for the operator's
+# decision on each module, and the image is filed under its verdict folder - so
+# at most the one image being decided sits in the shift folder (checked on the
+# real shares: one, on each normal machine). CONTINUOUS: it does not wait - every
+# module is passed by the machine itself, no verdict folder is ever made, and
+# every image stays in the shift folder (Post EL, both lines, 17 Oct: about
+# 1,000 a shift). So an image still in its shift folder this long after it was
+# taken is a continuous-mode capture: recorded as OK, marked 'continuous' - no
+# person decided it. Should an operator file it under a verdict later, that
+# filing is the image's and stands (images(): same machine, number and time).
+CONTINUOUS_AFTER_S = 300
+
+
+def scan(cfg, now=None):
+    """Every image the EL operator has filed under a verdict - and every image a
+    machine in continuous mode left in its shift folder - in the newest two date
+    folders of each configured Pre-EL and Post EL folder, read from the shares
+    alone, no database. A folder that cannot be read is skipped; the others are
+    still walked."""
+    now = time.time() if now is None else now
     out = []
     for station, unit, line, root in roots(cfg):
         if not _reachable(station, unit, line, root):
             continue
         for day in icon_ingest._el_day_dirs(root, DAYS):
             for path, mtime, depth in _walk(day.path):
-                if not _filed(path, depth):
-                    continue          # filed within minutes; a later pass has it
+                if _filed(path, depth):
+                    # exactly as read_el() reads a verdict
+                    verdict = os.path.basename(os.path.dirname(path)).strip() or "OK"
+                    mode = None
+                elif depth == 1 and now - mtime >= CONTINUOUS_AFTER_S:
+                    verdict, mode = "OK", "continuous"
+                else:
+                    continue          # being decided now; a later pass has it
                 out.append({
                     "station": station, "unit": unit, "line": line,
                     "path": os.path.normpath(path),
                     "stem": os.path.splitext(os.path.basename(path))[0],
-                    # exactly as read_el() reads a verdict
-                    "verdict": os.path.basename(os.path.dirname(path)).strip() or "OK",
+                    "verdict": verdict, "mode": mode,
                     "file_time": _file_time(mtime)})
     return out
 
@@ -429,10 +457,10 @@ def apply(cur, rows):
     for r in rows:
         cur.execute(
             "INSERT INTO el_capture (station, unit, line, serial, recapture, verdict, "
-            "path, file_time, seen_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "path, file_time, seen_at, mode) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
             "ON CONFLICT (station, path) DO NOTHING",
             (r["station"], r["unit"], r["line"], r["serial"], r["recapture"],
-             r["verdict"], r["path"], r["file_time"], seen))
+             r["verdict"], r["path"], r["file_time"], seen, r.get("mode")))
         if not cur.rowcount:
             continue
         out[r["station"]] = out.get(r["station"], 0) + 1
@@ -445,10 +473,10 @@ def apply(cur, rows):
     return out
 
 
-def run(cfg, cur):
+def run(cfg, cur, now=None):
     """One pass on the connection given (tests). The poller uses run_pass(),
     which reads the shares with no connection open."""
-    return apply(cur, pick_new(cur, scan(cfg)))
+    return apply(cur, pick_new(cur, scan(cfg, now)))
 
 
 LOG_NAMES = 10           # serials named per station in the log line
@@ -467,7 +495,8 @@ def named(rows, limit=LOG_NAMES):
             bits = ([r["line"]] if r["line"] else []) + \
                    (["secondary"] if r.get("unit") == 2 else [])
             return " (%s)" % ", ".join(bits) if bits else ""
-        shown = ", ".join("%s %s%s" % (r["serial"], r["verdict"], where(r))
+        shown = ", ".join("%s %s%s%s" % (r["serial"], r["verdict"],
+                                         " (continuous)" if r.get("mode") else "", where(r))
                           for r in mine[:limit])
         more = len(mine) - limit
         out.append("%s: %s%s" % (label, shown, " (+%d more)" % more if more > 0 else ""))

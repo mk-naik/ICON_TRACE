@@ -83,8 +83,17 @@ def _safe_scandir(path):
 def _el_day_name(name):
     """The date an EL folder name means, as (y, m, d), or None. The real share
     has both spellings - 30 folders named 2026-09-29 and one named 16-09-2026 -
-    and a stray `New folder` nobody dated at all."""
-    parts = (name or "").strip().split("-")
+    and a stray `New folder` nobody dated at all. Post EL Line A's PC writes a
+    third, 20261017 (17 Oct 2026): eight digits, year first (or 17102026, day
+    first, when the year-first reading is not a date)."""
+    raw = (name or "").strip()
+    if len(raw) == 8 and raw.isdigit():
+        for y, m, d in ((raw[:4], raw[4:6], raw[6:]), (raw[4:], raw[2:4], raw[:2])):
+            y, m, d = int(y), int(m), int(d)
+            if 2000 <= y <= 2100 and 1 <= m <= 12 and 1 <= d <= 31:
+                return (y, m, d)
+        return None
+    parts = raw.split("-")
     if len(parts) != 3 or not all(p.isdigit() for p in parts):
         return None
     a, b, c = (int(p) for p in parts)

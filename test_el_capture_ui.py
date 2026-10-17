@@ -426,6 +426,32 @@ def t_dashboard_widgets_on_page():
         assert pg.errors == [], pg.errors
 
 
+@test("continuous mode on the page (17 Oct 2026): a Post EL image the machine left in its "
+      "shift folder reads Pass on EL Stations with 'continuous mode' beside it, and the "
+      "journey's Post EL step says the machine passed it, no operator")
+def t_continuous_on_page():
+    seed_journey()
+    put(POST_B, "2026-10-15/中班", NEITHER + ".jpg", "2026-10-15T16:50:00")
+    with store.conn() as (cx, cur):
+        assert elcap.run(db.get_config(cur), cur) == {"post_el": 1}
+    with H.browser() as b:
+        pg = H.open_page(b, "elst")
+        pg.wait_for_selector("#v-elst.on #elRows", timeout=10000)
+        pg.fill("#elFrom", "2026-10-15")
+        pg.fill("#elTo", "2026-10-15")
+        pg.wait_for_function("document.getElementById('elRows').textContent.indexOf('%s') >= 0"
+                             % NEITHER, timeout=10000)
+        row = pg.evaluate("""(s) => { const tr = Array.from(document.querySelectorAll('#elRows tr'))
+            .find(t => t.textContent.indexOf(s) >= 0);
+            return Array.from(tr.cells).map(c => c.textContent.trim()); }""", NEITHER)
+        assert row[6] == "Pass continuous mode", row
+        pg.evaluate("go('search')")
+        nodes = open_module(pg, NEITHER)
+        post = [n for n in nodes if n["stage"] == "Post EL"][0]
+        assert post["value"] == "Pass" and any("continuous mode" in x for x in post["detail"]), post
+        assert pg.errors == [], pg.errors
+
+
 @test("the Production Dashboard and the Management Overview show an EL stations card "
       "under their KPI tiles with the period's figures; its button opens EL Stations")
 def t_dashboards_on_page():

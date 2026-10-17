@@ -84,8 +84,14 @@
     /* an NG at Post EL is Quality's to decide: say whether they have */
     var q = review === 'awaiting' ? ' <span class="hint">awaiting Quality</span>'
           : review === 'decided' ? ' <span class="hint">Quality decided</span>' : '';
+    /* the machine ran in continuous mode: it passed these itself, no operator
+       decided them (17 Oct 2026) */
+    var c = s.continuous ? ' <span class="hint" title="Left in the shift folder by a ' +
+          'machine in continuous mode - passed by the machine, no operator decision">' +
+          (s.continuous === s.images ? 'continuous mode' : s.continuous + ' continuous') +
+          '</span>' : '';
     return '<td><span class="tag ' + (TONE[st + ':' + s.status] || 't-mute') + '">' +
-           esc(s.label) + '</span>' + q + '</td>';
+           esc(s.label) + '</span>' + q + c + '</td>';
   }
 
   function draw(d) {

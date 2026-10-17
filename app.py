@@ -6510,7 +6510,7 @@ def _el_rows_for(cur, serials, station=None):
         part = serials[i:i + 500]
         out.extend(store.rows(
             cur, "SELECT capture_id, station, unit, line, serial, recapture, verdict, "
-                 "file_time, seen_at FROM el_capture WHERE serial IN (%s)%s"
+                 "file_time, seen_at, mode FROM el_capture WHERE serial IN (%s)%s"
                  % (",".join(["%s"] * len(part)),
                     " AND station=%s" if station else ""),
             tuple(part) + ((station,) if station else ())))
@@ -8903,6 +8903,11 @@ def _el_took(a, b):
     return "%d d %d h" % (m // 1440, m % 1440 // 60)
 
 
+# an image an EL machine in continuous mode left in its shift folder: it passed
+# every module itself, no person decided (icon_el_capture.CONTINUOUS_AFTER_S)
+_EL_CONTINUOUS = "continuous mode - passed by the machine, no operator decision"
+
+
 def _pre_el_steps(imgs):
     """Pre-EL as it happened (Mukesh, 16 Oct 2026): every image is a step, in
     the order taken across the line's two machines. OK is Pass and the module
@@ -8915,6 +8920,8 @@ def _pre_el_steps(imgs):
     for i, img in enumerate(imgs):
         ok = elcap.is_pass(img["verdict"])
         detail = [] if ok else [img["verdict"]]
+        if img.get("mode") == "continuous":
+            detail.append(_EL_CONTINUOUS)
         if img["recapture"]:
             detail.append("re-shot %d" % img["recapture"])
         machine = elcap.UNIT_NAME.get(img.get("unit") or 1, "")
@@ -8950,11 +8957,14 @@ def _post_el_steps(imgs, review=None):
     ngs = [i for i in imgs if not elcap.is_pass(i["verdict"])]
     at = ngs[0] if ngs else imgs[-1]
     detail = [ngs[0]["verdict"]] if ngs else []
+    if not ngs and all(i.get("mode") == "continuous" for i in imgs):
+        detail.append(_EL_CONTINUOUS)
     if len(imgs) > 1:
         shown = imgs[-_EL_STEP_LINES:]
         if len(imgs) > len(shown):
             detail.append("+%d earlier" % (len(imgs) - len(shown)))
-        detail += ["%s · %s" % (i["verdict"], _el_when(i["file_time"])) for i in shown]
+        detail += ["%s%s · %s" % (i["verdict"], " (continuous)" if i.get("mode") else "",
+                                  _el_when(i["file_time"])) for i in shown]
     lines = sorted({i["line"] for i in imgs if i["line"]})
     if lines:
         detail.append(" / ".join("Line " + ln for ln in lines))
@@ -8991,7 +9001,7 @@ def _el_records(cur, s):
     (icon_el_capture) - read from the table, never from the shares - and a Post
     EL NG's Needs Review item, Quality's decision once made."""
     caps = store.rows(cur, "SELECT capture_id, station, unit, line, recapture, "
-                           "verdict, file_time, seen_at FROM el_capture "
+                           "verdict, file_time, seen_at, mode FROM el_capture "
                            "WHERE serial=%s", (s,))
     review = store.one(cur, "SELECT status, resolved_by, resolved_at, reason, "
                             "created_at FROM review_item WHERE type=%s AND serial=%s",
@@ -9013,8 +9023,10 @@ def _el_log(s, caps, review):
                     "stage": "%s · %s" % (elcap.LABEL[c["station"]],
                                           "Pass" if elcap.is_pass(c["verdict"]) else "NG"),
                     "reference": machine,
-                    "detail": "%s%s · found %s" % (
-                        c["verdict"], " · re-shot %d" % c["recapture"] if c["recapture"] else "",
+                    "detail": "%s%s%s · found %s" % (
+                        c["verdict"],
+                        " · " + _EL_CONTINUOUS if c.get("mode") == "continuous" else "",
+                        " · re-shot %d" % c["recapture"] if c["recapture"] else "",
                         (c["seen_at"] or "").replace("T", " ")[:16]),
                     "user": "—"})
     if review:

@@ -127,9 +127,12 @@ def fresh(**cfg):
         master(cur, CUSTOM_US, 51, fmt=0)
 
 
-def run():
+def run(now=None):
+    """One pass. `now` (a timestamp) is the server's time for the continuous-mode
+    rule - an image in a shift folder younger than CONTINUOUS_AFTER_S is being
+    decided; by default it is the real time, so a test's (old) images are not."""
     with store.conn() as (cx, cur):
-        return elcap.run(db.get_config(cur), cur)
+        return elcap.run(db.get_config(cur), cur, now)
 
 
 def captures(serial=None):
@@ -220,31 +223,102 @@ def t_line_from_folder():
 # 2. not filed yet
 # --------------------------------------------------------------------------
 
-@test("an image straight under its shift folder is not recorded until the EL "
-      "operator files it - and then it is, with that verdict")
+@test("an image straight under its shift folder is being decided - in normal mode the "
+      "machine waits for the operator - and is not recorded; once the EL operator files "
+      "it, it is, with that verdict; one straight in the date folder never is")
 def t_unfiled_waits():
     fresh()
-    p = put(PRE_A, "2026-10-14/早班", S_WAIT + ".jpg", "2026-10-14T13:59:48")
+    at = "2026-10-14T13:59:48"
+    p = put(PRE_A, "2026-10-14/早班", S_WAIT + ".jpg", at)
     put(PRE_A, "2026-10-14", S_CRACK + ".jpg")                  # in the date folder itself
-    assert run() == {}, "an unfiled image was recorded"
+    soon = ist(at) + 60                                          # a minute after it was taken
+    assert run(now=soon) == {}, "an image being decided was recorded"
     assert not captures()
     dest = os.path.join(PRE_A, "2026-10-14", "中班", "OK")
     os.makedirs(dest)
-    os.replace(p, os.path.join(dest, S_WAIT + ".jpg"))           # filed, minutes later
-    assert run() == {"pre_el": 1}
+    os.replace(p, os.path.join(dest, S_WAIT + ".jpg"))           # filed, a minute later
+    assert run(now=soon + 60) == {"pre_el": 1}
     rows = captures(S_WAIT)
-    assert [(r["verdict"], r["file_time"]) for r in rows] == [("OK", "2026-10-14T13:59:48")], \
-        [dict(r) for r in rows]
+    assert [(r["verdict"], r["file_time"], r["mode"]) for r in rows] == \
+        [("OK", at, None)], [dict(r) for r in rows]
+    assert run() == {} and not captures(S_CRACK), "an image in the date folder was recorded"
 
 
 @test("the same holds under a date folder spelled 16-09-2026: the shift's name "
-      "(早班) is never taken for a verdict")
+      "(早班) is never taken for a verdict - left there, it is a continuous-mode OK")
 def t_unfiled_waits_ddmmyyyy():
     fresh()
     put(PRE_A, "16-09-2026/早班", S_WAIT + ".jpg", "2026-09-16T10:00:00")
     put(PRE_A, "16-09-2026/早班/Cell Crack", S_CRACK + ".jpg", "2026-09-16T10:01:00")
-    run()
+    run(now=ist("2026-09-16T10:02:00"))
     assert [r["serial"] for r in captures()] == [S_CRACK], [dict(r) for r in captures()]
+    run()
+    assert [(r["serial"], r["verdict"], r["mode"]) for r in captures()] == [
+        (S_CRACK, "Cell Crack", None), (S_WAIT, "OK", "continuous")], [dict(r) for r in captures()]
+
+
+@test("continuous mode (Mukesh, 17 Oct 2026): a machine that passes every module itself "
+      "leaves its images in the shift folder - five minutes on, each is recorded as OK, "
+      "marked continuous, and shown as passed by the machine; a Post EL one raises nothing")
+def t_continuous():
+    fresh()
+    at = "2026-10-14T09:00:00"
+    put(POST_B, "2026-10-14/早班", S_POST + ".jpg", at)
+    put(PRE_A, "2026-10-14/早班", S_CROSS + ".jpg", at)
+    assert run(now=ist(at) + elcap.CONTINUOUS_AFTER_S - 1) == {}      # still being decided
+    assert run(now=ist(at) + elcap.CONTINUOUS_AFTER_S) == {"pre_el": 1, "post_el": 1}
+    rows = {r["serial"]: r for r in captures()}
+    assert [(rows[s]["verdict"], rows[s]["mode"]) for s in (S_POST, S_CROSS)] == \
+        [("OK", "continuous")] * 2, rows
+    with store.conn() as (cx, cur):
+        assert not store.rows(cur, "SELECT 1 FROM review_item WHERE type='post_el_ng'")
+    post = el_part(S_POST)
+    assert post[0]["value"] == "Pass" and APP._EL_CONTINUOUS in post[0]["detail"], post
+    pre = el_part(S_CROSS)
+    assert pre[0]["value"] == "Pass" and APP._EL_CONTINUOUS in pre[0]["detail"], pre
+    _c, d = el_api(**{"from": "2026-10-14", "to": "2026-10-14"})
+    got = {r["serial"]: r for r in d["rows"]}
+    assert got[S_CROSS]["pre"]["continuous"] == 1 and got[S_POST]["post"]["continuous"] == 1, got
+    assert d["kpi"]["post_el"] == {"scanned": 1, "pass": 1, "ng": 0, "awaiting": 0}, d["kpi"]
+    log = signed_in().get("/api/trace/serial/" + S_CROSS).get_json()["events"]
+    assert [e["detail"] for e in log if e["stage"] == "Pre-EL · Pass"][0].startswith(
+        "OK · " + APP._EL_CONTINUOUS), log
+
+
+@test("a continuous-mode image an operator files under a verdict later is that image: "
+      "the filing stands - an NG at Pre-EL puts the module in rework, one at Post EL "
+      "sends it to Quality")
+def t_continuous_then_filed():
+    fresh()
+    at = "2026-10-14T09:00:00"
+    p = put(PRE_A, "2026-10-14/早班", S_CRACK + ".jpg", at)
+    q = put(POST_B, "2026-10-14/早班", S_POST + ".jpg", at)
+    run(now=ist(at) + 600)
+    for src, verdict in ((p, "Cell Crack"), (q, "Grid Burning")):
+        dest = os.path.join(os.path.dirname(src), verdict)
+        os.makedirs(dest)
+        os.replace(src, os.path.join(dest, os.path.basename(src)))   # the file time moves with it
+    assert run(now=ist(at) + 900) == {"pre_el": 1, "post_el": 1, "post_el_ng": 1}
+    assert [(x["stage"], x["value"]) for x in el_part(S_CRACK)] == [
+        ("Pre-EL", "NG"), ("Rework", "In rework")], el_part(S_CRACK)
+    assert el_part(S_POST)[0]["value"] == "NG"
+
+
+@test("Post EL Line A's PC names its date folders 20261017 (17 Oct 2026): read as dates - "
+      "the newest two walked, by the date they mean whatever the spelling")
+def t_yyyymmdd_folders():
+    import icon_ingest
+    assert icon_ingest._el_day_name("20261017") == (2026, 10, 17)
+    assert icon_ingest._el_day_name("17102026") == (2026, 10, 17)
+    assert icon_ingest._el_day_name("12345678") is None
+    assert icon_ingest._el_day_name("2026-10-17") == (2026, 10, 17)
+    fresh()
+    put(POST_B, "20261014/中班/OK", S_POST + ".jpg", "2026-10-14T16:00:00")
+    put(POST_B, "2026-10-13/中班/Cell Crack", S_CRACK + ".jpg", "2026-10-13T16:00:00")
+    put(POST_B, "20261012/中班/OK", S_CROSS + ".jpg", "2026-10-12T16:00:00")   # the third newest
+    run()
+    assert {(r["serial"], r["verdict"]) for r in captures()} == {
+        (S_POST, "OK"), (S_CRACK, "Cell Crack")}, [dict(r) for r in captures()]
 
 
 @test("a tree with no shift level still counts: date / OK / serial.jpg is filed")
@@ -494,7 +568,7 @@ def t_ensure_adds_table():
         cols = [r["name"] for r in store.rows(cur, "PRAGMA table_info(el_capture)")]
         idx = [r["name"] for r in store.rows(cur, "PRAGMA index_list(el_capture)")]
     assert cols == ["capture_id", "station", "unit", "line", "serial", "recapture",
-                    "verdict", "path", "file_time", "seen_at"], cols
+                    "verdict", "path", "file_time", "seen_at", "mode"], cols
     assert "ix_el_capture_serial" in idx, idx
 
 
@@ -1343,6 +1417,20 @@ def t_clocks():
     assert ("pre_el", 2, "A") not in c, "a first pass's backlog is not a clock reading"
     assert "3 min AHEAD" in elcap.clock_text(c[("pre_el", 1, "B")])
     assert "22 min BEHIND" in elcap.clock_text(c[("pre_el", 2, "B")])
+    # a continuous-mode image is recorded once five minutes old BY THE PC'S OWN clock,
+    # so its gap is that wait, whatever the clock - a machine with only those is not
+    # measured (17 Oct 2026)
+    now = clock.now()
+    iso = lambda t: t.isoformat(timespec="seconds")
+    with store.conn() as (cx, cur):
+        for i, (ft, seen) in enumerate(((now - datetime.timedelta(hours=4), now - datetime.timedelta(hours=3)),
+                                        (now - datetime.timedelta(minutes=40),
+                                         now - datetime.timedelta(minutes=34)))):
+            cur.execute("INSERT INTO el_capture (station, unit, line, serial, recapture, "
+                        "verdict, path, file_time, seen_at, mode) VALUES ('post_el', 1, 'A', "
+                        "%s, 0, 'OK', %s, %s, %s, 'continuous')",
+                        ("ICON625R12A17%05d" % i, "c:/clk/c%d.jpg" % i, iso(ft), iso(seen)))
+        assert ("post_el", 1, "A") not in elcap.clocks(cur)
     assert elcap.clock_text(c[("pre_el", 1, "A")]).startswith("Clock in step")
     assert elcap.clock_text(None).startswith("Clock not measured yet")
 

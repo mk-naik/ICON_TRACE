@@ -7907,3 +7907,27 @@ commit.
 - **Test:** `test_el_capture.py` +1 (57) and the filter test's tiles; `test_el_capture_ui.py`
   +1 (9): the funnel, both donuts' legends, the two section rows, Needs a decision, the
   line table's column - waiting for the chosen day's figures, not the first render's.
+
+### 17 Oct 2026 - EL continuous mode: images left in the shift folder are passes
+- **Reported (Mukesh):** "all EL has two modes of operations continuous and normal, in
+  continuous mode it captures images don't wait for user decision just pass automatically
+  hence no folder category created ... all images landed on shift folder ... currently
+  it's running like continuous so post EL shows 1-2 only".
+- **Found (read-only, the real shares):** both Post EL machines run continuous - about
+  1,000 images a shift straight in 早班 / 中班 / 晚班, one verdict folder in two days. The
+  poller took an image in a shift folder for "being decided" and waited for ever. And Post
+  EL Line A's PC names its date folders 20261017, which `_el_day_name` did not read - that
+  share was never walked. The FQC EL and both Pre-EL machines run normal (one image being
+  decided at a time).
+- **Change:** `icon_el_capture.scan`: an image still in its shift folder CONTINUOUS_AFTER_S
+  (5 min) after it was taken is recorded as OK with `el_capture.mode = 'continuous'`
+  (store migration); a later filing under a verdict stands (images(): same machine,
+  number, time). `summary()` counts them; the journey, the event log and EL Stations say
+  "passed by the machine, no operator decision"; `clocks()` skips them.
+  `icon_ingest._el_day_name` reads 20261017 (and 17102026). On the real shares: Post EL
+  Line A 0 -> 4,391 modules, Line B 1 -> 3,430 (newest two days).
+- **Not changed:** FQC's own reading of its EL folder (normal mode today) - DECISIONS 5,
+  [open] for Mukesh.
+- **Test:** `test_el_capture.py` +3 (60): waiting vs continuous by time, a continuous image
+  filed as NG later (Pre-EL in rework, Post EL to Quality), the 20261017 folders, the clock
+  skip; the "waiting" tests now pin the time. `test_el_capture_ui.py` +1 (10).

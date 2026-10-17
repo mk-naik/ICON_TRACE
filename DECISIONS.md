@@ -207,6 +207,20 @@ no one signs twice. [enforcement unverified]
   is never changed or deleted when its file or share disappears. One folder is one
   machine: Settings refuses a folder set as two of FQC EL, Pre-EL primary, Pre-EL
   secondary and Post EL. The images are not served (above, and section 10). [built]
+- **An EL machine runs in one of two modes** (Mukesh, 17 Oct). NORMAL: it waits for the
+  operator's decision and the image is filed under its verdict folder - at most the one
+  image being decided sits in the shift folder. CONTINUOUS: it does not wait, passes
+  every module itself, makes no verdict folder, and every image stays in the shift folder
+  (both Post EL machines on 17 Oct: about 1,000 a shift - which is why Post EL showed 1-2).
+  So **an image still in its shift folder five minutes after it was taken is a
+  continuous-mode pass**: recorded as OK, marked continuous, and shown as "passed by the
+  machine, no operator decision" (journey, event log, EL Stations). If an operator files
+  it under a verdict later, that filing stands - same machine, re-shot number and time.
+  A continuous image is no clock reading (it waits by the PC's own clock), so a machine
+  running only continuous is not clock-checked. A date folder may also be spelled
+  20261017 (Post EL Line A's PC). [built] **[open]** FQC's own EL (normal mode on 17 Oct)
+  is read by FQC as before: if it runs continuous, FQC sees no verdict for its images -
+  whether such an image is a clean EL for an FQC pass is Mukesh's call.
 - **At an EL station OK is Pass; any other folder is NG** (Mukesh, 16 Oct) - SR too: it
   is the NG of a module the stringer reworked, a folder of its own so they can be
   counted. **At Pre-EL

@@ -868,6 +868,10 @@ CREATE TABLE IF NOT EXISTS el_capture (
   path        TEXT NOT NULL COLLATE NOCASE,
   file_time   TEXT NOT NULL,         -- the file's modified time, the EL PC's clock
   seen_at     TEXT NOT NULL,         -- when the poller first recorded it
+  -- NULL: filed under its verdict by the operator. 'continuous': the machine ran
+  -- in continuous mode - it passes every module itself and the image stays in
+  -- the shift folder; recorded as OK, no person decided it
+  mode        TEXT NULL,
   UNIQUE (station, path)
 ) ;
 CREATE INDEX IF NOT EXISTS ix_el_capture_serial ON el_capture (serial) ;
