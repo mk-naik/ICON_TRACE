@@ -1672,12 +1672,64 @@ def t_continuous_alert():
     assert gone == [], "an alert is the last day's"
 
 
+@test("a read of the history walks more date folders ONCE: what the poller's newest two did "
+      "not reach is recorded, nothing twice; Admin or Super Admin starts it, one at a time, "
+      "audited")
+def t_backfill():
+    import time as _t
+    fresh()
+    days = ("2026-10-10", "2026-10-11", "2026-10-12", "2026-10-13", "2026-10-14")
+    for k, day in enumerate(days):
+        put(PRE_A, day + "/早班/OK", "ICON625R12A15229%02d.jpg" % (40 + k), day + "T09:00:00")
+    assert run() == {"pre_el": 2}, "the poller reads the newest two"
+    assert elcap.backfill(4) == {"pre_el": 2}
+    assert elcap.backfill(5) == {"pre_el": 1}
+    assert elcap.backfill(5) == {}, "a second read recorded again"
+    assert len(captures()) == 5
+    c = APP.app.test_client()
+    AUTH.test_login(c, role="Production Incharge")
+    assert c.post("/api/el/backfill", json={"days": 7}).status_code == 403
+    c = APP.app.test_client()
+    AUTH.test_login(c, role="Admin")
+    for bad in (2, 91, "x"):
+        r = c.post("/api/el/backfill", json={"days": bad})
+        assert r.status_code == 400, (bad, r.get_json())
+    put(PRE_A, "2026-10-09/早班/OK", "ICON625R12A1522939.jpg", "2026-10-09T09:00:00")
+    r = c.post("/api/el/backfill", json={"days": 7})
+    assert r.status_code == 200 and r.get_json()["status"]["running"], r.get_json()
+    for _i in range(100):
+        st = c.get("/api/el/backfill").get_json()
+        if not st["status"]["running"]:
+            break
+        _t.sleep(0.1)
+    assert st["status"]["recorded"] == {"pre_el": 1} and not st["status"].get("error"), st
+    assert st["coverage"]["pre_el"]["from"] == "2026-10-09T09:00:00", st["coverage"]
+    with store.conn() as (cx, cur):
+        a = store.one(cur, "SELECT actor, detail FROM dispatch_audit WHERE action='el.backfill'")
+    assert a and '"days": 7' in a["detail"] and '"pre_el": 1' in a["detail"], a
+
+
+@test("a machine that ran continuous LAST WEEK is history, not today's fault: the alert "
+      "reads when the images were taken, so a read of the history raises none")
+def t_continuous_alert_old():
+    seed_final()
+    old = (clock.now() - datetime.timedelta(days=5)).replace(microsecond=0)
+    shift_folder_run(FIN_B, 8, old.isoformat())
+    run()                                       # recorded now - taken five days ago
+    with store.conn() as (cx, cur):
+        assert elcap.continuous_alerts(cur) == [], "an old run raised today's alert"
+        assert elcap.continuous_alerts(cur, now=old + datetime.timedelta(hours=2))
+
+
 @test("the continuous-mode alert is shown where a person looks: EL Stations names the "
       "machine, and Stations & sources says it under that machine's folder")
 def t_continuous_alert_shown():
     seed_final()
-    shift_folder_run(FIN_B, 6, "2026-10-14T16:00:00")     # after seed_final's filed ones
-    run(now=ist("2026-10-14T23:00:00"))     # seen now: within the last day
+    # taken within the last day (the alert is about images TAKEN then), after
+    # seed_final's filed ones
+    start = (clock.now() - datetime.timedelta(hours=3)).replace(microsecond=0)
+    shift_folder_run(FIN_B, 6, start.isoformat())
+    run()
     _c, d = el_api(**{"from": "2026-10-14", "to": "2026-10-14"})
     assert len(d["continuous_alerts"]) == 1 and \
         d["continuous_alerts"][0].startswith("Final EL, Line B ran in CONTINUOUS mode: 6 "

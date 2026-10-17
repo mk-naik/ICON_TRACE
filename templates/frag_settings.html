@@ -84,6 +84,82 @@
     below - a folder that cannot be two machines at once is refused, with the reason.</span></div></div>
 {% endfor %}
 
+<div class="card" id="elHistCard"><div class="card-h"><h3>EL history</h3>
+  <div class="ch-r"><span class="tag t-mute" id="elHistTag">&mdash;</span></div></div>
+<div class="card-b">
+  <p class="hint">The server reads the newest two date folders of each EL folder every minute,
+    so the index &mdash; what EL Stations and EL Analysis count &mdash; begins the day it first
+    read a folder. Read further back once and the 7-day and 30-day windows have their
+    history. The shares are only read, nothing on them changes, and an image already in the
+    index is not recorded twice. It runs on its own while the screens keep working.</p>
+  <div id="elHistCov" class="hint mono" style="margin-top:8px"></div>
+</div>
+<div class="card-f">
+  <select id="elHistDays" style="padding:6px 9px;border:1px solid var(--line);border-radius:var(--r)">
+    <option value="7">7 days</option><option value="14">14 days</option>
+    <option value="30" selected>30 days</option><option value="60">60 days</option>
+    <option value="90">90 days</option></select>
+  <button class="btn btn-ghost" id="elHistGo" onclick="elHistRead()">Read back</button>
+  <span class="sp hint" id="elHistMsg"></span>
+</div></div>
+<script>
+(function () {
+  var LBL = { pre_el: 'Pre-EL', post_el: 'Post EL', final_el: 'Final EL' };
+  function $(id) { return document.getElementById(id); }
+  function when(t) { return t ? (typeof fmtIST === 'function' ? fmtIST(t) : String(t).replace('T', ' ')) : ''; }
+  var timer = null;
+  function show(d) {
+    var st = d.status || {}, cov = d.coverage || {};
+    $('elHistCov').innerHTML = ['pre_el', 'post_el', 'final_el'].map(function (k) {
+      var c = cov[k];
+      return LBL[k] + ': ' + (c ? 'from ' + when(c.from) + ' · ' + Number(c.images).toLocaleString('en-IN') +
+        ' images' : 'nothing indexed');
+    }).join('<br>');
+    var tag = $('elHistTag'), msg = $('elHistMsg');
+    if (st.running) {
+      tag.className = 'tag t-rev'; tag.textContent = 'reading';
+      msg.textContent = 'Reading ' + st.days + ' days back, started ' + when(st.started) + ' by ' + (st.by || '?') +
+        (st.files != null ? ' · ' + Number(st.done || 0).toLocaleString('en-IN') + ' of ' +
+         Number(st.files).toLocaleString('en-IN') + ' images checked' : ' · listing the folders…');
+      $('elHistGo').disabled = true;
+      clearTimeout(timer);
+      timer = setTimeout(load, 3000);
+    } else {
+      $('elHistGo').disabled = false;
+      if (st.finished) {
+        var rec = st.recorded || {}, n = 0;
+        Object.keys(rec).forEach(function (k) { if (LBL[k]) n += rec[k]; });
+        tag.className = 'tag ' + (st.error ? 't-fail' : 't-pass');
+        tag.textContent = st.error ? 'failed' : 'read';
+        msg.textContent = st.error ? 'The read of ' + st.days + ' days failed: ' + st.error :
+          'Read ' + st.days + ' days back (' + when(st.finished) + '): ' + n.toLocaleString('en-IN') +
+          ' images new to the index' + (n ? ' - ' + Object.keys(rec).filter(function (k) { return LBL[k]; })
+            .map(function (k) { return LBL[k] + ' ' + rec[k].toLocaleString('en-IN'); }).join(', ') : '') + '.';
+      } else {
+        tag.className = 'tag t-mute'; tag.textContent = 'newest two days';
+      }
+    }
+  }
+  function load() {
+    fetch('/api/el/backfill', { cache: 'no-store' }).then(function (r) { return r.json(); })
+      .then(function (d) { if (d.ok) show(d); }).catch(function () {});
+  }
+  window.elHistRead = function () {
+    var days = $('elHistDays').value;
+    $('elHistGo').disabled = true;
+    fetch('/api/el/backfill', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ days: Number(days) }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { $('elHistMsg').textContent = d.why || 'Refused.'; $('elHistGo').disabled = false; return; }
+        load();
+      })
+      .catch(function (e) { $('elHistMsg').textContent = 'Could not start: ' + e; $('elHistGo').disabled = false; });
+  };
+  load();
+})();
+</script>
+
 <div class="card"><div class="card-h"><h3>Plant</h3></div>
 <div class="card-b"><div class="grid g4">
   <div class="fld"><label>Unit</label><input id="s_unit" value="{{ cfg.unit }}">

@@ -8082,3 +8082,26 @@ commit.
   read below their shift folder, a copy of a recorded image not recorded again; old rows
   re-read once. `test_fqc.py` +1 (60): a copy in a New folder reads OK; a copied shift
   folder with no reason is NA.
+
+### 18 Oct 2026 - the EL history, read once further back
+- **Why:** EL Analysis's 7-day and 30-day windows had nothing behind them - the poller
+  reads the newest two date folders a minute, so the index began the day it first read a
+  folder (the EL Defect Master flagged `DAYS = 2` as its own decision).
+- **Change:** `icon_el_capture.backfill(days)` / `start_backfill`: scan / pick_new / apply
+  over 3-90 date folders, once, in batches of 2,000 images a transaction, on a thread of
+  its own, one at a time; `apply(review=False)` - no Needs Review item for a Post EL NG from
+  weeks ago (the first real read raised 2,693 before this). `/api/el/backfill` (GET:
+  progress and how far back each station reaches; POST {days}: Admin / Super Admin,
+  audited `el.backfill`, recorded before it reports itself done). Admin › Stations &
+  sources › EL history card. `continuous_alerts` reads the day by when images were TAKEN,
+  so old runs found by a history read raise no alert. EL Analysis's "indexed from" note
+  points an Admin to the card.
+- **Checked on the real shares** (into a scratch copy): 30 days = 356,973 files in 26 s
+  listing, 44 s in all; 331,000 images recorded; no review item; EL Analysis then answers
+  7 days in 0.2-1.1 s and 30 days in 0.5-3.4 s. Six folder names on no list remain in the
+  30 days (53 images): `No Poweer`, `Cell issue/Ribbun bold`, `Chip Cut`, `ell issue/
+  Ribbon bold`, `BASSING MISS`, `near jb cell crack` - shown as new, for Mukesh to map.
+- **Test:** `test_el_capture.py` +2 (72): the read records what the newest two did not
+  reach, nothing twice, the gate and the audit; an old continuous run raises no alert;
+  the alert tests use recent image times. `test_el_capture_ui.py` +1 (13): the card's
+  reach, a read started from it, its result.

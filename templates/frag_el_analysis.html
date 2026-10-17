@@ -389,7 +389,8 @@
     if (!cov) return '';
     if (cov > d.window.start) {
       return LABEL[st] + ' images are indexed from ' + when(cov) + ' — the part of this window ' +
-             'before that is empty, not zero.';
+             'before that is empty, not zero. An Admin can read the history once: Admin › ' +
+             'Stations & sources › EL history.';
     }
     return '';
   }

@@ -207,6 +207,16 @@ no one signs twice. [enforcement unverified]
   is never changed or deleted when its file or share disappears. One folder is one
   machine: Settings refuses a folder set as two of FQC EL, Pre-EL primary, Pre-EL
   secondary and Post EL. The images are not served (above, and section 10). [built]
+- **The EL history can be read once, further back** (18 Oct): the poller reads the newest
+  two date folders a minute, so the index begins the day it first read a folder and EL
+  Analysis's 7-day and 30-day windows had nothing behind them. Admin › Stations & sources
+  › EL history reads 3 to 90 date folders of every EL folder once - Admin or Super Admin,
+  one at a time, audited (`el.backfill`), on a thread of its own in batches of 2,000 images
+  so FQC and the poller never wait; the shares are only read; an image already recorded
+  is skipped. **It raises no Needs Review item**: a Post EL NG from weeks ago was taken off
+  the line then (30 days on the real shares held 2,693 such modules). The card says how
+  far back each station's index reaches. 30 days on the real shares: 357,000 files read
+  in about 45 s. [built]
 - **An EL machine runs in one of two modes** (Mukesh, 17 Oct). NORMAL: it waits for the
   operator's decision and the image is filed under its verdict folder - at most the one
   image being decided sits in the shift folder. CONTINUOUS: it does not wait, passes
@@ -244,7 +254,8 @@ no one signs twice. [enforcement unverified]
   images is read from those alone). **Five images of one machine in a row, by their
   time, all left by the machine is an equipment fault - an alert naming the machine**
   (EL Stations above its tiles, red; under that machine's folder in Stations & sources;
-  the server log), for a day. In normal mode at most the image being decided waits, and
+  the server log), for a day after the images were TAKEN (a read of the history records
+  old images today, and a run last week is not today's fault). In normal mode at most the image being decided waits, and
   one forgotten now and then (singles only on the real shares, 11-17 Oct) is no run; an
   operator's later filing of one breaks it. FQC itself still sees no verdict for an
   unfiled image (NA) - its rule is unchanged. [built]

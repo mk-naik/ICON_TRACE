@@ -496,20 +496,27 @@ def t_final_el_on_page():
 def t_continuous_alert_on_page():
     seed_journey()
     run5 = ["ICON625R12A17400%02d" % i for i in range(5)]
+    # taken in the last day (the alert is about images taken then), all on one
+    # factory day
+    base = (clock.now() - datetime.timedelta(minutes=20)).replace(microsecond=0)
+    if clock.shift_day(base) != clock.shift_day(base + datetime.timedelta(minutes=4)):
+        base -= datetime.timedelta(minutes=30)
+    day = clock.shift_day(base).isoformat()
     for i, s in enumerate(run5):
-        put(PRE_A, "2026-10-15/中班", s + ".jpg", "2026-10-15T18:%02d:00" % i)
+        put(PRE_A, "2026-10-15/中班", s + ".jpg",
+            (base + datetime.timedelta(minutes=i)).isoformat())
     with store.conn() as (cx, cur):
         assert elcap.run(db.get_config(cur), cur) == {"pre_el": 5}
     with H.browser() as b:
         pg = H.open_page(b, "elst")
         pg.wait_for_selector("#v-elst.on #elRows", timeout=10000)
-        pg.fill("#elFrom", "2026-10-15")
-        pg.fill("#elTo", "2026-10-15")
+        pg.fill("#elFrom", day)
+        pg.fill("#elTo", day)
         pg.wait_for_selector("#elContinuous", timeout=10000)
         alert = pg.text_content("#elContinuous")
         assert "Pre-EL primary, Line A ran in CONTINUOUS mode: 5 images in a row" in alert, alert
         assert pg.eval_on_selector("#elContinuous", "e => e.className") == "note n-bad"
-        assert pg.text_content("#elK1") == "1", "only BOTH is a decision"
+        assert pg.text_content("#elK1") == "0", "the machine's passes are no decision"
         assert "5 more passed by the machine (continuous), not counted" in \
             pg.text_content("#elK1d"), pg.text_content("#elK1d")
         row = pg.evaluate("""(s) => { const tr = Array.from(document.querySelectorAll('#elRows tr'))
@@ -517,6 +524,29 @@ def t_continuous_alert_on_page():
             return [tr.cells[2].textContent.trim(), tr.cells[2].querySelector('.tag').className]; }""",
                           run5[0])
         assert row == ["Passed by the machine continuous mode", "tag t-rev"], row
+        assert pg.errors == [], pg.errors
+
+
+@test("EL history in Stations & sources: how far back each station's index reaches, and a "
+      "read further back started from the card, its progress and its result on the card")
+def t_history_on_page():
+    import time as _t
+    seed_journey()
+    put(PRE_A, "2026-10-12/早班/OK", "ICON625R12A1522977.jpg", "2026-10-12T09:00:00")
+    put(PRE_A, "2026-10-11/早班/OK", "ICON625R12A1522978.jpg", "2026-10-11T09:00:00")
+    with H.browser() as b:
+        pg = stations(b)
+        pg.wait_for_function("document.getElementById('elHistCov').textContent.indexOf('Pre-EL: from') >= 0",
+                             timeout=10000)
+        cov = pg.text_content("#elHistCov")
+        assert "Pre-EL: from 15-10-2026" in cov and "Final EL: nothing indexed" in cov, cov
+        assert pg.text_content("#elHistTag") == "newest two days"
+        pg.select_option("#elHistDays", "7")
+        pg.click("#elHistGo")
+        pg.wait_for_function("document.getElementById('elHistTag').textContent === 'read'", timeout=30000)
+        msg = pg.text_content("#elHistMsg")
+        assert msg.startswith("Read 7 days back") and "2 images new to the index" in msg, msg
+        assert "Pre-EL: from 11-10-2026" in pg.text_content("#elHistCov")
         assert pg.errors == [], pg.errors
 
 

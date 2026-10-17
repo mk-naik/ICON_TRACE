@@ -234,11 +234,14 @@ def continuous_alerts(cur, now=None):
     In continuous mode every image stays (Post EL: runs of thousands). So
     CONTINUOUS_RUN of a machine's images in a row, by their time, all left by
     the machine - an operator's later filing of one taking it out of the run -
-    is the machine running continuous where a person must decide."""
+    is the machine running continuous where a person must decide. The last day
+    is by when the images were taken."""
     now = now or clock.now()
     since = (now - datetime.timedelta(hours=CLOCK_WINDOW_H)).isoformat(timespec="seconds")
+    # by when the images were TAKEN: a read of the history (backfill) records old
+    # images now, and a machine that ran continuous last week is not today's fault
     cur.execute("SELECT station, unit, line, serial, recapture, file_time, mode "
-                "FROM el_capture WHERE station IN (%s, %s) AND seen_at >= %s "
+                "FROM el_capture WHERE station IN (%s, %s) AND file_time >= %s "
                 "ORDER BY file_time, capture_id", NORMAL_ONLY + (since,))
     by = {}
     for r in cur.fetchall():
@@ -432,18 +435,18 @@ def _file_time(mtime):
 CONTINUOUS_AFTER_S = 300
 
 
-def scan(cfg, now=None):
+def scan(cfg, now=None, days=None):
     """Every image the EL operator has filed under a verdict - and every image a
     machine in continuous mode left in its shift folder - in the newest two date
-    folders of each configured Pre-EL, Post EL and Final EL folder, read from the
-    shares alone, no database. A folder that cannot be read is skipped; the others are
-    still walked."""
+    folders (`days` of them for a read further back) of each configured Pre-EL,
+    Post EL and Final EL folder, read from the shares alone, no database. A
+    folder that cannot be read is skipped; the others are still walked."""
     now = time.time() if now is None else now
     out = []
     for station, unit, line, root in roots(cfg):
         if not _reachable(station, unit, line, root):
             continue
-        for day in icon_ingest._el_day_dirs(root, DAYS):
+        for day in icon_ingest._el_day_dirs(root, days or DAYS):
             for path, mtime, depth in _walk(day.path):
                 if _filed(path, depth):
                     verdict, mode = verdict_of(path, depth), None
@@ -564,14 +567,16 @@ def pick_new(cur, files):
 REVIEW_TYPE = "post_el_ng"
 
 
-def apply(cur, rows):
+def apply(cur, rows, review=True):
     """Write what pick_new() found - each row checked absent first, so a pass
     with nothing new writes nothing at all (db.ingest_review_item's rule).
 
     An NG at Post EL also raises a Needs Review item (Mukesh, 16 Oct 2026):
     after lamination the module cannot be reworked, so it is taken off the line
     and Quality decide. One per module - raw_id is the serial - so a second NG
-    image of it raises nothing more, and neither does a later OK.
+    image of it raises nothing more, and neither does a later OK. A read of the
+    history (review=False) raises none: an NG from weeks ago was taken off the
+    line then - its image is recorded, Quality's queue is not filled with it.
     Returns {station: rows written, 'post_el_ng': items raised}."""
     import db
     out = {}
@@ -586,7 +591,7 @@ def apply(cur, rows):
         if not cur.rowcount:
             continue
         out[r["station"]] = out.get(r["station"], 0) + 1
-        if r["station"] == "post_el" and not is_pass(r["verdict"]) and \
+        if review and r["station"] == "post_el" and not is_pass(r["verdict"]) and \
                 db.ingest_review_item(cur, REVIEW_TYPE, r["serial"],
                                       "%s|%s" % (REVIEW_TYPE, r["serial"]),
                                       "el_capture", line=r["line"],
@@ -653,6 +658,77 @@ def run_pass():
                             "%s must run in normal mode", source_label(station, unit),
                             " Line %s" % line if line else "", n, LABEL[station])
     return counts
+
+
+# ---- reading further back, once (18 Oct 2026) ------------------------------------
+#
+# The poller reads the newest two date folders of each EL folder every minute, so
+# the index starts the day the poller first ran - and EL Analysis's 7-day and
+# 30-day windows had nothing behind them. A read of the history walks more date
+# folders ONCE, through the same scan / pick_new / apply as the poller (nothing
+# recorded twice: the same path, or the same image re-filed, is skipped), in
+# batches of BACKFILL_CHUNK images a transaction so FQC and the poller never wait
+# on it. One at a time; the shares are only read.
+BACKFILL_MAX_DAYS = 90
+BACKFILL_CHUNK = 2000
+_backfill_lock = threading.Lock()
+BACKFILL = {"running": False}
+
+
+def backfill_status():
+    return dict(BACKFILL)
+
+
+def backfill(days, by=None):
+    """Read `days` date folders of every configured EL folder into the index.
+    Returns {station: images recorded} (and post_el_ng). Synchronous - the
+    route runs it on a thread of its own (start_backfill)."""
+    import store, db
+    with store.conn() as (cx, cur):
+        cfg = db.get_config(cur)
+    t0 = time.time()
+    files = scan(cfg, days=days)
+    BACKFILL.update(files=len(files), done=0, scanned_s=round(time.time() - t0, 1))
+    out = {}
+    for i in range(0, len(files), BACKFILL_CHUNK):
+        part = files[i:i + BACKFILL_CHUNK]
+        with store.conn() as (cx, cur):
+            for k, n in apply(cur, pick_new(cur, part), review=False).items():
+                out[k] = out.get(k, 0) + n
+        BACKFILL.update(done=min(len(files), i + BACKFILL_CHUNK), recorded=dict(out))
+    log.info("EL history read back %d days by %s: %d files, recorded %s in %.0f s",
+             days, by or "?", len(files), out, time.time() - t0)
+    return out
+
+
+def start_backfill(days, by=None, on_done=None):
+    """Start a read of the history on a thread of its own. (ok, why)."""
+    if not _backfill_lock.acquire(blocking=False):
+        return False, "A read of the EL history is already running."
+    BACKFILL.clear()
+    BACKFILL.update(running=True, days=days, by=by, started=clock.stamp(), files=None,
+                    done=0, recorded={})
+
+    def run_it():
+        try:
+            try:
+                out = backfill(days, by)
+                BACKFILL.update(recorded=out, error=None)
+            except Exception as e:                   # said on the screen, and logged
+                log.exception("EL history read failed")
+                BACKFILL.update(error=str(e))
+            BACKFILL.update(finished=clock.stamp())
+            if on_done:                              # recorded BEFORE it says it is done
+                try:
+                    on_done(dict(BACKFILL))
+                except Exception:
+                    log.exception("recording the EL history read failed")
+        finally:
+            BACKFILL.update(running=False)
+            _backfill_lock.release()
+
+    threading.Thread(target=run_it, name="icon-el-backfill", daemon=True).start()
+    return True, None
 
 
 def start_background(interval=60):

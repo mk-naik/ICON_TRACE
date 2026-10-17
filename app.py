@@ -6796,6 +6796,43 @@ def api_el_analysis():
     return jsonify(out)
 
 
+@app.route("/api/el/backfill", methods=["GET", "POST"])
+@require_role(*_R_ADMIN)
+def api_el_backfill():
+    """Read the EL history once (18 Oct 2026): more date folders of every EL
+    folder than the poller's newest two, so EL Analysis's longer windows have
+    something behind them. GET says how it is going and how far back the index
+    reaches; POST {days} starts one - Admin or Super Admin, audited."""
+    if request.method == "GET":
+        with store.conn() as (cx, cur):
+            cur.execute("SELECT station, MIN(file_time) AS t, COUNT(*) AS n FROM el_capture "
+                        "GROUP BY station")
+            cov = {r["station"]: {"from": r["t"], "images": r["n"]} for r in cur.fetchall()}
+        return jsonify({"ok": True, "status": elcap.backfill_status(), "coverage": cov,
+                        "max_days": elcap.BACKFILL_MAX_DAYS})
+    d = request.get_json(silent=True) or {}
+    try:
+        days = int(d.get("days"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "why": "How many days back? A whole number."}), 400
+    if not 3 <= days <= elcap.BACKFILL_MAX_DAYS:
+        return jsonify({"ok": False, "why": "Between 3 and %d days back - the newest two are "
+                                            "read every minute already." % elcap.BACKFILL_MAX_DAYS}), 400
+    who = actor()
+
+    def done(st):
+        with store.conn() as (cx, cur):
+            db.audit(cur, who, "el.backfill", "el_capture", None,
+                     {"days": days, "files": st.get("files"), "recorded": st.get("recorded"),
+                      "error": st.get("error"), "started": st.get("started"),
+                      "finished": st.get("finished")})
+
+    ok, why = elcap.start_backfill(days, by=who, on_done=done)
+    if not ok:
+        return jsonify({"ok": False, "why": why}), 409
+    return jsonify({"ok": True, "status": elcap.backfill_status()})
+
+
 @app.route("/api/el/analysis/modules")
 @require_screen_view("elan")
 def api_el_analysis_modules():
