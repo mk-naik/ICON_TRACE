@@ -343,6 +343,31 @@ no one signs twice. [enforcement unverified]
   station with no folder set says so ("Not set up") rather than showing 0. [built] The Production Dashboard and the Management Overview show the same
   figures in an "EL stations" card under their KPI tiles, under their own period and
   shift; their customer, model and wattage narrow it to modules in the master. [built]
+- **EL Analysis is a screen of its own** (Production, after EL Stations; the EL Insight
+  Roadmap, approved 17 Oct): one EL station, or all three side by side, over any window -
+  the last hour (5-minute bars), 8 hours and this or the previous shift (by the hour),
+  today or yesterday (the factory day, by the hour), 7 days (by day and shift), 30 days
+  (by day), or a From-To range of up to 92 days. Tiles: images inspected (modules beside
+  them), NG rate (images and modules), first-pass yield (of the modules new to the
+  station in the window, those that passed at their first image; reworked; still NG), the
+  top reason, the share of Other, the reason that rose most against the window of the
+  same length just before - **no comparison when the index holds no images that far back,
+  never a zero**. Charts drawn by the page itself (it works offline): NG images by reason
+  with the NG-rate line, the reason-share donut, images inspected with the NG rate, the
+  Pareto (share, cumulative %, modules, change), reason by shift, reason by machine, Line
+  A and Line B. With all three: each station's own figures, NG rate by station, reason by
+  station - **never a total across stations** (one module is imaged at each) - and the
+  modules' journeys across them: NG at Pre-EL, reworked (median minutes), then what Final
+  EL saw (pass, NG, the same reason); NG at Final EL, and whether Pre-EL had seen it (same
+  or another reason), passed it first time, or never imaged it. Line, shift, machine,
+  reason, model and customer filters are dynamic; a reason narrows the NG side only.
+  **Every bar, slice, cell and row lists its modules** (one row a module, opening its
+  journey), exported to Excel with the window and filters printed above the table. An
+  image counts by when it was taken; one a machine passed in continuous mode is counted
+  apart and is in no NG rate; a reason is read through the one defect list when the
+  figures are read. The same people as EL Stations, anyone else by user permission. The
+  index holds what the poller has read since it began (the newest two date folders a
+  minute); a window reaching earlier says so. [built]
 
 ## 6. Quality, Needs Review, duplicate scans
 
@@ -474,7 +499,7 @@ no one signs twice. [enforcement unverified]
   LATER_SCREENS`): each account with no row for it gets its role's default at start-up,
   recorded as an auth event; a row that exists - an Admin's own choice - is never
   rewritten. EL Stations (16 Oct) is the first: Production Incharge, Admin and Super
-  Admin. [built]
+  Admin; EL Analysis (17 Oct) the second, to the same roles. [built]
 - **Admin's audit, print log, access review and machine counts are real** (7 Oct):
   every document opened to print and every export is recorded (who, which document,
   which template - never a copy count, which only the browser's print dialog knows);

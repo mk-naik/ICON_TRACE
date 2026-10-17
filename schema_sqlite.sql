@@ -879,6 +879,8 @@ CREATE TABLE IF NOT EXISTS el_capture (
   UNIQUE (station, path)
 ) ;
 CREATE INDEX IF NOT EXISTS ix_el_capture_serial ON el_capture (serial) ;
+-- EL Analysis reads a station's images over a window of time (17 Oct 2026)
+CREATE INDEX IF NOT EXISTS ix_el_capture_time ON el_capture (station, file_time) ;
 
 CREATE TABLE IF NOT EXISTS gp_counter (
   gp_date  TEXT NOT NULL PRIMARY KEY,

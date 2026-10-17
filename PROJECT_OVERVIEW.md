@@ -283,6 +283,8 @@ python test_anonymous_routes.py   3 tests · every /api route answers 401 with n
 python test_factory_day_defaults_ui.py 3 tests · after midnight the counting screens open on the factory day (Chromium, pinned clock)
 python test_el_capture.py         68 tests · continuous mode at Pre-EL / Final EL an alert, Pre-EL (two machines) / Post EL / Final EL (FQC's folders): the index, one folder one machine, the rework loop, EL Stations, the dashboards, a Post EL NG to Needs Review for Quality, the EL PCs' clocks, the Full event log, continuous mode, 20261017 date folders, a reason with a / in its name
 python test_el_capture_ui.py      12 tests · the continuous-mode alert, Final EL on EL Stations and in Settings, Pre-EL / Post EL folders in Settings, the journey, EL Stations, the dashboards' card, a Post EL NG in Needs Review, a Save on each line card, a serial not in the master, EL in the dashboards' funnel, donuts and tables, continuous mode (Chromium)
+python test_el_analysis.py        13 tests · EL Analysis: windows, counting, reasons, change, splits, first-pass yield, journeys across stations, the modules behind a figure, the gate, the Excel preface
+python test_el_analysis_ui.py      5 tests · EL Analysis on the page: one station's charts and tables, every figure opening its modules, all three side by side, filters, Excel (Chromium)
 ```
 
 The JS tests read their functions out of `icon_live.js`, so they test what

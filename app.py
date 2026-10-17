@@ -40,6 +40,7 @@ import icon_serial as gen
 import icon_evidence as ev
 import icon_ingest
 import icon_el_capture as elcap
+import icon_el_analysis as ela
 import icon_models as models
 import icon_customers as customers
 import icon_barcode as bc
@@ -6776,6 +6777,39 @@ def api_el_stations():
     })
 
 
+@app.route("/api/el/analysis")
+@require_screen_view("elan")
+def api_el_analysis():
+    """EL Analysis (the EL Insight Roadmap, approved 17 Oct 2026): what the EL
+    stations' images add up to over a window - one station, or all three side by
+    side - with every figure's reason read through the one defect list. The
+    counting is icon_el_analysis's; this only reads the request and answers."""
+    try:
+        p = ela.params(request.args)
+        with store.conn() as (cx, cur):
+            out = ela.analyse(cx, cur, p, clock.now(), db.get_config(cur))
+            # Pre-EL and Final EL must run in normal mode: a machine that ran
+            # continuous is named here too
+            out["alerts"] = [elcap.continuous_text(a) for a in elcap.continuous_alerts(cur)]
+    except ela.Refused as e:
+        return jsonify({"ok": False, "why": str(e)}), 400
+    return jsonify(out)
+
+
+@app.route("/api/el/analysis/modules")
+@require_screen_view("elan")
+def api_el_analysis_modules():
+    """The modules behind one figure on EL Analysis - a bar, a slice, a cell, a
+    row - one row a module, each opening its journey in Search & Trace."""
+    try:
+        p = ela.params(request.args)
+        with store.conn() as (cx, cur):
+            out = ela.drill(cx, cur, p, clock.now(), db.get_config(cur))
+    except ela.Refused as e:
+        return jsonify({"ok": False, "why": str(e)}), 400
+    return jsonify(out)
+
+
 @app.route("/api/packing/log")
 @require_screen_view("packdash")
 def api_packing_log():
@@ -6949,6 +6983,7 @@ _FRAGMENT_GATE = {
     "indent-form": {"screens": ("indent",)},
     "loading":     {"screens": ("loadver",)},
     "el-stations": {"screens": ("elst",)},
+    "el-analysis": {"screens": ("elan",)},
     # the Admin screen's own fragments - role-gated like the rest of it
     "items":       {"roles": _R_ADMIN},
     "settings":    {"roles": _R_ADMIN},
@@ -6979,7 +7014,8 @@ def view_fragment(name):
                "indent-form": "frag_indent_form.html",
                "items": "frag_items.html",
                "settings": "frag_settings.html",
-               "el-stations": "frag_el_stations.html"}
+               "el-stations": "frag_el_stations.html",
+               "el-analysis": "frag_el_analysis.html"}
     if name not in allowed:
         abort(404)
     # One route, several screens - so gated here by name, not by decorator.
@@ -8415,17 +8451,27 @@ def api_export_xlsx():
         rows = s.get("rows") or []
         ws = wb.create_sheet(_sheet_title(s.get("title"), used))
         widths = {}
+        # what the rows ARE - the window and filters they were read under (EL
+        # Analysis, 17 Oct 2026) - printed above them, then a blank row
+        preface = [str(x)[:400] for x in (s.get("preface") or []) if x is not None][:12]
+        for line in preface:
+            ws.append([_xlsx_value(line)])
+            _no_formulas(ws, ws.max_row)
+            ws.cell(ws.max_row, 1).font = Font(italic=True, color="3D4E63")
+        if preface:
+            ws.append([])
+        head = len(preface) + (2 if preface else 1)          # the header's row
 
         if cols:
             ws.append(cols)
-            _no_formulas(ws, 1)
+            _no_formulas(ws, head)
             for i, c in enumerate(cols, 1):
-                cell = ws.cell(1, i)
+                cell = ws.cell(head, i)
                 cell.font = head_font
                 cell.fill = head_fill
                 cell.alignment = Alignment(vertical="center", wrap_text=True)
                 widths[i] = len(c)
-            ws.freeze_panes = "A2"
+            ws.freeze_panes = "A%d" % (head + 1)
 
         for r in rows:
             vals = [_xlsx_value(v if isinstance(v, str) else
@@ -8440,8 +8486,8 @@ def api_export_xlsx():
         for i, w in widths.items():
             ws.column_dimensions[get_column_letter(i)].width = min(max(w + 3, 9), 46)
         if cols and rows:
-            ws.auto_filter.ref = "A1:%s%d" % (get_column_letter(len(cols)),
-                                              len(rows) + 1)
+            ws.auto_filter.ref = "A%d:%s%d" % (head, get_column_letter(len(cols)),
+                                               head + len(rows))
 
     if not wb.sheetnames:                       # every sheet came in empty
         return jsonify({"ok": False, "why": "There is nothing on this screen "

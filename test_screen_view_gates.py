@@ -100,6 +100,8 @@ EXPECTED = {
     "api_prodentries": {("prodentry",)}, "api_loss_events": {("loss",)},
     # 16 Oct 2026: EL Stations - Pre-EL / Post EL captures, its own screen
     "api_el_stations": {("elst",)},
+    # 17 Oct 2026: EL Analysis - its figures and the modules behind them, its own screen
+    "api_el_analysis": {("elan",)}, "api_el_analysis_modules": {("elan",)},
     # Round 38: the traceability report as Excel - Production Entry's own screen
     "export_traceability": {("prodentry",)},
     "api_fqc_dashboard_modules": {("dash",)},
@@ -126,7 +128,7 @@ EXPECTED = {
     "gatepass_print": {("gp",)},
     "api_hold": {("hold",)},
     "api_review_list": {("review",)}, "api_quality_pending": {("review",)},
-    "view_fragment": {("indent",), ("loadver",), ("elst",)},
+    "view_fragment": {("indent",), ("loadver",), ("elst",), ("elan",)},
     "export_csv": {("proddash", "mgmt"), ("fqc", "dash"), ("indent",), ("gp",)},
 }
 

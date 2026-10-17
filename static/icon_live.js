@@ -8851,6 +8851,13 @@ function wireFqcAnomalies() {
     { id: 'elst', label: 'EL Stations', icon: '\u25A6', after: 'prodentry',
       roles: ['Admin', 'Production Incharge'], url: '/view/el-stations',
       title: 'Pre-EL and Post EL - every module imaged, its rework, its rejections' },
+    /* EL Analysis (the EL Insight Roadmap, approved 17 Oct 2026): defects by
+       reason, trend, shift, machine and line, any window from an hour to 30
+       days, one station or all three side by side. The same people as EL
+       Stations to begin with; anyone else by user permission. */
+    { id: 'elan', label: 'EL Analysis', icon: '\u25A4', after: 'elst',
+      roles: ['Admin', 'Production Incharge'], url: '/view/el-analysis',
+      title: 'EL defects by reason, trend, shift, machine and line - any window' },
     { id: 'items', label: 'Item Master', icon: '\u25A5', after: 'admin',
       roles: ['Admin'], url: '/view/items',
       title: 'Maintained by Admin, not by operators' },
@@ -13427,6 +13434,8 @@ function wireFqcAnomalies() {
         /* EL Stations is fetched once at sign-in; its data is read on the way in */
         if (view === 'elst' && typeof can === 'function' && can('elst') &&
             typeof window.elstLoad === 'function') window.elstLoad();
+        if (view === 'elan' && typeof can === 'function' && can('elan') &&
+            typeof window.elanLoad === 'function') window.elanLoad();
         if (view === 'loss') { if (typeof loInit === 'function') loInit(); }
         if (view === 'disp') {
           wireDisp();

@@ -225,6 +225,7 @@ SCREENS = (
     ("plan",      "Planning",             "Production"),
     ("prodentry", "Production Entry",     "Production"),
     ("elst",      "EL Stations",          "Production"),
+    ("elan",      "EL Analysis",          "Production"),
     ("loss",      "Loss & Breakdown",     "Production"),
     ("dash",      "FQC Dashboard",        "FQC"),
     ("fqc",       "FQC Entry",            "FQC"),
@@ -274,8 +275,9 @@ SUBVIEWS = {
 # read-only would, the moment Round 27 enforces this table, take that job
 # away, which this round's own rule forbids: nobody's access changes.
 #   elst - EL Stations (16 Oct 2026) lists what the EL poller recorded; GET only.
+#   elan - EL Analysis (17 Oct 2026) reads the same index into figures; GET only.
 READ_ONLY_SCREENS = frozenset(("mgmt", "search", "proddash", "dash",
-                               "packdash", "hold", "drafts", "elst"))
+                               "packdash", "hold", "drafts", "elst", "elan"))
 
 # Screens added after accounts already existed. Every NEW account gets a row
 # per screen when it is created; an existing one has none for a screen added
@@ -284,7 +286,9 @@ READ_ONLY_SCREENS = frozenset(("mgmt", "search", "proddash", "dash",
 # row that exists: an Admin's later choice stands.
 #   elst  EL Stations - Production Incharge, Admin and Super Admin to begin
 #         with, others by user permission (Mukesh, 16 Oct 2026)
-LATER_SCREENS = ("elst",)
+#   elan  EL Analysis - the same people as EL Stations (the EL Insight Roadmap,
+#         approved 17 Oct 2026)
+LATER_SCREENS = ("elst", "elan")
 
 
 def log_event(cur, login_id, event, ip=None, detail=None, now=None):

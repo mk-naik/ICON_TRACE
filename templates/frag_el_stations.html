@@ -1,6 +1,8 @@
 <div class="pg"><h2>EL Stations</h2>
   <p>Pre-EL, Post EL and Final EL &middot; every module imaged, its rework, its rejections</p>
-  <div class="pg-act"><button class="btn btn-ghost" onclick="elstLoad()">Refresh</button></div></div>
+  <div class="pg-act"><button class="btn btn-ghost" onclick="elstLoad()">Refresh</button>
+    <button class="btn btn-ghost" title="Defects by reason, trend, shift, machine and line"
+            onclick="if (window.elanOpen) elanOpen({station: document.getElementById('elStation').value, window: 'today'}); else go('elan')">EL Analysis &rsaquo;</button></div></div>
 
 <div class="note n-info"><span>&#9432;</span><span><b>OK is Pass; any other folder is
   NG.</b> At Pre-EL an NG module goes for rework and comes back until it passes. After

@@ -8033,3 +8033,29 @@ commit.
   EL Stations and in Settings; t_continuous now expects "Passed by the machine" at Pre-EL;
   kpi dicts gained `machine`. `test_el_capture_ui.py` +1 (12): the alert, the row, the
   tile in Chromium.
+
+### 17 Oct 2026 - EL Analysis: defects by reason, trend, shift, machine and line
+- **Asked (Mukesh, 18 Oct, after the EL Defect Master):** "initially told you about data,
+  graph, defect filters, donut, single EL insights, whole location data, chart, bar,
+  trends etc. nothing is there ... you can create new pages for that" - the EL Insight
+  Roadmap's analysis screen (phases 2-4), which had not been built.
+- **Change:** `icon_el_analysis.py` (new): windows (1 h in 5-minute bars ... 30 days by
+  day, a range up to 92 days) with the window of the same length before them; images by
+  when taken, re-filings once, continuous-mode passes apart; reasons through
+  defect_folder_map at read time (a folder the list lacks: its own reason, new); per
+  station tiles, Pareto with change, trend, shift / machine / line splits, first-pass yield
+  of modules new to the station; with all three, the modules' journeys across stations;
+  the modules behind any figure. `/api/el/analysis`, `/api/el/analysis/modules` (screen
+  `elan`, read-only, LATER_SCREENS by role). `frag_el_analysis.html`: SVG charts drawn by
+  the page (stacked bars + NG-rate line, donut, rate lines), heat tables, drill-down list,
+  Excel export. `/api/export/xlsx` takes an optional `preface` printed above a sheet's
+  header. Index `ix_el_capture_time (station, file_time)`. EL Stations links to it.
+- **Checked on real data** (a scratch copy of 8090's production snapshot): every view 0.2 s
+  or less; Chromium screenshots of Pre-EL 7 days, Final EL today, all three today, Post EL
+  8 hours. It already shows Grid Burning at Pre-EL is never reworked (0 of 35) and 17 of
+  the 19 such modules imaged at Final EL so far were NG there for the same reason.
+- **Test:** `test_el_analysis.py` (13): windows and bars, counting, reasons and new
+  folders, the change and its missing comparison, bars, shift / machine / line, filters
+  and dynamic dropdowns, first-pass yield, all three with journeys, drill-downs, the gate,
+  the later-screen grant, the export preface. `test_el_analysis_ui.py` (5, Chromium).
+  `test_screen_view_gates.py`: the two routes and the fragment in the reviewed map.
