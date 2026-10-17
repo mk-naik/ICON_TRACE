@@ -6597,8 +6597,8 @@ def _el_by_line_shift(period, shift=""):
     the Production Dashboard's Line & shift table."""
     cells = {}
     for s in period["pre_el"].values():
-        if shift and s["shift"] != shift:
-            continue
+        if (shift and s["shift"] != shift) or s["status"] == "machine":
+            continue                  # passed by a machine in continuous mode: no decision
         for ln in (s["lines"] or [""]):
             c = cells.setdefault((ln, clock.shift_number(s["shift"])),
                                  {"scanned": 0, "pass": 0, "reworked": 0, "in_rework": 0})
@@ -6624,28 +6624,35 @@ def _el_kpi(period, shift="", line="", awaiting=frozenset()):
     image - FQC decides)."""
     def keep(s):
         return (not shift or s["shift"] == shift) and (not line or line in s["lines"])
-    pre = [s for s in period["pre_el"].values() if keep(s)]
+    # a module only a machine in continuous mode passed, at Pre-EL or Final EL, is
+    # no decision: counted apart ('machine'), never in scanned, a pass or a yield
+    # (17 Oct 2026, the EL Defect Master)
+    pre_all = [s for s in period["pre_el"].values() if keep(s)]
+    pre = [s for s in pre_all if s["status"] != "machine"]
     post = {serial: s for serial, s in period["post_el"].items() if keep(s)}
-    final = [s for s in period.get("final_el", {}).values() if keep(s)]
+    final_all = [s for s in period.get("final_el", {}).values() if keep(s)]
+    final = [s for s in final_all if s["status"] != "machine"]
     n = lambda xs, st: sum(1 for s in xs if s["status"] == st)
     first, rw, ir = n(pre, "pass"), n(pre, "reworked"), n(pre, "in_rework")
     return {"pre_el": {"scanned": len(pre), "pass": first, "reworked": rw,
                        "in_rework": ir, "rework": rw + ir,
-                       "fpy": round(first * 100.0 / len(pre), 1) if pre else None},
+                       "fpy": round(first * 100.0 / len(pre), 1) if pre else None,
+                       "machine": len(pre_all) - len(pre)},
             "post_el": {"scanned": len(post), "pass": n(post.values(), "pass"),
                         "ng": n(post.values(), "ng"),
                         "awaiting": sum(1 for serial, s in post.items()
                                         if s["status"] == "ng" and serial in awaiting)},
             "final_el": {"scanned": len(final), "pass": n(final, "pass"),
-                         "ng": n(final, "ng")}}
+                         "ng": n(final, "ng"), "machine": len(final_all) - len(final)}}
 
 
 # the Result filter's options, in the order a person reads them
 _EL_RESULTS = [(st, status, "%s: %s" % (elcap.LABEL[st], elcap.STATUS_LABEL[(st, status)]))
                for st, status in (("pre_el", "pass"), ("pre_el", "reworked"),
-                                  ("pre_el", "in_rework"), ("post_el", "pass"),
-                                  ("post_el", "ng"), ("final_el", "pass"),
-                                  ("final_el", "ng"))]
+                                  ("pre_el", "in_rework"), ("pre_el", "machine"),
+                                  ("post_el", "pass"), ("post_el", "ng"),
+                                  ("final_el", "pass"), ("final_el", "ng"),
+                                  ("final_el", "machine"))]
 _EL_ROW_CAP = 5000
 
 
@@ -6690,6 +6697,7 @@ def api_el_stations():
                 master[r["serial"]] = r["model"]
         cfg = db.get_config(cur)
         clk = elcap.clocks(cur)
+        alerts = elcap.continuous_alerts(cur)
         awaiting = _el_awaiting(cur)
 
     by = {}
@@ -6762,6 +6770,9 @@ def api_el_stations():
                                          ", Line %s" % ln if ln else "", elcap.clock_text(c))
                            for (st, unit, ln), c in sorted(clk.items(), key=str)
                            if c["flag"]],
+        # Pre-EL and Final EL must run in normal mode (17 Oct 2026): a machine that
+        # ran continuous is named - an equipment fault, not a figure
+        "continuous_alerts": [elcap.continuous_text(a) for a in alerts],
     })
 
 
@@ -6982,7 +6993,8 @@ def view_fragment(name):
         with store.conn() as (cx, cur):
             cfg = db.get_config(cur)
             clk = elcap.clocks(cur)
-        return render_template(allowed[name], **_settings_context(cfg, clk))
+            alerts = elcap.continuous_alerts(cur)
+        return render_template(allowed[name], **_settings_context(cfg, clk, alerts))
     if name == "indent-form":
         with store.conn() as (cx, cur):
             known = db.known_customers(cur)
@@ -6993,9 +7005,13 @@ def view_fragment(name):
     return render_template(allowed[name])
 
 
-def _el_clock_view(cfg, clk):
-    """{line: {settings prefix: {"text", "warn"}}} - each configured EL machine's
-    clock against the server's (icon_el_capture.clocks), for its Settings field."""
+def _el_clock_view(cfg, clk, alerts=None):
+    """{line: {settings prefix: {"text", "warn", "alert"}}} - each configured EL
+    machine's clock against the server's (icon_el_capture.clocks), for its
+    Settings field - and, for a Pre-EL or Final EL machine that ran in continuous
+    mode, the alert saying so (icon_el_capture.continuous_alerts)."""
+    alert = {(a["station"], a["unit"], a["line"]): elcap.continuous_text(a)
+             for a in (alerts or [])}
     out = {}
     finals = {s["line"]: s["el_root"] for s in ev.sources(cfg) if s.get("el_root")}
     for ln in ev.LINES:
@@ -7004,16 +7020,19 @@ def _el_clock_view(cfg, clk):
             if not (finals.get(ln) if prefix == "el" else _el_root_setting(cfg, prefix, ln)):
                 continue
             c = (clk or {}).get((station, unit, ln)) or (clk or {}).get((station, unit, None))
-            out[ln][prefix] = {"text": elcap.clock_text(c), "warn": bool(c and c["flag"])}
+            out[ln][prefix] = {"text": elcap.clock_text(c), "warn": bool(c and c["flag"]),
+                               "alert": alert.get((station, unit, ln)) or
+                                        alert.get((station, unit, None))}
     return out
 
 
-def _settings_context(cfg, clk=None):
+def _settings_context(cfg, clk=None, alerts=None):
     """Every variable frag_settings.html reads. Two routes render that fragment
     - /view/settings (inside v4) and the standalone /settings page, which
     includes it - so the context is built here, once. A variable added to one
     render and not the other turned /settings into a 500."""
-    return dict(cfg=cfg, probe=_evidence_probe(cfg), el_clock=_el_clock_view(cfg, clk),
+    return dict(cfg=cfg, probe=_evidence_probe(cfg),
+                el_clock=_el_clock_view(cfg, clk, alerts),
                 bc_fonts=bc.TEXT_FONTS,
                 bc_text=bc.text_settings(cfg),
                 bc_bar=bc.bar_settings(cfg),

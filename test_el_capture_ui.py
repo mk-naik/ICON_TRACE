@@ -490,6 +490,36 @@ def t_final_el_on_page():
         os.makedirs(FQC_EL, exist_ok=True)
 
 
+@test("continuous mode at Pre-EL on the page (17 Oct 2026: it must run normal): EL "
+      "Stations names the machine above its tiles, its modules read 'Passed by the "
+      "machine', and the Pre-EL tile says they are not counted")
+def t_continuous_alert_on_page():
+    seed_journey()
+    run5 = ["ICON625R12A17400%02d" % i for i in range(5)]
+    for i, s in enumerate(run5):
+        put(PRE_A, "2026-10-15/中班", s + ".jpg", "2026-10-15T18:%02d:00" % i)
+    with store.conn() as (cx, cur):
+        assert elcap.run(db.get_config(cur), cur) == {"pre_el": 5}
+    with H.browser() as b:
+        pg = H.open_page(b, "elst")
+        pg.wait_for_selector("#v-elst.on #elRows", timeout=10000)
+        pg.fill("#elFrom", "2026-10-15")
+        pg.fill("#elTo", "2026-10-15")
+        pg.wait_for_selector("#elContinuous", timeout=10000)
+        alert = pg.text_content("#elContinuous")
+        assert "Pre-EL primary, Line A ran in CONTINUOUS mode: 5 images in a row" in alert, alert
+        assert pg.eval_on_selector("#elContinuous", "e => e.className") == "note n-bad"
+        assert pg.text_content("#elK1") == "1", "only BOTH is a decision"
+        assert "5 more passed by the machine (continuous), not counted" in \
+            pg.text_content("#elK1d"), pg.text_content("#elK1d")
+        row = pg.evaluate("""(s) => { const tr = Array.from(document.querySelectorAll('#elRows tr'))
+            .find(t => t.textContent.indexOf(s) >= 0);
+            return [tr.cells[2].textContent.trim(), tr.cells[2].querySelector('.tag').className]; }""",
+                          run5[0])
+        assert row == ["Passed by the machine continuous mode", "tag t-rev"], row
+        assert pg.errors == [], pg.errors
+
+
 @test("the Production Dashboard and the Management Overview show an EL stations card "
       "under their KPI tiles with the period's figures; its button opens EL Stations")
 def t_dashboards_on_page():

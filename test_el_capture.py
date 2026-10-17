@@ -280,6 +280,12 @@ def t_continuous():
     got = {r["serial"]: r for r in d["rows"]}
     assert got[S_CROSS]["pre"]["continuous"] == 1 and got[S_POST]["post"]["continuous"] == 1, got
     assert d["kpi"]["post_el"] == {"scanned": 1, "pass": 1, "ng": 0, "awaiting": 0}, d["kpi"]
+    # Pre-EL must run in normal mode (17 Oct 2026): its machine-passed image is no
+    # decision - 'Passed by the machine', counted apart, not a pass or a yield
+    assert (got[S_CROSS]["pre"]["status"], got[S_CROSS]["pre"]["label"]) ==         ("machine", "Passed by the machine"), got[S_CROSS]["pre"]
+    assert (d["kpi"]["pre_el"]["scanned"], d["kpi"]["pre_el"]["machine"],
+            d["kpi"]["pre_el"]["fpy"]) == (0, 1, None), d["kpi"]
+    assert d["continuous_alerts"] == [], "one image is no run"
     log = signed_in().get("/api/trace/serial/" + S_CROSS).get_json()["events"]
     assert [e["detail"] for e in log if e["stage"] == "Pre-EL · Pass"][0].startswith(
         "OK · " + APP._EL_CONTINUOUS), log
@@ -1114,9 +1120,9 @@ def t_screen_api():
     code, d = el_api(**{"from": "2026-10-14", "to": "2026-10-14"})
     assert code == 200 and d["ok"], d
     assert d["kpi"] == {"pre_el": {"scanned": 4, "pass": 2, "reworked": 1, "in_rework": 1,
-                                   "rework": 2, "fpy": 50.0},
+                                   "rework": 2, "fpy": 50.0, "machine": 0},
                         "post_el": {"scanned": 2, "pass": 1, "ng": 1, "awaiting": 1},
-                        "final_el": {"scanned": 0, "pass": 0, "ng": 0}}, d["kpi"]
+                        "final_el": {"scanned": 0, "pass": 0, "ng": 0, "machine": 0}}, d["kpi"]
     rows = {r["serial"]: r for r in d["rows"]}
     assert set(rows) == {S_CRACK, S_CROSS, S_OLD, S_POST, NOT_PLANNED}, sorted(rows)
     c = rows[S_CRACK]
@@ -1161,7 +1167,7 @@ def t_screen_filters():
     _c, d = el_api(result="Pre-EL: In rework", **day)
     assert [r["serial"] for r in d["rows"]] == [S_OLD], d["rows"]
     assert d["kpi"]["pre_el"] == {"scanned": 1, "pass": 0, "reworked": 0, "in_rework": 1,
-                                  "rework": 1, "fpy": 0.0}, d["kpi"]
+                                  "rework": 1, "fpy": 0.0, "machine": 0}, d["kpi"]
     _c, d = el_api(station="post_el", **day)
     assert {r["serial"] for r in d["rows"]} == {S_CRACK, S_POST}, d["rows"]
     assert d["facets"]["shift"] == ["B"], d["facets"]
@@ -1574,7 +1580,7 @@ def t_final_el_screen():
     run()
     code, d = el_api(**{"from": "2026-10-14", "to": "2026-10-14"})
     assert code == 200 and d["ok"], d
-    assert d["kpi"]["final_el"] == {"scanned": 6, "pass": 2, "ng": 4}, d["kpi"]
+    assert d["kpi"]["final_el"] == {"scanned": 6, "pass": 2, "ng": 4, "machine": 0}, d["kpi"]
     assert d["configured"]["final_el"] is True
     rows = {r["serial"]: r for r in d["rows"]}
     c = rows[S_CRACK]["final"]
@@ -1586,7 +1592,7 @@ def t_final_el_screen():
     assert "Final EL: NG" in d["facets"]["result"], d["facets"]
     _c, d = el_api(result="Final EL: NG", **{"from": "2026-10-14", "to": "2026-10-14"})
     assert {r["serial"] for r in d["rows"]} == {S_CROSS, S_STRAY, S_OLD, S_WAIT}, d["rows"]
-    assert d["kpi"]["final_el"] == {"scanned": 4, "pass": 0, "ng": 4}, d["kpi"]
+    assert d["kpi"]["final_el"] == {"scanned": 4, "pass": 0, "ng": 4, "machine": 0}, d["kpi"]
     r = signed_in().get("/api/prod/dashboard",
                         query_string={"from": "2026-10-14", "to": "2026-10-14"}).get_json()
     assert set(r["el"]) == {"pre_el", "post_el"} and \
@@ -1603,6 +1609,83 @@ def t_final_el_event_log():
     assert [(e["stage"], e["reference"]) for e in rows] == \
         [("Final EL · NG", "Line A · Final EL"), ("Final EL · Pass", "Line A · Final EL")], rows
     assert not [s for s in d.get("journey", []) if s.get("stage") == "Final EL"]
+
+
+# --------------------------------------------------------------------------
+# 12. Pre-EL and Final EL must run in NORMAL mode (17 Oct 2026, the EL Defect
+#     Master): continuous mode there is an equipment fault - an alert
+# --------------------------------------------------------------------------
+
+def shift_folder_run(root, n, start, prefix="ICON625R12A17000", rel="2026-10-14/中班"):
+    """n images left in a shift folder a minute apart - what a machine in
+    continuous mode leaves - named as serials."""
+    t0 = datetime.datetime.fromisoformat(start)
+    out = []
+    for i in range(n):
+        at = (t0 + datetime.timedelta(minutes=i)).isoformat()
+        out.append(put(root, rel, "%s%02d.jpg" % (prefix, i), at))
+    return out
+
+
+@test("continuous mode at Pre-EL or Final EL raises an alert naming the machine - five "
+      "images in a row left by the machine; a forgotten image now and then raises none, "
+      "a filing breaks the run, Post EL's continuous raises none - and those images stay "
+      "out of the figures")
+def t_continuous_alert():
+    seed_final()
+    with store.conn() as (cx, cur):
+        db.set_config(cur, {"pre_el_b_root": PRE_B, "post_el_b_root": POST_B})
+    late = ist("2026-10-14T23:00:00")
+    # Pre-EL B primary: 5 in a row - continuous
+    shift_folder_run(PRE_B, 5, "2026-10-14T15:00:00")
+    # Final EL A: 4 in a row, one filed, then 2 more - never 5 in a row
+    imgs = shift_folder_run(FIN_A, 7, "2026-10-14T16:00:00", prefix="ICON625R12A17100")
+    dest = os.path.join(os.path.dirname(imgs[4]), "OK")
+    os.makedirs(dest, exist_ok=True)
+    os.replace(imgs[4], os.path.join(dest, os.path.basename(imgs[4])))
+    # Post EL B: 9 in a row - continuous is allowed there
+    shift_folder_run(POST_B, 9, "2026-10-14T17:00:00", prefix="ICON625R12A17200")
+    run(now=late)
+    now = datetime.datetime(2026, 10, 14, 23, 30)
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE el_capture SET seen_at=%s", ("2026-10-14T23:00:00",))
+        alerts = elcap.continuous_alerts(cur, now=now)
+    assert [(a["station"], a["unit"], a["line"], a["run"]) for a in alerts] == \
+        [("pre_el", 1, "B", 5)], alerts
+    text = elcap.continuous_text(alerts[0])
+    assert text.startswith("Pre-EL primary, Line B ran in CONTINUOUS mode: 5 images in a "
+                           "row (14-10 15:00 to 14-10 15:04)") and "normal mode" in text, text
+    # the 5 are out of Pre-EL's figures: passed by the machine, counted apart
+    _c, d = el_api(**{"from": "2026-10-14", "to": "2026-10-14"})
+    assert (d["kpi"]["pre_el"]["scanned"], d["kpi"]["pre_el"]["machine"]) == (0, 5), d["kpi"]
+    assert d["kpi"]["final_el"]["machine"] == 6 and d["kpi"]["final_el"]["pass"] == 3, d["kpi"]
+    assert d["kpi"]["post_el"]["pass"] == 9, "continuous is Post EL's normal: counted"
+    # a sixth in a row on Final EL A makes a run there too
+    shift_folder_run(FIN_A, 5, "2026-10-14T18:00:00", prefix="ICON625R12A17300")
+    run(now=late)
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE el_capture SET seen_at=%s", ("2026-10-14T23:00:00",))
+        alerts = elcap.continuous_alerts(cur, now=now)
+        gone = elcap.continuous_alerts(cur, now=now + datetime.timedelta(days=1))
+    assert [(a["station"], a["line"], a["run"]) for a in alerts] == \
+        [("final_el", "A", 7), ("pre_el", "B", 5)], alerts
+    assert gone == [], "an alert is the last day's"
+
+
+@test("the continuous-mode alert is shown where a person looks: EL Stations names the "
+      "machine, and Stations & sources says it under that machine's folder")
+def t_continuous_alert_shown():
+    seed_final()
+    shift_folder_run(FIN_B, 6, "2026-10-14T16:00:00")     # after seed_final's filed ones
+    run(now=ist("2026-10-14T23:00:00"))     # seen now: within the last day
+    _c, d = el_api(**{"from": "2026-10-14", "to": "2026-10-14"})
+    assert len(d["continuous_alerts"]) == 1 and \
+        d["continuous_alerts"][0].startswith("Final EL, Line B ran in CONTINUOUS mode: 6 "
+                                             "images in a row"), d["continuous_alerts"]
+    raw = signed_in().get("/view/settings").get_data(as_text=True)
+    html = " ".join(raw.split())
+    assert html.count('class="hint el-continuous"') == 1, "no alert under Final EL B's folder"
+    assert "Final EL, Line B ran in CONTINUOUS mode" in html
 
 
 if __name__ == "__main__":

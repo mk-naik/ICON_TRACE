@@ -75,7 +75,8 @@
   var TONE = { 'pre_el:pass': 't-pass', 'pre_el:reworked': 't-pass',
                'pre_el:in_rework': 't-rev', 'post_el:pass': 't-pass',
                'post_el:ng': 't-fail', 'final_el:pass': 't-pass',
-               'final_el:ng': 't-fail' };
+               'final_el:ng': 't-fail', 'pre_el:machine': 't-rev',
+               'final_el:machine': 't-rev' };
   var busy = false, again = false;
 
   /* each dropdown offers what the rows hold under every OTHER filter, and
@@ -109,8 +110,13 @@
     /* images are put in order by the EL PCs' own clocks - a machine whose clock is
        off the server's is named, since its images may be out of order */
     var cw = d.clock_warnings || [];
-    $('elClock').innerHTML = cw.length ? '<div class="note n-warn"><span>&#9888;</span><span>' +
-      cw.map(esc).join('<br>') + '</span></div>' : '';
+    /* Pre-EL and Final EL must run in normal mode (17 Oct 2026): a machine that
+       ran continuous is named first - an equipment fault, not a figure */
+    var ca = d.continuous_alerts || [];
+    $('elClock').innerHTML = (ca.length ? '<div class="note n-bad" id="elContinuous">' +
+      '<span>&#9888;</span><span>' + ca.map(esc).join('<br>') + '</span></div>' : '') +
+      (cw.length ? '<div class="note n-warn"><span>&#9888;</span><span>' +
+      cw.map(esc).join('<br>') + '</span></div>' : '');
     if (!$('elFrom').value) $('elFrom').value = d.from || '';
     if (!$('elTo').value) $('elTo').value = d.to || '';
     refill('elShift', d.facets.shift);
@@ -139,6 +145,12 @@
                            : 'no Post EL folder set (Admin › Stations & sources)';
     $('elK7d').textContent = d.configured.final_el ? 'modules first imaged in the period'
                            : 'no Final EL (FQC) folder set (Admin › Stations & sources)';
+    /* passed by a machine in continuous mode: no decision, so not in the figures -
+       said beside them, never silently dropped */
+    if (pre.machine) $('elK1d').textContent += ' · ' + pre.machine.toLocaleString() +
+      ' more passed by the machine (continuous), not counted';
+    if (fin.machine) $('elK7d').textContent += ' · ' + fin.machine.toLocaleString() +
+      ' more passed by the machine (continuous), not counted';
 
     $('elRows').innerHTML = d.rows.length ? d.rows.map(function (r) {
       var p = r.pre, q = r.post, f = r.final;

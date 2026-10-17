@@ -226,9 +226,19 @@ no one signs twice. [enforcement unverified]
   part trimmed. Images already recorded were read whole again from their own path, once
   (app_config `el_nested_verdicts`). FQC reads its own EL folder the same way since the
   EL Defect Master (below) - "Lead OPEN/Cross", no longer "Cross". [built]
-  **[open]** FQC's own EL (normal mode on 17 Oct)
-  is read by FQC as before: if it runs continuous, FQC sees no verdict for its images -
-  whether such an image is a clean EL for an FQC pass is Mukesh's call.
+  **Pre-EL and Final EL must run in NORMAL mode, never continuous** (Mukesh, 17 Oct, the
+  EL Defect Master: Pre-EL because a module can be reworked and a person must decide,
+  Final EL because it is the end of the process); Post EL may run continuous. So at those
+  two an image the machine passed by itself is no decision: a module with only such
+  images there is "Passed by the machine", counted apart and never in scanned, a pass, a
+  yield or the NG rate (EL Stations says how many beside the tile; a module with decided
+  images is read from those alone). **Five images of one machine in a row, by their
+  time, all left by the machine is an equipment fault - an alert naming the machine**
+  (EL Stations above its tiles, red; under that machine's folder in Stations & sources;
+  the server log), for a day. In normal mode at most the image being decided waits, and
+  one forgotten now and then (singles only on the real shares, 11-17 Oct) is no run; an
+  operator's later filing of one breaks it. FQC itself still sees no verdict for an
+  unfiled image (NA) - its rule is unchanged. [built]
 - **One defect list for every EL machine: the EL Defect Master** (Mukesh, 17 Oct,
   approved from Claude chat; a folder survey of the six EL machines on the LAN, 11-17
   Oct). `defect_master` / `defect_folder_map` stay the one list; each reason names the

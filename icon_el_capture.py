@@ -113,8 +113,20 @@ def images(rows):
 # a module's state at a station, and how a person reads it
 STATUS_LABEL = {("pre_el", "pass"): "Pass", ("pre_el", "reworked"): "Pass after rework",
                 ("pre_el", "in_rework"): "In rework",
+                ("pre_el", "machine"): "Passed by the machine",
                 ("post_el", "pass"): "Pass", ("post_el", "ng"): "NG",
-                ("final_el", "pass"): "Pass", ("final_el", "ng"): "NG"}
+                ("final_el", "pass"): "Pass", ("final_el", "ng"): "NG",
+                ("final_el", "machine"): "Passed by the machine"}
+
+# Pre-EL and Final EL must run in NORMAL mode, never continuous (Mukesh, 17 Oct
+# 2026, the EL Defect Master): Pre-EL because a module can be reworked and a
+# person must decide, Final EL because it is the end of the process. Post EL may
+# run continuous. So at these two an image the machine passed by itself is no
+# decision - it is left out of what a module's images add up to (a module with
+# nothing else there is 'machine': passed by the machine, counted apart from
+# the figures) - and a run of them is an equipment-configuration fault, an
+# alert naming the machine (continuous_alerts).
+NORMAL_ONLY = ("pre_el", "final_el")
 
 
 def summary(station, rows):
@@ -125,18 +137,27 @@ def summary(station, rows):
     moment any image is NG - it is Quality's to decide then, not a later
     image's. Final EL: what its NEWEST image says, as FQC reads it
     (icon_evidence.read_el takes the newest) - the decision is FQC's. A module
-    counts on the factory day and shift of its FIRST image at the station."""
+    counts on the factory day and shift of its FIRST image at the station.
+
+    At Pre-EL and Final EL (NORMAL_ONLY) an image a machine in continuous mode
+    passed by itself is left out of the status - nobody decided it; a module
+    with only such images there is 'machine'."""
     imgs = images(rows)
     if not imgs:
         return None
-    ngs = [i for i in imgs if not is_pass(i["verdict"])]
-    if station == "pre_el":
+    judged = imgs
+    if station in NORMAL_ONLY:
+        judged = [i for i in imgs if i.get("mode") != "continuous"]
+    ngs = [i for i in judged if not is_pass(i["verdict"])]
+    if not judged:
+        status, reason = "machine", None
+    elif station == "pre_el":
         status = ("pass" if not ngs else
-                  "reworked" if is_pass(imgs[-1]["verdict"]) else "in_rework")
+                  "reworked" if is_pass(judged[-1]["verdict"]) else "in_rework")
         reason = ngs[-1]["verdict"] if ngs else None
     elif station == "final_el":
-        status = "pass" if is_pass(imgs[-1]["verdict"]) else "ng"
-        reason = imgs[-1]["verdict"] if status == "ng" else None
+        status = "pass" if is_pass(judged[-1]["verdict"]) else "ng"
+        reason = judged[-1]["verdict"] if status == "ng" else None
     else:
         status = "ng" if ngs else "pass"
         reason = ngs[0]["verdict"] if ngs else None
@@ -198,6 +219,61 @@ def clocks(cur, now=None):
                              "behind" if g > CLOCK_BEHIND_S else None),
                     "minutes": int(round(abs(g) / 60.0))}
     return out
+
+
+CONTINUOUS_RUN = 5       # images in a row left by the machine: continuous, not a slip
+
+
+def continuous_alerts(cur, now=None):
+    """[{station, unit, line, images, run, first_at, last_at}] - each Pre-EL or
+    Final EL machine that ran in continuous mode in the last day.
+
+    In normal mode the machine waits for the operator, so at most the one image
+    being decided sits in the shift folder; one left there now and then is an
+    image somebody did not file (one at a time, on the real shares, 11-17 Oct).
+    In continuous mode every image stays (Post EL: runs of thousands). So
+    CONTINUOUS_RUN of a machine's images in a row, by their time, all left by
+    the machine - an operator's later filing of one taking it out of the run -
+    is the machine running continuous where a person must decide."""
+    now = now or clock.now()
+    since = (now - datetime.timedelta(hours=CLOCK_WINDOW_H)).isoformat(timespec="seconds")
+    cur.execute("SELECT station, unit, line, serial, recapture, file_time, mode "
+                "FROM el_capture WHERE station IN (%s, %s) AND seen_at >= %s "
+                "ORDER BY file_time, capture_id", NORMAL_ONLY + (since,))
+    by = {}
+    for r in cur.fetchall():
+        by.setdefault((r["station"], r["unit"], r["line"]), []).append(r)
+    out = []
+    for (station, unit, line), rs in sorted(by.items(), key=str):
+        filed = {(r["serial"], r["recapture"], r["file_time"])
+                 for r in rs if r["mode"] != "continuous"}
+        run, best, start, span, n = 0, 0, None, None, 0
+        for r in rs:
+            if r["mode"] == "continuous" and \
+                    (r["serial"], r["recapture"], r["file_time"]) not in filed:
+                n += 1
+                run += 1
+                start = r["file_time"] if run == 1 else start
+                if run > best:
+                    best, span = run, (start, r["file_time"])
+            elif r["mode"] != "continuous":
+                run = 0
+        if best >= CONTINUOUS_RUN:
+            out.append({"station": station, "unit": unit, "line": line, "images": n,
+                        "run": best, "first_at": span[0], "last_at": span[1]})
+    return out
+
+
+def continuous_text(a):
+    """What one continuous-mode alert says, in words."""
+    def t(s):
+        return (s or "")[8:10] + "-" + (s or "")[5:7] + " " + (s or "")[11:16]
+    return ("%s%s ran in CONTINUOUS mode: %d images in a row (%s to %s) were passed by "
+            "the machine with nobody deciding - %d in the last day. %s must run in normal "
+            "mode; switch the machine back. These images are not counted in its figures."
+            % (source_label(a["station"], a["unit"]),
+               ", Line %s" % a["line"] if a["line"] else "", a["run"], t(a["first_at"]),
+               t(a["last_at"]), a["images"], LABEL[a["station"]]))
 
 
 def clock_text(c):
@@ -556,6 +632,18 @@ def run_pass():
         counts = apply(cur, new)
     if counts:
         log.info("new images: %s - %s", counts, named(new))
+        # Pre-EL and Final EL must run in normal mode: say so in the log the
+        # moment a pass records a run of images the machine passed by itself
+        machines = {}
+        for r in new:
+            if r["station"] in NORMAL_ONLY and r.get("mode") == "continuous":
+                k = (r["station"], r["unit"], r["line"])
+                machines[k] = machines.get(k, 0) + 1
+        for (station, unit, line), n in sorted(machines.items(), key=str):
+            if n >= CONTINUOUS_RUN:
+                log.warning("%s%s: %d images passed by the machine in continuous mode - "
+                            "%s must run in normal mode", source_label(station, unit),
+                            " Line %s" % line if line else "", n, LABEL[station])
     return counts
 
 

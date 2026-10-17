@@ -8009,3 +8009,27 @@ commit.
   recorded and resolving (nested, typo, leading space, a folder no list has), one folder
   both lines, EL Stations' Final EL, the event log; 4 assertions gained `final_el`.
   `test_el_capture_ui.py` +1 (11): EL Stations and Settings in Chromium.
+
+### 17 Oct 2026 - continuous mode at Pre-EL or Final EL is an alert, kept out of the figures
+- **Asked (EL Defect Master, Decision 7 / scope item 5; Mukesh's rule 1):** Pre-EL and
+  Final EL must run NORMAL; a continuous-mode image there is an equipment-configuration
+  fault - flag it, name the machine, keep it out of the NG rate. Post EL unchanged.
+- **Found before:** a continuous image at Pre-EL was counted a first-time Pass - into
+  scanned and first-pass yield - with nobody having looked; nothing would notice a
+  machine switched to continuous.
+- **Measured (real shares, scratch copy, 11-17 Oct):** normal-mode machines left single
+  images now and then (longest run 1 on Pre-EL B primary and secondary, 0 on Final EL
+  A / B); continuous Post EL left runs of 2,451 and 3,455. So the alert is a run:
+  `icon_el_capture.CONTINUOUS_RUN` = 5 of one machine's images in a row by time, all
+  machine-left (a later filing of one breaks it), seen in the last day. None on the
+  real data.
+- **Change:** `summary()`: at Pre-EL / Final EL (`NORMAL_ONLY`) continuous images are left
+  out of the status; only those -> 'machine' ("Passed by the machine"). `_el_kpi`: not in
+  scanned / pass / yield / NG, counted as `machine`; `_el_by_line_shift` skips them.
+  `continuous_alerts()` / `continuous_text()`: EL Stations (`continuous_alerts`, a red
+  note above the tiles), Settings (under the machine's folder), the poller's log.
+- **Test:** `test_el_capture.py` +2 (68): a run of 5 at Pre-EL alerts and names the
+  machine, 4 + filed + 2 does not, Post EL's run does not, the day's window; the alert on
+  EL Stations and in Settings; t_continuous now expects "Passed by the machine" at Pre-EL;
+  kpi dicts gained `machine`. `test_el_capture_ui.py` +1 (12): the alert, the row, the
+  tile in Chromium.

@@ -38,7 +38,7 @@
       operator&rsquo;s verdict. FQC reads it when a serial is looked up, and the
       server indexes it every minute as the Final EL station (EL Stations) - one
       folder, read the same way by both.</div>
-    {% set ck = el_clock[LN].get('el') %}{% if ck %}<div class="hint el-clock"{{ ' style="color:var(--review);font-weight:600"' | safe if ck.warn }}>{{ ck.text }}</div>{% endif %}</div>
+    {% set ck = el_clock[LN].get('el') %}{% if ck %}<div class="hint el-clock"{{ ' style="color:var(--review);font-weight:600"' | safe if ck.warn }}>{{ ck.text }}</div>{% if ck.alert %}<div class="hint el-continuous" style="color:var(--fail);font-weight:600">{{ ck.alert }}</div>{% endif %}{% endif %}</div>
   <div class="fld" style="grid-column:1/-1"><label>Pre-EL primary image root folder</label>
     <input id="s_{{ ln }}_pre_el" value="{{ cfg['pre_el_' + ln + '_root'] }}"
            placeholder="\\PRE-EL-{{ LN }}\el">
@@ -46,7 +46,7 @@
       line's flow goes to. Read by the server every minute, not by FQC; the account
       the server runs as needs read access to the share. Leave it blank and nothing
       is scanned.</div>
-    {% set ck = el_clock[LN].get('pre_el') %}{% if ck %}<div class="hint el-clock"{{ ' style="color:var(--review);font-weight:600"' | safe if ck.warn }}>{{ ck.text }}</div>{% endif %}</div>
+    {% set ck = el_clock[LN].get('pre_el') %}{% if ck %}<div class="hint el-clock"{{ ' style="color:var(--review);font-weight:600"' | safe if ck.warn }}>{{ ck.text }}</div>{% if ck.alert %}<div class="hint el-continuous" style="color:var(--fail);font-weight:600">{{ ck.alert }}</div>{% endif %}{% endif %}</div>
   <div class="fld" style="grid-column:1/-1"><label>Pre-EL secondary image root folder</label>
     <input id="s_{{ ln }}_pre_el2" value="{{ cfg['pre_el2_' + ln + '_root'] }}"
            placeholder="\\PRE-EL2-{{ LN }}\el">
@@ -55,7 +55,7 @@
       back through the other one, so both are read and their images put in order by
       time. Read by the server every minute, not by FQC; the account the server runs
       as needs read access to the share. Leave it blank and nothing is scanned.</div>
-    {% set ck = el_clock[LN].get('pre_el2') %}{% if ck %}<div class="hint el-clock"{{ ' style="color:var(--review);font-weight:600"' | safe if ck.warn }}>{{ ck.text }}</div>{% endif %}</div>
+    {% set ck = el_clock[LN].get('pre_el2') %}{% if ck %}<div class="hint el-clock"{{ ' style="color:var(--review);font-weight:600"' | safe if ck.warn }}>{{ ck.text }}</div>{% if ck.alert %}<div class="hint el-continuous" style="color:var(--fail);font-weight:600">{{ ck.alert }}</div>{% endif %}{% endif %}</div>
   <div class="fld" style="grid-column:1/-1"><label>Post EL (after lamination) image root folder</label>
     <input id="s_{{ ln }}_post_el" value="{{ cfg['post_el_' + ln + '_root'] }}"
            placeholder="\\POST-EL-{{ LN }}\el">
