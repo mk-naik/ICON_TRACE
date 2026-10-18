@@ -8135,3 +8135,20 @@ commit.
   a station with another station's result is refused, 400, with the reason. The screen
   clears a result of the old station when another station is picked.
 - **Test:** `test_el_capture.py` +1 (73), `test_el_capture_ui.py` +1 (14).
+
+### 18 Oct 2026 - every filter checked for "an option that belongs elsewhere"
+- **Asked (Mukesh, after the EL Stations Result fix):** "check other places and filter for
+  same".
+- **Checked:** every screen's dropdown builder, server and page. The fault needs a row that
+  holds several things (EL Stations' module: a result at each station). Every other list
+  offers one value per row - Challan, Loading and Gate Pass lists, Production Entry, Loss,
+  Packing Log, FQC Recent and drill-in, the dashboards, the table filters - so none can
+  offer a value from something else. A sweep of the real 30-day data through the API -
+  each station of EL Stations and EL Analysis, every option offered (70) picked in turn:
+  each belongs to its station and finds something.
+- **Found and fixed in EL Analysis:** a reason picked at Final EL (Dark Busbar) stayed
+  picked after switching to Pre-EL, which never files it; with all three and Line A, the
+  Pre-EL panel showed nothing without saying Pre-EL has no Line A folder. Now switching
+  station clears a reason the new station does not file in the window (said in the status
+  line; one both stations file is kept), and the panel says why it is empty.
+- **Test:** `test_el_analysis_ui.py` +1 (7).

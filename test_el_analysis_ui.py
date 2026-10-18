@@ -229,6 +229,51 @@ def t_dashboard_card():
         assert q.errors == [], q.errors
 
 
+@test("what a dropdown offers belongs to the station picked (18 Oct 2026, Mukesh: 'check "
+      "other places and filter for same'): at Pre-EL only Pre-EL's reasons, machines and "
+      "lines; a reason Pre-EL does not file is cleared on switching to it, and said so; one "
+      "both file is kept; all three with Line A says Pre-EL has no folder there")
+def t_dropdowns_follow_station():
+    world()
+    with H.browser() as b:
+        pg = open_analysis(b)                       # Pre-EL, 7 days
+        opts = lambda sel: pg.eval_on_selector_all(sel + " option", "os => os.map(o => o.value)")
+        assert opts("#elaReason") == ["", "DF-CELLCRACK", "DF-GRIDBURNING"], opts("#elaReason")
+        assert opts("#elaMachine") == ["", "pre_el|1|B", "pre_el|2|B"], opts("#elaMachine")
+        assert opts("#elaLine") == ["", "B"], opts("#elaLine")
+        # Final EL: pick Dark Busbar, which Pre-EL never files
+        pg.click('#elaStation button[data-st="final_el"]')
+        pg.wait_for_function("document.querySelector('#elaStation button.on').textContent === 'Final EL'",
+                             timeout=10000)
+        pg.wait_for_function("Array.from(document.querySelectorAll('#elaReason option'))"
+                             ".some(o => o.value === 'DF-DARKBUSBAR')", timeout=10000)
+        pg.select_option("#elaReason", "DF-DARKBUSBAR")
+        pg.wait_for_function("""Array.from(document.querySelectorAll('#v-elan .ela-tiles .kpi label'))
+            .some(l => l.textContent === 'NG rate · this reason')""", timeout=10000)
+        pg.click('#elaStation button[data-st="pre_el"]')
+        pg.wait_for_function("document.getElementById('elaStatus').textContent"
+                             ".indexOf('The reason picked is not filed at Pre-EL') === 0", timeout=10000)
+        assert pg.input_value("#elaReason") == "", "a reason Pre-EL does not file stayed picked"
+        # Grid Burning is filed at both: switching keeps it
+        pg.select_option("#elaReason", "DF-GRIDBURNING")
+        pg.wait_for_function("""Array.from(document.querySelectorAll('#v-elan .ela-tiles .kpi label'))
+            .some(l => l.textContent === 'NG rate · this reason')""", timeout=10000)
+        pg.click('#elaStation button[data-st="final_el"]')
+        pg.wait_for_function("document.querySelector('#elaStation button.on').textContent === 'Final EL' && "
+                             "document.getElementById('elaStatus').textContent.indexOf('read ') > 0",
+                             timeout=10000)
+        assert pg.input_value("#elaReason") == "DF-GRIDBURNING"
+        assert "not filed" not in pg.text_content("#elaStatus")
+        # all three, Line A: Pre-EL has no folder there and says so
+        pg.select_option("#elaReason", "")
+        pg.click('#elaStation button[data-st=""]')
+        pg.wait_for_selector("#v-elan .ela-st", timeout=10000)
+        pg.select_option("#elaLine", "A")
+        pg.wait_for_function("document.querySelector('#v-elan .ela-st[data-st=\"pre_el\"]').textContent"
+                             ".indexOf('No Pre-EL folder is set for Line A') >= 0", timeout=10000)
+        assert pg.errors == [], pg.errors
+
+
 @test("a role without EL Analysis has no such screen")
 def t_quality():
     world()

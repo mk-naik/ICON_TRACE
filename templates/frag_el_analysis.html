@@ -586,6 +586,10 @@
       var body;
       if (!info.configured) {
         body = '<div class="ela-empty">No ' + LABEL[st] + ' folder is set (Admin › Stations &amp; sources).</div>';
+      } else if (S.line && (info.lines || []).indexOf(S.line) < 0 && (info.lines || []).indexOf('') < 0) {
+        body = '<div class="ela-empty">No ' + LABEL[st] + ' folder is set for Line ' + esc(S.line) +
+          (st === 'pre_el' && S.line === 'A' ? ' (Line A’s Pre-EL is not on the LAN yet)' : '') +
+          ' — nothing is read there.</div>';
       } else {
         body = '<div class="ela-mini">' +
           '<div><label>Inspected</label><b>' + num(t.decided) + '</b><small>' + num(t.modules) + ' modules</small></div>' +
@@ -739,9 +743,10 @@
     $('elaAlerts').innerHTML = al.length ? '<div class="note n-bad" style="margin-bottom:10px"><span>&#9888;</span><span>' +
       al.map(esc).join('<br>') + '</span></div>' : '';
     var w = d.window;
-    $('elaStatus').textContent = w.label + ': ' + when(w.start) + ' to ' + when(w.end) +
-      (w.running ? ' (now)' : '') + ' · read ' + when(d.generated_at) +
+    $('elaStatus').textContent = (S.cleared ? S.cleared + ' ' : '') + w.label + ': ' + when(w.start) +
+      ' to ' + when(w.end) + (w.running ? ' (now)' : '') + ' · read ' + when(d.generated_at) +
       (LIVE[S.window] ? ' · refreshes every minute' : '');
+    S.cleared = '';
     $('elaBody').innerHTML = d.station ? single(d, d.blocks[d.station]) : compare(d);
   }
 
@@ -757,6 +762,17 @@
             esc(d.why || 'The server refused it.') + '</span></div>';
           $('elaStatus').textContent = '';
           return;
+        }
+        if (S.checkReason) {
+          S.checkReason = false;
+          var has = (d.facets.reason || []).some(function (r) { return r.key === S.reason; });
+          if (!has && S.reason) {
+            S.cleared = 'The reason picked is not filed at ' + (d.station ? LABEL[d.station] : 'any station') +
+              ' in this window, so it was cleared.';
+            S.reason = '';
+            again = true;             /* read again, through the one queue */
+            return;
+          }
         }
         D = d;
         draw(d);
@@ -783,6 +799,10 @@
   window.elanStation = function (st) {
     S.station = st;
     if (S.machine && S.machine.split('|')[0] !== st) S.machine = '';
+    /* a reason picked at another station is kept only if this one files it in the
+       window - checked against the answer (18 Oct 2026, the same rule as EL
+       Stations' Result: what is offered belongs to the station picked) */
+    if (S.reason) S.checkReason = true;
     remember();
     window.elanDrillClose();
     window.elanLoad();

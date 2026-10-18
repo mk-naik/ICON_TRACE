@@ -392,7 +392,12 @@ no one signs twice. [enforcement unverified]
   figures are read. The same people as EL Stations, anyone else by user permission. The
   index holds what the poller has read since it began (the newest two date folders a
   minute); a window reaching earlier says so. An NG rate over fewer than 20 images in a bar
-  is drawn hollow and left off the line - 3 NG of 7 images is no trend. [built]
+  is drawn hollow and left off the line - 3 NG of 7 images is no trend. **What a dropdown
+  offers belongs to the station picked** (18 Oct, Mukesh: "check other places and filter
+  for same"): one station's reasons, machines and lines only; switching station clears a
+  reason the new station does not file in the window, and says so (one both file is
+  kept); with all three and a line picked, a station with no folder on that line says so
+  rather than showing nothing. [built]
 - **Top EL defects on the dashboards** (the roadmap's phase 5, 18 Oct): the Production
   Dashboard and the Management Overview show, under their EL stations card, each
   station's five busiest reasons over a window of the card's own - 1 hour, 8 hours, today,
