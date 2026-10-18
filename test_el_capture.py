@@ -615,7 +615,7 @@ def t_ensure_adds_table():
         cols = [r["name"] for r in store.rows(cur, "PRAGMA table_info(el_capture)")]
         idx = [r["name"] for r in store.rows(cur, "PRAGMA index_list(el_capture)")]
     assert cols == ["capture_id", "station", "unit", "line", "serial", "recapture",
-                    "verdict", "path", "file_time", "seen_at", "mode"], cols
+                    "verdict", "path", "file_time", "seen_at", "mode", "found_by"], cols
     assert "ix_el_capture_serial" in idx, idx
 
 
@@ -1698,6 +1698,12 @@ def t_backfill():
         put(PRE_A, day + "/早班/OK", "ICON625R12A15229%02d.jpg" % (40 + k), day + "T09:00:00")
     assert run() == {"pre_el": 2}, "the poller reads the newest two"
     assert elcap.backfill(4) == {"pre_el": 2}
+    with store.conn() as (cx, cur):
+        marks = store.rows(cur, "SELECT found_by, COUNT(*) AS n FROM el_capture "
+                                "GROUP BY found_by ORDER BY found_by")
+        # recorded days late on purpose: no reading of the EL PC's clock
+        assert [(m["found_by"], m["n"]) for m in marks] == [(None, 2), ("history", 2)], marks
+        assert ("pre_el", 1, "A") not in elcap.clocks(cur), elcap.clocks(cur)
     assert elcap.backfill(5) == {"pre_el": 1}
     assert elcap.backfill(5) == {}, "a second read recorded again"
     assert len(captures()) == 5

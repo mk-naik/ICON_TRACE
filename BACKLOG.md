@@ -8152,3 +8152,20 @@ commit.
   station clears a reason the new station does not file in the window (said in the status
   line; one both stations file is kept), and the panel says why it is empty.
 - **Test:** `test_el_analysis_ui.py` +1 (7).
+
+### 18 Oct 2026 - after a read of the EL history: EL Stations quick again, clocks from the poller only
+- **Found (the filter sweep, on 30 days of real history):** EL Stations took 12 s for 7
+  days (0.36 s for a day before the history); the EL PC clock check scanned the 330,000
+  images the history read recorded that day - and, for a machine with no fresh images,
+  would have read their days-old gaps as a clock hours "behind".
+- **Cause:** `_el_rows_for` asked for 500 serials AND a station - SQLite chose the new
+  (station, file_time) index and read the whole station's images per batch (300 batches,
+  22 ms each); `_el_period` filtered the factory day with date() over every row.
+  `clocks()` read every row recorded in the last day.
+- **Change:** `_el_rows_for` uses the serial index by name; `_el_period` asks for the
+  factory days as a file_time range (06:00 to 06:00). New column `el_capture.found_by`
+  ('history' for a read of the history; schema + migration; `apply(found_by=)`);
+  `clocks()` reads only the poller's own, decided images, filtered in SQL. EL Stations on
+  real history: 1 day 1.1 s, 7 days 3.7 s (was 12 s), 30 days 14 s.
+- **Test:** `test_el_capture.py` (73): a history read's rows are marked and give no clock
+  reading; the table's columns.

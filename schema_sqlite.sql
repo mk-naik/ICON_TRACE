@@ -876,6 +876,9 @@ CREATE TABLE IF NOT EXISTS el_capture (
   -- in continuous mode - it passes every module itself and the image stays in
   -- the shift folder; recorded as OK, no person decided it
   mode        TEXT NULL,
+  -- NULL: recorded by the minute poller as it came. 'history': by a read of the
+  -- EL history (18 Oct 2026) - an old image recorded now, no clock reading
+  found_by    TEXT NULL,
   UNIQUE (station, path)
 ) ;
 CREATE INDEX IF NOT EXISTS ix_el_capture_serial ON el_capture (serial) ;

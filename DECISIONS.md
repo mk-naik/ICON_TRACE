@@ -216,7 +216,8 @@ no one signs twice. [enforcement unverified]
   is skipped. **It raises no Needs Review item**: a Post EL NG from weeks ago was taken off
   the line then (30 days on the real shares held 2,693 such modules). The card says how
   far back each station's index reaches. 30 days on the real shares: 357,000 files read
-  in about 45 s. [built]
+  in about 45 s. Its rows are marked (`el_capture.found_by = 'history'`): they came days
+  late on purpose and are no reading of an EL PC's clock. [built]
 - **An EL machine runs in one of two modes** (Mukesh, 17 Oct). NORMAL: it waits for the
   operator's decision and the image is filed under its verdict folder - at most the one
   image being decided sits in the shift folder. CONTINUOUS: it does not wait, passes

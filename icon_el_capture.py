@@ -194,17 +194,16 @@ def clocks(cur, now=None):
     cur.execute("SELECT station, unit, line, MIN(seen_at) AS first FROM el_capture "
                 "GROUP BY station, unit, line")
     first = {(r["station"], r["unit"], r["line"]): r["first"] for r in cur.fetchall()}
-    cur.execute("SELECT station, unit, line, file_time, seen_at, mode FROM el_capture "
-                "WHERE seen_at >= %s", (since,))
+    # recorded once CONTINUOUS_AFTER_S old by the PC's own clock, a continuous
+    # image's gap is that wait, whatever the clock says - it measures nothing; and
+    # an image a read of the history recorded (found_by) came days late on purpose
+    cur.execute("SELECT station, unit, line, file_time, seen_at FROM el_capture "
+                "WHERE seen_at >= %s AND mode IS NULL AND found_by IS NULL", (since,))
     gaps = {}
     for r in cur.fetchall():
         key = (r["station"], r["unit"], r["line"])
         if r["seen_at"] <= first.get(key, ""):
             continue                       # that machine's first pass: a backlog
-        if r["mode"] == "continuous":
-            # recorded once CONTINUOUS_AFTER_S old by the PC's own clock - the gap
-            # is that wait, whatever the clock says, so it measures nothing
-            continue
         try:
             g = (datetime.datetime.fromisoformat(r["seen_at"]) -
                  datetime.datetime.fromisoformat(r["file_time"])).total_seconds()
@@ -567,7 +566,7 @@ def pick_new(cur, files):
 REVIEW_TYPE = "post_el_ng"
 
 
-def apply(cur, rows, review=True):
+def apply(cur, rows, review=True, found_by=None):
     """Write what pick_new() found - each row checked absent first, so a pass
     with nothing new writes nothing at all (db.ingest_review_item's rule).
 
@@ -576,7 +575,9 @@ def apply(cur, rows, review=True):
     and Quality decide. One per module - raw_id is the serial - so a second NG
     image of it raises nothing more, and neither does a later OK. A read of the
     history (review=False) raises none: an NG from weeks ago was taken off the
-    line then - its image is recorded, Quality's queue is not filled with it.
+    line then - its image is recorded, Quality's queue is not filled with it -
+    and marks its rows (found_by='history'): they came days late on purpose,
+    and are no reading of an EL PC's clock.
     Returns {station: rows written, 'post_el_ng': items raised}."""
     import db
     out = {}
@@ -584,10 +585,10 @@ def apply(cur, rows, review=True):
     for r in rows:
         cur.execute(
             "INSERT INTO el_capture (station, unit, line, serial, recapture, verdict, "
-            "path, file_time, seen_at, mode) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "path, file_time, seen_at, mode, found_by) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
             "ON CONFLICT (station, path) DO NOTHING",
             (r["station"], r["unit"], r["line"], r["serial"], r["recapture"],
-             r["verdict"], r["path"], r["file_time"], seen, r.get("mode")))
+             r["verdict"], r["path"], r["file_time"], seen, r.get("mode"), found_by))
         if not cur.rowcount:
             continue
         out[r["station"]] = out.get(r["station"], 0) + 1
@@ -693,7 +694,8 @@ def backfill(days, by=None):
     for i in range(0, len(files), BACKFILL_CHUNK):
         part = files[i:i + BACKFILL_CHUNK]
         with store.conn() as (cx, cur):
-            for k, n in apply(cur, pick_new(cur, part), review=False).items():
+            for k, n in apply(cur, pick_new(cur, part), review=False,
+                              found_by="history").items():
                 out[k] = out.get(k, 0) + n
         BACKFILL.update(done=min(len(files), i + BACKFILL_CHUNK), recorded=dict(out))
     log.info("EL history read back %d days by %s: %d files, recorded %s in %.0f s",

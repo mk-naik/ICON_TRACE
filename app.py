@@ -6508,13 +6508,18 @@ def api_prod_dashboard():
 # --------------------------------------------------------------------------
 
 def _el_rows_for(cur, serials, station=None):
-    """Every el_capture row of these serials (at one station, or both)."""
+    """Every el_capture row of these serials (at one station, or all).
+
+    By the serial index, named: with a station in the query SQLite chose the
+    (station, file_time) index instead and read every image of the station for
+    each 500 serials - 7 s of EL Stations' 12 for a week of real history."""
     out, serials = [], sorted(serials)
     for i in range(0, len(serials), 500):
         part = serials[i:i + 500]
         out.extend(store.rows(
             cur, "SELECT capture_id, station, unit, line, serial, recapture, verdict, "
-                 "file_time, seen_at, mode FROM el_capture WHERE serial IN (%s)%s"
+                 "file_time, seen_at, mode FROM el_capture INDEXED BY ix_el_capture_serial "
+                 "WHERE serial IN (%s)%s"
                  % (",".join(["%s"] * len(part)),
                     " AND station=%s" if station else ""),
             tuple(part) + ((station,) if station else ())))
@@ -6530,12 +6535,14 @@ def _el_period(cur, frm, to, customer="", model="", wattage="", stations=None):
     narrowed; with none set, a module the master does not have yet counts too.
     `stations` limits it (the dashboards read Pre-EL and Post EL only); a station
     left out is an empty dict, never a missing key."""
-    day = clock.shift_day_sql("file_time")
+    # the factory days frm..to as a range of file_time - 06:00 to 06:00 - so the
+    # (station, file_time) index finds them instead of a date() over every row
     w, a = [], []
     if frm:
-        w.append(day + " >= %s"); a.append(frm)
+        w.append("file_time >= %s"); a.append(frm + "T%02d:00:00" % clock.DAY_STARTS_AT)
     if to:
-        w.append(day + " <= %s"); a.append(to)
+        nxt = datetime.date.fromisoformat(to) + datetime.timedelta(days=1)
+        w.append("file_time < %s"); a.append(nxt.isoformat() + "T%02d:00:00" % clock.DAY_STARTS_AT)
     m, ma = [], []
     if customer and customer.lower() != "all customers":
         g2g = "G2G (M10R)" in customer             # v4's name for general stock

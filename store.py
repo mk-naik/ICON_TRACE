@@ -318,6 +318,9 @@ def _migrate(cx, text):
     # Rows recorded before were all filed by an operator.
     if cols("el_capture") and "mode" not in cols("el_capture"):
         cx.execute("ALTER TABLE el_capture ADD COLUMN mode TEXT")
+    # 18 Oct 2026: an image recorded by a read of the history, not as it came
+    if cols("el_capture") and "found_by" not in cols("el_capture"):
+        cx.execute("ALTER TABLE el_capture ADD COLUMN found_by TEXT")
     if cols("el_capture"):
         _el_nested_verdicts(cx)
         _el_verdicts_below_shift(cx)
