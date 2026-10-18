@@ -218,7 +218,15 @@
   };
 
   ['elFrom', 'elTo', 'elShift', 'elStation', 'elResult', 'elLine'].forEach(function (id) {
-    $(id).addEventListener('change', window.elstLoad);
+    $(id).addEventListener('change', function () {
+      /* a result belongs to its station: picking another station clears a result
+         of the old one (18 Oct 2026) */
+      if (id === 'elStation') {
+        var st = $('elStation').value, r = $('elResult').value;
+        if (st && r && r.indexOf((LABEL[st] || st) + ': ') !== 0) $('elResult').value = '';
+      }
+      window.elstLoad();
+    });
   });
   /* landed on directly (a refresh on #elst): the screen is already showing */
   var v = $('v-elst');

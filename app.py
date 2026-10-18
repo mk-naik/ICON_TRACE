@@ -6683,6 +6683,12 @@ def api_el_stations():
     line = (request.args.get("line") or "").strip().upper()
     if station and station not in elcap.LABEL:
         return jsonify({"ok": False, "why": "No such station: %s." % station}), 400
+    # a result belongs to its station (18 Oct 2026, Mukesh: "if I selected just
+    # Pre-EL then why result include Post EL also?")
+    if station and result and not result.startswith(elcap.LABEL[station] + ": "):
+        return jsonify({"ok": False, "why": "“%s” is not a %s result - pick one of %s's, or "
+                                            "All stations." % (result, elcap.LABEL[station],
+                                                               elcap.LABEL[station])}), 400
 
     with store.conn() as (cx, cur):
         period = _el_period(cur, frm, to)
@@ -6724,27 +6730,31 @@ def api_el_stations():
             "results": [lab for st, status, lab in _EL_RESULTS
                         if sums[st] and sums[st]["status"] == status]})
 
-    def member_ok(m, skip=None):
-        return ((skip == "station" or not station or m["station"] == station) and
-                (skip == "shift" or not shift or m["shift"] == shift) and
-                (skip == "line" or not line or line in m["lines"]))
+    def member_ok(m, *skip):
+        return (("station" in skip or not station or m["station"] == station) and
+                ("shift" in skip or not shift or m["shift"] == shift) and
+                ("line" in skip or not line or line in m["lines"]))
 
-    def row_ok(r, skip=None):
-        if skip != "result" and result and result not in r["results"]:
+    def row_ok(r, *skip):
+        if "result" not in skip and result and result not in r["results"]:
             return False
-        return any(member_ok(m, skip) for m in r["members"])
+        return any(member_ok(m, *skip) for m in r["members"])
 
     facets = {
         "shift": sorted({m["shift"] for r in rows if row_ok(r, "shift")
                          for m in r["members"] if member_ok(m, "shift")}),
+        # every station stays offered whatever result is picked: picking another
+        # station clears that result on the screen
         "station": [st for st, _l in elcap.STATIONS
-                    if any(m["station"] == st for r in rows if row_ok(r, "station")
+                    if any(m["station"] == st for r in rows if row_ok(r, "station", "result")
                            for m in r["members"] if member_ok(m, "station"))],
         "line": sorted({ln for r in rows if row_ok(r, "line")
                         for m in r["members"] if member_ok(m, "line")
                         for ln in m["lines"]}),
-        "result": [lab for _st, _s, lab in _EL_RESULTS
-                   if any(lab in r["results"] for r in rows if row_ok(r, "result"))],
+        # with a station picked, only that station's results
+        "result": [lab for st_, _s, lab in _EL_RESULTS
+                   if (not station or st_ == station) and
+                   any(lab in r["results"] for r in rows if row_ok(r, "result"))],
     }
     shown = sorted((r for r in rows if row_ok(r)), key=lambda r: r["last_at"],
                    reverse=True)

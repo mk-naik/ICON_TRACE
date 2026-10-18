@@ -1182,6 +1182,21 @@ def t_screen_filters():
     assert code == 400
 
 
+@test("EL Stations: a result belongs to its station - with Pre-EL picked, Result offers "
+      "Pre-EL's results only; every station stays offered whatever result is picked; a "
+      "result of another station is refused with its reason (18 Oct 2026)")
+def t_screen_result_station():
+    seed_day()
+    day = {"from": "2026-10-14", "to": "2026-10-14"}
+    _c, d = el_api(station="pre_el", **day)
+    assert d["facets"]["result"] == ["Pre-EL: Pass", "Pre-EL: Pass after rework",
+                                     "Pre-EL: In rework"], d["facets"]["result"]
+    _c, d = el_api(result="Post EL: NG", **day)
+    assert d["facets"]["station"] == ["pre_el", "post_el"], d["facets"]["station"]
+    code, d = el_api(station="pre_el", result="Post EL: Pass", **day)
+    assert code == 400 and "not a Pre-EL result" in d["why"], d
+
+
 @test("EL Stations: no dates means today's factory day; a date that is not one is refused")
 def t_screen_dates():
     fresh()

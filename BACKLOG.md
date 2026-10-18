@@ -8124,3 +8124,14 @@ commit.
   journeys. `test_el_analysis_ui.py` +1 (6): the card's stations, the 7-day window, a
   reason opening EL Analysis on it, no card for an incharge an Admin took EL Analysis
   from; the small-bar rates hollow. `test_dashboards_e2e.py` 28, unchanged.
+
+### 18 Oct 2026 - EL Stations: a result belongs to its station
+- **Found (Mukesh, screenshot):** Station = Pre-EL, and the Result dropdown still offered
+  "Post EL: Pass".
+- **Cause:** the Result options were every result of the rows the other filters keep - and
+  a module first imaged at Pre-EL in the period carries its Post EL result in the same row.
+- **Change:** `api_el_stations`: with a station picked, Result offers that station's
+  results only; the Station options ignore a picked result (each station stays offered);
+  a station with another station's result is refused, 400, with the reason. The screen
+  clears a result of the old station when another station is picked.
+- **Test:** `test_el_capture.py` +1 (73), `test_el_capture_ui.py` +1 (14).

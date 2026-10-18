@@ -348,7 +348,11 @@ no one signs twice. [enforcement unverified]
   still opens Search & Trace, which says it is not in the master and shows what the EL
   stations recorded - its steps and its images (17 Oct). **Its tiles count what the
   filters select** - Station and Result too, not only the dates, Shift and Line (17 Oct,
-  Mukesh: "this not change with filter").
+  Mukesh: "this not change with filter"). **A result belongs to its station** (18 Oct,
+  Mukesh: "if I selected just Pre-EL then why result include Post EL also?"): with a
+  station picked, Result offers only that station's results; every station stays offered
+  whatever result is picked, and picking another station clears a result of the old one;
+  a station and another station's result together are refused with the reason. [built]
 - **EL in the dashboards' own widgets** (Mukesh, 17 Oct: "dash donut not included, Where
   the plant stands, Stage funnel, other must show information"), all from the dashboard's
   own answer and period: the **Stage funnel** has Pre-EL and Post EL between Allocated and

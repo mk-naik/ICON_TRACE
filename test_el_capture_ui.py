@@ -313,6 +313,33 @@ def t_screen_on_page():
         assert q.errors == [], q.errors
 
 
+@test("EL Stations on the page: a result belongs to its station - Pre-EL picked offers "
+      "only Pre-EL's results, and picking Post EL clears a Pre-EL result (18 Oct 2026)")
+def t_result_follows_station():
+    seed_screen()
+    with H.browser() as b:
+        pg = H.open_page(b, "elst")
+        pg.wait_for_selector("#v-elst.on #elRows", timeout=10000)
+        pg.fill("#elFrom", "2026-10-15")
+        pg.fill("#elTo", "2026-10-15")
+        pg.wait_for_function("document.getElementById('elRows').textContent.indexOf('%s') >= 0"
+                             % IN_REWORK, timeout=10000)
+        pg.select_option("#elStation", "pre_el")
+        pg.wait_for_function("""Array.from(document.querySelectorAll('#elResult option'))
+            .every(o => !o.value || o.value.indexOf('Pre-EL: ') === 0)""", timeout=10000)
+        opts = pg.eval_on_selector_all("#elResult option", "os => os.map(o => o.value)")
+        assert opts == ["", "Pre-EL: Pass after rework", "Pre-EL: In rework"], opts
+        pg.select_option("#elResult", "Pre-EL: In rework")
+        pg.wait_for_function("document.querySelectorAll('#elRows tr').length === 1", timeout=10000)
+        pg.select_option("#elStation", "post_el")
+        pg.wait_for_function("document.getElementById('elResult').value === '' && "
+                             "document.getElementById('elRows').textContent.indexOf('%s') >= 0"
+                             % REJECTED, timeout=10000)
+        opts = pg.eval_on_selector_all("#elResult option", "os => os.map(o => o.value)")
+        assert opts == ["", "Post EL: Pass", "Post EL: NG"], opts
+        assert pg.errors == [], pg.errors
+
+
 GHOST = "ICON625R12A1522915"           # imaged at Pre-EL, not in the master
 
 
