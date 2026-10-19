@@ -85,11 +85,19 @@
 #v-elan .ela-empty{padding:18px;text-align:center;color:var(--ink3);font-size:12.5px}
 #v-elan .ela-foot{font-size:11px;color:var(--ink3);margin-top:8px;line-height:1.45}
 #v-elan .ela-sub{font-size:11px;color:var(--ink3);font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px}
+/* the list a click opens is brought to the top of the pane (19 Oct 2026: at the
+   foot of a long page, and short while it was still reading, it could not get
+   there - a click "landed" on the card above it). It fills the pane, so it can. */
+#v-elan #elaDrill{min-height:calc(100vh - 96px);scroll-margin-top:6px}
+#v-elan #elaDrill .ela-drill-rows{max-height:calc(100vh - 235px);overflow:auto}
+#v-elan .ela-flash{outline:3px solid var(--solar);outline-offset:2px}
+#v-elan .card-h [data-snap]{white-space:nowrap}
 </style>
 
 <div class="pg"><h2>EL Analysis</h2>
   <p>Pre-EL, Post EL and Final EL &middot; defects by reason, trend, shift, machine and line &middot; any window from the last hour to 30 days</p>
   <div class="pg-act">
+    <button class="btn btn-ghost" onclick="elanSnapSummary()" title="Copy the tiles (or, with all three, the three stations) as a picture, to paste into a WhatsApp chat">&#10697; Copy summary</button>
     <button class="btn btn-ghost" onclick="elanExport()">Export to Excel</button>
     <button class="btn btn-ghost" onclick="elanLoad()">Refresh</button>
     <button class="btn btn-ghost" onclick="go('elst')">EL Stations &rsaquo;</button></div></div>
@@ -131,10 +139,11 @@
 <div class="card" id="elaDrill" hidden>
   <div class="card-h"><h3 id="elaDrillTitle">Modules</h3>
     <div class="ch-r"><span class="tag t-mute" id="elaDrillCount"></span>
+      <button class="btn btn-ghost btn-sm" id="elaDrillBack" onclick="elanDrillBack()" title="Back to the chart you clicked">&uarr; Back to the chart</button>
       <button class="btn btn-ghost btn-sm" onclick="elanDrillExport()">Export to Excel</button>
       <button class="btn btn-ghost btn-sm" onclick="elanDrillClose()">Close</button></div></div>
   <div class="card-b" style="padding:8px 15px"><div class="hint" id="elaDrillNote"></div></div>
-  <div class="scroll" style="max-height:440px"><table class="ela-t" id="elaDrillTable"></table></div>
+  <div class="scroll ela-drill-rows"><table class="ela-t" id="elaDrillTable"></table></div>
 </div>
 
 <script>
@@ -491,11 +500,13 @@
            '</div>' + list + '</div>';
   }
 
-  /* "pre_el|2|B" -> "secondary · B" - a column head that fits */
+  /* "pre_el|2|B" -> "secondary · Line B"; Post EL and Final EL have one machine a
+     line, so "final_el|1|A" -> "Line A" - the station is said already, in the
+     card and in a list's title */
   function machineShort(key) {
     var p = String(key).split('|');
-    var who = p[0] === 'pre_el' ? (p[1] === '2' ? 'secondary' : 'primary') : LABEL[p[0]] || p[0];
-    return who + ' · ' + (p[2] ? 'Line ' + p[2] : 'both lines');
+    var line = p[2] ? 'Line ' + p[2] : 'both lines';
+    return p[0] === 'pre_el' ? (p[1] === '2' ? 'secondary' : 'primary') + ' · ' + line : line;
   }
 
   /* ---- what the station's machines and folders say ---- */
@@ -750,7 +761,8 @@
     var grain = GRAIN[d.window.step_minutes] || '';
     var series = reasonSeries(b);
     h.push('<div class="ela-2"><div class="card"><div class="card-h"><h3>NG at the first image, by reason<span class="ela-sub">' +
-      esc(grain) + ' · modules · point at a reason to see it alone</span></h3></div><div class="card-b" data-chart="stack">' +
+      esc(grain) + ' · modules<span data-noshot> · point at a reason to see it alone</span></span></h3></div>' +
+      '<div class="card-b" data-chart="stack">' +
       (t.ng_first ? stackSvg({ buckets: d.window.buckets, series: series, unit: 'modules NG at their first image',
         width: chartW('wide'), solo: true, aria: 'Modules NG at their first image by reason, ' + grain }) +
         legendHtml(series) : '<div class="ela-empty">No module NG at its first image in this window.</div>') + '</div></div>' +
@@ -978,6 +990,7 @@
       (LIVE[S.window] ? ' · refreshes every minute' : '');
     S.cleared = '';
     $('elaBody').innerHTML = d.station ? single(d, d.blocks[d.station]) : compare(d);
+    addSnapButtons();
   }
 
   window.elanLoad = function () {
@@ -1034,7 +1047,7 @@
        Stations' Result: what is offered belongs to the station picked) */
     if (S.reason) S.checkReason = true;
     remember();
-    window.elanDrillClose();
+    window.elanDrillClose(true);
     window.elanLoad();
   };
   window.elanReset = function () {
@@ -1097,9 +1110,10 @@
     if (!D) return;
     var t = e.target.closest('[data-b],[data-k],[data-c],[data-flow],[data-s],[data-fqc],tr.click,li[data-k]');
     if (!t || t.closest('button')) return;
+    var src = t.closest('.card') || t;             /* where "Back to the chart" returns to */
     if (t.hasAttribute('data-fqc')) {
       return drill({ station: 'final_el', kind: 'fqc', reason: t.getAttribute('data-fqc'),
-                     outcome: t.getAttribute('data-outcome') || '' });
+                     outcome: t.getAttribute('data-outcome') || '' }, src);
     }
     var holder = t.closest('[data-st]');
     var st = t.getAttribute('data-s') || (holder && holder.getAttribute('data-st')) || D.station;
@@ -1112,7 +1126,7 @@
     if (t.hasAttribute('data-flow')) {
       ctx = { station: '', flow: t.getAttribute('data-flow'), sub: t.getAttribute('data-sub') || '' };
       if (k) ctx.reason = k;
-      return drill(ctx);
+      return drill(ctx, src);
     }
     if (k === '__rate' || /^__lim/.test(k || '')) return;
     ctx.kind = t.getAttribute('data-kind') || 'first_ng';
@@ -1130,7 +1144,15 @@
       if (t.getAttribute('data-kind')) ctx.kind = t.getAttribute('data-kind');
     }
     if (t.hasAttribute('data-line')) ctx.line = t.getAttribute('data-line');
-    drill(ctx);
+    drill(ctx, src);
+  });
+
+  /* a card's "Copy picture" */
+  $('elaBody').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-snap]');
+    if (!b || !D || !window.iconSnap) return;
+    var card = b.closest('.card');
+    if (card) window.iconSnap(card, snapMeta(cardTitle(card) || 'chart'));
   });
 
   function ctxTitle(ctx) {
@@ -1149,17 +1171,43 @@
     return bits.join(' · ');
   }
 
-  function drill(ctx) {
+  /* the list a click opens is brought to the top of the pane - at once, and again
+     when its rows are in, in case a smooth scroll was cut short (19 Oct 2026: a
+     click "landed" on Line A and Line B, the card above it) */
+  function landOnDrill(again) {
+    var card = $('elaDrill');
+    if (card.hidden) return;
+    if (!again) { card.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+    var pane = card.closest('.main');
+    var off = card.getBoundingClientRect().top - (pane ? pane.getBoundingClientRect().top : 0);
+    if (off > 40 || off < -40) card.scrollIntoView({ block: 'start' });
+  }
+  /* the card that was clicked - or, the page redrawn since (a live window reads
+     again every minute), the card of the same name */
+  function drillFrom() {
+    if (!DRILL) return null;
+    if (DRILL.from && document.body.contains(DRILL.from)) return DRILL.from;
+    var want = DRILL.card;
+    return want ? Array.prototype.filter.call($('elaBody').querySelectorAll('.card'), function (c) {
+      return cardTitle(c) === want; })[0] || null : null;
+  }
+
+  function drill(ctx, from) {
     var p = params(ctx);
     if ('station' in ctx) p.station = ctx.station;
-    DRILL = { p: p, title: '' };
+    DRILL = { p: p, title: '', from: from || null, card: from ? cardTitle(from) : '' };
     $('elaDrill').hidden = false;
+    $('elaDrillBack').hidden = !from;
     $('elaDrillTitle').textContent = 'Modules — reading…';
+    $('elaDrillCount').textContent = '';
+    $('elaDrillNote').textContent = '';
     $('elaDrillTable').innerHTML = '';
-    $('elaDrill').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    landOnDrill(false);
+    var mine = DRILL;
     fetch('/api/el/analysis/modules?' + qs(p), { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        if (DRILL !== mine) return;            /* closed, or another figure clicked since */
         if (!d.ok) {
           $('elaDrillTitle').textContent = 'Modules';
           $('elaDrillNote').textContent = d.why || 'The server refused it.';
@@ -1183,22 +1231,79 @@
               return '<td' + (typeof v === 'number' ? ' class="num"' : '') + '>' + esc(v) + '</td>';
             }).join('') + '</tr>'; }).join('') :
             '<tr><td colspan="' + d.columns.length + '"><div class="ela-empty">No module.</div></td></tr>') + '</tbody>';
+        landOnDrill(true);
       })
       .catch(function (e) { $('elaDrillNote').textContent = 'Could not load: ' + e; });
   }
-  window.elanDrillClose = function () { $('elaDrill').hidden = true; DRILL = null; };
+  /* back to the chart that was clicked, marked for a moment */
+  window.elanDrillBack = function () {
+    var el = drillFrom();
+    if (!el) { $('elaBody').scrollIntoView({ block: 'start' }); return; }
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.classList.add('ela-flash');
+    setTimeout(function () { el.classList.remove('ela-flash'); }, 1500);
+  };
+  /* closing returns to the chart too; `quiet` (the station changed): it does not */
+  window.elanDrillClose = function (quiet) {
+    var el = quiet ? null : drillFrom();
+    $('elaDrill').hidden = true;
+    DRILL = null;
+    if (el) el.scrollIntoView({ block: 'start' });
+  };
 
   /* ---- Excel: what is on the screen, its window and filters at the top ---- */
   function filterText() {
-    var f = [];
+    var f = [], fc = (D && D.facets) || {};
+    var named = function (list, key) {
+      var x = (list || []).filter(function (v) { return v.key === key; })[0];
+      return x ? x.label : key;
+    };
     if (S.line) f.push('Line ' + S.line);
     if (S.shift) f.push(S.shift + ' shift');
-    if (S.machine) f.push('machine ' + S.machine.replace(/\|/g, ' '));
-    if (S.reason) f.push('reason ' + S.reason);
+    if (S.machine) f.push('machine ' + named(fc.machine, S.machine));
+    if (S.reason) f.push('reason ' + named(fc.reason, S.reason));
     if (S.model) f.push('model ' + S.model);
-    if (S.customer) f.push('customer ' + S.customer);
+    if (S.customer) f.push('customer ' + named(fc.customer, S.customer));
     return f.length ? f.join(', ') : 'none';
   }
+
+  /* ---- a card as a picture, to paste into a WhatsApp chat (19 Oct 2026, Mukesh:
+     "graphs to share in whatsapp ... option to copy image") - drawn and recorded
+     by iconSnap (icon_live.js), what it shows printed on it ---- */
+  function snapBtn() {
+    return '<button class="btn btn-ghost btn-sm" data-snap data-noshot title="Copy this as a picture, to ' +
+      'paste into a WhatsApp chat">⧉ Copy picture</button>';
+  }
+  function addSnapButtons() {
+    Array.prototype.forEach.call($('elaBody').querySelectorAll('.card > .card-h'), function (h) {
+      var r = h.querySelector('.ch-r');
+      if (!r) { r = document.createElement('div'); r.className = 'ch-r'; h.appendChild(r); }
+      if (!r.querySelector('[data-snap]')) r.insertAdjacentHTML('beforeend', snapBtn());
+    });
+  }
+  function cardTitle(card) {
+    var h = card && card.querySelector('.card-h h3');
+    if (!h) return '';
+    var c = h.cloneNode(true);
+    Array.prototype.forEach.call(c.querySelectorAll('.ela-sub'), function (n) { n.parentNode.removeChild(n); });
+    return c.textContent.replace(/\s*›\s*$/, '').replace(/\s+/g, ' ').trim();
+  }
+  function snapMeta(what) {
+    var w = D.window, g = D.generated_at || '';
+    var span = w.label + ': ' + when(w.start) + ' to ' + when(w.end) + (w.running ? ' (now)' : '');
+    return { name: 'el_' + (D.station || 'all') + '_' + what.toLowerCase(),
+             title: 'EL Analysis · ' + (D.station ? LABEL[D.station] : 'Pre-EL, Post EL and Final EL') + ' · ' + what,
+             lines: [span, 'Filters: ' + filterText()],
+             foot: 'Read ' + when(g) + ' by ICON TRACE. Images count by when they were taken, on the factory ' +
+               'day (06:00 to 06:00); an NG rate is on each module’s first image at the station.',
+             window: span, filters: filterText(),
+             stamp: g ? g.slice(0, 10).replace(/-/g, '') + '_' + g.slice(11, 16).replace(':', '') : '' };
+  }
+  window.elanSnapSummary = function () {
+    if (!D || !window.iconSnap) return;
+    var el = $('elaBody').querySelector(D.station ? '.ela-tiles' : '.ela-3');
+    if (el) window.iconSnap(el, snapMeta('Summary'));
+  };
   function preface(extra) {
     var w = D.window;
     return ['EL Analysis · ' + (D.station ? LABEL[D.station] : 'Pre-EL, Post EL and Final EL') + ' · ' + w.label +

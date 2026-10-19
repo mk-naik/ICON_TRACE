@@ -1795,6 +1795,183 @@
   }
   window.iconElCard = elDashCard;
 
+  /* ---- a card as a picture, to paste into a WhatsApp chat (19 Oct 2026, Mukesh:
+     "graphs to share in whatsapp ... option to copy image so user can paste in
+     chat") ----
+     The card is drawn as a PNG with what it shows printed above it - the screen,
+     the window, the filters - and when it was read, so a picture forwarded on
+     WhatsApp still says what it is. The browser draws it itself, from the page's
+     own styles (the card inside an SVG foreignObject, onto a canvas): nothing of
+     it is sent anywhere and nothing loads from the internet. The server is asked
+     first, so every picture is recorded like every export (DECISIONS 9); a
+     refusal draws nothing. The picture then opens in the dialog. Where the
+     browser lets a page put a picture on the clipboard (an https address, or the
+     server PC's own localhost) it is copied at once; on a plain http address the
+     browser does not allow it, so the dialog says to right-click the picture and
+     Copy image, which works everywhere. Save as file is there too. */
+  var SNAP_URL = null;
+  function snapEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  /* the page's own rules, as the page applies them now: a @media block is kept
+     only if it matches this window (inside the picture it would be measured
+     against the picture's width, and lay the card out differently); fonts and
+     imports are left out - nothing loads */
+  function snapCss() {
+    var out = [];
+    function take(rules) {
+      Array.prototype.forEach.call(rules || [], function (r) {
+        if (r.type === 3 || r.type === 5) return;                     /* @import, @font-face */
+        if (r.type === 4) {                                           /* @media */
+          var m = r.media && r.media.mediaText;
+          if (!m || window.matchMedia(m).matches) take(r.cssRules);
+          return;
+        }
+        out.push(r.cssText);
+      });
+    }
+    Array.prototype.forEach.call(document.styleSheets, function (sh) {
+      var rules = null;
+      try { rules = sh.cssRules; } catch (e) { rules = null; }       /* another origin's sheet */
+      take(rules);
+    });
+    return out.join('\n');
+  }
+  function snapDraw(el, o) {
+    return new Promise(function (resolve, reject) {
+      var view = el.closest('.view');
+      var host = view || document.body;
+      var w = Math.ceil(el.getBoundingClientRect().width);
+      var bs = getComputedStyle(document.body);
+      var wrap = document.createElement('div');
+      wrap.style.cssText = 'position:absolute;left:-30000px;top:0;box-sizing:border-box;width:' + (w + 36) +
+        'px;padding:16px 18px 14px;background:#fff;color:' + bs.color + ';font-family:' + bs.fontFamily +
+        ';font-size:' + bs.fontSize + ';line-height:' + bs.lineHeight;
+      wrap.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;' +
+        'border-bottom:2px solid #1B4D7A;padding-bottom:6px;margin-bottom:7px"><b style="font-size:15px;' +
+        'color:#1B4D7A">' + snapEsc(o.title) + '</b><span style="font-size:11px;color:#72859A;white-space:nowrap">' +
+        'ICON TRACE · Unit-2 Raipur</span></div>' + (o.lines || []).map(function (t) {
+          return '<div style="font-size:12px;color:#3D4E63;margin-bottom:2px">' + snapEsc(t) + '</div>';
+        }).join('') + '<div style="height:8px"></div>';
+      var clone = el.cloneNode(true);
+      clone.removeAttribute('id');
+      Array.prototype.forEach.call(clone.querySelectorAll('[data-noshot]'), function (n) {
+        n.parentNode.removeChild(n);
+      });
+      clone.style.margin = '0';
+      wrap.appendChild(clone);
+      if (o.foot) {
+        var f = document.createElement('div');
+        f.style.cssText = 'font-size:10.5px;color:#72859A;margin-top:9px';
+        f.textContent = o.foot;
+        wrap.appendChild(f);
+      }
+      host.appendChild(wrap);                 /* laid out as the screen lays it out, to measure */
+      var W = Math.ceil(wrap.offsetWidth), H = Math.ceil(wrap.offsetHeight);
+      wrap.style.position = 'static';
+      wrap.style.left = '0';
+      var outer = document.createElement('div');
+      if (view && view.id) outer.id = view.id;                  /* the screen's own rules apply */
+      outer.style.cssText = 'width:' + W + 'px;height:' + H + 'px;background:#fff;overflow:hidden';
+      var st = document.createElement('style');
+      st.textContent = snapCss();
+      outer.appendChild(st);
+      outer.appendChild(wrap);                                  /* out of the page again */
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '">' +
+        '<foreignObject x="0" y="0" width="100%" height="100%">' +
+        new XMLSerializer().serializeToString(outer) + '</foreignObject></svg>';
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var k = 2, c = document.createElement('canvas');      /* twice the screen: sharp on a phone */
+          c.width = W * k;
+          c.height = H * k;
+          var g = c.getContext('2d');
+          g.fillStyle = '#fff';
+          g.fillRect(0, 0, c.width, c.height);
+          g.scale(k, k);
+          g.drawImage(img, 0, 0, W, H);
+          c.toBlob(function (b) {
+            if (b) resolve(b); else reject(new Error('the browser could not draw it'));
+          }, 'image/png');
+        } catch (e) { reject(e); }
+      };
+      img.onerror = function () { reject(new Error('the browser could not draw it')); };
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    });
+  }
+  function snapCanCopy() {
+    return !!(window.isSecureContext && navigator.clipboard && navigator.clipboard.write &&
+              window.ClipboardItem);
+  }
+  function snapSave(blob, file) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = file;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
+  }
+  function snapDialog(blob, o, file) {
+    var mdl = document.getElementById('mdl'), host = document.getElementById('mdlGeneric');
+    if (!mdl || !host) { snapSave(blob, file); return; }
+    if (SNAP_URL) { try { URL.revokeObjectURL(SNAP_URL); } catch (e) { /* gone already */ } }
+    SNAP_URL = URL.createObjectURL(blob);
+    var title = document.getElementById('mdlTitle'), sub = document.getElementById('mdlSub');
+    if (title) title.textContent = 'Picture · ' + (o.title || '');
+    if (sub) sub.textContent = 'To paste into a WhatsApp chat (or any chat or email)';
+    if (typeof modalMode === 'function') modalMode(true);
+    var can = snapCanCopy();
+    host.innerHTML = '<div class="card" style="margin:0"><div class="card-h"><h3 id="snapSaid">' +
+      (can ? 'Copying…' : 'Right-click the picture, then Copy image') + '</h3><div class="ch-r">' +
+      (can ? '<button class="btn btn-primary btn-sm" id="snapCopy">Copy again</button>' : '') +
+      '<button class="btn btn-ghost btn-sm" id="snapSave">Save as file</button></div></div>' +
+      '<div class="card-b"><div class="hint" id="snapHow" style="margin:0 0 8px">' + (can ?
+        'Open the WhatsApp chat and press Ctrl+V. Or save it as a file and attach it.' :
+        'This browser lets a page copy a picture by itself only on a secure (https) address, so right-click ' +
+        'the picture, choose <b>Copy image</b>, then press Ctrl+V in the WhatsApp chat. Or save it as a file ' +
+        'and attach it.') + '</div>' +
+      '<div style="max-height:62vh;overflow:auto;background:#E9EEF4;border-radius:var(--r);padding:10px;' +
+      'text-align:center"><img id="snapImg" alt="' + snapEsc(o.title || 'picture') + '" src="' + SNAP_URL +
+      '" style="max-width:100%;height:auto;background:#fff;box-shadow:0 1px 4px rgba(14,26,43,.18)"></div>' +
+      '</div></div>';
+    mdl.classList.add('on');
+    var said = document.getElementById('snapSaid');
+    var copy = function () {
+      navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(function () {
+        said.textContent = 'Copied - paste it into the WhatsApp chat with Ctrl+V';
+      }, function () {
+        said.textContent = 'Not copied - right-click the picture, then Copy image';
+      });
+    };
+    if (can) {
+      copy();
+      document.getElementById('snapCopy').onclick = copy;
+    }
+    document.getElementById('snapSave').onclick = function () { snapSave(blob, file); };
+  }
+  /* o: name (the file and the log), title, lines (printed under the title), foot,
+     window and filters (for the log), stamp ('20261019_1540', the read time) */
+  window.iconSnap = function (el, o) {
+    o = o || {};
+    if (!el) return;
+    var name = String(o.name || 'chart').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'chart';
+    var file = 'icontrace_' + name + (o.stamp ? '_' + o.stamp : '') + '.png';
+    var say = function (m) { if (typeof toast === 'function') toast(m); };
+    fetch('/api/export/image', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, title: o.title || '', window: o.window || '',
+                             filters: o.filters || '' }) })
+      .then(function (r) {
+        return r.json().then(function (b) { if (!r.ok || !b.ok) throw new Error((b && b.why) || 'refused'); },
+                             function () { throw new Error('the server did not answer'); });
+      })
+      .then(function () { return snapDraw(el, o); })
+      .then(function (blob) { snapDialog(blob, o, file); })
+      ['catch'](function (e) { say('No picture - ' + ((e && e.message) || e)); });
+  };
+
   /* Top EL defects (the EL Insight Roadmap, phase 5): the five busiest reasons at
      each EL station over a window of the card's own - the last hour, 8 hours,
      today, 7 days - each with its change on the window before and its trend; a
@@ -1847,12 +2024,19 @@
         var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
           return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
         var n = function (v) { return Number(v || 0).toLocaleString('en-IN'); };
-        var head = '<div class="card-h"><h3>Top EL defects</h3><div class="ch-r">' +
+        var head = '<div class="card-h"><h3>Top EL defects</h3><div class="ch-r" data-noshot>' +
           Object.keys(EL_TOP_WIN).map(function (w) {
             return '<button class="btn btn-sm ' + (w === win ? 'btn-primary' : 'btn-ghost') +
               '" onclick="iconElTopSet(\'' + w + '\')">' + EL_TOP_WIN[w] + '</button>'; }).join('') +
           ' <button class="btn btn-ghost btn-sm" onclick="if (window.elanOpen) elanOpen({station: \'\', window: \'' +
-          win + '\'})">Open EL Analysis ›</button></div></div>';
+          win + '\'})">Open EL Analysis ›</button>' +
+          ' <button class="btn btn-ghost btn-sm" data-snap title="Copy this card as a picture, to paste into a ' +
+          'WhatsApp chat" onclick="iconElTopSnap(\'' + cardId + '\')">⧉ Copy picture</button></div></div>';
+        if (d.ok && d.window) {
+          var fmt = function (t) { return typeof fmtIST === 'function' ? fmtIST(t) : String(t).replace('T', ' '); };
+          card.__label = d.window.label + ': ' + fmt(d.window.start) + ' to ' + fmt(d.window.end);
+          card.__gen = d.generated_at || '';
+        }
         if (!d.ok) {
           card.innerHTML = head + '<div class="card-b"><div class="note n-bad"><span>&#9888;</span><span>' +
             esc(d.why || 'The server refused it.') + '</span></div></div>';
@@ -1909,6 +2093,22 @@
       });
   }
   window.iconElTop = elTopCard;
+  /* the card as a picture, its window and when it was read printed on it */
+  window.iconElTopSnap = function (id) {
+    var card = document.getElementById(id);
+    if (!card || !window.iconSnap) return;
+    var g = card.__gen || '';
+    window.iconSnap(card, {
+      name: 'el_top_defects_' + (card.__win || ''),
+      title: 'Top EL defects · ' + (EL_TOP_WIN[card.__win] || ''),
+      lines: [(id === 'mgElTop' ? 'Management Overview' : 'Production Dashboard') +
+              (card.__label ? ' · ' + card.__label : '')],
+      foot: g ? 'Read ' + (typeof fmtIST === 'function' ? fmtIST(g) : g.replace('T', ' ')) +
+        ' by ICON TRACE. Modules NG at their first image at each station; stations are never added together.' : '',
+      window: card.__label || '',
+      stamp: g ? g.slice(0, 10).replace(/-/g, '') + '_' + g.slice(11, 16).replace(':', '') : ''
+    });
+  };
   window.iconElTopSet = function (w) {
     try { localStorage.setItem('icon.eltop', w); } catch (e) { /* this view only */ }
     [['v-mgmt', 'mgElTop', 'mgElCard'], ['v-proddash', 'pdElTop', 'pdElCard']].forEach(function (x) {
@@ -16187,7 +16387,9 @@ window.gpSetKind = function(k) {
     'export.serials': ['Serials (CSV)', 'Exported'],
     'export.fqc': ['FQC records (CSV)', 'Exported'],
     'export.indents': ['Indents (CSV)', 'Exported'],
-    'export.gatepass': ['Gate passes (CSV)', 'Exported']
+    'export.gatepass': ['Gate passes (CSV)', 'Exported'],
+    'export.xlsx': ['A screen\'s table (Excel)', 'Exported'],
+    'export.image': ['A chart as a picture (PNG)', 'Exported']
   };
 
   function adLogBar(pane, pre, kind) {

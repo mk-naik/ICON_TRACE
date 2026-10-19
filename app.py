@@ -8458,6 +8458,26 @@ def _sheet_title(raw, used):
     return t
 
 
+@app.route("/api/export/image", methods=["POST"])
+@require_role(*_R_EVERY)
+def api_export_image():
+    """A chart or table saved as a picture (19 Oct 2026, Mukesh: "graphs to share
+    in whatsapp"). The browser draws the picture itself, from what is on the
+    screen; it asks here first, so every picture saved is recorded like every
+    other export (DECISIONS 9) - who, when, which screen and chart. Nothing of
+    the picture is sent."""
+    d = request.get_json(force=True, silent=True) or {}
+    name = "".join(ch for ch in str(d.get("name") or "")
+                   if ch.isalnum() or ch in "-_")[:60]
+    if not name:
+        return jsonify({"ok": False, "why": "Which chart? It has no name."}), 400
+    _log_print("export.image", "screen", name, format="png",
+               template=str(d.get("title") or "")[:120],
+               window=str(d.get("window") or "")[:160],
+               filters=str(d.get("filters") or "")[:200])
+    return jsonify({"ok": True})
+
+
 @app.route("/api/export/xlsx", methods=["POST"])
 # Still on its role gate after Round 27: Export is every screen's own
 # download button, including the read-only ones, so tying it to any one
@@ -8553,6 +8573,10 @@ def api_export_xlsx():
     wb.save(buf)
     buf.seek(0)
     fn = "icontrace_%s_%s.xlsx" % (name, clock.today().isoformat())
+    # every export is recorded (DECISIONS 9) - this one, behind every screen's
+    # Export button, was not until 19 Oct 2026
+    _log_print("export.xlsx", "screen", name, format="xlsx", rows=written,
+               sheets=[str(s.get("title") or "")[:60] for s in sheets][:EXPORT_MAX_SHEETS])
     return Response(buf.read(),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="%s"' % fn})

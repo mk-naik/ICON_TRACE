@@ -177,6 +177,104 @@ def t_drill():
         assert pg.errors == [], pg.errors
 
 
+def pane_top(pg, sel):
+    """How far an element's top is below the top of the scrolling pane, in px."""
+    return pg.evaluate("""(s) => Math.round(document.querySelector(s).getBoundingClientRect().top -
+        document.querySelector('.main').getBoundingClientRect().top)""", sel)
+
+
+@test("a click lands on its list (19 Oct 2026, Mukesh: it landed on 'Line A and Line B'): the "
+      "Modules card is brought to the top of the pane once its rows are in; Back to the chart "
+      "and Close return to the card that was clicked")
+def t_drill_lands():
+    world()
+    with H.browser() as b:
+        pg = open_analysis(b)
+        for sel in ('#v-elan [data-chart="donut"] li[data-k="DF-CELLCRACK"]',
+                    '#v-elan [data-chart="pareto"] tbody tr[data-k="DF-GRIDBURNING"]',
+                    '#v-elan [data-chart="shift"] td.cell[data-kind="first"] >> nth=0'):
+            pg.evaluate("document.querySelector('.main').scrollTop = 0")
+            pg.click(sel)
+            pg.wait_for_function("document.getElementById('elaDrillCount').textContent.indexOf('modules') > 0",
+                                 timeout=10000)
+            pg.wait_for_timeout(900)                         # a smooth scroll, and the rows in
+            top = pane_top(pg, "#elaDrill")
+            assert 0 <= top <= 12, "%s: the list's card is %dpx down the pane" % (sel, top)
+        assert pg.text_content("#elaDrillTitle").startswith("Modules — First images")
+        pg.click("#elaDrillBack")
+        pg.wait_for_timeout(900)
+        shift = '#v-elan .card:has([data-chart="shift"])'
+        assert abs(pane_top(pg, shift)) <= 12, "Back: the shift card is %dpx down" % pane_top(pg, shift)
+        pg.click('#v-elan [data-chart="pareto"] tbody tr[data-k="DF-CELLCRACK"]')
+        pg.wait_for_function("document.getElementById('elaDrillCount').textContent === '1 modules'", timeout=10000)
+        pg.click("#elaDrill button:has-text('Close')")
+        pg.wait_for_timeout(400)
+        assert pg.locator("#elaDrill").is_hidden()
+        # back at the Pareto - at the top, or as near as a page this short can scroll
+        pareto = '#v-elan .card:has([data-chart="pareto"])'
+        top = pane_top(pg, pareto)
+        at_end = pg.evaluate("(() => { const m = document.querySelector('.main'); "
+                             "return m.scrollTop + m.clientHeight >= m.scrollHeight - 2; })()")
+        assert abs(top) <= 12 or (at_end and 0 <= top < 400), "Close: the Pareto is %dpx down" % top
+        assert pg.errors == [], pg.errors
+
+
+@test("any card copies as a picture to paste into a WhatsApp chat (19 Oct 2026): where the browser "
+      "allows it the PNG is on the clipboard at once - the window and filters printed on it, its own "
+      "button left off - Save as file gives the same; each picture is recorded; on an address the "
+      "browser does not trust, the dialog says to right-click and Copy image")
+def t_copy_picture():
+    world()
+    with H.browser() as b:
+        pg = open_analysis(b, role="Admin")
+        pg.context.grant_permissions(["clipboard-read", "clipboard-write"], origin=H.base_url())
+        assert pg.locator("#elaBody .card [data-snap]").count() >= 6
+        card = pg.locator("#elaBody .card", has=pg.locator(".card-h h3", has_text="Pareto")).first
+        width = card.evaluate("c => Math.ceil(c.getBoundingClientRect().width)")
+        card.locator("[data-snap]").click()
+        pg.wait_for_function("document.getElementById('snapSaid') && "
+                             "document.getElementById('snapSaid').textContent.indexOf('Copied') === 0",
+                             timeout=15000)
+        assert pg.text_content("#mdlTitle") == "Picture · EL Analysis · Pre-EL · Pareto · every reason"
+        clip = pg.evaluate("""async () => { const it = (await navigator.clipboard.read())[0];
+            const b = await it.getType('image/png'); return [it.types, b.size]; }""")
+        assert clip[0] == ["image/png"] and clip[1] > 5000, clip
+        size = pg.evaluate("""() => { const i = document.getElementById('snapImg');
+            return [i.naturalWidth, i.naturalHeight]; }""")
+        assert size[0] == 2 * (width + 36), (size, width)       # twice the card, with its margin
+        with pg.expect_download() as dl:
+            pg.click("#snapSave")
+        assert dl.value.suggested_filename.startswith("icontrace_el_pre_el_pareto_every_reason_"), \
+            dl.value.suggested_filename
+        assert dl.value.suggested_filename.endswith(".png")
+        pg.evaluate("closeModal()")
+        pg.click("#v-elan .pg-act button:has-text('Copy summary')")
+        pg.wait_for_function("document.getElementById('mdl').classList.contains('on') && "
+                             "document.getElementById('mdlTitle').textContent === "
+                             "'Picture · EL Analysis · Pre-EL · Summary' && "
+                             "document.getElementById('snapSaid').textContent.indexOf('Copied') === 0",
+                             timeout=15000)
+        logs = pg.evaluate("fetch('/api/admin/audit?kind=docs').then(r => r.json())")
+        pics = [x["entity_id"] for x in logs["rows"] if x["action"] == "export.image"]
+        assert pics == ["el_pre_el_summary", "el_pre_el_pareto_every_reason"], pics
+        assert pg.errors == [], pg.errors
+        # a plain http address on the plant's LAN: the browser will not let the page copy
+        q = H.open_page(b, None, role="Admin")
+        q.add_init_script("Object.defineProperty(window, 'isSecureContext', { get: () => false });")
+        q.reload()
+        q.wait_for_selector("#app.on", timeout=15000)
+        q.wait_for_timeout(700)
+        q.click('#sidenav [data-v="elan"]')
+        q.wait_for_function("document.getElementById('elaStatus').textContent.indexOf('read ') > 0",
+                            timeout=15000)
+        q.locator("#elaBody .card [data-snap]").first.click()
+        q.wait_for_function("document.getElementById('snapImg') && document.getElementById('snapImg').complete "
+                            "&& document.getElementById('snapImg').naturalWidth > 0", timeout=15000)
+        assert q.text_content("#snapSaid") == "Right-click the picture, then Copy image"
+        assert q.locator("#snapCopy").count() == 0 and "Copy image" in q.text_content("#snapHow")
+        assert q.errors == [], q.errors
+
+
 @test("point at a reason in the stacked bars: the others fade and it is drawn alone from the "
       "axis; away from the chart, all of them again")
 def t_isolate():
@@ -371,6 +469,15 @@ def t_dashboard_card():
         assert "first images" in text, text
         rows = pg.locator("#pdElTop tr[onclick]")
         assert rows.count() >= 4, rows.count()
+        # the card as a picture, its window printed on it
+        pg.context.grant_permissions(["clipboard-read", "clipboard-write"], origin=H.base_url())
+        pg.click("#pdElTop [data-snap]")
+        pg.wait_for_function("document.getElementById('mdl').classList.contains('on') && "
+                             "document.getElementById('snapSaid') && "
+                             "document.getElementById('snapSaid').textContent.indexOf('Copied') === 0",
+                             timeout=15000)
+        assert pg.text_content("#mdlTitle").startswith("Picture · Top EL defects · "), pg.text_content("#mdlTitle")
+        pg.evaluate("closeModal()")
         pg.click("#pdElTop button >> text='7 days'")
         pg.wait_for_function("document.querySelector('#pdElTop .btn-primary').textContent === '7 days'",
                              timeout=10000)

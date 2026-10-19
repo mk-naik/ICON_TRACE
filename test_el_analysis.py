@@ -669,6 +669,31 @@ def t_later_screen():
                      "Quality": {"view": False, "write": False}}, perms
 
 
+@test("every export is recorded (DECISIONS 9): a screen's Excel and a chart copied as a picture "
+      "each leave a row in the Document & print log - who, which screen, which chart; a "
+      "picture with no name is refused")
+def t_exports_recorded():
+    fresh()
+    c = APP.app.test_client()
+    AUTH.test_login(c)
+    r = c.post("/api/export/xlsx", json={"name": "el_analysis", "sheets": [{
+        "title": "Pre-EL Pareto", "columns": ["Reason"], "rows": [["Grid Burning"], ["Other"]]}]})
+    assert r.status_code == 200
+    r = c.post("/api/export/image", json={"name": "el_pre_el_pareto", "title": "EL Analysis · Pre-EL · Pareto",
+                                          "window": "Last 7 days", "filters": "none"})
+    assert r.status_code == 200 and r.get_json()["ok"], r.get_json()
+    assert c.post("/api/export/image", json={"name": "  "}).status_code == 400
+    rows = c.get("/api/admin/audit?kind=docs").get_json()["rows"]
+    got = {(x["action"], x["entity_id"]) for x in rows}
+    assert {("export.xlsx", "el_analysis"), ("export.image", "el_pre_el_pareto")} <= got, got
+    pic = [x for x in rows if x["action"] == "export.image"][0]
+    assert pic["detail"]["template"] == "EL Analysis · Pre-EL · Pareto" and pic["detail"]["format"] == "png"
+    assert pic["actor"], "a picture recorded without who made it: %s" % pic
+    xl = [x for x in rows if x["action"] == "export.xlsx"][0]
+    assert xl["detail"]["rows"] == 2 and xl["detail"]["sheets"] == ["Pre-EL Pareto"], xl["detail"]
+    assert APP.app.test_client().post("/api/export/image", json={"name": "x"}).status_code == 401
+
+
 @test("the Excel prints the window and filters above the table: a preface, a blank row, the "
       "header, frozen and filtered from there")
 def t_export_preface():

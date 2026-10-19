@@ -8205,3 +8205,31 @@ commit.
   Speed: 7 days one station 0.3-0.7 s (was 10-61 s), 30 days all three 4.4 s.
 - **Test:** `test_el_analysis.py` 21 (was 14), `test_el_analysis_ui.py` 12 (was 7);
   checked in Chromium on a copy of the real data.
+
+### 19 Oct 2026 - EL Analysis: a click lands on its list; Copy picture for WhatsApp; every Excel export recorded
+- **Found (Mukesh: "when I click any portion of donut/bar ... it land to 'Line A and
+  Line B'"):** reproduced in Chromium - after a click the Modules card sat about 760 px
+  down a 900 px pane, its title at the bottom edge.
+- **Cause:** the card is the last on the page and was scrolled to while it still read
+  "reading…" and was short, so the pane could not bring it to the top; nothing scrolled
+  again when its rows came in.
+- **Change:** the card fills the pane (min-height) and is brought to the top at once and
+  again when its rows are in; "Back to the chart" and Close return to the card that was
+  clicked (found again by its title after a live refresh); an answer for a list closed
+  since is dropped.
+- **Asked (Mukesh: "exportable images, and graphs to share in whatsapp did you build
+  it?"; then "if not url so just option to copy image so user can paste in chat"):** it
+  was not built - the audit's share link was on the "later" list, and no picture was
+  ever planned. Built: **Copy picture** on every EL Analysis card, the summary and the
+  dashboards' Top EL defects card. `iconSnap` (icon_live.js) draws the card in an SVG
+  foreignObject onto a canvas at twice its size, with the page's own rules (an @media
+  block only as this window applies it), nothing loaded; the window, filters and read
+  time are printed on it. Copied to the clipboard where the browser allows a page to
+  (https, or the server PC's localhost); on a plain http LAN address the dialog says to
+  right-click the picture and Copy image. Save as file. `POST /api/export/image` records
+  it first (`export.image`), a refusal draws nothing.
+- **Found on the way:** `/api/export/xlsx`, behind every screen's Export button, never
+  recorded an export though DECISIONS 9 says every export is - now `export.xlsx`.
+- **Test:** `test_el_analysis.py` +1 (22): both exports recorded; `test_el_analysis_ui.py`
+  +2 (14): a click lands on its list, Back and Close; Copy picture - clipboard, file, the
+  print log, the right-click fallback.

@@ -436,6 +436,22 @@ no one signs twice. [enforcement unverified]
   it does; Other is grey; a chart colours at most seven reasons, the rest are one grey
   band. It opens on the shift running now for a Production Incharge and on 7 days for
   anyone else, unless a window was picked before on that PC. [built]
+- **A click lands on its list, and any card copies as a picture** (19 Oct, Mukesh: a
+  click on a donut or a bar "land to 'Line A and Line B'" - the Modules card, last on the
+  page and short while it read, could not reach the top - and "option to copy image so
+  user can paste in chat"). The Modules card fills the pane and is brought to its top
+  once its rows are in; **Back to the chart** and Close return to the card that was
+  clicked. Every EL Analysis card, the summary (the tiles, or the three stations) and the
+  dashboards' Top EL defects card have **Copy picture**: the browser draws the card as a
+  PNG with the screen, window, filters and read time printed on it and puts it on the
+  clipboard, to paste into a WhatsApp chat with Ctrl+V. A browser lets a page do that only
+  on an https address or the server PC's own localhost; on a plain http address on the LAN
+  the picture opens and the dialog says to right-click it and Copy image, which works
+  everywhere. Save as file is beside it. The picture is drawn in the browser from the
+  screen - nothing is sent anywhere - and each one is recorded in the Document & print
+  log (`export.image`), the server asked first. [built] **[open]** a link to the exact view
+  (the audit's item 11) is not built: it would open only on the plant's LAN, for someone
+  with an account.
 - **Top EL defects on the dashboards** (the roadmap's phase 5, 18 Oct): the Production
   Dashboard and the Management Overview show, under their EL stations card, each
   station's five busiest reasons over a window of the card's own - 1 hour, 8 hours, today,
@@ -581,7 +597,10 @@ no one signs twice. [enforcement unverified]
   the Audit trail and Document & print log read the server's record; an access
   review sign-off is recorded; machine counts are master data - Super Admin saves
   them, everyone's Loss arithmetic reads them. Grade rules show FQC's real rules and
-  version; Open questions are read from this file. [built]
+  version; Open questions are read from this file. [built] Every screen's Export to Excel
+  (`/api/export/xlsx`) was not recorded until 19 Oct; it is now (`export.xlsx`: the
+  screen's name, its sheets and rows), as is a chart copied as a picture
+  (`export.image`). [built]
 - **`/settings` is not an app of its own.** Evidence Sources is a tab of Admin
   (Stations & sources); `/settings` (GET) redirects to `/#admin/stations`, signed
   in or not - it shows nothing itself, and the fragment it lands on is gated
