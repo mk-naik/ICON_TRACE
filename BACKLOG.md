@@ -8169,3 +8169,39 @@ commit.
   real history: 1 day 1.1 s, 7 days 3.7 s (was 12 s), 30 days 14 s.
 - **Test:** `test_el_capture.py` (73): a history read's rows are marked and give no clock
   reading; the table's columns.
+
+### 19 Oct 2026 - EL Analysis: first images, rates with their significance, Laney limits, FQC by EL reason
+- **Found (an audit of the screen, its claims measured on testing's 30 days of real
+  history before anything changed; Mukesh's go, 19 Oct):** every rate mixed a module's
+  first image with its re-images, so the Pre-EL machine that takes the rework read 18.9%
+  NG against 11.4% (13-19 Oct; on first images 13.2% / 11.2%); Change, Rose most, the heat shading
+  and the cross-station table compared COUNTS, so a busier window read as a rise; the
+  Pareto ranked images, a re-shot counted again, and its cumulative passed 100% once
+  ranked by modules over any image (1,784 module-reasons for 1,514 modules); colours were
+  re-ranked on every answer; the From-to boxes always showed (a display rule beat
+  [hidden]); the comparison vanished when the index began minutes after the window before.
+- **Cause:** one population for every figure; counts where rates were meant;
+  `assignColors` ranked by the answer in hand; `.ela-range{display:inline-flex}`;
+  `prev_complete` asked for the whole window before.
+- **Change:** `icon_el_analysis` marks each image first (the module's first decided image
+  at the station, ever) or a re-image; the NG rate, splits and comparisons are on first
+  images, "NG again" on re-images; the Pareto ranks modules NG at their first image (cum
+  ends at 100%), re-images beside, Other in its ranked place (Mukesh: not skipped); a
+  reason's change is its rate's, with a two-proportion z (3: rose, 2-3: watch); compared
+  when 95% of the window before is indexed; the window before is counted by the same pass
+  as the window (`_previous` via `_decided` - its SQL took 61 s for one station, a bad
+  plan); Laney p' limits on the trend (`_laney`, sigma-z floor 1, 8 bars at least, no
+  flag under 20 images); `fqc_table` and drill kind `fqc`. The screen: seven owned hues in
+  a fixed order (read from the real data: 18 reasons reach a top seven, 11 hues would keep
+  them apart, so only lesser reasons ever move), Other grey; point at a reason in the
+  stacked bars to see it alone; the rate line on the volume chart only, with its limits;
+  the FQC table on Final EL and all three; an incharge lands on This shift, anyone else on
+  7 days; `[hidden]` honoured. The dashboards' card: modules at the first image, the rate,
+  the change coloured by its z, a sparkline of the rate.
+- **Real data, 7 days to 19 Oct:** Pre-EL 12.0% NG at the first image (15.0% all images),
+  35.7% NG again after rework; Other 1.48% -> 2.18% of first images (z +4.1, the one
+  riser). Final EL: Cell Issue/Ribbon Bold, 15% of first images the week before, none this
+  week, while Dark Busbar went 6.6% -> 18.2% - told to Mukesh as data, nothing assumed.
+  Speed: 7 days one station 0.3-0.7 s (was 10-61 s), 30 days all three 4.4 s.
+- **Test:** `test_el_analysis.py` 21 (was 14), `test_el_analysis_ui.py` 12 (was 7);
+  checked in Chromium on a copy of the real data.

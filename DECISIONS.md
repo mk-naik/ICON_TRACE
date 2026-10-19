@@ -207,6 +207,13 @@ no one signs twice. [enforcement unverified]
   is never changed or deleted when its file or share disappears. One folder is one
   machine: Settings refuses a folder set as two of FQC EL, Pre-EL primary, Pre-EL
   secondary and Post EL. The images are not served (above, and section 10). [built]
+  **[open]** (19 Oct) Line B's images say otherwise, 18 Sep - 19 Oct, 56,462 modules on
+  testing's copy: the machine set as "secondary" took 64.5% of first images, and after an
+  NG the next image was on the one set as "primary" 6,562 times of 6,604, whichever
+  machine found the NG - rework goes through one machine, not "the other one". Whether
+  Settings has the two the wrong way round, or that is how the line works, is Mukesh's
+  call; nothing was changed. EL Analysis compares the machines on first images, so its
+  comparison does not depend on the answer.
 - **The EL history can be read once, further back** (18 Oct): the poller reads the newest
   two date folders a minute, so the index begins the day it first read a folder and EL
   Analysis's 7-day and 30-day windows had nothing behind them. Admin › Stations & sources
@@ -372,15 +379,16 @@ no one signs twice. [enforcement unverified]
   Roadmap, approved 17 Oct): one EL station, or all three side by side, over any window -
   the last hour (5-minute bars), 8 hours and this or the previous shift (by the hour),
   today or yesterday (the factory day, by the hour), 7 days (by day and shift), 30 days
-  (by day), or a From-To range of up to 92 days. Tiles: images inspected (modules beside
-  them), NG rate (images and modules), first-pass yield (of the modules new to the
-  station in the window, those that passed at their first image; reworked; still NG), the
-  top reason, the share of Other, the reason that rose most against the window of the
-  same length just before - **no comparison when the index holds no images that far back,
-  never a zero**. Charts drawn by the page itself (it works offline): NG images by reason
-  with the NG-rate line, the reason-share donut, images inspected with the NG rate, the
-  Pareto (share, cumulative %, modules, change), reason by shift, reason by machine, Line
-  A and Line B. With all three: each station's own figures, NG rate by station, reason by
+  (by day), or a From-To range of up to 92 days. Tiles: images inspected (first images
+  and re-images beside), the NG rate at the first image (first-pass yield and the
+  all-images rate beside), NG again on a re-image, the top reason, the share of Other, the
+  reason that rose most against the window of the same length just before - **no
+  comparison when the index covers less than 95% of that window, never a zero**. Charts
+  drawn by the page itself (it works offline): first-image NG by reason (point at a
+  reason: it alone, drawn from the axis), the reason-share donut, images inspected with
+  the first-image NG rate and its control limits, the Pareto, reason by shift, reason by
+  machine, Line A and Line B; on Final EL, FQC's decision by the EL reason it read. With
+  all three: each station's own figures, NG rate by station, reason by
   station - **never a total across stations** (one module is imaged at each) - and the
   modules' journeys across them: NG at Pre-EL, reworked (median minutes), then what Final
   EL saw (pass, NG, the same reason); NG at Final EL, and whether Pre-EL had seen it (same
@@ -399,11 +407,41 @@ no one signs twice. [enforcement unverified]
   reason the new station does not file in the window, and says so (one both file is
   kept); with all three and a line picked, a station with no folder on that line says so
   rather than showing nothing. [built]
+- **EL Analysis counts first images and compares rates** (19 Oct, Mukesh's go on an audit
+  of the screen, its claims measured on the real data first). A module's first decided
+  image at a station, ever recorded, is its **first image**; every later one a
+  **re-image** (back from rework at Pre-EL, re-tested at Final EL). The NG rate, every
+  split (shift, machine, line) and every comparison are on first images; re-images have
+  their own figure, "NG again" - a third of Pre-EL's are NG again, and nearly all go
+  through one machine, which an all-images rate made the worse machine (13-19 Oct: 18.9%
+  against 11.4% on all images; 13.2% and 11.2% on first images). The **Pareto ranks modules** NG at their first image (one
+  image a module, so a re-shot never counts twice), their rate of first images beside, the
+  re-images filed under each reason beside and not in the rank; **Other keeps its ranked
+  place**, in the Pareto and as Top reason (Mukesh: it is a folder operators choose, and
+  its share is a figure of its own). A **change is the change of a reason's rate** on
+  first images, with a two-proportion z: z 3 or more rose (red), 2 to 3 is one to watch
+  (amber), the rest is within chance - a busier window is not a rise. The window before is
+  compared when the index covers at least 95% of it. The NG-rate trend carries **Laney p′
+  control limits**, 3 sigma red and 2 sigma amber, from the window's own bars and widened
+  by how much more they vary than chance (sigma-z, never taken below 1): at a thousand
+  images a shift plain p limits would flag nearly every bar. A bar of fewer than 20 first
+  images draws no limits and is never flagged. **FQC's decision by the EL reason it read**
+  (Final EL and all three): FQC's live decisions in the window, by when FQC decided, by
+  the Final EL folder FQC read - passed, rejected, and Quality's grades of the rejects; it
+  shows what was decided, not what should have been; FQC's records carry no line.
+  **Colours stay put**: seven hues; the seven reasons the plant files most (Grid Burning,
+  Low Eff, Cell Crack, Lead Open/Cross, SR, Patches, Dark Busbar) own one each and always
+  keep it; every other common reason has the hue of one it seldom shares a chart with
+  (read from the plant's days and weeks, 18 Sep - 19 Oct) and takes a spare one on the day
+  it does; Other is grey; a chart colours at most seven reasons, the rest are one grey
+  band. It opens on the shift running now for a Production Incharge and on 7 days for
+  anyone else, unless a window was picked before on that PC. [built]
 - **Top EL defects on the dashboards** (the roadmap's phase 5, 18 Oct): the Production
   Dashboard and the Management Overview show, under their EL stations card, each
   station's five busiest reasons over a window of the card's own - 1 hour, 8 hours, today,
-  7 days - with share, change on the window before and a trend line; a reason opens EL
-  Analysis on that station, window and reason. Only for an account that has EL Analysis;
+  7 days - as modules NG at their first image with the reason's rate, its change on the
+  window before (red beyond chance, amber to watch) and a trend of the rate; a reason opens
+  EL Analysis on that station, window and reason. Only for an account that has EL Analysis;
   stations never added. [built]
 
 ## 6. Quality, Needs Review, duplicate scans

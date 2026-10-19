@@ -4,11 +4,14 @@ ICON TRACE - EL Analysis on the running page (Chromium).
     python test_el_analysis_ui.py
 
 What a person sees: EL Analysis in the menu after EL Stations; one station's
-tiles, its NG-by-reason bars with the NG-rate line, the donut, the Pareto, reason
-by shift and by machine, Line A and Line B; every one of them opens its modules,
-and a module its journey; all three stations side by side with the modules'
-journeys across them; a reason filter; the Excel; and no screen for a role that
-does not have it.
+tiles (the NG rate on first images, NG again after rework), its first-image NG
+by reason (point at a reason: it alone), the donut, the volume with the NG rate
+and its Laney limits, the Pareto by modules, reason by shift and by machine,
+Line A and Line B; every one of them opens its modules, and a module its
+journey; all three stations side by side with the modules' journeys across them
+and FQC's decision by the EL reason it read; a reason filter; the Excel; the
+window an incharge and anyone else lands on; a reason's colour that does not
+change; and no screen for a role that does not have it.
 """
 
 import datetime, os, sys, traceback
@@ -43,23 +46,31 @@ def ago(minutes):
     return (clock.now() - datetime.timedelta(minutes=minutes)).replace(microsecond=0).isoformat()
 
 
-def cap(station, serial, verdict, at, unit=1, line="B", mode=None):
+def cap(station, serial, verdict, at, unit=1, line="B", mode=None, cur=None):
     _n[0] += 1
+    row = (station, unit, line, serial, verdict, r"X:\%s\%d.jpg" % (station, _n[0]), at,
+           clock.stamp(), mode)
+    sql = ("INSERT INTO el_capture (station, unit, line, serial, recapture, verdict, path, "
+           "file_time, seen_at, mode) VALUES (%s,%s,%s,%s,0,%s,%s,%s,%s,%s)")
+    if cur is not None:
+        cur.execute(sql, row)
+        return
+    with store.conn() as (cx, c2):
+        c2.execute(sql, row)
+
+
+def base():
+    store.wipe()
+    AUTH.ensure_auth_schema()
     with store.conn() as (cx, cur):
-        cur.execute("INSERT INTO el_capture (station, unit, line, serial, recapture, verdict, path, "
-                    "file_time, seen_at, mode) VALUES (%s,%s,%s,%s,0,%s,%s,%s,%s,%s)",
-                    (station, unit, line, serial, verdict, r"X:\%s\%d.jpg" % (station, _n[0]), at,
-                     clock.stamp(), mode))
+        db.set_config(cur, CFG)
 
 
 def world():
     """Pre-EL: two passed, one Grid Burning reworked (then Final EL NG for the same
     reason), one Cell Crack still NG; Final EL: an escape (passed Pre-EL, NG at
     Final EL) and a Line A module never at Pre-EL; Post EL in continuous mode."""
-    store.wipe()
-    AUTH.ensure_auth_schema()
-    with store.conn() as (cx, cur):
-        db.set_config(cur, CFG)
+    base()
     cap("pre_el", S(1), "OK", ago(300))
     cap("pre_el", S(2), "OK", ago(290), unit=2)
     cap("pre_el", S(3), "Grid Burning", ago(280))
@@ -77,47 +88,74 @@ def rows_of(pg, sel):
         .map(tr => Array.from(tr.cells).map(c => c.textContent.trim()))""", sel)
 
 
-def open_analysis(b, role="Production Incharge"):
+def tiles(pg):
+    return dict(pg.eval_on_selector_all("#v-elan .ela-tiles .kpi", """ks => ks.map(k =>
+        [k.querySelector('label').textContent, k.querySelector('.v').textContent])"""))
+
+
+def open_analysis(b, role="Production Incharge", window="7d", kept=None):
     pg = H.open_page(b, None, role=role)
-    pg.evaluate("try { localStorage.removeItem('icon.elan') } catch (e) {}")
+    if kept:
+        # the screens are put in place when the page starts: a choice kept on this
+        # PC is read then, so it is set and the page started again
+        pg.evaluate("(k) => localStorage.setItem('icon.elan', k)", kept)
+        pg.reload()
+        pg.wait_for_load_state("networkidle")
+        pg.wait_for_selector("#app.on", timeout=15000)
+        pg.wait_for_timeout(700)
     order = pg.evaluate("""() => Array.from(document.querySelectorAll('#sidenav .nav-i'))
         .filter(b => b.offsetParent !== null).map(b => b.getAttribute('data-v'))""")
     assert "elan" in order and order.index("elan") == order.index("elst") + 1, order
     pg.click('#sidenav [data-v="elan"]')
-    pg.wait_for_selector("#v-elan.on .ela-tiles", timeout=15000)
+    pg.wait_for_selector("#v-elan.on #elaStatus", timeout=15000)
+    pg.wait_for_function("document.getElementById('elaStatus').textContent.indexOf('read ') > 0",
+                         timeout=15000)
+    if window and pg.eval_on_selector("#elaWindow button.on", "b => b.getAttribute('data-w')") != window:
+        pg.click('#elaWindow button[data-w="%s"]' % window)
+        pg.wait_for_function("document.querySelector('#elaWindow button.on').getAttribute('data-w') === %r && "
+                             "document.getElementById('elaStatus').textContent.indexOf('read ') > 0" % window,
+                             timeout=15000)
     return pg
 
 
-@test("one station: its tiles, NG by reason with the NG-rate line, the donut, the Pareto, "
-      "reason by shift and machine, Line A and B - drawn by the page, no library")
+@test("one station: its tiles - the NG rate on first images, NG again after rework - its "
+      "first-image NG by reason, the donut, the volume with the NG rate, the Pareto, reason by "
+      "shift and machine, Line A and B - drawn by the page, no library")
 def t_single():
     world()
     with H.browser() as b:
         pg = open_analysis(b)
         on = pg.eval_on_selector_all("#v-elan .ela-seg button.on", "bs => bs.map(b => b.textContent)")
         assert on == ["Pre-EL", "7 days"], on
-        k = pg.eval_on_selector_all("#v-elan .ela-tiles .kpi", """ks => ks.map(k =>
-            [k.querySelector('label').textContent, k.querySelector('.v').textContent])""")
-        got = dict(k)
-        assert got["Inspected"] == "5" and got["NG rate"] == "40%", got
-        assert got["First-pass yield"] == "50%" and got["Top reason"] in ("Cell Crack", "Grid Burning"), got
+        got = tiles(pg)
+        # five images, four of them first images; two of those NG
+        assert got["Inspected"] == "5" and got["NG rate · first image"] == "50%", got
+        assert got["NG again after rework"] == "0%", got
+        assert got["Top reason"] == "Cell Crack", got
         assert pg.locator('#v-elan [data-chart="stack"] rect.seg').count() == 2
+        assert pg.locator('#v-elan [data-chart="stack"] path.rate').count() == 0, \
+            "the NG rate is drawn once, on the volume chart"
         # a handful of images a bar: the NG rate is drawn as hollow points, off the line -
         # 1 NG of 2 images is no trend
-        assert pg.locator('#v-elan [data-chart="stack"] path.rate').count() == 0
-        assert pg.locator('#v-elan [data-chart="stack"] circle.dot.thin').count() >= 1
+        assert pg.locator('#v-elan [data-chart="volume"] path.rate').count() == 0
+        assert pg.locator('#v-elan [data-chart="volume"] circle.dot.thin').count() >= 1
         assert pg.locator('#v-elan [data-chart="donut"] circle.seg').count() == 2
         assert pg.locator('#v-elan [data-chart="pareto"] tbody tr').count() == 2
         assert pg.locator('#v-elan [data-chart="shift"] table').count() == 1
         machines = pg.eval_on_selector_all('#v-elan [data-chart="machine"] thead th',
                                            "ts => ts.map(t => t.textContent)")
         assert machines == ["Reason", "primary · Line B", "secondary · Line B"], machines
+        mrows = {r[0]: r[1:] for r in rows_of(pg, '#v-elan [data-chart="machine"] tbody tr')}
+        # on first images: the primary 2 NG of 3, the secondary none of 1 - and the
+        # module back from rework beside, on the secondary
+        assert mrows["First images"] == ["3", "1"] and mrows["NG rate"] == ["66.7%", "0%"], mrows
+        assert mrows["Back from rework · NG again"] == ["0", "1 · 0%"], mrows
         lines = pg.text_content('#v-elan [data-chart="lines"]')
         assert "No Pre-EL folder is set for Line A" in lines and "not on the LAN yet" in lines, lines
         assert pg.errors == [], pg.errors
 
 
-@test("every figure opens its modules - a Pareto row, a bar, a heat cell - and a module "
+@test("every figure opens its modules - a Pareto row, a heat cell, a bar - and a module "
       "opens its journey in Search & Trace")
 def t_drill():
     world()
@@ -128,14 +166,37 @@ def t_drill():
                              timeout=10000)
         assert "Cell Crack" in pg.text_content("#elaDrillTitle")
         assert rows_of(pg, "#elaDrillTable tbody tr")[0][0] == S(4)
-        pg.click('#v-elan [data-chart="shift"] td.cell[data-kind="all"]')
-        pg.wait_for_function("document.getElementById('elaDrillTitle').textContent.indexOf('Inspected') >= 0",
+        pg.click('#v-elan [data-chart="shift"] td.cell[data-kind="first"]')
+        pg.wait_for_function("document.getElementById('elaDrillTitle').textContent.indexOf('First images') >= 0",
                              timeout=10000)
         pg.click('#v-elan [data-chart="stack"] rect.seg >> nth=0')
-        pg.wait_for_function("document.getElementById('elaDrillTitle').textContent.indexOf('NG ·') >= 0",
+        pg.wait_for_function("document.getElementById('elaDrillTitle').textContent.indexOf('NG at their first image') >= 0",
                              timeout=10000)
         pg.click("#elaDrillTable tbody tr button.lnk >> nth=0")
         pg.wait_for_selector("#searchOut .crumb", timeout=10000)
+        assert pg.errors == [], pg.errors
+
+
+@test("point at a reason in the stacked bars: the others fade and it is drawn alone from the "
+      "axis; away from the chart, all of them again")
+def t_isolate():
+    world()
+    with H.browser() as b:
+        pg = open_analysis(b)
+        chart = '#v-elan [data-chart="stack"]'
+        pg.hover(chart + ' .ela-legend span[data-k="DF-GRIDBURNING"]')
+        pg.wait_for_function("document.querySelector('%s').classList.contains('iso')" % chart, timeout=5000)
+        shown = pg.eval_on_selector_all(chart + " g.solo", """gs => gs.map(g =>
+            [g.getAttribute('data-k'), getComputedStyle(g).display !== 'none'])""")
+        assert dict(shown) == {"DF-CELLCRACK": False, "DF-GRIDBURNING": True}, shown
+        faded = pg.eval_on_selector(chart + ' rect.seg[data-k="DF-CELLCRACK"]',
+                                    "r => Number(getComputedStyle(r).opacity)")
+        assert faded < 0.5, faded
+        dim = pg.eval_on_selector_all(chart + " .ela-legend span.dim", "ss => ss.map(s => s.getAttribute('data-k'))")
+        assert dim == ["DF-CELLCRACK"], dim
+        pg.hover("#v-elan .pg h2")
+        pg.wait_for_function("!document.querySelector('%s').classList.contains('iso')" % chart, timeout=5000)
+        assert pg.locator(chart + " g.solo.on").count() == 0
         assert pg.errors == [], pg.errors
 
 
@@ -170,20 +231,24 @@ def t_compare():
 
 
 @test("a reason picked narrows the NG side only; the window buttons change the bars; the "
-      "Excel downloads")
+      "From-to boxes show only for From-to; the Excel downloads")
 def t_filters_export():
     world()
     with H.browser() as b:
         pg = open_analysis(b)
+        visible = lambda: pg.eval_on_selector("#elaRange", "e => getComputedStyle(e).display !== 'none'")
+        assert visible() is False, "the From-to boxes show on a window that is not From-to"
         pg.select_option("#elaReason", "DF-GRIDBURNING")
         pg.wait_for_function("""Array.from(document.querySelectorAll('#v-elan .ela-tiles .kpi label'))
             .some(l => l.textContent === 'NG rate · this reason')""", timeout=10000)
-        k = dict(pg.eval_on_selector_all("#v-elan .ela-tiles .kpi", """ks => ks.map(k =>
-            [k.querySelector('label').textContent, k.querySelector('.v').textContent])"""))
-        assert k["Inspected"] == "5" and k["NG rate · this reason"] == "20%", k
+        k = tiles(pg)
+        assert k["Inspected"] == "5" and k["NG rate · this reason"] == "25%", k
+        pg.click('#elaWindow button[data-w="range"]')
+        assert visible() is True
         pg.click('#elaWindow button[data-w="8h"]')
         pg.wait_for_function("document.getElementById('elaStatus').textContent.indexOf('Last 8 hours') === 0",
                              timeout=10000)
+        assert visible() is False
         assert pg.locator('#v-elan [data-chart="volume"] text.xa').count() >= 8
         with pg.expect_download(timeout=20000) as dl:
             pg.click("#v-elan .pg-act button >> text='Export to Excel'")
@@ -191,9 +256,107 @@ def t_filters_export():
         assert pg.errors == [], pg.errors
 
 
+@test("the window it opens on: a shift incharge on the shift running now, anyone else on the "
+      "last 7 days - and a window picked before, on that PC, wins")
+def t_landing():
+    world()
+    with H.browser() as b:
+        pg = open_analysis(b, role="Production Incharge", window=None)
+        assert pg.eval_on_selector("#elaWindow button.on", "b => b.textContent") == "This shift"
+        pg = open_analysis(b, role="Admin", window=None)
+        assert pg.eval_on_selector("#elaWindow button.on", "b => b.textContent") == "7 days"
+        pg = open_analysis(b, role="Production Incharge", window=None,
+                           kept='{"station": "final_el", "window": "yesterday"}')
+        on = pg.eval_on_selector_all("#v-elan .ela-seg button.on", "bs => bs.map(b => b.textContent)")
+        assert on == ["Final EL", "Yesterday"], on
+        assert pg.errors == [], pg.errors
+
+
+@test("a reason's colour does not change - not with the window, not with the station - and "
+      "Other is grey")
+def t_colours():
+    base()
+    with store.conn() as (cx, cur):
+        for k, v in enumerate(("Grid Burning", "Cell Crack", "Other", "Other", "OK", "OK")):
+            cap("pre_el", S(100 + k), v, ago(30 + k), cur=cur)
+        for k, v in enumerate(("Low Eff", "Grid Burning", "Patches", "OK")):
+            cap("final_el", S(200 + k), v, ago(20 + k), cur=cur)
+    with H.browser() as b:
+        pg = open_analysis(b)
+        swatch = """(k) => { const r = document.querySelector('#v-elan [data-chart="pareto"] tr[data-k="' + k + '"] i.sw');
+                             return r ? getComputedStyle(r).backgroundColor : null; }"""
+        week = {k: pg.evaluate(swatch, k) for k in ("DF-GRIDBURNING", "DF-CELLCRACK", "DF-OTHER")}
+        assert week == {"DF-GRIDBURNING": "rgb(45, 111, 210)", "DF-CELLCRACK": "rgb(42, 138, 102)",
+                        "DF-OTHER": "rgb(142, 155, 170)"}, week
+        pg.click('#elaWindow button[data-w="1h"]')
+        pg.wait_for_function("document.getElementById('elaStatus').textContent.indexOf('Last 1 hour') === 0",
+                             timeout=10000)
+        hour = {k: pg.evaluate(swatch, k) for k in week}
+        assert hour == week, (hour, week)
+        pg.click('#elaStation button[data-st="final_el"]')
+        pg.wait_for_function("document.querySelector('#elaStation button.on').textContent === 'Final EL' && "
+                             "document.getElementById('elaStatus').textContent.indexOf('read ') > 0", timeout=10000)
+        assert pg.evaluate(swatch, "DF-GRIDBURNING") == week["DF-GRIDBURNING"]
+        assert pg.evaluate(swatch, "DF-LOWEFF") == "rgb(224, 138, 30)"
+        assert pg.errors == [], pg.errors
+
+
+@test("the NG-rate trend carries its control limits (Laney p'): the centre, the 2 and 3 sigma "
+      "lines, a bar beyond 3 sigma marked and said so")
+def t_limits():
+    base()
+    now = clock.now()
+    start = now - datetime.timedelta(hours=8 * 9 + 4)
+    with store.conn() as (cx, cur):
+        for shift in range(9):                       # nine shifts, 30 first images each
+            t0 = start + datetime.timedelta(hours=8 * shift)
+            bad = 15 if shift == 6 else 3            # one shift at half NG
+            for k in range(30):
+                at = (t0 + datetime.timedelta(minutes=10 * k)).replace(microsecond=0).isoformat()
+                cap("pre_el", "ICON625R12A19%03d%02d" % (shift, k), "Cell Crack" if k < bad else "OK",
+                    at, cur=cur)
+    with H.browser() as b:
+        pg = open_analysis(b)
+        vol = '#v-elan [data-chart="volume"]'
+        assert pg.locator(vol + " path.lim3").count() == 1 and pg.locator(vol + " path.lim2").count() == 1
+        assert pg.locator(vol + " line.cl").count() == 1
+        assert pg.locator(vol + " circle.dot.f3").count() == 1, "the half-NG shift is not marked"
+        note = pg.text_content(vol + " .ela-foot")
+        assert "Laney p′" in note and "1 bar above the red line" in note, note
+        assert pg.errors == [], pg.errors
+
+
+@test("FQC's decision by the EL reason it read, on Final EL and beside all three: how many "
+      "it passed and rejected, each count opening its modules")
+def t_fqc():
+    base()
+    with store.conn() as (cx, cur):
+        for k, (outcome, el) in enumerate((("pass", "DARK BUSBAR"), ("pass", "Dark Busbar"),
+                                           ("reject", "DARK BUSBAR"), ("pass", "OK"))):
+            store.insert(cur, "fqc_record", {"serial": S(300 + k), "outcome": outcome,
+                                             "grade": "A" if outcome == "pass" else None,
+                                             "mode": "confirmed", "decided_by": "fqc1",
+                                             "at": ago(40 + k), "el_verdict": el})
+        cap("final_el", S(300), "DARK BUSBAR", ago(60), cur=cur)
+    with H.browser() as b:
+        pg = open_analysis(b)
+        pg.click('#elaStation button[data-st="final_el"]')
+        pg.wait_for_function("document.querySelector('#elaStation button.on').textContent === 'Final EL' && "
+                             "document.getElementById('elaStatus').textContent.indexOf('read ') > 0", timeout=10000)
+        rows = rows_of(pg, "#elaBody table:has(td[data-fqc]) tbody tr")
+        assert [r[:4] for r in rows] == [["Dark Busbar", "3", "2", "66.7%"], ["EL clean (OK)", "1", "1", "100%"]], rows
+        pg.click('#elaBody td.cell[data-fqc="DF-DARKBUSBAR"][data-outcome="reject"]')
+        pg.wait_for_function("document.getElementById('elaDrillCount').textContent === '1 modules'", timeout=10000)
+        assert rows_of(pg, "#elaDrillTable tbody tr")[0][:3] == [S(302), "—", "Reject"]
+        pg.click('#elaStation button[data-st=""]')
+        pg.wait_for_selector("#v-elan .ela-st", timeout=10000)
+        assert "FQC’s decision by the EL reason it read" in pg.text_content("#elaBody")
+        assert pg.errors == [], pg.errors
+
+
 @test("the dashboards' Top EL defects card: each station's busiest reasons for a window of "
-      "its own, with their change and trend; a reason opens EL Analysis on it; only for an "
-      "account that has EL Analysis")
+      "its own, with their rate, its change and trend; a reason opens EL Analysis on it; only "
+      "for an account that has EL Analysis")
 def t_dashboard_card():
     import icon_auth
     world()
@@ -205,6 +368,7 @@ def t_dashboard_card():
         assert cols == ["Pre-EL", "Post EL", "Final EL"], cols
         text = pg.text_content("#pdElTop")
         assert "passed by the machine" in text, text          # Post EL: continuous only
+        assert "first images" in text, text
         rows = pg.locator("#pdElTop tr[onclick]")
         assert rows.count() >= 4, rows.count()
         pg.click("#pdElTop button >> text='7 days'")
@@ -285,10 +449,13 @@ def t_quality():
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
+    only = [a for a in sys.argv[1:] if not a.startswith("-")]
     width = max(len(n) for n, _ in _results)
     passed = failed = 0
     try:
         for name, fn in _results:
+            if only and fn.__name__ not in only:
+                continue
             try:
                 fn()
                 print("  PASS  %-*s" % (width, name))

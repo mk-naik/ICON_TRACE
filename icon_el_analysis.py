@@ -1,6 +1,7 @@
 """
 ICON TRACE - EL Analysis: what the EL stations' images add up to over a window
-(the EL Insight Roadmap, approved by Mukesh on 17 Oct 2026).
+(the EL Insight Roadmap, approved by Mukesh on 17 Oct 2026; its correctness
+reworked on 19 Oct 2026 after an audit read on the real data).
 
 Read from el_capture - the poller's index of every EL station's images
 (icon_el_capture) - never from the shares. Every figure:
@@ -14,6 +15,26 @@ Read from el_capture - the poller's index of every EL station's images
     decided it, so it is in no NG rate (EL Defect Master, Decision 7);
   * shows modules beside images and never adds stations together (Decision 5)
     - one module is imaged at Pre-EL, Post EL and Final EL.
+
+FIRST IMAGES AND RE-IMAGES (19 Oct 2026). A module's first decided image at a
+station, ever recorded, is its FIRST image there - the line's own defect rate.
+Every later image of it there is a RE-IMAGE: back after rework at Pre-EL (on the
+real data a third of them are NG again), a re-test at Final EL. One rate over
+both mixed two populations, and which machine it flattered depended on which
+machine took the rework - so the NG rate, every split (shift, machine, line)
+and every comparison are on first images; re-images have their own figure,
+"NG again". The Pareto ranks MODULES - those NG at their first image, one image
+a module, so a re-shot never counts twice - with the re-images filed under each
+reason beside it. Other keeps its ranked place (Mukesh, 19 Oct): it is a folder
+operators choose, and its share is a figure of its own.
+
+CONTROL LIMITS. The NG-rate trend carries Laney p' limits (3 sigma, 2 sigma):
+plain p limits at a thousand images a shift would flag nearly every bar.
+
+RATES, NOT COUNTS. A reason's change against the window before is its rate on
+first images, then and now, with a two-proportion z: |z| >= 3 is a signal, 2-3
+one to watch - so a busier week is not a "rise". The comparison is made only
+when the index covers at least 95% of the window before.
 
 An image re-filed under another verdict (same machine, serial, re-shot number
 and time) is one image, its latest filing standing (icon_el_capture.images).
@@ -35,6 +56,11 @@ STATION_IDS = tuple(s for s, _l in elcap.STATIONS)
 SHIFTS = ("A", "B", "C")
 ROW_CAP = 3000            # modules a drill-down lists
 MAX_RANGE_DAYS = 92
+Z_SIGNAL = 3.0            # a change this many standard errors out is a signal
+Z_WATCH = 2.0             # ... this many, one to watch
+PREV_COVERED = 0.95       # the window before must be this much indexed to compare
+MIN_N = 20                # a bar's rate over fewer first images is no trend
+LANEY_MIN_BARS = 8        # bars with images a control chart needs
 _M = datetime.timedelta(minutes=1)
 _H = datetime.timedelta(hours=1)
 _D = datetime.timedelta(days=1)
@@ -45,12 +71,15 @@ WINDOWS = (("1h", "Last 1 hour"), ("8h", "Last 8 hours"), ("shift", "This shift"
            ("7d", "Last 7 days"), ("30d", "Last 30 days"), ("range", "From - to"))
 WINDOW_LABEL = dict(WINDOWS)
 
-KINDS = ("ng", "pass", "all", "continuous", "first_pass", "reworked", "still_ng")
+KINDS = ("ng", "first_ng", "first", "reimage", "reimage_ng", "pass", "all", "continuous",
+         "first_pass", "reworked", "still_ng", "fqc")
 # the module journeys across stations a drill-down can list (compare view)
 FLOWS = ("pre_ng", "final_ng")
 FLOW_SUBS = {"pre_ng": ("", "reworked", "at_final", "final_pass", "final_ng",
                         "final_same", "no_final"),
              "final_ng": ("", "pre_same", "pre_other", "pre_pass", "no_pre")}
+# the FQC table's two rows that are not an EL reason
+FQC_CLEAN, FQC_NONE = "__clean", "__none"
 
 
 class Refused(ValueError):
@@ -204,8 +233,8 @@ def _is_pass(verdict):
 
 
 class Img(object):
-    __slots__ = ("station", "unit", "line", "serial", "verdict", "t", "b", "shift",
-                 "machine", "ng", "rkey", "rlabel", "rnew", "model", "customer")
+    __slots__ = ("station", "unit", "line", "serial", "verdict", "t", "ft", "b", "shift",
+                 "machine", "ng", "rkey", "rlabel", "rnew", "model", "customer", "first")
 
 
 def _master(cur, stations, start, end):
@@ -219,29 +248,42 @@ def _master(cur, stations, start, end):
     return {r["serial"]: (r["model"], r["customer"]) for r in cur.fetchall()}
 
 
-def _decided(cx, stations, start, end, w, reason_of, master):
-    """The images a person decided (mode NULL) at these stations, taken in
-    [start, end), one per image however often it was re-filed."""
+def _first_ever(cur, station, start, end):
+    """{serial: its first decided image's time at the station, ever recorded} for
+    the modules the station imaged in [start, end)."""
+    cur.execute("SELECT serial, MIN(file_time) AS t FROM el_capture WHERE station = %s "
+                "AND mode IS NULL AND serial IN (SELECT serial FROM el_capture WHERE "
+                "station = %s AND mode IS NULL AND file_time >= %s AND file_time < %s) "
+                "GROUP BY serial", (station, station, start, end))
+    return {r["serial"]: r["t"] for r in cur.fetchall()}
+
+
+def _decided(cx, cur, stations, w, reason_of, master):
+    """The images a person decided (mode NULL) at these stations, taken in the
+    window, one per image however often it was re-filed - each marked first (the
+    module's first decided image at the station, ever) or a re-image."""
+    s0, e0 = w["start"].isoformat(), w["end"].isoformat()
     c = cx.cursor()
     c.row_factory = None
     c.execute("SELECT station, unit, line, serial, recapture, verdict, file_time "
               "FROM el_capture WHERE mode IS NULL AND file_time >= ? AND file_time < ? "
               "AND station IN (%s) ORDER BY seen_at, capture_id"
-              % ",".join("?" * len(stations)),
-              (start.isoformat(), end.isoformat()) + tuple(stations))
+              % ",".join("?" * len(stations)), (s0, e0) + tuple(stations))
     keep = {}
     for r in c.fetchall():
         keep[(r[0], r[1], r[3], r[4], r[6])] = r
+    firsts = {st: _first_ever(cur, st, s0, e0) for st in stations}
     step = w["step"].total_seconds()
     w0 = w["start"]
     out = []
     for st, unit, line, serial, _rc, verdict, ft in keep.values():
         i = Img()
-        i.station, i.unit, i.line, i.serial, i.verdict = st, unit, line, serial, verdict
+        i.station, i.unit, i.line, i.serial, i.verdict, i.ft = st, unit, line, serial, verdict, ft
         i.t = datetime.datetime.fromisoformat(ft)
         i.b = int((i.t - w0).total_seconds() // step)
         i.shift = clock.SHIFT_LETTER[clock.shift_of(i.t.hour)]
         i.machine = machine_key(st, unit, line)
+        i.first = firsts[st].get(serial) == ft
         i.ng = not _is_pass(verdict)
         if i.ng:
             i.rkey, i.rlabel, i.rnew = reason_of(verdict)
@@ -313,32 +355,31 @@ def _continuous(cur, stations, w, p):
     return out
 
 
-def _previous(cur, stations, w, p, reason_of):
-    """The window before, as counts: {station: {"decided", "ng_all", "ng",
-    "reasons": {key: n}}} - one per image, its latest filing standing."""
-    out = {st: {"decided": 0, "ng_all": 0, "ng": 0, "reasons": {}, "labels": {}}
-           for st in stations}
-    fw, fa = _sql_filters(p)
-    cur.execute(
-        "SELECT station, verdict, COUNT(*) AS n FROM (SELECT station, verdict, "
-        "ROW_NUMBER() OVER (PARTITION BY station, unit, serial, recapture, file_time "
-        "ORDER BY seen_at DESC, capture_id DESC) AS rn FROM el_capture WHERE mode IS NULL "
-        "AND file_time >= %%s AND file_time < %%s AND station IN (%s)%s) "
-        "WHERE rn = 1 GROUP BY station, verdict"
-        % (",".join(["%s"] * len(stations)), "".join(" AND " + x for x in fw)),
-        (w["prev_start"].isoformat(), w["prev_end"].isoformat()) + tuple(stations) + tuple(fa))
-    for r in cur.fetchall():
-        o = out[r["station"]]
-        o["decided"] += r["n"]
-        if _is_pass(r["verdict"]):
+def _previous(cx, cur, stations, w, p, reason_of):
+    """The window before, counted exactly as the window is - the same reading,
+    one per image, first images the same way, the same filters - so a change is
+    never an artefact of two ways of counting: {station: {"images", "first",
+    "first_ng_all", "first_ng", "reasons": {key: first-image NG}, "labels"}}."""
+    pw = {"start": w["prev_start"], "end": w["prev_end"], "step": w["step"]}
+    master = _master(cur, stations, pw["start"], pw["end"]) if p["model"] or p["customer"] else {}
+    out = {st: {"images": 0, "first": 0, "first_ng_all": 0, "first_ng": 0,
+                "reasons": {}, "labels": {}} for st in stations}
+    for i in _decided(cx, cur, stations, pw, reason_of, master):
+        if not _ok(i, p):
             continue
-        o["ng_all"] += r["n"]
-        key, label, _new = reason_of(r["verdict"])
-        if p["reason"] and key != p["reason"]:
+        o = out[i.station]
+        o["images"] += 1
+        if not i.first:
             continue
-        o["ng"] += r["n"]
-        o["reasons"][key] = o["reasons"].get(key, 0) + r["n"]
-        o["labels"][key] = label
+        o["first"] += 1
+        if not i.ng:
+            continue
+        o["first_ng_all"] += 1
+        if p["reason"] and i.rkey != p["reason"]:
+            continue
+        o["first_ng"] += 1
+        o["reasons"][i.rkey] = o["reasons"].get(i.rkey, 0) + 1
+        o["labels"][i.rkey] = i.rlabel
     return out
 
 
@@ -349,27 +390,47 @@ def _coverage(cur):
     return {r["station"]: r["t"] for r in cur.fetchall()}
 
 
-def _seen_before(cur, station, w):
-    """The modules imaged in the window that the station had decided an image of
-    BEFORE it - not new to the station in the window."""
-    cur.execute("SELECT DISTINCT serial FROM el_capture WHERE station = %s AND mode IS NULL "
-                "AND file_time < %s AND serial IN (SELECT serial FROM el_capture WHERE "
-                "station = %s AND mode IS NULL AND file_time >= %s AND file_time < %s)",
-                (station, w["start"].isoformat(), station, w["start"].isoformat(),
-                 w["end"].isoformat()))
-    return {r["serial"] for r in cur.fetchall()}
-
-
-def _firsts(imgs):
-    """{(station, serial): its first decided image in the window, unfiltered}."""
-    out = {}
-    for i in imgs:                       # in time order
-        out.setdefault((i.station, i.serial), i.t)
-    return out
+def _covered(cov, w):
+    """How much of the window before the index holds (0..1)."""
+    if not cov:
+        return 0.0
+    whole = (w["prev_end"] - w["prev_start"]).total_seconds()
+    start = max(w["prev_start"], datetime.datetime.fromisoformat(cov))
+    return max(0.0, (w["prev_end"] - start).total_seconds()) / whole if whole > 0 else 0.0
 
 
 def _pct(a, b):
     return round(a * 100.0 / b, 1) if b else None
+
+
+def _rate(x, n, digits=2):
+    return round(x * 100.0 / n, digits) if n else None
+
+
+def _z(x1, n1, x0, n0):
+    """Two-proportion z of x1/n1 against x0/n0 - how many standard errors the rate
+    moved. None when either has no images or nothing happened in both."""
+    if not n1 or not n0 or x0 is None:
+        return None
+    p = float(x1 + x0) / (n1 + n0)
+    if p <= 0 or p >= 1:
+        return None
+    se = math.sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n0))
+    return round((x1 / float(n1) - x0 / float(n0)) / se, 1)
+
+
+def _signal(z):
+    if z is None:
+        return None
+    if z >= Z_SIGNAL:
+        return "up"
+    if z <= -Z_SIGNAL:
+        return "down"
+    if z >= Z_WATCH:
+        return "watch_up"
+    if z <= -Z_WATCH:
+        return "watch_down"
+    return None
 
 
 # ---- filters ---------------------------------------------------------------------
@@ -444,108 +505,179 @@ def _facets(imgs, p):
 
 # ---- one station ------------------------------------------------------------------
 
-def _new_modules(cur, st, dec, w, firsts):
-    """The modules whose FIRST decided image at the station ever recorded was taken
-    in the window: {serial: 'first_pass' | 'reworked' | 'still_ng'} - passed at
-    the first image, NG then passed later in the window, or still NG at its end.
-    A module whose first image a filter leaves out is not judged on a later one."""
+def _first_classes(dec):
+    """{(station, serial): 'first_pass' | 'reworked' | 'still_ng'} for the modules
+    whose FIRST image at the station is among these images: passed at it, NG then
+    passed at a later image in the window, or still NG at its end."""
     by = {}
-    for i in dec:
-        if i.station == st:
-            by.setdefault(i.serial, []).append(i)
-    if not by:
-        return {}
-    before = _seen_before(cur, st, w)
+    for i in dec:                                # in time order
+        by.setdefault((i.station, i.serial), []).append(i)
     out = {}
-    for serial, imgs in by.items():
-        if serial in before or imgs[0].t != firsts.get((st, serial)):
-            continue                    # imaged before the window, or its first image filtered out
-        if not imgs[0].ng:
-            out[serial] = "first_pass"
+    for key, imgs in by.items():
+        f = next((i for i in imgs if i.first), None)
+        if f is None:
+            continue
+        if not f.ng:
+            out[key] = "first_pass"
         else:
-            out[serial] = "reworked" if any(not i.ng for i in imgs[1:]) else "still_ng"
+            out[key] = ("reworked" if any(not i.ng for i in imgs if i.t > f.t)
+                        else "still_ng")
     return out
 
 
-def _block(cur, st, base, p, w, cont, prev, coverage, cfg_lines, firsts):
+def _laney(trend):
+    """Laney p' control limits for the NG rate on first images, bar by bar. The
+    centre is p = all first-image NG / all first images of the window's bars; a
+    bar of n images has the binomial sigma sqrt(p(1-p)/n), widened by sigma-z -
+    the spread between bars that the binomial does not explain (the mean moving
+    range of the bars' z-scores / 1.128). At a thousand images a shift plain p
+    limits are so narrow that nearly every bar is out - bars vary more than coin
+    tosses do - and sigma-z corrects for that; it is never taken below 1, so the
+    limits are never narrower than plain p limits. A bar of MIN_N images or more
+    beyond 3 sigma is flagged, one between 2 and 3 sigma above the centre watched."""
+    pts = [(i, t["first_ng"], t["first"]) for i, t in enumerate(trend) if t["first"]]
+    out = {"ok": False, "bars_with_images": len(pts), "min_bars": LANEY_MIN_BARS}
+    if len(pts) < LANEY_MIN_BARS:
+        return out
+    n_all = float(sum(n for _i, _x, n in pts))
+    p = sum(x for _i, x, _n in pts) / n_all
+    out["center"] = round(p * 100, 2)
+    if p <= 0 or p >= 1:
+        return out
+    zs = [(x / float(n) - p) / math.sqrt(p * (1 - p) / n) for _i, x, n in pts]
+    mr = [abs(b - a) for a, b in zip(zs, zs[1:])]
+    sz_raw = sum(mr) / len(mr) / 1.128
+    sz = max(1.0, sz_raw)
+    bars = [None] * len(trend)
+    flags = {"high3": 0, "high2": 0, "low3": 0}
+    for i, x, n in pts:
+        s = math.sqrt(p * (1 - p) / n) * sz
+        r = x / float(n)
+        flag = None
+        if n >= MIN_N:
+            if r > p + 3 * s:
+                flag = "high3"
+            elif r > p + 2 * s:
+                flag = "high2"
+            elif r < p - 3 * s:
+                flag = "low3"
+        if flag:
+            flags[flag] += 1
+        bars[i] = {"u3": round(min(1.0, p + 3 * s) * 100, 2), "l3": round(max(0.0, p - 3 * s) * 100, 2),
+                   "u2": round(min(1.0, p + 2 * s) * 100, 2), "l2": round(max(0.0, p - 2 * s) * 100, 2),
+                   "flag": flag}
+    out.update({"ok": True, "sigma_z": round(sz_raw, 2), "floored": sz_raw < 1,
+                "bars": bars, "flags": flags})
+    return out
+
+
+def _block(st, base, p, w, cont, prev, coverage, cfg_lines):
     dec = [i for i in base if i.station == st]
-    ng_all = [i for i in dec if i.ng]
-    ng = [i for i in ng_all if not p["reason"] or i.rkey == p["reason"]]
-    mods = {i.serial for i in dec}
-    ngmods = {i.serial for i in ng}
+    want = (lambda i: i.ng and i.rkey == p["reason"]) if p["reason"] else (lambda i: i.ng)
+    first = [i for i in dec if i.first]
+    redo = [i for i in dec if not i.first]
+    ngf = [i for i in first if want(i)]
+    ngr = [i for i in redo if want(i)]
+    ngf_all = sum(1 for i in first if i.ng)
     pv = prev.get(st) or {}
     cov = coverage.get(st)
-    prev_complete = bool(cov) and cov <= w["prev_start"].isoformat()
+    covered = _covered(cov, w)
+    prev_ok = covered >= PREV_COVERED
+    n_first, p_first = len(first), pv.get("first", 0)
 
-    # the Pareto: every reason, busiest first, with its change on the window before
+    # the Pareto: every reason, ranked by the MODULES NG for it at their first
+    # image here - one image a module, so a re-shot never counts twice - its rate
+    # on first images and that rate's change on the window before; the re-images
+    # filed under it beside, never in the rank
     by = {}
-    for i in ng:
+    for i in dec:
+        if not want(i):
+            continue
         r = by.get(i.rkey)
         if r is None:
             r = by[i.rkey] = {"key": i.rkey, "label": i.rlabel, "new": i.rnew,
-                              "images": 0, "mods": set()}
-        r["images"] += 1
-        r["mods"].add(i.serial)
+                              "modules": 0, "re": 0}
+        if i.first:
+            r["modules"] += 1
+        else:
+            r["re"] += 1
     reasons, cum = [], 0
-    for r in sorted(by.values(), key=lambda r: (-r["images"], r["label"].lower())):
-        cum += r["images"]
-        before = (pv.get("reasons") or {}).get(r["key"], 0) if prev_complete else None
+    for r in sorted(by.values(), key=lambda r: (-r["modules"], -r["re"], r["label"].lower())):
+        m = r["modules"]
+        cum += m
+        before = (pv.get("reasons") or {}).get(r["key"], 0) if prev_ok else None
+        rate = _rate(m, n_first)
+        prate = _rate(before, p_first) if before is not None else None
+        z = _z(m, n_first, before, p_first) if before is not None else None
         reasons.append({"key": r["key"], "label": r["label"], "new": r["new"],
-                        "images": r["images"], "modules": len(r["mods"]),
-                        "share": _pct(r["images"], len(ng)), "cum": _pct(cum, len(ng)),
-                        "prev": before,
-                        "change": None if before is None else r["images"] - before})
+                        "modules": m, "re": r["re"], "rate": rate,
+                        "share": _pct(m, len(ngf)), "cum": _pct(cum, len(ngf)) if m else None,
+                        "prev": before, "prev_rate": prate,
+                        "change": (round(rate - prate, 2)
+                                   if rate is not None and prate is not None else None),
+                        "z": z, "signal": _signal(z)})
     # a reason that was there before and is gone now is a change too
     gone = []
-    if prev_complete:
+    if prev_ok:
         for key, n in sorted((pv.get("reasons") or {}).items(), key=lambda x: -x[1]):
             if key not in by and n:
+                z = _z(0, n_first, n, p_first)
                 gone.append({"key": key, "label": (pv.get("labels") or {}).get(key, key),
-                             "prev": n})
-    riser = max((r for r in reasons if r["change"] and r["change"] > 0),
-                key=lambda r: (r["change"], r["images"]), default=None)
+                             "prev": n, "prev_rate": _rate(n, p_first), "z": z,
+                             "signal": _signal(z)})
+    riser = max((r for r in reasons if r["z"] is not None and r["z"] >= Z_SIGNAL),
+                key=lambda r: r["z"], default=None)
+    watch = max((r for r in reasons if r["z"] is not None and Z_WATCH <= r["z"] < Z_SIGNAL),
+                key=lambda r: r["z"], default=None)
 
     nb = len(w["buckets"])
-    trend = [{"decided": 0, "ng": 0, "ng_all": 0, "cont": 0, "r": {}} for _ in range(nb)]
+    trend = [{"first": 0, "first_ng": 0, "re": 0, "re_ng": 0, "cont": 0, "r": {}}
+             for _ in range(nb)]
     for i in dec:
-        if 0 <= i.b < nb:
-            trend[i.b]["decided"] += 1
-            if i.ng:
-                trend[i.b]["ng_all"] += 1
-    for i in ng:
-        if 0 <= i.b < nb:
-            t = trend[i.b]
-            t["ng"] += 1
-            t["r"][i.rkey] = t["r"].get(i.rkey, 0) + 1
+        if not 0 <= i.b < nb:
+            continue
+        t = trend[i.b]
+        if i.first:
+            t["first"] += 1
+            if want(i):
+                t["first_ng"] += 1
+                t["r"][i.rkey] = t["r"].get(i.rkey, 0) + 1
+        else:
+            t["re"] += 1
+            if want(i):
+                t["re_ng"] += 1
     for b, n in ((cont.get(st) or {}).get("by_bucket") or {}).items():
         if 0 <= b < nb:
             trend[b]["cont"] += n
     for t in trend:
-        t["rate"] = _pct(t["ng"], t["decided"])
+        t["rate"] = _rate(t["first_ng"], t["first"], 1)
 
     def split(key_of, keys=None):
+        """Shift, machine, line: first images - the line's own rate - and the
+        re-images beside, never in it (a machine that takes the rework would
+        otherwise read as the worse machine)."""
         cells = {}
         for i in dec:
             k = key_of(i)
             c = cells.get(k)
             if c is None:
-                c = cells[k] = {"decided": 0, "ng": 0, "ng_all": 0, "mods": set(),
-                                "ngmods": set(), "r": {}}
-            c["decided"] += 1
-            c["mods"].add(i.serial)
-            if i.ng:
-                c["ng_all"] += 1
-                if not p["reason"] or i.rkey == p["reason"]:
-                    c["ng"] += 1
-                    c["ngmods"].add(i.serial)
+                c = cells[k] = {"first": 0, "first_ng": 0, "re": 0, "re_ng": 0, "r": {}}
+            if i.first:
+                c["first"] += 1
+                if want(i):
+                    c["first_ng"] += 1
                     c["r"][i.rkey] = c["r"].get(i.rkey, 0) + 1
+            else:
+                c["re"] += 1
+                if want(i):
+                    c["re_ng"] += 1
         out = []
         for k in (keys if keys is not None else sorted(cells, key=lambda x: x or "")):
-            c = cells.get(k) or {"decided": 0, "ng": 0, "ng_all": 0, "mods": set(),
-                                 "ngmods": set(), "r": {}}
-            out.append({"key": k, "decided": c["decided"], "ng": c["ng"], "ng_all": c["ng_all"],
-                        "modules": len(c["mods"]), "ng_modules": len(c["ngmods"]),
-                        "rate": _pct(c["ng"], c["decided"]), "r": c["r"]})
+            c = cells.get(k) or {"first": 0, "first_ng": 0, "re": 0, "re_ng": 0, "r": {}}
+            out.append({"key": k, "first": c["first"], "first_ng": c["first_ng"],
+                        "rate": _rate(c["first_ng"], c["first"], 1),
+                        "re": c["re"], "re_ng": c["re_ng"],
+                        "re_rate": _rate(c["re_ng"], c["re"], 1), "r": c["r"]})
         return out
 
     shifts = split(lambda i: i.shift, list(SHIFTS))
@@ -557,37 +689,108 @@ def _block(cur, st, base, p, w, cont, prev, coverage, cfg_lines, firsts):
     seen_lines = {l["key"] for l in lines}
     for ln in ("A", "B"):
         if ln not in seen_lines:
-            lines.append({"key": ln, "decided": 0, "ng": 0, "ng_all": 0, "modules": 0,
-                          "ng_modules": 0, "rate": None, "r": {}})
+            lines.append({"key": ln, "first": 0, "first_ng": 0, "rate": None, "re": 0,
+                          "re_ng": 0, "re_rate": None, "r": {}})
     for l in lines:
         l["label"] = "Line %s" % l["key"] if l["key"] else "Both lines (one folder)"
-        l["configured"] = bool(l["key"]) and (st, l["key"]) in cfg_lines or \
+        l["configured"] = (bool(l["key"]) and (st, l["key"]) in cfg_lines) or \
             (st, None) in cfg_lines
     lines.sort(key=lambda l: l["key"] or "~")
 
-    newm = _new_modules(cur, st, dec, w, firsts)
-    fp = sum(1 for v in newm.values() if v == "first_pass")
-    rw = sum(1 for v in newm.values() if v == "reworked")
-    sn = sum(1 for v in newm.values() if v == "still_ng")
-    other = sum(1 for i in ng_all if i.rkey == "DF-OTHER")
+    classes = _first_classes(dec)
+    fp = sum(1 for v in classes.values() if v == "first_pass")
+    rw = sum(1 for v in classes.values() if v == "reworked")
+    sn = sum(1 for v in classes.values() if v == "still_ng")
+    other = by.get("DF-OTHER") or {"modules": 0, "re": 0}
     c = cont.get(st) or {"images": 0, "modules": 0}
+    ng_images = sum(1 for i in dec if want(i))
+    z_head = _z(len(ngf), n_first, pv.get("first_ng", 0), p_first) if prev_ok else None
     tiles = {
-        "decided": len(dec), "modules": len(mods), "pass": len(dec) - len(ng_all),
-        "ng_all": len(ng_all), "ng": len(ng), "ng_modules": len(ngmods),
-        "ng_rate": _pct(len(ng), len(dec)), "ng_rate_modules": _pct(len(ngmods), len(mods)),
+        "images": len(dec), "first": n_first, "re": len(redo),
+        "re_modules": len({i.serial for i in redo}), "modules": len({i.serial for i in dec}),
+        # the headline: NG at the FIRST image - the line's own defect rate
+        "ng_first": len(ngf), "ng_rate": _rate(len(ngf), n_first, 1),
+        # every image, re-images in: shown beside, never instead
+        "ng_images": ng_images, "ng_rate_all": _rate(ng_images, len(dec), 1),
+        "ng_modules": len({i.serial for i in dec if want(i)}),
+        "fpy": _rate(fp, len(classes), 1), "first_pass": fp, "reworked": rw, "still_ng": sn,
+        # rework quality: NG again on a re-image
+        "re_ng": len(ngr), "re_rate": _rate(len(ngr), len(redo), 1),
         "continuous": c["images"], "continuous_modules": c["modules"],
-        "new_modules": len(newm), "first_pass": fp, "reworked": rw, "still_ng": sn,
-        "fpy": _pct(fp, len(newm)),
-        "top": reasons[0] if reasons else None,
-        "other": other, "other_share": None if p["reason"] else _pct(other, len(ng_all)),
-        "riser": riser,
-        "prev": {"decided": pv.get("decided", 0), "ng": pv.get("ng", 0),
-                 "ng_rate": _pct(pv.get("ng", 0), pv.get("decided", 0)),
-                 "complete": prev_complete},
+        "top": reasons[0] if reasons and reasons[0]["modules"] else None,
+        "other": other["modules"], "other_re": other["re"],
+        "other_share": None if p["reason"] else _pct(other["modules"], ngf_all),
+        "riser": riser, "watch": watch,
+        "prev": {"first": p_first, "ng_first": pv.get("first_ng", 0),
+                 "ng_rate": _rate(pv.get("first_ng", 0), p_first, 1) if prev_ok else None,
+                 "z": z_head, "signal": _signal(z_head),
+                 "complete": prev_ok, "covered": int(covered * 100)},
     }
     return {"station": st, "label": elcap.LABEL[st], "tiles": tiles, "reasons": reasons,
-            "gone": gone, "trend": trend, "shifts": shifts, "machines": machines,
-            "lines": lines, "coverage": cov}
+            "gone": gone, "trend": trend, "control": _laney(trend), "shifts": shifts,
+            "machines": machines, "lines": lines, "coverage": cov}
+
+
+# ---- FQC's decision by the EL reason it read ---------------------------------------
+
+def _fqc_key(el_verdict, reason_of):
+    v = (el_verdict or "").strip()
+    if not v:
+        return FQC_NONE, "No EL reading", False
+    if _is_pass(v):
+        return FQC_CLEAN, "EL clean (OK)", False
+    return reason_of(v)
+
+
+def _fqc_records(cur, w, p):
+    where = ["f.superseded_by IS NULL", "COALESCE(f.status, '') <> 'cancelled'",
+             "f.at >= %s", "f.at < %s"]
+    args = [w["start"].isoformat(), w["end"].isoformat()]
+    if p["shift"]:
+        h = "CAST(strftime('%H', f.at) AS INTEGER)"
+        where.append({"A": h + " BETWEEN 6 AND 13", "B": h + " BETWEEN 14 AND 21",
+                      "C": "(" + h + " >= 22 OR " + h + " < 6)"}[p["shift"]])
+    if p["model"] or p["customer"]:
+        m, ma = ["build_instance = 1"], []
+        if p["model"]:
+            m.append("model = %s"); ma.append(p["model"])
+        if p["customer"]:
+            m.append("customer = %s"); ma.append(p["customer"])
+        where.append("f.serial IN (SELECT serial FROM serial WHERE %s)" % " AND ".join(m))
+        args += ma
+    cur.execute("SELECT f.serial, f.outcome, f.el_verdict, f.quality_grade, f.at, f.decided_by "
+                "FROM fqc_record f WHERE " + " AND ".join(where) + " ORDER BY f.at", args)
+    return cur.fetchall()
+
+
+def fqc_table(cur, w, p, reason_of):
+    """FQC's decisions in the window (live ones, by when they were made), by the EL
+    reason FQC read off Final EL - its own share: how many it passed, how many it
+    rejected, and what Quality made of the rejects. What an EL reason costs is
+    read here, not assumed; which reasons are critical is a person's call."""
+    agg = {}
+    for r in _fqc_records(cur, w, p):
+        key, label, new = _fqc_key(r["el_verdict"], reason_of)
+        if p["reason"] and key != p["reason"]:
+            continue
+        a = agg.get(key)
+        if a is None:
+            a = agg[key] = {"key": key, "label": label, "new": new, "decisions": 0,
+                            "passed": 0, "rejected": 0,
+                            "quality": {"A": 0, "GY": 0, "BGY": 0, "pending": 0}}
+        a["decisions"] += 1
+        if r["outcome"] == "pass":
+            a["passed"] += 1
+        else:
+            a["rejected"] += 1
+            q = r["quality_grade"] if r["quality_grade"] in ("A", "GY", "BGY") else "pending"
+            a["quality"][q] += 1
+    rows = sorted((a for a in agg.values() if a["key"] not in (FQC_CLEAN, FQC_NONE)),
+                  key=lambda a: (-a["decisions"], a["label"].lower()))
+    rows += [agg[k] for k in (FQC_CLEAN, FQC_NONE) if k in agg]
+    for a in rows:
+        a["pass_rate"] = _pct(a["passed"], a["decisions"])
+    return {"rows": rows, "decisions": sum(a["decisions"] for a in rows)}
 
 
 # ---- across stations ---------------------------------------------------------------
@@ -601,8 +804,8 @@ def _journeys(cx, serials, reason_of):
     for k in range(0, len(serials), 500):
         part = serials[k:k + 500]
         c.execute("SELECT station, unit, line, serial, recapture, verdict, file_time, mode "
-                  "FROM el_capture WHERE serial IN (%s) ORDER BY seen_at, capture_id"
-                  % ",".join("?" * len(part)), part)
+                  "FROM el_capture INDEXED BY ix_el_capture_serial WHERE serial IN (%s) "
+                  "ORDER BY seen_at, capture_id" % ",".join("?" * len(part)), part)
         keep = {}
         for r in c.fetchall():
             ident = (r[0], r[1], r[3], r[4], r[6])
@@ -650,7 +853,7 @@ def _flows(cx, base, p, reason_of):
     for serial, first in pre_ng.items():
         j = js.get(serial, {})
         pre = [x for x in j.get("pre_el", []) if not x["cont"]]
-        t0 = first.t.isoformat()
+        t0 = first.ft
         nxt = next((x for x in pre if x["t"] > t0 and not x["ng"]), None)
         fin = [x for x in j.get("final_el", []) if not x["cont"]]
         post = j.get("post_el", [])
@@ -682,7 +885,7 @@ def _flows(cx, base, p, reason_of):
             r["no_final"] += 1
     for serial, last in fin_ng.items():
         j = js.get(serial, {})
-        t1 = last.t.isoformat()
+        t1 = last.ft
         pre = [x for x in j.get("pre_el", []) if not x["cont"] and x["t"] <= t1]
         pre_ngs = [x for x in pre if x["ng"]]
         state = ("no_pre" if not pre else
@@ -701,8 +904,7 @@ def _flows(cx, base, p, reason_of):
             r["no_pre_lines"][ln] = r["no_pre_lines"].get(ln, 0) + 1
 
     def total(rows, keys):
-        t = {k: sum(r[k] for r in rows) for k in keys}
-        return t
+        return {k: sum(r[k] for r in rows) for k in keys}
 
     pre_list = sorted(pre_rows.values(), key=lambda r: (-r["modules"], r["label"].lower()))
     for r in pre_list:
@@ -731,6 +933,7 @@ def params(args):
          "shift": g("shift").upper(), "machine": g("machine"), "reason": g("reason"),
          "model": g("model"), "customer": g("customer"),
          "kind": g("kind") or "ng", "flow": g("flow"), "sub": g("sub"), "bucket": g("bucket"),
+         "outcome": g("outcome"),
          # the modules' journeys across stations - left out by a dashboard card
          "flows": g("flows") != "0"}
     if p["station"] and p["station"] not in STATION_IDS:
@@ -751,6 +954,8 @@ def params(args):
             raise Refused("That %s is too long." % k)
     if p["kind"] not in KINDS:
         raise Refused("No such list: %s." % p["kind"])
+    if p["outcome"] not in ("", "pass", "reject"):
+        raise Refused("An FQC outcome is pass or reject.")
     if p["flow"] and p["flow"] not in FLOWS:
         raise Refused("No such journey: %s." % p["flow"])
     if p["flow"] and p["sub"] not in FLOW_SUBS[p["flow"]]:
@@ -773,25 +978,24 @@ def _scope(cx, cur, p, now, cfg):
             raise Refused("That machine is not at the station shown.")
     reason_of = reasons(cur)
     master = _master(cur, stations, w["start"], w["end"])
-    imgs = _decided(cx, stations, w["start"], w["end"], w, reason_of, master)
+    imgs = _decided(cx, cur, stations, w, reason_of, master)
     return w, stations, reason_of, master, imgs
 
 
 def analyse(cx, cur, p, now, cfg):
     """Everything the EL Analysis screen draws for one window: per station its
     tiles, Pareto, trend, shifts, machines and lines; with all three stations,
-    the modules' journeys across them too."""
+    the modules' journeys across them; with Final EL in view, FQC's decision by
+    the EL reason it read."""
     w, stations, reason_of, master, imgs = _scope(cx, cur, p, now, cfg)
     base = [i for i in imgs if _ok(i, p)] if any(p[d] for d in _DIMS) else imgs
     cont = _continuous(cur, stations, w, p)
-    prev = _previous(cur, stations, w, p, reason_of)
+    prev = _previous(cx, cur, stations, w, p, reason_of)
     coverage = _coverage(cur)
     roots = elcap.roots(cfg)
     cfg_lines = {(st, ln) for st, _u, ln, _r in roots}
     configured = {st: any(r[0] == st for r in roots) for st in STATION_IDS}
-    firsts = _firsts(imgs)
-    blocks = {st: _block(cur, st, base, p, w, cont, prev, coverage, cfg_lines, firsts)
-              for st in stations}
+    blocks = {st: _block(st, base, p, w, cont, prev, coverage, cfg_lines) for st in stations}
     out = {
         "ok": True, "generated_at": now.replace(microsecond=0).isoformat(),
         "window": {"name": w["name"], "label": w["label"], "start": w["start"].isoformat(),
@@ -808,9 +1012,12 @@ def analyse(cx, cur, p, now, cfg):
         "facets": _facets(imgs, p),
         "blocks": blocks,
         "coverage": coverage,
+        "z": {"signal": Z_SIGNAL, "watch": Z_WATCH}, "min_n": MIN_N,
     }
     if not p["station"] and p["flows"]:
         out["flows"] = _flows(cx, base, p, reason_of)[0]
+    if p["station"] in ("", "final_el") and p["flows"]:
+        out["fqc"] = fqc_table(cur, w, p, reason_of)
     return out
 
 
@@ -819,7 +1026,7 @@ def _when(t):
         (t or "").replace("T", " ")
 
 
-def _module_rows(sel, master, cont_rows=None):
+def _module_rows(sel, master):
     """One row a module: what the selected images say about it."""
     by = {}
     for i in sel:
@@ -852,6 +1059,11 @@ def _module_rows(sel, master, cont_rows=None):
 MODULE_COLUMNS = ["Serial", "Model", "Station", "Machine", "Line", "Images", "NG images",
                   "Reasons", "First image", "Last image"]
 
+_KIND_TITLE = {"ng": "NG at any image", "first_ng": "NG at their first image", "first": "First images",
+               "reimage": "Re-images", "reimage_ng": "NG again on a re-image",
+               "pass": "Passed", "all": "Inspected", "first_pass": "Passed first time",
+               "reworked": "NG, then passed after rework", "still_ng": "NG, not passed yet"}
+
 
 def drill(cx, cur, p, now, cfg):
     """The modules behind one figure on the screen - a bar, a slice, a cell, a
@@ -861,7 +1073,25 @@ def drill(cx, cur, p, now, cfg):
     nb = len(w["buckets"])
     if p["bucket"] is not None and p["bucket"] >= nb:
         raise Refused("That bar is not in this window any more - refresh.")
-    if p["flow"]:
+    want = (lambda i: i.ng and i.rkey == p["reason"]) if p["reason"] else (lambda i: i.ng)
+    if p["kind"] == "fqc":
+        rows = []
+        for r in reversed(_fqc_records(cur, w, p)):
+            key, label, _new = _fqc_key(r["el_verdict"], reason_of)
+            if p["reason"] and key != p["reason"]:
+                continue
+            if p["outcome"] and (r["outcome"] == "pass") != (p["outcome"] == "pass"):
+                continue
+            rows.append([r["serial"], master.get(r["serial"], (None, None))[0] or "—",
+                         "Pass" if r["outcome"] == "pass" else "Reject",
+                         _when(r["at"]), r["decided_by"] or "—",
+                         (r["el_verdict"] or "—"),
+                         (r["quality_grade"] or ("pending" if r["outcome"] != "pass" else "—"))])
+        columns = ["Serial", "Model", "FQC decision", "Decided", "By", "EL reading at FQC",
+                   "Quality"]
+        title = "FQC's decisions" + (" - " + {"pass": "passed", "reject": "rejected"}[p["outcome"]]
+                                     if p["outcome"] else "")
+    elif p["flow"]:
         _f, per, js = _flows(cx, base, p, reason_of)
         rows = []
         for (flow, serial), rec in per.items():
@@ -905,7 +1135,6 @@ def drill(cx, cur, p, now, cfg):
                    "Pre-EL reason" if p["flow"] == "pre_ng" else "Final EL reason",
                    "Rework took", "Pre-EL images", "Post EL images", "Final EL images"]
         if p["flow"] == "final_ng":
-            columns[4] = "—"
             rows = [r[:4] + r[5:] for r in rows]
             columns = columns[:4] + columns[5:]
         title = _flow_title(p)
@@ -918,19 +1147,23 @@ def drill(cx, cur, p, now, cfg):
             sel = [i for i in sel if i.b == p["bucket"]]
         kind = p["kind"]
         if kind == "ng":
-            sel = [i for i in sel if i.ng and (not p["reason"] or i.rkey == p["reason"])]
+            sel = [i for i in sel if want(i)]
+        elif kind == "first_ng":
+            sel = [i for i in sel if i.first and want(i)]
+        elif kind == "first":
+            sel = [i for i in sel if i.first]
+        elif kind == "reimage":
+            sel = [i for i in sel if not i.first]
+        elif kind == "reimage_ng":
+            sel = [i for i in sel if not i.first and want(i)]
         elif kind == "pass":
             sel = [i for i in sel if not i.ng]
         elif kind in ("first_pass", "reworked", "still_ng"):
-            keep, firsts = set(), _firsts(imgs)
-            for st in stations:
-                keep |= {s for s, v in _new_modules(cur, st, base, w, firsts).items()
-                         if v == kind}
+            keep = {s for (st, s), v in _first_classes(base).items() if v == kind}
             sel = [i for i in sel if i.serial in keep]
         rows = _module_rows(sel, master)
         columns = MODULE_COLUMNS
-        title = {"ng": "NG", "pass": "Passed", "all": "Inspected", "first_pass": "Passed first time",
-                 "reworked": "NG, then passed after rework", "still_ng": "NG, not passed yet"}[kind]
+        title = _KIND_TITLE[kind]
     total = len(rows)
     return {"ok": True, "title": title, "columns": columns, "rows": rows[:ROW_CAP],
             "total": total, "cap": ROW_CAP,

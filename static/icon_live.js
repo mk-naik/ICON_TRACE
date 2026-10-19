@@ -1806,14 +1806,21 @@
     try { var w = localStorage.getItem('icon.eltop'); if (EL_TOP_WIN[w]) return w; } catch (e) { /* default */ }
     return 'today';
   }
+  /* a reason's rate of first images bar by bar (19 Oct 2026: a rate, not a count,
+     so a busier bar is not a rise); a bar of too few first images is a gap */
   function elTopSpark(vals) {
-    var n = vals.length, max = Math.max.apply(null, vals.concat([1])), pts = [];
-    if (n < 2) return '';
-    for (var i = 0; i < n; i++) {
-      pts.push((i * 88 / (n - 1)).toFixed(1) + ',' + (20 - vals[i] * 18 / max).toFixed(1));
+    var n = vals.length, max = 0, i, segs = [], cur = [];
+    vals.forEach(function (v) { if (v != null && v > max) max = v; });
+    if (n < 2 || !max) return '';
+    for (i = 0; i < n; i++) {
+      if (vals[i] == null) { if (cur.length) segs.push(cur); cur = []; continue; }
+      cur.push((i * 88 / (n - 1)).toFixed(1) + ',' + (20 - vals[i] * 18 / max).toFixed(1));
     }
-    return '<svg viewBox="0 0 90 22" width="90" height="22" aria-hidden="true">' +
-      '<polyline points="' + pts.join(' ') + '" fill="none" stroke="#BE3325" stroke-width="1.6"/></svg>';
+    if (cur.length) segs.push(cur);
+    return '<svg viewBox="0 0 90 22" width="90" height="22" aria-hidden="true">' + segs.map(function (p) {
+      return p.length > 1 ? '<polyline points="' + p.join(' ') + '" fill="none" stroke="#BE3325" stroke-width="1.6"/>' :
+        '<circle cx="' + p[0].split(',')[0] + '" cy="' + p[0].split(',')[1] + '" r="1.4" fill="#BE3325"/>';
+    }).join('') + '</svg>';
   }
   function elTopCard(viewId, cardId, afterId) {
     if (typeof can !== 'function' || !can('elan')) return;
@@ -1853,39 +1860,47 @@
         }
         var cfg = {};
         (d.stations || []).forEach(function (s) { cfg[s.id] = s.configured; });
+        var minN = d.min_n || 20;
         var cols = EL_TOP_ST.map(function (pair) {
           var st = pair[0], b = d.blocks[st], t = b.tiles, body;
-          if (!cfg[st] && !t.decided && !t.continuous) {
+          var ranked = b.reasons.filter(function (r) { return r.modules; });
+          if (!cfg[st] && !t.images && !t.continuous) {
             body = '<div class="hint">No folder set (Admin › Stations &amp; sources).</div>';
-          } else if (!t.decided) {
+          } else if (!t.images) {
             body = '<div class="hint">' + (t.continuous ? n(t.continuous) + ' images passed by the machine ' +
               '(continuous) — no operator decided any, so no NG figure.' : 'No image in this window.') + '</div>';
-          } else if (!b.reasons.length) {
-            body = '<div class="hint">' + n(t.decided) + ' inspected, no NG image' + (t.continuous ? ' · ' +
+          } else if (!ranked.length) {
+            body = '<div class="hint">' + n(t.first) + ' first images, none NG' + (t.continuous ? ' · ' +
               n(t.continuous) + ' more passed by the machine (continuous), counted apart' : '') + '.</div>';
           } else {
-            body = '<table style="width:100%;font-size:12px"><tbody>' + b.reasons.slice(0, 5).map(function (r) {
+            body = '<table style="width:100%;font-size:12px"><tbody>' + ranked.slice(0, 5).map(function (r) {
+              /* the change of the reason's rate: red beyond chance, amber one to watch */
+              var tone = r.signal === 'up' ? 'color:var(--fail);font-weight:700' :
+                r.signal === 'down' ? 'color:var(--pass);font-weight:700' :
+                /^watch/.test(r.signal || '') ? 'color:var(--review);font-weight:700' : 'color:var(--ink3)';
               var ch = r.change == null ? '<span style="color:var(--ink3)">—</span>' :
-                r.change > 0 ? '<span style="color:var(--fail);font-weight:700">▲ ' + n(r.change) + '</span>' :
-                r.change < 0 ? '<span style="color:var(--pass);font-weight:700">▼ ' + n(-r.change) + '</span>' :
-                '<span style="color:var(--ink3)">=</span>';
+                '<span style="' + tone + '" title="' + esc('Rate of first images ' + r.prev_rate + '% → ' + r.rate + '%' +
+                (r.z == null ? '' : ' · z ' + r.z)) + '">' + (r.change > 0 ? '▲ ' : r.change < 0 ? '▼ ' : '') +
+                Math.abs(r.change).toFixed(2) + ' pts</span>';
               return '<tr style="cursor:pointer" title="Open EL Analysis on ' + esc(r.label) + '" onclick="if (window.elanOpen) elanOpen({station: \'' +
                 st + '\', window: \'' + win + '\', reason: ' + jsArg(r.key) + '})">' +
                 '<td style="padding:4px 0">' + esc(r.label) + (r['new'] ? ' <span class="tag t-rev">new</span>' : '') + '</td>' +
-                '<td class="num" style="padding:4px 6px"><b>' + n(r.images) + '</b></td>' +
-                '<td class="num" style="padding:4px 6px;color:var(--ink3)">' + (r.share == null ? '' : r.share + '%') + '</td>' +
+                '<td class="num" style="padding:4px 6px"><b>' + n(r.modules) + '</b></td>' +
+                '<td class="num" style="padding:4px 6px;color:var(--ink3)">' + (r.rate == null ? '' : r.rate.toFixed(2) + '%') + '</td>' +
                 '<td class="num" style="padding:4px 6px">' + ch + '</td>' +
-                '<td style="padding:4px 0;text-align:right">' + elTopSpark(b.trend.map(function (x) { return x.r[r.key] || 0; })) +
+                '<td style="padding:4px 0;text-align:right">' + elTopSpark(b.trend.map(function (x) {
+                  return x.first >= minN ? (x.r[r.key] || 0) * 100 / x.first : null; })) +
                 '</td></tr>';
             }).join('') + '</tbody></table>';
           }
           return '<div><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-            '<b style="font-size:12.5px">' + pair[1] + '</b>' + (t.decided ? '<span class="tag ' + (t.ng ? 't-fail' : 't-pass') +
-            '">NG ' + (t.ng_rate == null ? '—' : t.ng_rate + '%') + ' of ' + n(t.decided) + '</span>' : '') + '</div>' + body + '</div>';
+            '<b style="font-size:12.5px">' + pair[1] + '</b>' + (t.first ? '<span class="tag ' + (t.ng_first ? 't-fail' : 't-pass') +
+            '">NG ' + (t.ng_rate == null ? '—' : t.ng_rate + '%') + ' of ' + n(t.first) + ' first images</span>' : '') + '</div>' + body + '</div>';
         });
         card.innerHTML = head + '<div class="card-b"><div class="grid g3">' + cols.join('') + '</div>' +
-          '<div class="hint" style="margin-top:8px">' + esc(d.window.label) + ' · NG images by reason · change on the ' +
-          'window of the same length before · a reason opens EL Analysis on it. Stations are never added together.</div></div>';
+          '<div class="hint" style="margin-top:8px">' + esc(d.window.label) + ' · modules NG at their first image, by reason, ' +
+          'and the reason’s rate · change of the rate on the window of the same length before: red beyond chance, amber ' +
+          'one to watch · a reason opens EL Analysis on it. Stations are never added together.</div></div>';
       })
       .catch(function (e) {
         card.__busy = false;

@@ -1,7 +1,8 @@
 <style>
-/* EL Analysis (17 Oct 2026, the EL Insight Roadmap). v4's own card, kpi, tag
-   and filters classes; what is new here is scoped under #v-elan. Charts are
-   SVG drawn by this page - no library, nothing from the internet. */
+/* EL Analysis (17 Oct 2026, the EL Insight Roadmap; its correctness reworked
+   19 Oct 2026). v4's own card, kpi, tag and filters classes; what is new here
+   is scoped under #v-elan. Charts are SVG drawn by this page - no library,
+   nothing from the internet. */
 #v-elan .ela-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:0 0 10px}
 #v-elan .ela-seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--panel)}
 #v-elan .ela-seg button{border:0;border-right:1px solid var(--line);background:none;padding:7px 12px;font-size:12px;font-weight:600;color:var(--ink2);cursor:pointer}
@@ -9,6 +10,9 @@
 #v-elan .ela-seg button:hover{background:var(--brand-lt)}
 #v-elan .ela-seg button.on{background:var(--brand);color:#fff}
 #v-elan .ela-range{display:inline-flex;gap:6px;align-items:center;font-size:12px}
+/* a display rule outranks the browser's own [hidden] - said again so the From-to
+   boxes show only for From-to (19 Oct 2026) */
+#v-elan .ela-range[hidden]{display:none}
 #v-elan .ela-range input{padding:5px 7px;border:1px solid var(--line);border-radius:var(--r);font-size:12px}
 #v-elan .ela-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px}
 #v-elan .ela-tiles .kpi .v{font-size:22px}
@@ -26,16 +30,29 @@
 #v-elan .ela-svg .xa{font-size:10px;fill:var(--ink3);text-anchor:middle}
 #v-elan .ela-svg .hit{fill:transparent;cursor:pointer}
 #v-elan .ela-svg .hit:hover{fill:rgba(27,77,122,.07)}
-#v-elan .ela-svg .seg{cursor:pointer}
+#v-elan .ela-svg .seg,#v-elan .ela-svg .soloseg{cursor:pointer}
 #v-elan .ela-svg .seg:hover{opacity:.78}
+/* hover a reason: the others fade and it is drawn alone from the axis, so its
+   own trend reads on a common baseline (19 Oct 2026) */
+#v-elan .ela-svg .solo{display:none;pointer-events:none}
+#v-elan .ela-svg .solo.on{display:inline}
+#v-elan [data-chart].iso .ela-svg .seg{opacity:.13}
+#v-elan [data-chart].iso .ela-legend span.dim{opacity:.38}
 #v-elan .ela-svg .rate{fill:none;stroke:var(--fail);stroke-width:2}
 #v-elan .ela-svg .dot{fill:var(--fail);cursor:pointer}
 #v-elan .ela-svg .dot.thin{fill:#fff;stroke:var(--fail);stroke-width:1.2}
+#v-elan .ela-svg .dot.f3{fill:var(--fail);stroke:#fff;stroke-width:1.6}
+#v-elan .ela-svg .dot.f2{fill:var(--review);stroke:#fff;stroke-width:1.6}
+#v-elan .ela-svg .dot.fl{fill:var(--pass);stroke:#fff;stroke-width:1.6}
+#v-elan .ela-svg .cl{stroke:var(--ink3);stroke-width:1;stroke-dasharray:4 3}
+#v-elan .ela-svg .lim3{fill:none;stroke:var(--fail);stroke-width:1.2;stroke-dasharray:6 3;opacity:.85}
+#v-elan .ela-svg .lim2{fill:none;stroke:var(--review);stroke-width:1.1;stroke-dasharray:2 3}
 #v-elan .ela-svg .ct{font-family:var(--f-mono);font-size:22px;font-weight:700;fill:var(--ink);text-anchor:middle}
 #v-elan .ela-svg .cs{font-size:10px;fill:var(--ink3);text-anchor:middle}
 #v-elan .ela-legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px;font-size:11.5px;color:var(--ink2)}
 #v-elan .ela-legend span{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
-#v-elan .ela-legend i,#v-elan .ela-list i{display:inline-block;width:10px;height:10px;border-radius:2px;flex:none}
+#v-elan .ela-legend i,#v-elan .ela-list i,#v-elan .sw{display:inline-block;width:10px;height:10px;border-radius:2px;flex:none}
+#v-elan .ela-legend i.dash{height:0;width:16px;border-radius:0;background:none!important;border-top:2px dashed}
 #v-elan .ela-donutwrap{display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;align-items:center}
 #v-elan .ela-list{list-style:none;margin:0;padding:0;font-size:12px}
 #v-elan .ela-list li{display:grid;grid-template-columns:12px minmax(0,1fr) auto auto;gap:7px;align-items:center;padding:3px 4px;border-radius:2px;cursor:pointer}
@@ -49,11 +66,16 @@
 #v-elan table.ela-t td.num,#v-elan table.ela-t th.num{text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums}
 #v-elan table.ela-t tr.click{cursor:pointer}
 #v-elan table.ela-t tr.click:hover td{background:var(--brand-lt)}
-#v-elan table.ela-t td.cell{cursor:pointer;text-align:right;font-family:var(--f-mono)}
+#v-elan table.ela-t td.cell{cursor:pointer;text-align:right;font-family:var(--f-mono);white-space:nowrap}
 #v-elan table.ela-t td.cell:hover{outline:2px solid var(--brand);outline-offset:-2px}
+#v-elan table.ela-t td.few{color:var(--ink3);font-style:italic}
 #v-elan .ela-bar-in{height:9px;border-radius:2px;min-width:2px}
+#v-elan .ela-pf{display:flex;height:9px;border-radius:2px;overflow:hidden;min-width:60px;background:var(--line2)}
+#v-elan .ela-pf span{display:block;height:100%}
 #v-elan .up{color:var(--fail);font-weight:700}
 #v-elan .down{color:var(--pass);font-weight:700}
+#v-elan .watch{color:var(--review);font-weight:700}
+#v-elan .mute{color:var(--ink3)}
 #v-elan .ela-st h3 button{background:none;border:0;padding:0;font:inherit;color:var(--brand);cursor:pointer;text-transform:uppercase;letter-spacing:.4px}
 #v-elan .ela-mini{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px}
 #v-elan .ela-mini div{border:1px solid var(--line2);border-radius:var(--r);padding:7px 9px}
@@ -61,7 +83,7 @@
 #v-elan .ela-mini b{font-family:var(--f-mono);font-size:17px}
 #v-elan .ela-mini small{display:block;font-size:10.5px;color:var(--ink3)}
 #v-elan .ela-empty{padding:18px;text-align:center;color:var(--ink3);font-size:12.5px}
-#v-elan .ela-foot{font-size:11px;color:var(--ink3);margin-top:8px}
+#v-elan .ela-foot{font-size:11px;color:var(--ink3);margin-top:8px;line-height:1.45}
 #v-elan .ela-sub{font-size:11px;color:var(--ink3);font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px}
 </style>
 
@@ -72,12 +94,13 @@
     <button class="btn btn-ghost" onclick="elanLoad()">Refresh</button>
     <button class="btn btn-ghost" onclick="go('elst')">EL Stations &rsaquo;</button></div></div>
 
-<div class="note n-info"><span>&#9432;</span><span>Every figure counts images by <b>when they
-  were taken</b>, on the factory day (06:00 to 06:00). An image's reason is its folder, read
-  through the one defect list &mdash; a folder the list does not have shows as <b>new</b>.
-  Images a machine passed by itself in continuous mode are <b>counted apart</b> and are in no
-  NG rate. Stations are <b>never added together</b>: one module is imaged at each. Click any
-  bar, slice, cell or row to list its modules.</span></div>
+<div class="note n-info"><span>&#9432;</span><span>Images count by <b>when they were taken</b>,
+  on the factory day (06:00 to 06:00). The NG rate is on each module's <b>first image</b> at a
+  station; a module imaged again (back from rework, or re-tested) is a <b>re-image</b>, with its
+  own figure. A change is a change of <b>rate</b>, marked when it is beyond chance. An image's
+  reason is its folder, read through the one defect list &mdash; a folder the list does not have
+  shows as <b>new</b>. Images a machine passed by itself in continuous mode are <b>counted apart</b>.
+  Stations are <b>never added together</b>. Click any bar, slice, cell or row to list its modules.</span></div>
 <div id="elaAlerts"></div>
 
 <div class="ela-bar">
@@ -124,40 +147,67 @@
   }
   function num(x) { return x == null ? '—' : Number(x).toLocaleString('en-IN'); }
   function pc(x) { return x == null ? '—' : x + '%'; }
+  function pc2(x) { return x == null ? '—' : Number(x).toFixed(2) + '%'; }
+  function sgn(x) { return x == null ? '' : (x > 0 ? '+' : '') + x; }
   function when(t) { return t ? (typeof fmtIST === 'function' ? fmtIST(t) : String(t).replace('T', ' ')) : ''; }
   function toastMsg(m) { if (typeof toast === 'function') toast(m); }
 
   var LABEL = { pre_el: 'Pre-EL', post_el: 'Post EL', final_el: 'Final EL' };
   var ORDER = ['pre_el', 'post_el', 'final_el'];
   var SCOL = { pre_el: '#2D6FD2', post_el: '#7A47AD', final_el: '#E08A1E' };
-  var PALETTE = ['#1B4D7A', '#E08A1E', '#2A8A66', '#BE3325', '#7A47AD', '#2D6FD2', '#B08800',
-                 '#0F8B8D', '#C2185B', '#6D4C41', '#5C6BC0', '#7CB342', '#00897B', '#F06292'];
+
+  /* ---- colours (19 Oct 2026): a reason keeps its colour from view to view, Other
+     is grey, and a chart colours at most seven reasons - the rest are one light
+     grey band. Seven hues. The seven reasons the plant files most own one each
+     and always keep it. Every other common reason has the hue of one it seldom
+     shares a chart with - read from the plant's own days and weeks, 18 Sep to
+     19 Oct: 18 reasons reached some station's top seven, and keeping them all
+     apart would take 11 hues - and on the rare day it meets that one, it takes
+     a spare hue. Only a lesser reason ever changes colour. */
+  var HUES = ['#2D6FD2', '#E08A1E', '#2A8A66', '#BE3325', '#7A47AD', '#0F8B8D', '#B08800'];
+  var PRIORITY = ['DF-GRIDBURNING', 'DF-LOWEFF', 'DF-CELLCRACK', 'DF-LEADOPENCROSS', 'DF-SR',
+                  'DF-PATCHES', 'DF-DARKBUSBAR', 'DF-NOPOWER', 'DF-BUSSINGMISS', 'DF-BURNING',
+                  'DF-STRSHORT', 'DF-FOREIGNPARTICLE', 'DF-EDGEBURNING', 'DF-RIBSHORT',
+                  'DF-CELLISSUERIBBONBOLD', 'DF-CELLPARTICLE', 'DF-OUTPUTTERMINALISSUE',
+                  'DF-TERMINALBENDING'];
+  var OWN_HUE = {
+    'DF-GRIDBURNING': 0, 'DF-LOWEFF': 1, 'DF-CELLCRACK': 2, 'DF-LEADOPENCROSS': 3,
+    'DF-SR': 4, 'DF-PATCHES': 5, 'DF-DARKBUSBAR': 6,
+    'DF-NOPOWER': 4, 'DF-BUSSINGMISS': 6, 'DF-BURNING': 0, 'DF-STRSHORT': 5,
+    'DF-FOREIGNPARTICLE': 6, 'DF-EDGEBURNING': 2, 'DF-RIBSHORT': 1,
+    'DF-CELLISSUERIBBONBOLD': 4, 'DF-CELLPARTICLE': 5, 'DF-OUTPUTTERMINALISSUE': 1,
+    'DF-TERMINALBENDING': 1 };
   var OTHER = '#8E9BAA', REST = '#CBD3DC';
-  var TOPN = 8;
-  /* an NG rate over fewer images than this is drawn hollow and left off the line:
-     3 NG of 7 images is 43%, and no trend */
+  var TOPN = 7, TOPN_CARD = 5;
+  /* a rate over fewer first images than this is drawn hollow, left off the line
+     and never flagged: 3 NG of 7 images is 43%, and no trend. The server's own
+     number replaces it on the first answer. */
   var MIN_N = 20;
   var GRAIN = { 5: 'every 5 minutes', 60: 'by hour', 480: 'by day and shift', 1440: 'by day' };
   var LIVE = { '1h': 1, '8h': 1, shift: 1, today: 1 };
 
   var S = { station: 'pre_el', window: '7d', from: '', to: '', line: '', shift: '', machine: '',
             reason: '', model: '', customer: '' };
-  try {
-    var kept = JSON.parse(localStorage.getItem('icon.elan') || 'null');
-    if (kept && typeof kept === 'object') {
-      if ('station' in kept && (kept.station === '' || LABEL[kept.station])) S.station = kept.station;
-      if (kept.window) S.window = kept.window;
-      if (kept.from) S.from = kept.from;
-      if (kept.to) S.to = kept.to;
-    }
-  } catch (e) { /* a private window: the defaults stand */ }
+  var kept = null;
+  try { kept = JSON.parse(localStorage.getItem('icon.elan') || 'null'); } catch (e) { kept = null; }
+  if (kept && typeof kept === 'object') {
+    if ('station' in kept && (kept.station === '' || LABEL[kept.station])) S.station = kept.station;
+    if (kept.window) S.window = kept.window;
+    if (kept.from) S.from = kept.from;
+    if (kept.to) S.to = kept.to;
+  } else {
+    /* nothing kept on this PC (19 Oct 2026): a shift incharge lands on the shift
+       running now, anyone else on the last 7 days */
+    var role = (typeof USER !== 'undefined' && USER) ? USER.role : '';
+    if (role === 'Production Incharge') S.window = 'shift';
+  }
   function remember() {
     try { localStorage.setItem('icon.elan', JSON.stringify({ station: S.station, window: S.window,
                                                              from: S.from, to: S.to })); }
     catch (e) { /* not kept - harmless */ }
   }
 
-  var D = null, COLORS = {}, busy = false, again = false, DRILL = null;
+  var D = null, CMAP = {}, busy = false, again = false, DRILL = null;
 
   function params(extra) {
     var p = { station: S.station, window: S.window, line: S.line, shift: S.shift,
@@ -171,20 +221,34 @@
       .map(function (k) { return k + '=' + encodeURIComponent(p[k]); }).join('&');
   }
 
-  /* ---- colours: one per reason, the same in every chart on the page ---- */
-  function assignColors(d) {
-    var tot = {};
-    Object.keys(d.blocks).forEach(function (st) {
-      d.blocks[st].reasons.forEach(function (r) { tot[r.key] = (tot[r.key] || 0) + r.images; });
+  /* a station's colours: its top `n` reasons (by modules NG at the first image)
+     are coloured, the rest are the grey band. Each takes its own hue in the
+     plant's order, so an owner always has its own; one whose hue is held here
+     already (or a new folder, which has none) takes a spare one */
+  function colorMap(block, n) {
+    var map = {}, used = {}, cand = [];
+    var order = function (k) { var i = PRIORITY.indexOf(k); return i < 0 ? PRIORITY.length : i; };
+    block.reasons.forEach(function (r) {
+      if (r.key !== 'DF-OTHER' && r.modules && cand.length < n) cand.push(r.key);
     });
-    var i = 0;
-    COLORS = {};
-    Object.keys(tot).sort(function (a, b) { return tot[b] - tot[a]; }).forEach(function (k) {
-      COLORS[k] = k === 'DF-OTHER' ? OTHER : PALETTE[i++ % PALETTE.length];
+    cand.slice().sort(function (a, b) { return order(a) - order(b); }).forEach(function (k) {
+      var h = OWN_HUE[k];
+      if (h != null && !used[h]) { map[k] = HUES[h]; used[h] = 1; }
     });
+    cand.forEach(function (k) {
+      if (map[k]) return;
+      for (var h = 0; h < HUES.length; h++) {
+        if (!used[h]) { map[k] = HUES[h]; used[h] = 1; return; }
+      }
+    });
+    return map;
   }
-  function colorOf(k) { return k === '__rest' ? REST : (COLORS[k] || REST); }
+  function colorOf(st, k) {
+    if (k === 'DF-OTHER') return OTHER;
+    return (CMAP[st] || {})[k] || REST;
+  }
   function reasonLabel(r) { return r.label + (r['new'] ? ' (new)' : ''); }
+  function swatch(c) { return '<i class="sw" style="background:' + c + '"></i>'; }
 
   /* ---- charts ---- */
   /* an axis on round numbers: at most five steps of 1, 2 or 5 x 10^n */
@@ -209,13 +273,15 @@
   }
   function axisNum(v) { return v >= 1000 ? (Math.round(v / 100) / 10) + 'k' : String(Math.round(v * 10) / 10); }
 
-  /* stacked bars: buckets x series, an optional rate line on its own axis */
+  /* stacked bars: buckets x series. o.solo draws each series alone too (shown
+     on hover); o.rate a rate line on its own axis, o.control its Laney limits */
   function stackSvg(o) {
     var small = function (i) { return o.rateN && (o.rateN[i] || 0) < MIN_N; };
+    var ctl = o.control && o.control.ok ? o.control : null;
     var anyRate = (o.rate || []).filter(function (r) { return r != null; });
     var rates = (o.rate || []).filter(function (r, i) { return r != null && !small(i); });
     if (!rates.length) rates = anyRate;
-    var W = Math.max(300, o.width || 760), H = o.height || 240, L = 42, R = rates.length ? 40 : 10, T = 10, B = 28;
+    var W = Math.max(300, o.width || 760), H = o.height || 240, L = 42, R = rates.length ? 44 : 10, T = 10, B = 28;
     var n = o.buckets.length, iw = W - L - R, ih = H - T - B, cw = iw / n;
     var bw = Math.max(1.5, Math.min(34, cw * 0.72)), i, j, tot = [];
     for (i = 0; i < n; i++) {
@@ -247,16 +313,54 @@
                ': ' + num(v)) + '</title></rect>');
       }
     }
+    if (o.solo) {
+      for (j = 0; j < o.series.length; j++) {
+        var sr = o.series[j], g = ['<g class="solo" data-k="' + esc(sr.key) + '">'];
+        for (i = 0; i < n; i++) {
+          var sv = sr.values[i] || 0;
+          if (!sv) continue;
+          var sh = ih * sv / ymax;
+          g.push('<rect class="soloseg" data-b="' + i + '" data-k="' + esc(sr.key) + '" x="' +
+                 (L + cw * i + (cw - bw) / 2) + '" y="' + (T + ih - sh) + '" width="' + bw + '" height="' +
+                 Math.max(sh, 0.8) + '" fill="' + sr.color + '"><title>' + esc(o.buckets[i].title + ' · ' +
+                 sr.label + ': ' + num(sv)) + '</title></rect>');
+        }
+        g.push('</g>');
+        s.push(g.join(''));
+      }
+    }
     var every = Math.max(1, Math.ceil(n / Math.max(4, Math.floor(iw / 62))));
     for (i = 0; i < n; i += every) {
       s.push('<text class="xa" x="' + (L + cw * i + cw / 2) + '" y="' + (H - 9) + '">' +
              esc(o.buckets[i].label) + '</text>');
     }
     if (rates.length) {
-      var rs = scale(Math.max.apply(null, rates)), rmax = rs.max;
+      var top = Math.max.apply(null, rates);
+      if (ctl) {
+        for (i = 0; i < n; i++) {
+          if (ctl.bars[i] && !small(i)) top = Math.max(top, ctl.bars[i].u3);
+        }
+      }
+      var rs = scale(top), rmax = rs.max;
+      var Y = function (val) { return Math.max(T, T + ih - ih * val / rmax); };
       for (j = 0; j <= rs.n; j++) {
         s.push('<text class="yb" x="' + (W - R + 5) + '" y="' + (T + ih - ih * j / rs.n + 3) + '">' +
                axisNum(rs.step * j) + '%</text>');
+      }
+      if (ctl) {
+        s.push('<line class="cl" x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(ctl.center) + '" y2="' +
+               Y(ctl.center) + '"><title>Centre ' + ctl.center + '%</title></line>');
+        var p3 = '', p2 = '';
+        for (i = 0; i < n; i++) {
+          var cb = ctl.bars[i];
+          if (!cb || small(i)) continue;            /* no limits where there is no trend */
+          var a0 = (L + cw * i).toFixed(1), a1 = (L + cw * (i + 1)).toFixed(1);
+          p3 += ' M ' + a0 + ' ' + Y(cb.u3).toFixed(1) + ' H ' + a1;
+          p2 += ' M ' + a0 + ' ' + Y(cb.u2).toFixed(1) + ' H ' + a1;
+          if (cb.l3 > 0) p3 += ' M ' + a0 + ' ' + Y(cb.l3).toFixed(1) + ' H ' + a1;
+          if (cb.l2 > 0) p2 += ' M ' + a0 + ' ' + Y(cb.l2).toFixed(1) + ' H ' + a1;
+        }
+        s.push('<path class="lim2" d="' + p2 + '"/><path class="lim3" d="' + p3 + '"/>');
       }
       var path = '', pen = false;
       for (i = 0; i < n; i++) {
@@ -269,11 +373,15 @@
       if (path) s.push('<path class="rate" d="' + path + '"/>');
       for (i = 0; i < n; i++) {
         if (o.rate[i] == null) continue;
-        var few = small(i);
-        s.push('<circle class="dot' + (few ? ' thin' : '') + '" data-b="' + i + '" r="2.6" cx="' +
-               (L + cw * i + cw / 2) + '" cy="' + Math.max(T, T + ih - ih * o.rate[i] / rmax) +
-               '"><title>' + esc(o.buckets[i].title + ' · NG rate ' + o.rate[i] + '%' +
-               (few ? ' of only ' + (o.rateN[i] || 0) + ' images - no trend' : '')) + '</title></circle>');
+        var few = small(i), fb = ctl && ctl.bars[i], flag = fb && fb.flag;
+        var cls = few ? ' thin' : flag === 'high3' ? ' f3' : flag === 'high2' ? ' f2' : flag === 'low3' ? ' fl' : '';
+        var lim = fb ? ' · limits ' + fb.l3 + '–' + fb.u3 + '% (3σ), ' + fb.l2 + '–' + fb.u2 + '% (2σ)' : '';
+        var said = flag === 'high3' ? ' · beyond 3σ' : flag === 'high2' ? ' · between 2σ and 3σ' :
+          flag === 'low3' ? ' · below the lower 3σ limit' : '';
+        s.push('<circle class="dot' + cls + '" data-b="' + i + '" r="' + (flag && !few ? 4.4 : 2.6) + '" cx="' +
+               (L + cw * i + cw / 2) + '" cy="' + Y(o.rate[i]) + '"><title>' +
+               esc(o.buckets[i].title + ' · NG rate ' + o.rate[i] + '% of ' + num((o.rateN || [])[i]) +
+                   ' first images' + (few ? ' - too few for a trend' : said + lim)) + '</title></circle>');
       }
     }
     s.push('</svg>');
@@ -285,7 +393,8 @@
     var W = Math.max(300, o.width || 760), H = o.height || 220, L = 42, R = 12, T = 10, B = 28;
     var n = o.buckets.length, iw = W - L - R, ih = H - T - B, cw = iw / n, i, j;
     var all = [];
-    o.series.forEach(function (sr) { sr.values.forEach(function (v) { if (v != null) all.push(v); }); });
+    o.series.forEach(function (sr) { sr.values.forEach(function (v, k) {
+      if (v != null && !(sr.ns && (sr.ns[k] || 0) < MIN_N)) all.push(v); }); });
     var sc = scale(Math.max.apply(null, all.concat([0]))), ymax = sc.max;
     var s = ['<svg class="ela-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
              esc(o.aria || '') + '">'];
@@ -315,19 +424,19 @@
         if (sr.values[i] == null) continue;
         s.push('<circle class="dot" data-b="' + i + '" data-s="' + esc(sr.key) + '" r="3" style="' +
                (few(i) ? 'fill:#fff;stroke:' + sr.color + ';stroke-width:1.2' : 'fill:' + sr.color) + '" cx="' +
-               (L + cw * i + cw / 2) + '" cy="' + (T + ih - ih * sr.values[i] / ymax) + '"><title>' +
+               (L + cw * i + cw / 2) + '" cy="' + Math.max(T, T + ih - ih * sr.values[i] / ymax) + '"><title>' +
                esc(o.buckets[i].title + ' · ' + sr.label + ': ' + sr.values[i] + (o.pct ? '%' : '') +
-               (few(i) ? ' of only ' + (sr.ns[i] || 0) + ' images - no trend' : '')) + '</title></circle>');
+               (few(i) ? ' of only ' + (sr.ns[i] || 0) + ' first images - no trend' : '')) + '</title></circle>');
       }
     });
     s.push('</svg>');
     return s.join('');
   }
 
-  /* a donut of the reasons' share - the biggest, then the rest together */
+  /* a donut of the reasons' share - the coloured ones, Other, then the rest together */
   function donutSvg(slices, total, center, sub) {
     var r = 58, sw = 22, C = 2 * Math.PI * r, acc = 0;
-    var s = ['<svg class="ela-svg" viewBox="0 0 160 160" role="img" aria-label="Share of NG images by reason">',
+    var s = ['<svg class="ela-svg" viewBox="0 0 160 160" role="img" aria-label="Share of NG modules by reason">',
              '<circle cx="80" cy="80" r="' + r + '" fill="none" stroke="var(--line2)" stroke-width="' + sw + '"/>'];
     slices.forEach(function (sl) {
       if (!sl.value || !total) return;
@@ -344,42 +453,41 @@
     return s.join('');
   }
 
-  /* the top reasons of a block, the rest as one - for the stack and the donut */
-  function topReasons(block, n) {
-    var top = block.reasons.slice(0, n || TOPN);
-    var rest = block.reasons.slice(n || TOPN);
-    return { top: top, rest: rest, restKeys: rest.map(function (r) { return r.key; }) };
-  }
-  function reasonSeries(block, n) {
-    var t = topReasons(block, n), series = [];
-    t.top.forEach(function (r) {
-      series.push({ key: r.key, label: reasonLabel(r), color: colorOf(r.key),
-                    values: block.trend.map(function (b) { return b.r[r.key] || 0; }) });
+  /* the series of a station's reason charts: each coloured reason and Other in
+     their Pareto order, then the rest as one - modules NG at their first image */
+  function reasonSeries(block) {
+    var st = block.station, map = CMAP[st] || {}, shown = [], rest = [];
+    block.reasons.forEach(function (r) {
+      if (!r.modules) return;                       /* filed on re-images only */
+      if (r.key === 'DF-OTHER' || map[r.key]) shown.push(r); else rest.push(r);
     });
-    if (t.rest.length) {
-      series.push({ key: '__rest', label: t.rest.length + ' more reasons', color: REST,
-                    values: block.trend.map(function (b) {
-                      return t.restKeys.reduce(function (s, k) { return s + (b.r[k] || 0); }, 0); }) });
+    var out = shown.map(function (r) {
+      return { key: r.key, label: reasonLabel(r), color: colorOf(st, r.key), total: r.modules,
+               values: block.trend.map(function (b) { return b.r[r.key] || 0; }) };
+    });
+    if (rest.length) {
+      var keys = rest.map(function (r) { return r.key; });
+      out.push({ key: '__rest', label: rest.length + ' more reason' + (rest.length > 1 ? 's' : ''),
+                 color: REST, total: rest.reduce(function (a, r) { return a + r.modules; }, 0),
+                 values: block.trend.map(function (b) {
+                   return keys.reduce(function (a, k) { return a + (b.r[k] || 0); }, 0); }) });
     }
-    return series;
+    return out;
   }
   function legendHtml(series, attr) {
     return '<div class="ela-legend">' + series.map(function (s) {
-      return '<span data-' + (attr || 'k') + '="' + esc(s.key) + '"><i style="background:' + s.color + '"></i>' +
-             esc(s.label) + '</span>'; }).join('') + '</div>';
+      return '<span data-' + (attr || 'k') + '="' + esc(s.key) + '"><i' + (s.dash ? ' class="dash" style="border-color:' +
+             s.color + '"' : ' style="background:' + s.color + '"') + '></i>' + esc(s.label) + '</span>'; }).join('') + '</div>';
   }
-  function donutBlock(block, slicesN) {
-    var t = topReasons(block, slicesN || TOPN), tot = block.tiles.ng;
-    var slices = t.top.map(function (r) {
-      return { key: r.key, label: reasonLabel(r), value: r.images, color: colorOf(r.key) }; });
-    var restN = t.rest.reduce(function (s, r) { return s + r.images; }, 0);
-    if (restN) slices.push({ key: '__rest', label: t.rest.length + ' more reasons', value: restN, color: REST });
+  function donutBlock(block, series) {
+    var tot = block.tiles.ng_first;
+    var slices = series.map(function (s) { return { key: s.key, label: s.label, value: s.total, color: s.color }; });
     var list = '<ul class="ela-list">' + slices.map(function (sl) {
       return '<li data-k="' + esc(sl.key) + '" title="List these modules"><i style="background:' +
              sl.color + '"></i><span class="nm">' + esc(sl.label) + '</span><b>' + num(sl.value) +
              '</b><em>' + (tot ? Math.round(sl.value * 1000 / tot) / 10 + '%' : '') + '</em></li>';
     }).join('') + '</ul>';
-    return '<div class="ela-donutwrap"><div>' + donutSvg(slices, tot, num(tot), 'NG images') +
+    return '<div class="ela-donutwrap"><div>' + donutSvg(slices, tot, num(tot), 'NG modules') +
            '</div>' + list + '</div>';
   }
 
@@ -392,8 +500,7 @@
 
   /* ---- what the station's machines and folders say ---- */
   function stationInfo(d, st) {
-    var info = (d.stations || []).filter(function (x) { return x.id === st; })[0] || {};
-    return info;
+    return (d.stations || []).filter(function (x) { return x.id === st; })[0] || {};
   }
   function coverageNote(d, st) {
     var cov = d.coverage && d.coverage[st];
@@ -406,101 +513,155 @@
     return '';
   }
 
+  /* ---- a change, and whether it is beyond chance ---- */
+  function sigClass(sig) {
+    return sig === 'up' ? 'up' : sig === 'down' ? 'down' : /^watch/.test(sig || '') ? 'watch' : 'mute';
+  }
+  function changeHtml(r) {
+    if (r.change == null) return '<span class="mute">—</span>';
+    var a = r.change > 0 ? '▲ ' : r.change < 0 ? '▼ ' : '';
+    return '<span class="' + sigClass(r.signal) + '" title="' + esc('Rate of first images ' + pc2(r.prev_rate) +
+      ' → ' + pc2(r.rate) + (r.z == null ? '' : ' · z ' + sgn(r.z) + (r.signal ? '' : ', within chance'))) + '">' +
+      a + Math.abs(r.change).toFixed(2) + ' pts</span>';
+  }
+  function riseText(r) {
+    return pc2(r.prev_rate) + ' → ' + pc2(r.rate) + ' of first images (' + sgn(r.change) + ' pts, z ' + sgn(r.z) + ')';
+  }
+  function coverText(t) {
+    return t.prev.covered ? 'the index covers ' + t.prev.covered + '% of the window before (95% needed)' :
+      'the index has no images before this window';
+  }
+  function prevHtml(t) {
+    var p = t.prev;
+    if (!p.complete) return '<span class="mute">no comparison: ' + esc(coverText(t)) + '</span>';
+    var word = { up: 'rose', down: 'fell', watch_up: 'up — watch', watch_down: 'down — watch' }[p.signal];
+    return 'the window before: ' + pc(p.ng_rate) + ' · ' + (word ? '<span class="' + sigClass(p.signal) + '">' +
+      word + ' (z ' + sgn(p.z) + ')</span>' : '<span class="mute">no change beyond chance</span>');
+  }
+
   /* ---- tiles ---- */
   function kpi(cls, label, value, detail, isText, title) {
     return '<div class="kpi ' + (cls || '') + '"' + (title ? ' title="' + esc(title) + '"' : '') +
            '><label>' + esc(label) + '</label><div class="v' + (isText ? ' txt' : '') + '">' +
            (value == null ? '—' : value) + '</div><div class="d">' + (detail || '') + '</div></div>';
   }
-  function prevText(d, t) {
-    if (!t.prev.complete) return 'no comparison: the index has no images before this window';
-    return 'the window before: ' + pc(t.prev.ng_rate);
-  }
   function tilesHtml(d, b) {
-    var t = b.tiles, st = b.station, out = [];
-    out.push(kpi('', 'Inspected', num(t.decided),
-      num(t.modules) + ' modules' + (t.continuous ? ' · <b>' + num(t.continuous) +
-      '</b> more passed by the machine (continuous), counted apart' : '')));
-    out.push(kpi('k-fail', S.reason ? 'NG rate · this reason' : 'NG rate', t.ng_rate == null ? '—' : t.ng_rate + '%',
-      num(t.ng) + ' NG images · ' + num(t.ng_modules) + ' modules (' + pc(t.ng_rate_modules) + ')<br>' +
-      esc(prevText(d, t))));
-    out.push(kpi('k-pass', 'First-pass yield', t.fpy == null ? '—' : t.fpy + '%',
-      t.new_modules ? 'of ' + num(t.new_modules) + ' modules new to ' + LABEL[st] + ' · ' + num(t.reworked) +
-      ' passed after an NG · ' + num(t.still_ng) + ' still NG' : 'no module new to ' + LABEL[st] + ' in the window',
-      false, 'Modules whose first image ever at the station was taken in this window: passed at that first image'));
+    var t = b.tiles, st = b.station, out = [], pre = st === 'pre_el';
+    out.push(kpi('', 'Inspected', num(t.images),
+      num(t.first) + ' first images · ' + num(t.re) + ' re-images (' + num(t.re_modules) + ' modules ' +
+      (pre ? 'back from rework' : 'imaged again') + ')' + (t.continuous ? '<br><b>' + num(t.continuous) +
+      '</b> more passed by the machine (continuous), counted apart' : ''), false,
+      'A module’s first image at ' + LABEL[st] + ' is its first image; every later one a re-image'));
+    out.push(kpi('k-fail', S.reason ? 'NG rate · this reason' : 'NG rate · first image', pc(t.ng_rate),
+      num(t.ng_first) + ' of ' + num(t.first) + ' modules NG at their first image' +
+      (S.reason ? '' : ' · first-pass yield ' + pc(t.fpy)) + '<br>' + prevHtml(t) +
+      '<br><span class="mute">All images, re-images in: ' + pc(t.ng_rate_all) + '</span>'));
+    out.push(kpi('k-rev', pre ? 'NG again after rework' : 'NG again on a re-image', pc(t.re_rate),
+      t.re ? num(t.re_ng) + ' of ' + num(t.re) + ' re-images NG' +
+      (t.reworked || t.still_ng ? '<br>NG at the first image: ' + num(t.reworked) + ' passed later · ' +
+       num(t.still_ng) + ' not yet' : '') : 'no module imaged again in this window', false,
+      'A module back at ' + LABEL[st] + ' and NG again, of all re-images'));
     out.push(kpi('', 'Top reason', t.top ? esc(reasonLabel(t.top)) : '—',
-      t.top ? num(t.top.images) + ' images · ' + pc(t.top.share) + ' of NG · ' + num(t.top.modules) + ' modules' : 'no NG image', true));
+      t.top ? num(t.top.modules) + ' modules · ' + pc(t.top.share) + ' of first-image NG · ' + pc2(t.top.rate) +
+      ' of first images' : 'no module NG at its first image', true));
     out.push(kpi('k-rev', 'Share of Other', S.reason ? '—' : pc(t.other_share),
-      S.reason ? 'a reason is picked' : num(t.other) + ' NG images filed as Other — no cause recorded'));
-    var rs = t.riser;
+      S.reason ? 'a reason is picked' : num(t.other) + ' modules NG at their first image filed as Other — no cause ' +
+      'recorded' + (t.other_re ? ' · ' + num(t.other_re) + ' more Other filings on re-images' : '')));
+    var rs = t.riser, wt = t.watch;
     out.push(kpi('k-solar', 'Rose most', rs ? esc(reasonLabel(rs)) : '—',
-      rs ? '<span class="up">+' + num(rs.change) + '</span> on the previous window (' + num(rs.prev) +
-      ' → ' + num(rs.images) + ')' : (t.prev.complete ? 'no reason rose' : 'no comparison yet'), true));
+      rs ? '<span class="up">' + esc(riseText(rs)) + '</span>' :
+      !t.prev.complete ? 'no comparison: ' + esc(coverText(t)) :
+      'no reason rose beyond chance' + (wt ? '<br><span class="watch">watch: ' + esc(reasonLabel(wt)) + ', ' +
+      esc(riseText(wt)) + '</span>' : ''), true,
+      'A rise of the rate on first images at least 3 standard errors out (z >= 3); 2 to 3 is one to watch'));
     return '<div class="ela-tiles">' + out.join('') + '</div>';
   }
 
   /* ---- the Pareto ---- */
   function paretoHtml(d, b) {
     if (!b.reasons.length) return '<div class="ela-empty">No NG image in this window.</div>';
-    var max = b.reasons[0].images;
-    var complete = b.tiles.prev.complete;
-    var rows = b.reasons.map(function (r, i) {
-      var ch = r.change == null ? '<span style="color:var(--ink3)">—</span>' :
-        r.change > 0 ? '<span class="up">▲ ' + num(r.change) + '</span>' :
-        r.change < 0 ? '<span class="down">▼ ' + num(-r.change) + '</span>' : '<span style="color:var(--ink3)">=</span>';
-      return '<tr class="click" data-k="' + esc(r.key) + '"><td class="num">' + (i + 1) + '</td>' +
-        '<td><span style="display:inline-flex;align-items:center;gap:6px"><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' +
-        colorOf(r.key) + '"></i>' + esc(r.label) + '</span>' + (r['new'] ? ' <span class="tag t-rev">new</span>' : '') + '</td>' +
-        '<td style="width:30%"><div class="ela-bar-in" style="width:' + (r.images * 100 / max) +
-        '%;background:' + colorOf(r.key) + '"></div></td>' +
-        '<td class="num">' + num(r.images) + '</td><td class="num">' + pc(r.share) + '</td>' +
-        '<td class="num">' + pc(r.cum) + '</td><td class="num">' + num(r.modules) + '</td>' +
-        '<td class="num">' + ch + '</td></tr>';
+    var st = b.station, max = 1;
+    b.reasons.forEach(function (r) { max = Math.max(max, r.modules); });
+    var rank = 0;
+    var rows = b.reasons.map(function (r) {
+      var c = colorOf(st, r.key);
+      return '<tr class="click" data-k="' + esc(r.key) + '" data-kind="' + (r.modules ? 'first_ng' : 'reimage_ng') +
+        '"><td class="num">' + (r.modules ? ++rank : '') + '</td>' +
+        '<td><span style="display:inline-flex;align-items:center;gap:6px">' + swatch(c) + esc(r.label) + '</span>' +
+        (r['new'] ? ' <span class="tag t-rev">new</span>' : '') + '</td>' +
+        '<td style="width:24%">' + (r.modules ? '<div class="ela-bar-in" style="width:' + (r.modules * 100 / max) +
+        '%;background:' + c + '"></div>' : '') + '</td>' +
+        '<td class="num"><b>' + num(r.modules) + '</b></td><td class="num">' + pc2(r.rate) + '</td>' +
+        '<td class="num">' + (r.modules ? pc(r.share) : '—') + '</td>' +
+        '<td class="num">' + (r.cum == null ? '—' : pc(r.cum)) + '</td>' +
+        '<td class="num">' + changeHtml(r) + '</td>' +
+        '<td class="num">' + (r.re ? num(r.re) : '<span class="mute">·</span>') + '</td></tr>';
     }).join('');
-    var gone = (b.gone || []).length ? '<div class="ela-foot" style="padding:0 15px 10px">In the window before and ' +
-      'none in this one: ' + b.gone.map(function (g) { return esc(g.label) + ' (' + num(g.prev) + ')'; }).join(', ') +
-      '.</div>' : '';
+    var gone = (b.gone || []).length ? '<div class="ela-foot" style="padding:0 15px 10px">At first images in the ' +
+      'window before and none in this one: ' + b.gone.map(function (g) {
+        return esc(g.label) + ' (' + num(g.prev) + ', ' + pc2(g.prev_rate) + ')'; }).join(', ') + '.</div>' : '';
+    var t = b.tiles, pre = st === 'pre_el';
     return '<div class="scroll"><table class="ela-t"><thead><tr><th class="num">#</th><th>Reason</th><th></th>' +
-      '<th class="num">NG images</th><th class="num">Share</th><th class="num">Cumulative</th>' +
-      '<th class="num">Modules</th><th class="num">Change</th></tr></thead><tbody>' + rows +
+      '<th class="num">Modules</th><th class="num">Rate</th><th class="num">Share</th><th class="num">Cumulative</th>' +
+      '<th class="num">Change</th><th class="num">Re-images NG</th></tr></thead><tbody>' + rows +
       '</tbody></table></div>' +
-      '<div class="ela-foot" style="padding:0 15px">Change is against the window of the same length just before this one' +
-      (complete ? '.' : ' — not shown: the index holds no images that far back.') + '</div>' + gone;
+      '<div class="ela-foot" style="padding:0 15px">Modules: NG at their first image at ' + LABEL[st] +
+      ' in this window — one image a module, so a re-shot never counts twice. Rate: of the ' + num(t.first) +
+      ' first images. Change: the rate against the window of the same length just before, in points — ' +
+      '<span class="up">red</span> beyond chance (z ≥ 3), <span class="watch">amber</span> one to watch ' +
+      '(z 2–3), grey within chance' + (t.prev.complete ? '' : '; not shown: ' + esc(coverText(t))) +
+      '. Re-images NG: images of modules ' + (pre ? 'back from rework' : 'imaged again') +
+      ' filed under the reason, beside the rank and not in it.</div>' + gone;
   }
 
-  /* ---- reason x shift / machine / line ---- */
+  /* ---- reason x shift / machine / line: rates on first images ---- */
   function heatHtml(b, cols, what) {
-    var reasons = b.reasons.slice(0, 12);
-    if (!cols.length || !b.tiles.decided) {
+    var st = b.station, pre = st === 'pre_el';
+    var reasons = b.reasons.filter(function (r) { return r.modules; }).slice(0, 12);
+    if (!cols.length || !b.tiles.images) {
       return '<div class="ela-empty">' + (b.tiles.continuous ? 'No image a person decided in this window — its ' +
         num(b.tiles.continuous) + ' were passed by the machine (continuous).' : 'No image in this window.') + '</div>';
     }
     var max = 0;
-    cols.forEach(function (c) { reasons.forEach(function (r) { max = Math.max(max, c.r[r.key] || 0); }); });
+    cols.forEach(function (c) {
+      if (c.first < MIN_N) return;
+      reasons.forEach(function (r) { max = Math.max(max, (c.r[r.key] || 0) / c.first); });
+    });
     var head = '<tr><th>Reason</th>' + cols.map(function (c) {
       return '<th class="num" title="' + esc(c.label) + '">' + esc(c.short || c.label) + '</th>'; }).join('') + '</tr>';
-    var sum = '<tr><td><b>Inspected</b></td>' + cols.map(function (c) {
-      return '<td class="cell" data-c="' + esc(c.key) + '" data-kind="all">' + num(c.decided) + '</td>'; }).join('') + '</tr>' +
+    var sum = '<tr><td><b>First images</b></td>' + cols.map(function (c) {
+      return '<td class="cell" data-c="' + esc(c.key) + '" data-kind="first">' + num(c.first) + '</td>'; }).join('') + '</tr>' +
       '<tr><td><b>NG rate</b></td>' + cols.map(function (c) {
-      return '<td class="cell" data-c="' + esc(c.key) + '" data-kind="ng"><b>' + pc(c.rate) + '</b></td>'; }).join('') + '</tr>';
+      return '<td class="cell" data-c="' + esc(c.key) + '" data-kind="first_ng"><b>' + pc(c.rate) + '</b></td>'; }).join('') + '</tr>' +
+      '<tr><td><b>' + (pre ? 'Back from rework · NG again' : 'Re-images · NG again') + '</b></td>' + cols.map(function (c) {
+      return '<td class="cell" data-c="' + esc(c.key) + '" data-kind="reimage_ng" title="' +
+        esc(num(c.re_ng) + ' of ' + num(c.re) + ' re-images NG') + '">' + num(c.re) +
+        (c.re ? ' <span class="mute">· ' + pc(c.re_rate) + '</span>' : '') + '</td>'; }).join('') + '</tr>';
     var rows = reasons.map(function (r) {
-      return '<tr><td><span style="display:inline-flex;align-items:center;gap:6px"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:' +
-        colorOf(r.key) + '"></i>' + esc(reasonLabel(r)) + '</span></td>' + cols.map(function (c) {
-          var v = c.r[r.key] || 0, a = max ? 0.07 + 0.6 * v / max : 0;
-          return '<td class="cell" data-c="' + esc(c.key) + '" data-k="' + esc(r.key) + '" style="background:' +
-            (v ? 'rgba(190,51,37,' + a.toFixed(2) + ')' : 'transparent') + '" title="' +
-            esc(reasonLabel(r) + ' · ' + c.label + ': ' + v + ' NG images') + '">' + (v ? num(v) : '·') + '</td>';
+      return '<tr><td><span style="display:inline-flex;align-items:center;gap:6px">' + swatch(colorOf(st, r.key)) +
+        esc(reasonLabel(r)) + '</span></td>' + cols.map(function (c) {
+          var v = c.r[r.key] || 0, rate = c.first ? v * 100 / c.first : null, few = c.first < MIN_N;
+          var a = !few && max && v ? 0.07 + 0.6 * (v / c.first) / max : 0;
+          return '<td class="cell' + (few && v ? ' few' : '') + '" data-c="' + esc(c.key) + '" data-k="' + esc(r.key) +
+            '" style="background:' + (a ? 'rgba(190,51,37,' + a.toFixed(2) + ')' : 'transparent') + '" title="' +
+            esc(reasonLabel(r) + ' · ' + c.label + ': ' + v + ' of ' + c.first + ' first images' +
+                (few ? ' - too few to compare' : '')) + '">' +
+            (v ? rate.toFixed(1) + '%' : '·') + '</td>';
         }).join('') + '</tr>';
     }).join('');
     return '<div class="scroll"><table class="ela-t" data-what="' + what + '"><thead>' + head +
       '</thead><tbody>' + sum + rows + '</tbody></table></div>' +
-      (b.reasons.length > 12 ? '<div class="ela-foot">The 12 busiest reasons of ' + b.reasons.length + '.</div>' : '');
+      '<div class="ela-foot" style="padding:0 15px 10px">A reason’s rate of each column’s first images, shaded by rate; ' +
+      'a column of fewer than ' + MIN_N + ' first images is not shaded.' +
+      (b.reasons.length > 12 ? ' The 12 busiest reasons.' : '') + '</div>';
   }
 
   function linesHtml(d, b) {
     var st = b.station;
+    var lab = {};
+    b.reasons.forEach(function (r) { lab[r.key] = reasonLabel(r); });
     var cards = b.lines.map(function (l) {
-      if (!l.decided) {
+      if (!l.first && !l.re) {
         return '<div><h4 style="margin:0 0 6px;font-size:12px">' + esc(l.label) + '</h4><div class="ela-empty" style="padding:10px">' +
           (l.configured ? (b.tiles.continuous ? 'No image a person decided on ' : 'No ' + LABEL[st] + ' image on ') +
            esc(l.label) + ' in this window.' :
@@ -508,32 +669,78 @@
            (st === 'pre_el' && l.key === 'A' ? ' (Line A’s Pre-EL is not on the LAN yet)' : '') + '.') + '</div></div>';
       }
       var top = Object.keys(l.r).sort(function (a, z) { return l.r[z] - l.r[a]; }).slice(0, 6);
-      var lab = {};
-      b.reasons.forEach(function (r) { lab[r.key] = reasonLabel(r); });
-      var max = top.length ? l.r[top[0]] : 1;
       return '<div><h4 style="margin:0 0 6px;font-size:12px">' + esc(l.label) + '</h4>' +
-        '<div class="ela-mini"><div><label>Inspected</label><b>' + num(l.decided) + '</b><small>' + num(l.modules) +
-        ' modules</small></div><div><label>NG rate</label><b style="color:var(--fail)">' + pc(l.rate) + '</b><small>' +
-        num(l.ng) + ' NG images · ' + num(l.ng_modules) + ' modules</small></div></div>' +
+        '<div class="ela-mini"><div><label>First images</label><b>' + num(l.first) + '</b><small>' +
+        num(l.re) + ' re-images</small></div><div><label>NG rate</label><b style="color:var(--fail)">' + pc(l.rate) +
+        '</b><small>' + num(l.first_ng) + ' NG at the first image</small></div></div>' +
         '<ul class="ela-list">' + top.map(function (k) {
-          return '<li data-k="' + esc(k) + '" data-line="' + esc(l.key) + '"><i style="background:' + colorOf(k) +
+          return '<li data-k="' + esc(k) + '" data-line="' + esc(l.key) + '"><i style="background:' + colorOf(st, k) +
             '"></i><span class="nm">' + esc(lab[k] || k) + '</span><b>' + num(l.r[k]) + '</b><em>' +
-            pc(l.ng ? Math.round(l.r[k] * 1000 / l.ng) / 10 : null) + '</em></li>';
+            (l.first ? (l.r[k] * 100 / l.first).toFixed(2) + '%' : '') + '</em></li>';
         }).join('') + '</ul></div>';
     }).join('');
     return '<div class="ela-h">' + cards + '</div>';
   }
 
+  /* ---- FQC's decision by the EL reason it read ---- */
+  function fqcHtml(d) {
+    var f = d.fqc;
+    if (!f) return '';
+    var cell = function (v, k, outcome) {
+      return '<td class="cell" data-fqc="' + esc(k) + '" data-outcome="' + (outcome || '') + '">' + num(v) + '</td>';
+    };
+    var rows = f.rows.map(function (r) {
+      var q = r.quality, pp = r.decisions ? r.passed * 100 / r.decisions : 0;
+      return '<tr><td>' + esc(r.label) + (r['new'] ? ' <span class="tag t-rev">new</span>' : '') + '</td>' +
+        cell(r.decisions, r.key, '') + cell(r.passed, r.key, 'pass') +
+        '<td class="num"><b>' + pc(r.pass_rate) + '</b></td>' +
+        '<td style="width:14%"><div class="ela-pf" title="' + esc(num(r.passed) + ' passed · ' + num(r.rejected) +
+        ' rejected') + '"><span style="width:' + pp + '%;background:var(--pass)"></span><span style="width:' + (100 - pp) +
+        '%;background:var(--fail)"></span></div></td>' +
+        cell(r.rejected, r.key, 'reject') + '<td class="num">' + num(q.A) + '</td><td class="num">' + num(q.GY) +
+        '</td><td class="num">' + num(q.BGY) + '</td><td class="num">' + (q.pending ? '<span class="watch">' +
+        num(q.pending) + '</span>' : '0') + '</td></tr>';
+    }).join('');
+    return '<div class="card"><div class="card-h"><h3>FQC’s decision by the EL reason it read<span class="ela-sub">' +
+      num(f.decisions) + ' decisions in this window</span></h3></div><div class="card-b flush"><div class="scroll">' +
+      '<table class="ela-t"><thead><tr><th>EL reason at FQC</th><th class="num">Decisions</th><th class="num">Passed</th>' +
+      '<th class="num">Passed %</th><th></th><th class="num">Rejected</th><th class="num">Quality: A</th>' +
+      '<th class="num">GY</th><th class="num">BGY</th><th class="num">Not graded yet</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="10"><div class="ela-empty">No FQC decision in this window.</div></td></tr>') +
+      '</tbody></table></div><div class="ela-foot" style="padding:0 15px 10px">FQC’s live decisions made in this ' +
+      'window (by when FQC decided), by the folder of the module’s Final EL image that FQC read. A Final EL folder ' +
+      'is the EL operator’s call; FQC decides on the evidence, and Quality grades a reject. This table shows what ' +
+      'was decided, not what should have been.' + (S.line || S.machine ? ' FQC’s records carry no line, so this ' +
+      'table is both lines.' : '') + '</div></div></div>';
+  }
+
+  function controlNote(c) {
+    if (!c) return '';
+    if (!c.ok) {
+      return '<div class="ela-foot">No control limits: ' + (c.center === 0 ? 'no module NG at its first image in ' +
+        'this window.' : num(c.bars_with_images) + ' bars with images; the limits need ' + c.min_bars + '.') + '</div>';
+    }
+    var f = c.flags || {};
+    return '<div class="ela-foot">Control limits: Laney p′ from this window’s own bars — centre ' + c.center +
+      '%, σz ' + c.sigma_z + (c.floored ? ' (below 1, taken as 1: plain p limits)' : ' (the bars vary ' + c.sigma_z +
+      ' times as much as chance alone would, and the limits allow for it)') + '. ' +
+      (f.high3 ? '<span class="up">' + f.high3 + ' bar' + (f.high3 > 1 ? 's' : '') + ' above the red line</span> ' +
+       '(beyond 3σ). ' : 'No bar beyond 3σ. ') +
+      (f.high2 ? '<span class="watch">' + f.high2 + ' between the amber and red lines</span> (2–3σ). ' : '') +
+      (f.low3 ? '<span class="down">' + f.low3 + ' below the lower red line</span>. ' : '') +
+      'A bar of fewer than ' + MIN_N + ' first images is hollow and never flagged.</div>';
+  }
+
   /* ---- one station ---- */
   function single(d, b) {
-    var st = b.station, t = b.tiles, info = stationInfo(d, st), h = [];
+    var st = b.station, t = b.tiles, info = stationInfo(d, st), h = [], pre = st === 'pre_el';
     if (!info.configured) {
       return '<div class="note n-warn"><span>&#9888;</span><span>No ' + LABEL[st] + ' folder is set ' +
         '(Admin › Stations &amp; sources) — nothing is read, so there is nothing to show.</span></div>';
     }
     var cov = coverageNote(d, st);
     if (cov) h.push('<div class="note n-warn" style="margin-bottom:10px"><span>&#9432;</span><span>' + esc(cov) + '</span></div>');
-    if (!t.decided && t.continuous) {
+    if (!t.images && t.continuous) {
       h.push('<div class="note n-info" style="margin-bottom:10px"><span>&#9432;</span><span>All ' + num(t.continuous) +
         ' ' + LABEL[st] + ' images in this window were passed by the machine in continuous mode — no operator ' +
         'decided any, so there is no NG figure.' + (st === 'post_el' ? ' Post EL may run continuous.' :
@@ -542,30 +749,38 @@
     h.push(tilesHtml(d, b));
     var grain = GRAIN[d.window.step_minutes] || '';
     var series = reasonSeries(b);
-    h.push('<div class="ela-2"><div class="card"><div class="card-h"><h3>NG images by reason<span class="ela-sub">' +
-      esc(grain) + ' · red line: NG rate</span></h3></div><div class="card-b" data-chart="stack">' +
-      (t.ng ? stackSvg({ buckets: d.window.buckets, series: series, unit: 'NG images', width: chartW('wide'),
-        rate: b.trend.map(function (x) { return x.rate; }), rateN: b.trend.map(function (x) { return x.decided; }),
-        aria: 'NG images by reason, ' + grain }) +
-        legendHtml(series) : '<div class="ela-empty">No NG image in this window.</div>') + '</div></div>' +
-      '<div class="card"><div class="card-h"><h3>Reason share</h3></div><div class="card-b" data-chart="donut">' +
-      (t.ng ? donutBlock(b) : '<div class="ela-empty">No NG image in this window.</div>') + '</div></div></div>');
-    var vol = [{ key: '__decided', label: 'Inspected (decided by a person)', color: '#9DB4CC',
-                 values: b.trend.map(function (x) { return x.decided; }) }];
+    h.push('<div class="ela-2"><div class="card"><div class="card-h"><h3>NG at the first image, by reason<span class="ela-sub">' +
+      esc(grain) + ' · modules · point at a reason to see it alone</span></h3></div><div class="card-b" data-chart="stack">' +
+      (t.ng_first ? stackSvg({ buckets: d.window.buckets, series: series, unit: 'modules NG at their first image',
+        width: chartW('wide'), solo: true, aria: 'Modules NG at their first image by reason, ' + grain }) +
+        legendHtml(series) : '<div class="ela-empty">No module NG at its first image in this window.</div>') + '</div></div>' +
+      '<div class="card"><div class="card-h"><h3>Reason share<span class="ela-sub">modules NG at the first image</span></h3></div>' +
+      '<div class="card-b" data-chart="donut">' + (t.ng_first ? donutBlock(b, series) :
+        '<div class="ela-empty">No module NG at its first image in this window.</div>') + '</div></div></div>');
+    var vol = [{ key: '__first', label: 'First images', color: '#9DB4CC',
+                 values: b.trend.map(function (x) { return x.first; }) }];
+    if (t.re) vol.push({ key: '__re', label: pre ? 'Re-images (back from rework)' : 'Re-images', color: '#CDBFE0',
+                         values: b.trend.map(function (x) { return x.re; }) });
     if (t.continuous) vol.push({ key: '__cont', label: 'Passed by the machine (continuous)', color: '#DCE3EA',
                                  values: b.trend.map(function (x) { return x.cont; }) });
-    h.push('<div class="card"><div class="card-h"><h3>Images inspected and NG rate<span class="ela-sub">' + esc(grain) +
-      '</span></h3></div><div class="card-b" data-chart="volume">' +
-      stackSvg({ buckets: d.window.buckets, series: vol, unit: 'images', height: 210, width: chartW('full'),
-        rate: b.trend.map(function (x) { return x.rate; }), rateN: b.trend.map(function (x) { return x.decided; }),
-        aria: 'Images inspected and NG rate' }) +
-      legendHtml(vol.concat([{ key: '__rate', label: 'NG rate (right axis)', color: 'var(--fail)' }])) + '</div></div>');
-    h.push('<div class="card"><div class="card-h"><h3>Pareto · every reason</h3></div><div class="card-b flush" data-chart="pareto">' +
-      paretoHtml(d, b) + '</div></div>');
+    var keys = vol.concat([{ key: '__rate', label: 'NG rate at the first image (right axis)', color: 'var(--fail)' }]);
+    if (b.control && b.control.ok) {
+      keys.push({ key: '__lim3', label: '3σ limit', color: 'var(--fail)', dash: true });
+      keys.push({ key: '__lim2', label: '2σ limit', color: 'var(--review)', dash: true });
+    }
+    h.push('<div class="card"><div class="card-h"><h3>Images inspected and the NG rate at the first image' +
+      '<span class="ela-sub">' + esc(grain) + '</span></h3></div><div class="card-b" data-chart="volume">' +
+      stackSvg({ buckets: d.window.buckets, series: vol, unit: 'images', height: 230, width: chartW('full'),
+        rate: b.trend.map(function (x) { return x.rate; }), rateN: b.trend.map(function (x) { return x.first; }),
+        control: b.control, aria: 'Images inspected and the NG rate at the first image' }) +
+      legendHtml(keys) + controlNote(b.control) + '</div></div>');
+    h.push('<div class="card"><div class="card-h"><h3>Pareto · every reason<span class="ela-sub">modules NG at their ' +
+      'first image</span></h3></div><div class="card-b flush" data-chart="pareto">' + paretoHtml(d, b) + '</div></div>');
+    if (st === 'final_el') h.push(fqcHtml(d));
     var shiftCols = b.shifts.map(function (s) { return { key: s.key, label: 'Shift ' + s.key, short: s.key + ' shift',
-      decided: s.decided, rate: s.rate, r: s.r }; });
+      first: s.first, rate: s.rate, re: s.re, re_ng: s.re_ng, re_rate: s.re_rate, r: s.r }; });
     var machCols = b.machines.map(function (m) { return { key: m.key, label: m.label,
-      short: machineShort(m.key), decided: m.decided, rate: m.rate, r: m.r }; });
+      short: machineShort(m.key), first: m.first, rate: m.rate, re: m.re, re_ng: m.re_ng, re_rate: m.re_rate, r: m.r }; });
     h.push('<div class="ela-h"><div class="card"><div class="card-h"><h3>Reason by shift</h3></div>' +
       '<div class="card-b flush" data-chart="shift">' + heatHtml(b, shiftCols, 'shift') + '</div></div>' +
       '<div class="card"><div class="card-h"><h3>Reason by machine</h3></div><div class="card-b flush" data-chart="machine">' +
@@ -591,19 +806,20 @@
           (st === 'pre_el' && S.line === 'A' ? ' (Line A’s Pre-EL is not on the LAN yet)' : '') +
           ' — nothing is read there.</div>';
       } else {
+        var series = reasonSeries(b);
         body = '<div class="ela-mini">' +
-          '<div><label>Inspected</label><b>' + num(t.decided) + '</b><small>' + num(t.modules) + ' modules</small></div>' +
-          '<div><label>NG rate</label><b style="color:var(--fail)">' + pc(t.ng_rate) + '</b><small>' + num(t.ng) +
-          ' images · ' + num(t.ng_modules) + ' modules</small></div>' +
-          '<div><label>First-pass yield</label><b style="color:var(--pass)">' + pc(t.fpy) + '</b><small>of ' +
-          num(t.new_modules) + ' new modules</small></div>' +
+          '<div><label>First images</label><b>' + num(t.first) + '</b><small>' + num(t.re) + ' re-images</small></div>' +
+          '<div><label>NG rate · first image</label><b style="color:var(--fail)">' + pc(t.ng_rate) + '</b><small>' +
+          num(t.ng_first) + ' modules</small></div>' +
+          '<div><label>NG again on a re-image</label><b style="color:var(--review)">' + pc(t.re_rate) + '</b><small>' +
+          num(t.re_ng) + ' of ' + num(t.re) + '</small></div>' +
           '<div><label>Passed by machine</label><b>' + num(t.continuous) + '</b><small>continuous · apart</small></div>' +
-          '</div>' + (t.ng ? donutBlock(b, 5) + '<div style="margin-top:10px" data-chart="stack" data-st="' + st + '">' +
-          stackSvg({ buckets: d.window.buckets, series: reasonSeries(b, 5), unit: 'NG images', height: 170,
-                     width: chartW('third'), aria: LABEL[st] + ' NG images by reason' }) + '</div>' :
-          '<div class="ela-empty">' + (!t.decided && t.continuous ?
+          '</div>' + (t.ng_first ? donutBlock(b, series) + '<div style="margin-top:10px" data-chart="stack" data-st="' + st + '">' +
+          stackSvg({ buckets: d.window.buckets, series: series, unit: 'modules NG at their first image', height: 170,
+                     width: chartW('third'), solo: true, aria: LABEL[st] + ' modules NG at their first image by reason' }) +
+          '</div>' : '<div class="ela-empty">' + (!t.images && t.continuous ?
             'Every image was passed by the machine (continuous) — no NG figure.' :
-            'No NG image in this window.' + (t.continuous ? ' ' + num(t.continuous) +
+            'No module NG at its first image in this window.' + (t.continuous ? ' ' + num(t.continuous) +
             ' more were passed by the machine (continuous), counted apart.' : '')) + '</div>');
       }
       return '<div class="card ela-st" data-st="' + st + '"><div class="card-h"><h3><button onclick="elanStation(\'' + st +
@@ -615,36 +831,46 @@
     var rateSeries = ORDER.filter(function (st) { return stationInfo(d, st).configured; }).map(function (st) {
       return { key: st, label: LABEL[st], color: SCOL[st],
                values: d.blocks[st].trend.map(function (x) { return x.rate; }),
-               ns: d.blocks[st].trend.map(function (x) { return x.decided; }) }; });
-    h.push('<div class="card"><div class="card-h"><h3>NG rate by station<span class="ela-sub">' +
-      esc(GRAIN[d.window.step_minutes] || '') + ' · images a person decided</span></h3></div><div class="card-b" data-chart="rates">' +
+               ns: d.blocks[st].trend.map(function (x) { return x.first; }) }; });
+    h.push('<div class="card"><div class="card-h"><h3>NG rate at the first image, by station<span class="ela-sub">' +
+      esc(GRAIN[d.window.step_minutes] || '') + '</span></h3></div><div class="card-b" data-chart="rates">' +
       linesSvg({ buckets: d.window.buckets, series: rateSeries, pct: true, width: chartW('full'),
-                 aria: 'NG rate by station' }) +
+                 aria: 'NG rate at the first image by station' }) +
       legendHtml(rateSeries, 's') + '</div></div>');
 
-    /* reason x station - never a total across them */
-    var keys = {}, lab = {};
-    ORDER.forEach(function (st) { d.blocks[st].reasons.forEach(function (r) {
-      keys[r.key] = Math.max(keys[r.key] || 0, r.share || 0); lab[r.key] = reasonLabel(r); }); });
-    var rk = Object.keys(keys).sort(function (a, z) { return keys[z] - keys[a]; });
-    var byKey = {};
-    ORDER.forEach(function (st) { byKey[st] = {}; d.blocks[st].reasons.forEach(function (r) { byKey[st][r.key] = r; }); });
+    /* reason x station, as rates of each station's first images - never a total across them */
+    var best = {}, lab = {}, byKey = {};
+    ORDER.forEach(function (st) {
+      byKey[st] = {};
+      d.blocks[st].reasons.forEach(function (r) {
+        if (!r.modules) return;
+        byKey[st][r.key] = r;
+        best[r.key] = Math.max(best[r.key] || 0, r.rate || 0);
+        lab[r.key] = reasonLabel(r);
+      });
+    });
+    var rk = Object.keys(best).sort(function (a, z) { return best[z] - best[a]; });
     var rows = rk.map(function (k) {
-      return '<tr><td><span style="display:inline-flex;align-items:center;gap:6px"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:' +
-        colorOf(k) + '"></i>' + esc(lab[k]) + '</span></td>' + ORDER.map(function (st) {
+      return '<tr><td>' + esc(lab[k]) + '</td>' + ORDER.map(function (st) {
           var r = byKey[st][k];
-          return r ? '<td class="cell" data-st="' + st + '" data-k="' + esc(k) + '" title="List these modules">' + num(r.images) +
-            ' <span style="color:var(--ink3)">· ' + num(r.modules) + ' mod · ' + pc(r.share) + '</span></td>' :
+          return r ? '<td class="cell" data-st="' + st + '" data-k="' + esc(k) + '" title="' +
+            esc(num(r.modules) + ' modules NG at their first image of ' + num(d.blocks[st].tiles.first)) + '">' +
+            pc2(r.rate) + ' <span class="mute">· ' + num(r.modules) + '</span></td>' :
             '<td style="text-align:right;color:var(--ink3)">·</td>';
         }).join('') + '</tr>';
     }).join('');
-    h.push('<div class="card"><div class="card-h"><h3>Reason by station<span class="ela-sub">NG images · modules · share of the station’s NG</span></h3></div>' +
+    h.push('<div class="card"><div class="card-h"><h3>Reason by station<span class="ela-sub">rate of the station’s ' +
+      'first images · modules</span></h3></div>' +
       '<div class="card-b flush"><div class="scroll"><table class="ela-t"><thead><tr><th>Reason</th>' +
-      ORDER.map(function (st) { var t = d.blocks[st].tiles; return '<th class="num">' + LABEL[st] + '<br><span style="text-transform:none">' +
-        num(t.decided) + ' inspected · ' + pc(t.ng_rate) + ' NG</span></th>'; }).join('') +
-      '</tr></thead><tbody>' + (rows || '<tr><td colspan="4"><div class="ela-empty">No NG image in this window.</div></td></tr>') +
-      '</tbody></table></div><div class="ela-foot" style="padding:0 15px 10px">No total column: one module is imaged at each station, so adding them would count it two or three times.</div></div></div>');
+      ORDER.map(function (st) { var t = d.blocks[st].tiles; return '<th class="num">' + LABEL[st] +
+        '<br><span style="text-transform:none">' + num(t.first) + ' first images · ' + pc(t.ng_rate) + ' NG</span></th>'; }).join('') +
+      '</tr></thead><tbody>' + (rows || '<tr><td colspan="4"><div class="ela-empty">No module NG at its first image in this window.</div></td></tr>') +
+      '</tbody></table></div><div class="ela-foot" style="padding:0 15px 10px">No total column: one module is imaged at each ' +
+      'station, so adding them would count it two or three times. The seven reasons the plant files most keep their ' +
+      'colour everywhere; another can take a spare one where it shares a chart with the reason it shares a colour ' +
+      'with.</div></div></div>');
 
+    h.push(fqcHtml(d));
     h.push(flowsHtml(d));
     return h.join('');
   }
@@ -737,7 +963,11 @@
   }
 
   function draw(d) {
-    assignColors(d);
+    if (d.min_n) MIN_N = d.min_n;
+    CMAP = {};
+    Object.keys(d.blocks).forEach(function (st) {
+      CMAP[st] = colorMap(d.blocks[st], d.station ? TOPN : TOPN_CARD);
+    });
     drawControls(d);
     var al = d.alerts || [];
     $('elaAlerts').innerHTML = al.length ? '<div class="note n-bad" style="margin-bottom:10px"><span>&#9888;</span><span>' +
@@ -841,11 +1071,36 @@
     $(x[0]).addEventListener('change', function () { S[x[1]] = $(x[0]).value; window.elanLoad(); });
   });
 
+  /* ---- point at a reason in a stacked chart: it alone ---- */
+  function isolate(chart, k) {
+    if (!chart || chart.__iso === k) return;
+    chart.__iso = k;
+    chart.classList.toggle('iso', !!k);
+    Array.prototype.forEach.call(chart.querySelectorAll('.solo'), function (g) {
+      g.classList.toggle('on', !!k && g.getAttribute('data-k') === k); });
+    Array.prototype.forEach.call(chart.querySelectorAll('.ela-legend [data-k]'), function (c) {
+      c.classList.toggle('dim', !!k && c.getAttribute('data-k') !== k); });
+  }
+  $('elaBody').addEventListener('mouseover', function (e) {
+    var chart = e.target.closest('[data-chart="stack"]');
+    if (!chart) return;
+    var el = e.target.closest('[data-k]');
+    if (el && chart.contains(el)) isolate(chart, el.getAttribute('data-k'));
+  });
+  $('elaBody').addEventListener('mouseout', function (e) {
+    var chart = e.target.closest('[data-chart="stack"]');
+    if (chart && !(e.relatedTarget && chart.contains(e.relatedTarget))) isolate(chart, null);
+  });
+
   /* ---- click anything: its modules ---- */
   $('elaBody').addEventListener('click', function (e) {
     if (!D) return;
-    var t = e.target.closest('[data-b],[data-k],[data-c],[data-flow],[data-s],tr.click,li[data-k]');
+    var t = e.target.closest('[data-b],[data-k],[data-c],[data-flow],[data-s],[data-fqc],tr.click,li[data-k]');
     if (!t || t.closest('button')) return;
+    if (t.hasAttribute('data-fqc')) {
+      return drill({ station: 'final_el', kind: 'fqc', reason: t.getAttribute('data-fqc'),
+                     outcome: t.getAttribute('data-outcome') || '' });
+    }
     var holder = t.closest('[data-st]');
     var st = t.getAttribute('data-s') || (holder && holder.getAttribute('data-st')) || D.station;
     if (t.hasAttribute('data-s') && !t.hasAttribute('data-b')) {
@@ -857,23 +1112,25 @@
     if (t.hasAttribute('data-flow')) {
       ctx = { station: '', flow: t.getAttribute('data-flow'), sub: t.getAttribute('data-sub') || '' };
       if (k) ctx.reason = k;
-      return drill(ctx, null);
+      return drill(ctx);
     }
-    if (k === '__rate') return;
-    if (k && k !== '__rest' && k !== '__decided' && k !== '__cont') { ctx.reason = k; }
-    if (k === '__cont') ctx.kind = 'continuous';
-    else if (k === '__decided') ctx.kind = 'all';
-    else ctx.kind = 'ng';
+    if (k === '__rate' || /^__lim/.test(k || '')) return;
+    ctx.kind = t.getAttribute('data-kind') || 'first_ng';
+    if (k === '__first') ctx.kind = 'first';
+    else if (k === '__re') ctx.kind = 'reimage';
+    else if (k === '__cont') ctx.kind = 'continuous';
+    else if (k && k !== '__rest') ctx.reason = k;
     if (t.hasAttribute('data-b')) ctx.bucket = t.getAttribute('data-b');
-    if (kind === 'volume' && !k && t.hasAttribute('data-b')) ctx.kind = 'all';
+    if (kind === 'volume' && !k && t.hasAttribute('data-b')) {
+      ctx.kind = t.classList.contains('dot') ? 'first_ng' : 'first';
+    }
     if (t.hasAttribute('data-c')) {
       var what = t.closest('table').getAttribute('data-what');
       ctx[what] = t.getAttribute('data-c');
       if (t.getAttribute('data-kind')) ctx.kind = t.getAttribute('data-kind');
     }
     if (t.hasAttribute('data-line')) ctx.line = t.getAttribute('data-line');
-    if (k === '__rest') ctx.kind = 'ng';
-    drill(ctx, null);
+    drill(ctx);
   });
 
   function ctxTitle(ctx) {
@@ -883,6 +1140,7 @@
       var lab = ctx.reason;
       Object.keys(D.blocks).forEach(function (st) { D.blocks[st].reasons.forEach(function (r) {
         if (r.key === ctx.reason) lab = reasonLabel(r); }); });
+      ((D.fqc && D.fqc.rows) || []).forEach(function (r) { if (r.key === ctx.reason) lab = r.label; });
       bits.push(lab);
     }
     if (ctx.shift) bits.push(ctx.shift + ' shift');
@@ -947,8 +1205,10 @@
             ' · ' + when(w.start) + ' to ' + when(w.end), 'Filters: ' + filterText()]
       .concat(extra || [])
       .concat(['Read ' + when(D.generated_at) + ' by ICON TRACE. Images are counted by when they were taken, ' +
-               'on the factory day (06:00 to 06:00). Images a machine passed in continuous mode are counted ' +
-               'apart and are in no NG rate. Stations are never added together.']);
+               'on the factory day (06:00 to 06:00). The NG rate is on each module’s first image at a station; ' +
+               're-images are counted apart. A change is of the rate, with its z (3 or more: beyond chance). ' +
+               'Images a machine passed in continuous mode are counted apart and are in no NG rate. Stations ' +
+               'are never added together.']);
   }
   function xlsx(name, sheets) {
     toastMsg('Building the Excel file…');
@@ -968,43 +1228,66 @@
       })
       .catch(function (e) { toastMsg('Export failed — ' + e.message); });
   }
+  function opt(v) { return v == null ? '' : v; }
   window.elanExport = function () {
     if (!D) return;
     var sheets = [], w = D.window;
     Object.keys(D.blocks).forEach(function (st) {
-      var b = D.blocks[st], t = b.tiles, L = LABEL[st];
+      var b = D.blocks[st], t = b.tiles, L = LABEL[st], c = b.control || {};
+      var rise = function (r) { return r ? pc2(r.prev_rate) + ' → ' + pc2(r.rate) + ' (' + sgn(r.change) + ' pts, z ' + sgn(r.z) + ')' : ''; };
       sheets.push({ title: L + ' summary', preface: preface(), columns: ['Measure', 'Value', 'Detail'], rows: [
-        ['Images inspected (decided by a person)', t.decided, t.modules + ' modules'],
+        ['Images inspected (decided by a person)', t.images, t.modules + ' modules'],
+        ['First images', t.first, 'a module’s first decided image at ' + L + ', ever'],
+        ['Re-images', t.re, t.re_modules + ' modules imaged again'],
         ['Passed by the machine (continuous), counted apart', t.continuous, t.continuous_modules + ' modules'],
-        ['NG images', t.ng, t.ng_modules + ' modules'],
-        ['NG rate (images)', pc(t.ng_rate), 'modules: ' + pc(t.ng_rate_modules)],
-        ['First-pass yield', pc(t.fpy), 'of ' + t.new_modules + ' modules new to ' + L + '; ' + t.reworked +
-         ' passed after an NG; ' + t.still_ng + ' still NG'],
-        ['Top reason', t.top ? reasonLabel(t.top) : '—', t.top ? t.top.images + ' images' : ''],
-        ['Share of Other', pc(t.other_share), t.other + ' images'],
-        ['Rose most', t.riser ? reasonLabel(t.riser) : '—', t.riser ? '+' + t.riser.change + ' (' + t.riser.prev +
-         ' → ' + t.riser.images + ')' : ''],
-        ['Previous window NG rate', pc(t.prev.ng_rate), t.prev.complete ? '' : 'the index has no images that far back']] });
-      sheets.push({ title: L + ' Pareto', preface: preface(), columns: ['#', 'Reason', 'New folder', 'NG images', 'Share %',
-        'Cumulative %', 'Modules', 'Previous window', 'Change'], rows: b.reasons.map(function (r, i) {
-          return [i + 1, r.label, r['new'] ? 'yes' : '', r.images, r.share, r.cum, r.modules,
-                  r.prev == null ? '' : r.prev, r.change == null ? '' : r.change]; }) });
-      var rk = b.reasons.map(function (r) { return r.key; });
-      sheets.push({ title: L + ' trend', preface: preface(), columns: ['Bar', 'From', 'To', 'Inspected', 'NG', 'NG rate %',
-        'Passed by machine'].concat(b.reasons.map(function (r) { return r.label; })),
-        rows: b.trend.map(function (x, i) {
+        ['NG rate at the first image', pc(t.ng_rate), t.ng_first + ' of ' + t.first + ' first images'],
+        ['NG rate, all images (re-images in)', pc(t.ng_rate_all), t.ng_images + ' of ' + t.images + ' images'],
+        ['First-pass yield', pc(t.fpy), t.first_pass + ' passed at the first image; ' + t.reworked +
+         ' passed after an NG; ' + t.still_ng + ' not yet'],
+        ['NG again on a re-image', pc(t.re_rate), t.re_ng + ' of ' + t.re + ' re-images'],
+        ['Top reason', t.top ? reasonLabel(t.top) : '—', t.top ? t.top.modules + ' modules; ' + pc(t.top.share) + ' of first-image NG' : ''],
+        ['Share of Other', pc(t.other_share), t.other + ' modules; ' + t.other_re + ' more Other filings on re-images'],
+        ['Rose most (z 3 or more)', t.riser ? reasonLabel(t.riser) : '—', rise(t.riser)],
+        ['To watch (z 2 to 3)', t.watch ? reasonLabel(t.watch) : '—', rise(t.watch)],
+        ['The window before: NG rate at the first image', t.prev.complete ? pc(t.prev.ng_rate) : '—',
+         t.prev.complete ? (t.prev.z == null ? '' : 'z ' + sgn(t.prev.z)) : coverText(t)],
+        ['Control limits (Laney p′)', c.ok ? 'centre ' + c.center + '%' : '—',
+         c.ok ? 'sigma-z ' + c.sigma_z + (c.floored ? ' (taken as 1)' : '') : (c.bars_with_images || 0) + ' bars with images; ' + (c.min_bars || 8) + ' needed']] });
+      sheets.push({ title: L + ' Pareto', preface: preface(['Modules: NG at their first image. Rate: of the ' + t.first + ' first images.']),
+        columns: ['#', 'Reason', 'New folder', 'Modules', 'Rate %', 'Share %', 'Cumulative %', 'Rate % before',
+                  'Change (points)', 'z', 'Beyond chance', 'Re-images NG'],
+        rows: b.reasons.map(function (r, i) {
+          return [r.modules ? i + 1 : '', r.label, r['new'] ? 'yes' : '', r.modules, opt(r.rate), opt(r.share), opt(r.cum),
+                  opt(r.prev_rate), opt(r.change), opt(r.z),
+                  { up: 'rose', down: 'fell', watch_up: 'watch (up)', watch_down: 'watch (down)' }[r.signal] || '', r.re]; }) });
+      var rk = b.reasons.filter(function (r) { return r.modules; }).map(function (r) { return r.key; });
+      var rl = b.reasons.filter(function (r) { return r.modules; }).map(function (r) { return r.label; });
+      sheets.push({ title: L + ' trend', preface: preface(), columns: ['Bar', 'From', 'To', 'First images', 'NG at the first image',
+        'NG rate %', 'Re-images', 'NG again', 'Passed by machine', 'Lower 3σ %', 'Lower 2σ %', 'Upper 2σ %', 'Upper 3σ %', 'Flag']
+        .concat(rl), rows: b.trend.map(function (x, i) {
+          var cb = c.ok && c.bars[i];
           return [w.buckets[i].label, w.buckets[i].start.replace('T', ' '), w.buckets[i].end.replace('T', ' '),
-                  x.decided, x.ng, x.rate == null ? '' : x.rate, x.cont].concat(rk.map(function (k) { return x.r[k] || 0; }));
+                  x.first, x.first_ng, opt(x.rate), x.re, x.re_ng, x.cont,
+                  cb ? cb.l3 : '', cb ? cb.l2 : '', cb ? cb.u2 : '', cb ? cb.u3 : '',
+                  cb && cb.flag ? { high3: 'beyond 3σ', high2: '2σ to 3σ', low3: 'below 3σ' }[cb.flag] : '']
+            .concat(rk.map(function (k) { return x.r[k] || 0; }));
         }) });
       [['shift', b.shifts], ['machine', b.machines], ['line', b.lines]].forEach(function (pair) {
         sheets.push({ title: L + ' by ' + pair[0], preface: preface(), columns: [pair[0][0].toUpperCase() + pair[0].slice(1),
-          'Inspected', 'NG', 'NG rate %', 'Modules', 'NG modules'].concat(b.reasons.map(function (r) { return r.label; })),
-          rows: pair[1].map(function (c) {
-            return [c.label || c.key, c.decided, c.ng, c.rate == null ? '' : c.rate, c.modules, c.ng_modules]
-              .concat(rk.map(function (k) { return c.r[k] || 0; }));
+          'First images', 'NG at the first image', 'NG rate %', 'Re-images', 'NG again', 'NG again %'].concat(rl),
+          rows: pair[1].map(function (x) {
+            return [x.label || x.key, x.first, x.first_ng, opt(x.rate), x.re, x.re_ng, opt(x.re_rate)]
+              .concat(rk.map(function (k) { return x.r[k] || 0; }));
           }) });
       });
     });
+    if (D.fqc) {
+      sheets.push({ title: 'FQC by EL reason', preface: preface(['FQC’s live decisions made in the window, by the EL ' +
+        'folder FQC read' + (S.line || S.machine ? ' - FQC’s records carry no line, so both lines' : '')]),
+        columns: ['EL reason at FQC', 'Decisions', 'Passed', 'Passed %', 'Rejected', 'Quality A', 'GY', 'BGY', 'Not graded yet'],
+        rows: D.fqc.rows.map(function (r) { return [r.label, r.decisions, r.passed, opt(r.pass_rate), r.rejected,
+          r.quality.A, r.quality.GY, r.quality.BGY, r.quality.pending]; }) });
+    }
     if (D.flows) {
       sheets.push({ title: 'Pre-EL NG next', preface: preface(['Modules NG at Pre-EL in the window, and what happened next']),
         columns: ['Pre-EL reason', 'Modules', 'Passed after rework', 'Rework median (min)', 'At Final EL', 'Final EL pass',
