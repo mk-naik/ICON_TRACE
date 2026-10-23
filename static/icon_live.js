@@ -5749,7 +5749,14 @@ function wireFqcAnomalies() {
     document.addEventListener('click', function (e) {
       var btn = e.target && e.target.closest ? e.target.closest('button,a') : null;
       if (!btn || !btn.getAttribute) return;
-      if ((btn.getAttribute('onclick') || '').indexOf('exportNote') === -1) return;
+      /* icon_table.js's own Export (data-role="export" in its card - EL
+         Stations, Loading Verification's list) built a CSV in the browser
+         that nothing recorded, though every export is (DECISIONS 9). It goes
+         the same way as every other Export now (overnight audit, 24 Oct). */
+      var tableExport = btn.getAttribute('data-role') === 'export' &&
+                        btn.closest('[data-itable]');
+      if ((btn.getAttribute('onclick') || '').indexOf('exportNote') === -1 &&
+          !tableExport) return;
       /* capture phase, so v4's inline handler never runs and the placeholder
          toast never appears beside the real file */
       e.preventDefault();

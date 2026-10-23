@@ -313,6 +313,32 @@ def t_screen_on_page():
         assert q.errors == [], q.errors
 
 
+@test("EL Stations on the page: Export is the recorded Excel export of the rows on "
+      "screen - it built a CSV in the browser that nothing recorded (24 Oct 2026)")
+def t_export_recorded():
+    seed_screen()
+    with H.browser() as b:
+        pg = H.open_page(b, "elst")
+        pg.wait_for_selector("#v-elst.on #elRows", timeout=10000)
+        pg.fill("#elFrom", "2026-10-15")
+        pg.fill("#elTo", "2026-10-15")
+        pg.wait_for_function("document.getElementById('elRows').textContent.indexOf('%s') >= 0"
+                             % IN_REWORK, timeout=10000)
+        pg.wait_for_timeout(300)
+        with pg.expect_request("**/api/export/xlsx", timeout=8000) as info:
+            pg.click("#v-elst [data-role=export]")
+        body = info.value.post_data_json
+        assert body["name"] == "el-stations", body["name"]
+        sent = [r[0] for s in body["sheets"] for r in s["rows"]]
+        assert set(sent) == {BOTH, IN_REWORK, REJECTED}, sent
+        pg.wait_for_timeout(500)
+        with store.conn() as (cx, cur):
+            logged = store.rows(cur, "SELECT entity_id FROM dispatch_audit "
+                                     "WHERE action='export.xlsx'", ())
+        assert [r["entity_id"] for r in logged] == ["el-stations"], [dict(r) for r in logged]
+        assert pg.errors == [], pg.errors
+
+
 @test("EL Stations on the page: a result belongs to its station - Pre-EL picked offers "
       "only Pre-EL's results, and picking Post EL clears a Pre-EL result (18 Oct 2026)")
 def t_result_follows_station():

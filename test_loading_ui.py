@@ -128,6 +128,28 @@ def t_list_count_badge():
         assert not pg.errors, pg.errors
 
 
+@test("the list's Export is the recorded Excel export of the rows on screen - it "
+      "built a CSV in the browser that nothing recorded (overnight audit, 24 Oct)")
+def t_list_export_recorded():
+    c = T.setup()
+    issued(c, [14, 15], "INV-UI-EXPORT")
+    with H.browser() as b:
+        pg = H.open_page(b, role="Dispatch Operator")
+        open_list(pg, "2026-09-01")
+        assert len(listed(pg)) == 1, listed(pg)
+        with pg.expect_request("**/api/export/xlsx", timeout=8000) as info:
+            pg.click("#v-loading-list [data-role=export]")
+        body = info.value.post_data_json
+        assert body["name"] == "loading", body["name"]
+        assert sum(len(s["rows"]) for s in body["sheets"]) == 1, body["sheets"]
+        pg.wait_for_timeout(500)
+        with store.conn() as (cx, cur):
+            logged = store.rows(cur, "SELECT entity_id FROM dispatch_audit "
+                                     "WHERE action='export.xlsx'", ())
+        assert [r["entity_id"] for r in logged] == ["loading"], [dict(r) for r in logged]
+        assert not pg.errors, pg.errors
+
+
 @test("Reset clears every field: the dates go back to the day the list opened on, "
       "the status to All and the search empty - it reset only the search box")
 def t_list_reset():

@@ -8341,3 +8341,15 @@ commit.
   written, an edit too; Chromium - a good range, and a range whose serial the master
   already holds. Planning's other suites pass (custom serials, batch copy, withdraw,
   material remove, BOM match, indent export).
+
+### 24 Oct 2026 - two tables' Export made a CSV nothing recorded (overnight audit)
+- **Found:** EL Stations' and Loading Verification list's Export (`data-role="export"`
+  in an icon_table.js card) built a CSV in the browser: no request, so the Document &
+  print log never heard of it, though DECISIONS 9 says every export is recorded (and
+  the screen's other Export buttons are, since 19 Oct).
+- **Change (icon_live.js, wireExports):** those clicks are taken over in the capture
+  phase like every exportNote() button - the rows on screen to /api/export/xlsx, an
+  Excel file, `export.xlsx` in the log (EL Stations as `el-stations`, the list as
+  `loading`).
+- **Test:** `test_el_capture_ui.py` +1 (15), `test_loading_ui.py` +1 (8): the request,
+  its rows, the log row.
