@@ -8310,3 +8310,19 @@ commit.
   view. `test_boot_payload.py` (9): the badge now counts open pallets and is per
   account. `test_packing.js` 29, `test_challan.py` 80, change feed, challan list /
   cancel / edit, demo claims - all pass.
+
+### 24 Oct 2026 - "Record material change" claimed a save, verified by sample staff (overnight audit)
+- **Found (Chromium, Production Entry):** ticking "A material changed part-way through
+  this range" opens v4's box. Its Second verification offered v4's sample staff as
+  verifiers (Mukesh, Rajesh Kumar, Deepak Yadav, Vikram Singh - USERS, not accounts),
+  and "Record material change" toasted "1 material change(s) recorded, verified by
+  Mukesh." with nothing sent. The ticked materials do travel - with the entry, as
+  `material_note`, when Record production is pressed - the verifier never did.
+- **Change (icon_live.js):** after v4 draws the box, Verified by, the verification note
+  and the button are disabled with "Not built yet - the materials ticked above are saved
+  with this entry when you press Record production; a second verifier is not recorded";
+  no sample name is listed; saveMatChg() claims nothing.
+- **Found, not changed:** `material_note` is stored on the production entry but no screen
+  or report reads it. **[open]** whether it should show (Search & Trace, the
+  traceability report) and how a verifier should be recorded.
+- **Test:** `test_demo_claims.py` +1 (4, Chromium).

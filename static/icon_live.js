@@ -14984,6 +14984,49 @@ window.gpSetKind = function(k) {
     if (fileIn) fileIn.value = '';
   };
 
+  /* "A material changed part-way through this range": what is ticked here
+     travels with the entry (material_note) when Record production is
+     pressed. v4's "Second verification" under it did not: its Verified by
+     list was v4's sample staff (Mukesh, Rajesh Kumar, Deepak Yadav, Vikram
+     Singh - not accounts), and "Record material change" toasted "1 material
+     change(s) recorded, verified by Mukesh." with nothing sent (overnight
+     audit, 24 Oct 2026). Disabled with the truth on hover until a verifier
+     is something the server records. */
+  var MC_WHY = 'Not built yet - the materials ticked above are saved with this ' +
+               'entry when you press Record production; a second verifier is not ' +
+               'recorded.';
+  function mcLock() {
+    var box = document.getElementById('peMatBox');
+    if (!box) return;
+    var who = document.getElementById('mcVerifier');
+    if (who && !who.__locked) {
+      who.__locked = true;
+      who.innerHTML = '<option value="">— not recorded yet —</option>';
+    }
+    box.querySelectorAll('#mcVerifier, input[placeholder="what was seen on the floor"]')
+      .forEach(function (el) { el.disabled = true; el.title = MC_WHY; });
+    box.querySelectorAll('button[onclick^="saveMatChg"], button[data-mc-locked]')
+      .forEach(function (b) {
+        b.removeAttribute('onclick');
+        b.setAttribute('data-mc-locked', '1');
+        b.disabled = true;
+        b.title = MC_WHY;
+        b.classList.add('ro-locked');
+      });
+  }
+  if (typeof window.renderMatChg === 'function' && !window.renderMatChg.__live) {
+    var _v4RenderMatChg = window.renderMatChg;
+    window.renderMatChg = function () {
+      var r = _v4RenderMatChg.apply(this, arguments);
+      mcLock();
+      return r;
+    };
+    window.renderMatChg.__live = true;
+  }
+  window.saveMatChg = function () {
+    if (typeof toast === 'function') toast(MC_WHY);
+  };
+
   /* The date and shift of a production entry are when it is recorded -
      stamped by the server from the IST clock, whatever the form says and
      never from the serial's printed date. The form's two fields only show

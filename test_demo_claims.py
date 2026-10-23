@@ -152,6 +152,43 @@ def t_admin_buttons():
         print("      explanatory toasts still shown: %s" % [t[:40] for t in pg.toasts])
 
 
+@test("Production Entry's material change: no sample staff as verifiers, and "
+      "\"Record material change\" no longer claims a save that never happened "
+      "(overnight audit, 24 Oct 2026)")
+def t_material_change_box():
+    store.wipe(); AUTH.ensure_auth_schema()
+    with store.conn() as (cx, cur):
+        for i in range(3):
+            store.insert(cur, "serial", {"serial": "ICON590G120212%04d" % (1000 + i),
+                "build_instance": 1, "model": "ISEN590-G2X", "wattage": 590,
+                "customer": "STOCK", "dcr": "DCR", "format_version": 2,
+                "date_produced": "2026-09-09", "shift": 1, "sequence": 1000 + i,
+                "state": "planned"})
+    with H.browser() as b:
+        pg = page(b)
+        pg.evaluate("go('prodentry')"); pg.wait_for_timeout(700)
+        pg.locator("#v-prodentry button", has_text="New production entry").first.click()
+        pg.wait_for_timeout(600)
+        pg.fill("#peFrom", "ICON590G1202121000"); pg.dispatch_event("#peFrom", "input")
+        pg.fill("#peTo", "ICON590G1202121002"); pg.dispatch_event("#peTo", "input")
+        pg.wait_for_timeout(500)
+        pg.check("#peMatChg"); pg.wait_for_timeout(500)
+        # tick a material: the box re-renders, the lock must survive it
+        pg.locator("#peMatBox .matrow input[type=checkbox]").first.check()
+        pg.wait_for_timeout(400)
+        who = pg.evaluate("() => Array.prototype.map.call("
+                          "document.getElementById('mcVerifier').options, o => o.text)")
+        assert who == ["— not recorded yet —"], who
+        assert pg.is_disabled("#mcVerifier")
+        btn = pg.locator("#peMatBox button", has_text="Record material change").first
+        assert btn.is_visible() and btn.is_disabled(), "the claiming button is live"
+        assert (btn.get_attribute("title") or "").startswith("Not built yet"), btn.get_attribute("title")
+        btn.click(force=True); pg.wait_for_timeout(200)
+        pg.evaluate("saveMatChg()"); pg.wait_for_timeout(200)
+        assert not [t for t in pg.toasts if "recorded, verified by" in t], pg.toasts
+        assert pg.errors == [], pg.errors
+
+
 # --------------------------------------------------------------------------
 
 if __name__ == "__main__":
