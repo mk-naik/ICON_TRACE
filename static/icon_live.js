@@ -743,10 +743,14 @@
     if (typeof USER !== 'undefined' && USER) USER.name = '';
     var app = document.getElementById('app');
     var login = document.getElementById('login');
+    /* only a page that was signed in can have timed out: a first visit asks
+       the server something before anyone signs in, and was greeted with
+       "Your session has timed out" (overnight audit, 24 Oct 2026) */
+    var wasIn = !!(app && app.classList.contains('on'));
     if (app) app.classList.remove('on');
     if (login) {
       login.classList.remove('gone');
-      setLoginMsg('Your session has timed out. Please sign in again.');
+      if (wasIn) setLoginMsg('Your session has timed out. Please sign in again.');
     }
   }
   window.iconSessionLost = sessionLost;
@@ -7822,6 +7826,10 @@ function wireFqcAnomalies() {
     _loadViewableScreens();
     addScreens();
     sidebarToggle();
+    /* v4's title named a station_config table that does not exist */
+    var tbSt = document.getElementById('tbStation');
+    if (tbSt) tbSt.title = 'Your station, written on your account (Admin > Users). ' +
+      'The line beside it is this page’s own list - nothing reads it.';
     wireDateResets();
     wireFqcKeys();
     wireFqcScanner();
@@ -17033,11 +17041,61 @@ window.gpSetKind = function(k) {
     adBusy('auditRows', 8, 'Open this tab to load the audit trail.');
   };
   window.renderReasons = function () { adBusy('reasonRows', 6, 'Open this tab to load.'); };
+  /* Stations & sources' station_config card counted "bound users" from v4's
+     own sample staff (5 on FQC-01, 4 on FQC-02, ...) and said the table was
+     "read from this table when the server starts" - there is no such table
+     (overnight audit, 24 Oct 2026). A station is written on each account; the
+     count is the active accounts Users lists for it, and a station an account
+     names that this list lacks is shown too. */
+  function adStationsPaint() {
+    var tb = document.getElementById('stationRows');
+    if (!tb || !can('admin')) return;
+    var note = document.querySelector('#ad-stations > .note');
+    if (note && !note.__live) {
+      note.__live = true;
+      note.innerHTML = '<span>&#9432;</span><span>A station is written on each account ' +
+        '(Users) and shown in the top bar. The line beside it here is this page’s own ' +
+        'list - not saved on the server, and nothing reads it: FQC searches both lines’ ' +
+        'testers for every serial. Serials carry no line indicator.</span>';
+    }
+    var card = tb.closest('.card');
+    var tag = card && card.querySelector('.card-h .tag');
+    if (tag) tag.textContent = 'written on each account';
+    var th = card && card.querySelectorAll('thead th')[4];
+    if (th) {
+      th.textContent = 'Accounts';
+      th.title = 'Active accounts on Users that name this station';
+    }
+    var paint = function () {
+      var by = {};
+      _users.rows.forEach(function (u) {
+        if (u.active && u.station) by[u.station] = (by[u.station] || 0) + 1;
+      });
+      var listed = {};
+      Array.prototype.forEach.call(tb.querySelectorAll('tr'), function (tr) {
+        if (!tr.cells[4]) return;
+        var id = tr.cells[0].textContent.trim();
+        listed[id] = 1;
+        tr.cells[4].textContent = by[id] || 0;
+      });
+      Object.keys(by).filter(function (s) { return !listed[s]; }).forEach(function (s) {
+        tb.insertAdjacentHTML('beforeend', '<tr data-account-station><td class="mono" ' +
+          'style="font-weight:700">' + fqcEsc(s) + '</td><td colspan="3" ' +
+          'style="color:var(--ink3)">named on an account, not in this list</td>' +
+          '<td class="num">' + by[s] + '</td><td></td></tr>');
+      });
+    };
+    Array.prototype.forEach.call(tb.querySelectorAll('tr'), function (tr) {
+      if (tr.cells[4]) tr.cells[4].textContent = '…';
+    });
+    if (_users.loaded) paint(); else usersLoad().then(paint);
+  }
   if (typeof window.renderStations === 'function' && !window.renderStations.__live) {
     var _v4RenderStations = window.renderStations;
     window.renderStations = function () {
       _v4RenderStations.apply(this, arguments);
       if (_adRules) adRulesPaint(); else adBusy('gradeRows', 5, 'Open this tab to load.');
+      try { adStationsPaint(); } catch (e) {}
     };
     window.renderStations.__live = true;
   }
@@ -17046,7 +17104,8 @@ window.gpSetKind = function(k) {
 
   var AD_LOADERS = { audit: adAuditLoad, docs: adDocsLoad, reasons: adReasonsLoad,
                      grade: adRulesLoad, access: adAccessLoad, open: adOpenLoad,
-                     mach: function () { window.adMachinesBoot(); } };
+                     mach: function () { window.adMachinesBoot(); },
+                     stations: adStationsPaint };
   if (typeof window.adTab === 'function' && !window.adTab.__loaders) {
     var _adTabPrev = window.adTab;
     window.adTab = function (btn, p) {

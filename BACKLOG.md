@@ -8391,3 +8391,20 @@ commit.
   example, real build, pending, provisional, unconfirmed): what remains is honest (the
   ideal rate "unconfirmed until Humeshwar", Hold's "not built yet").
 - **Test:** `test_demo_leftovers_ui.py` (new, 1, Chromium).
+
+### 24 Oct 2026 - Stations & sources counted v4's sample staff; a first visit "timed out" (overnight audit)
+- **Found (Admin tab text scanned for v4 values):** the station_config card's "Bound users"
+  read 5 / 4 / 2 / 1 / 3 - v4's sample USERS on each station, not accounts (the copy it
+  was read on had one account). Its note said the table is "read from this table when the
+  server starts": there is no station table; a station is written on each account, and
+  nothing on the server reads a station's line (FQC searches both lines' testers). The
+  top bar's station chip said "Bound in station_config".
+- **Found on the way:** a brand-new visit, never signed in, opened on "Your session has
+  timed out. Please sign in again." - a call answered 401 before anyone signed in ran the
+  session-lost path.
+- **Change (icon_live.js):** the column is "Accounts" - the active accounts Users lists for
+  that station - and a station an account names that the list lacks gets its own row; the
+  note and tag say what is true; the chip's title too. The timed-out message only for a page
+  that was signed in.
+- **Test:** `test_demo_leftovers_ui.py` +2 (3, Chromium). Relogin 6, login 11, users 7 + 21,
+  admin tabs 9, sessions 14, hash route 9, EL capture 15 - all pass.
