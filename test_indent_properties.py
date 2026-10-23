@@ -131,6 +131,11 @@ def t_form_markup():
     i = html.index('id="i_custom"')
     tag = html[html.rfind("<input", 0, i + 1):html.index(">", i)]
     assert "checked" not in tag, tag
+    # "Prepared by" is the person on the paper indent - v4 preset Akansha
+    # Reddy, recorded on every indent nobody retyped (overnight audit)
+    i = html.index('id="i_prep"')
+    tag = html[html.rfind("<input", 0, i + 1):html.index(">", i)]
+    assert "value=" not in tag and "Akansha" not in tag, tag
 
 
 @test("in the browser: ticking the box and saving stores a custom-serial indent; "
@@ -142,6 +147,7 @@ def t_form_in_browser():
         for custom, no in ((True, "OCT-11/2026"), (False, "OCT-12/2026")):
             pg.evaluate("indNew()")
             pg.wait_for_selector("#i_custom", timeout=8000)
+            assert pg.input_value("#i_prep") == "", pg.input_value("#i_prep")
             pg.fill("#i_no", no)
             pg.fill("#i_date", "2026-10-01")
             pg.fill("#i_cust", "Borosil Renewables Limited")
@@ -165,6 +171,7 @@ def t_form_in_browser():
         assert row("OCT-11/2026")[0]["custom_serial"] == 1
         assert row("OCT-12/2026")[0]["custom_serial"] == 0
         assert row("OCT-11/2026")[1]["arc"] == "NARC"
+        assert not row("OCT-12/2026")[0]["prepared_by"], row("OCT-12/2026")[0]["prepared_by"]
         pg.evaluate("indEdit('OCT-11/2026')")
         pg.wait_for_selector("#i_custom", timeout=8000)
         pg.wait_for_timeout(600)

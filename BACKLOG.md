@@ -8271,3 +8271,15 @@ commit.
 - **Change (frag_items.html):** the button calls exportNote(), the Export every screen
   uses - the rows on screen to /api/export/xlsx, recorded as `export.xlsx`.
 - **Test:** `test_item_master_export.py` (new, 1, Chromium): request, file, print log.
+
+### 24 Oct 2026 - a new indent was "prepared by Akansha Reddy" unless retyped (overnight audit)
+- **Found:** New indent opened with Prepared by = "Akansha Reddy", a value in the form's
+  markup since the first commit (and on the old /indent/new page). Three of the plant's
+  four real indents carry it (read-only, 24 Oct) - true or not, the form said it for
+  whoever did not retype it.
+- **Change:** the field starts blank, with the hint "as signed on the indent" (as Approved
+  by has "Marketing HOD"); an edited indent still shows what it recorded.
+- **Not changed:** the three recorded indents. **[open]** whether Akansha Reddy did prepare
+  IS2I/26/0002-0004.
+- **Test:** `test_indent_properties.py` (6): the form has no preset name, the browser
+  opens it blank, an untouched form stores none.
