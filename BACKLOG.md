@@ -8432,3 +8432,10 @@ commit.
   picked the read-only note an Admin gets in front of v4's, and rewrote it.
 - **Change:** it waits for a signed-in account (USER.perms) and rewrites only v4's own note.
 - **Test:** both files pass again (6, 5); `test_demo_leftovers_ui.py` 4.
+
+### 24 Oct 2026 - two print tests fixed an RGP's return date on 18 Oct
+- **Found (full suite):** `test_gatepass_print.py` (4) and `test_challan_print_ui.py` (1) failed
+  from 19 Oct on: they make a returnable gate pass expected back on 2026-10-18, and the server
+  rightly refuses an expected return before today.
+- **Change:** the tests use a date a week ahead on the IST clock; the rule is unchanged.
+- **Test:** 6 and 4 pass.

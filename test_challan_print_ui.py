@@ -18,6 +18,7 @@ prints it to PDF the way Chrome does.
      is gone on paper; the link works in both directions.
 """
 
+import datetime
 import io
 import re
 import shutil
@@ -26,6 +27,7 @@ import traceback
 
 import test_challan as T            # first: it fixes the throwaway database
 import ui_harness as H              # noqa: E402  (same store and app)
+import icon_clock                   # noqa: E402
 import store                        # noqa: E402
 
 APP = H.APP
@@ -136,7 +138,8 @@ def t_gatepass_three_copies():
               "qty": 1 + i, "remark": "Return after calibration" if i % 2 else ""} for i in range(7)]
     r = c.post("/api/gatepass", json={"kind": "RGP", "party": "Jakson Calibration Services Pvt Ltd",
                                       "delivery_address": "Plot 14, Sector 63, Noida", "vehicle_no": "By hand",
-                                      "expected_return": "2026-10-18", "items": items})
+                                      "expected_return": (icon_clock.today() + datetime.timedelta(days=7)).isoformat(),
+                                      "items": items})
     assert r.status_code == 200, r.get_json()
     gp_no = r.get_json()["gp_no"]
     from urllib.parse import quote

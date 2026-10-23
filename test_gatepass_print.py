@@ -18,6 +18,12 @@ import re, shutil, sys, traceback
 
 import test_gatepass_multiitem as M      # first: it fixes the throwaway database and has the helpers
 import store                             # noqa: E402
+import datetime                          # noqa: E402
+import icon_clock                        # noqa: E402
+
+# a week ahead, always: a fixed 2026-10-18 was refused from 19 Oct on - an RGP's
+# expected return cannot be before today (the rule, kept)
+RETURN = icon_clock.today() + datetime.timedelta(days=7)
 
 _results = []
 
@@ -47,7 +53,7 @@ def rgp(c):
     r = c.post("/api/gatepass", json={
         "kind": "RGP", "party": "Jakson Calibration Services Pvt Ltd",
         "delivery_address": "Plot 14, Sector 63, Noida", "vehicle_no": "By hand",
-        "expected_return": "2026-10-18", "items": M.THREE_ITEMS})
+        "expected_return": RETURN.isoformat(), "items": M.THREE_ITEMS})
     assert r.status_code == 200, r.get_json()
     return r.get_json()
 
@@ -86,7 +92,8 @@ def t_standalone_facts():
                      "recipient, returned on receipt", "Laptop for repair", "Cell stock to Unit-1",
                      "Spare frame set", "urgent", "NOS", "KG", "SET"):
             assert want in flat, "%s format is missing %r" % (style, want)
-        assert "18.10.2026" in h or "2026-10-18" in h, "%s: the expected return date is missing" % style
+        assert RETURN.strftime("%d.%m.%Y") in h or RETURN.isoformat() in h, \
+            "%s: the expected return date is missing" % style
         assert ">53<" in h, "%s: the total quantity (1 + 50 + 2) is not shown as its own figure" % style
         assert "returnable" in h.lower(), style
         assert 'src="/static/enicon-logo.svg"' in h and "<svg" in h, style
