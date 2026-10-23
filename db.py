@@ -1447,16 +1447,24 @@ def review_open_counts(cur):
             "duplicate_scan": dup, "not_in_master": not_master}
 
 
-def draft_challan_count(cur):
-    """How many challans are still drafts - unissued, reserving the material
-    (serials, boxes) they list, per the Drafts screen's own note. The
-    sidebar's "Drafts" badge was v4's own frozen demo number ("4") for every
-    account, forever - this is its first real source. Only challans have a
-    draft state in this schema; no other document type does."""
+def draft_challan_count(cur, challans=True, pallets=True):
+    """What the Drafts screen lists, for the sidebar's "Drafts" badge (v4's
+    own frozen demo number, "4", for every account, forever, until this):
+    challans still drafts - unissued, reserving the pallets they name - and
+    pallets still open on New Pallet, holding the modules scanned into them.
+    Those are the two kinds of unfinished work this schema keeps (24 Oct
+    2026: the open pallets joined when the screen stopped being v4's sample).
+    `challans` / `pallets`: whether the account can see that kind at all."""
     if cur is None:
         return 0
-    return _store.one(cur, "SELECT COUNT(*) AS n FROM challan WHERE "
-                           "status='draft'")["n"]
+    n = 0
+    if challans:
+        n += _store.one(cur, "SELECT COUNT(*) AS n FROM challan WHERE "
+                             "status='draft'")["n"]
+    if pallets:
+        n += _store.one(cur, "SELECT COUNT(*) AS n FROM box WHERE "
+                             "state='open'")["n"]
+    return n
 
 
 def ensure_backfill_indent_line(cur, customer_code, customer_name, model,
@@ -1916,7 +1924,7 @@ def challans_list(cur, q=None, status=None, fy=None, n=200):
     sql = """
         SELECT c.challan_id, c.fy, c.seq, c.suffix, c.challan_date,
                c.status, c.buyer_name, c.invoice_no, c.qty,
-               c.cancelled_at, c.cancelled_reason,
+               c.cancelled_at, c.cancelled_reason, c.created_at, c.created_by,
                COUNT(DISTINCT cb.challan_box_id) AS box_count,
                COUNT(DISTINCT gp.gp_id)          AS gp_count
         FROM challan c

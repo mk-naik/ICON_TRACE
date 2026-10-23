@@ -180,7 +180,8 @@ def t_map_is_the_reviewed_map():
 
 
 @test("every screen in the registry has at least one read gated on it - "
-     "except Drafts, which makes no server call at all")
+     "except Drafts, whose rows come from Challan's and the packing screens' "
+     "own reads, behind their own gates")
 def t_every_screen_has_reads():
     covered = {s for _p, screens, _f in VIEW_MAP for s in screens}
     assert icon_auth.SCREEN_IDS - covered == {"drafts"}, icon_auth.SCREEN_IDS - covered

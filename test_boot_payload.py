@@ -331,7 +331,8 @@ def t_nav_badges_endpoint():
     sa = APP.app.test_client()
     AUTH.test_login(sa)
     d = sa.get("/api/nav_badges").get_json()
-    assert d == {"needs_review": 0, "drafts": 0}, d
+    # world() opened a pallet and left it open - Drafts lists it (24 Oct 2026)
+    assert d == {"needs_review": 0, "drafts": 1}, d
 
     with store.conn() as (cx, cur):
         import db
@@ -343,11 +344,11 @@ def t_nav_badges_endpoint():
                     ("26-27", 9001, "2026-09-09", "ISEN625-G12R", 625, 1,
                      "2026-09-09T10:00:00", "test"))
     d = sa.get("/api/nav_badges").get_json()
-    assert d == {"needs_review": 1, "drafts": 1}, d
+    assert d == {"needs_review": 1, "drafts": 2}, d
     # /api/boot's own counts agree - the first paint after sign-in is
     # already right, with no extra round trip for it
     boot_counts = sa.get("/api/boot").get_json()["counts"]
-    assert boot_counts["needs_review"] == 1 and boot_counts["drafts"] == 1, boot_counts
+    assert boot_counts["needs_review"] == 1 and boot_counts["drafts"] == 2, boot_counts
 
 
 @test("the sidebar shows the real counts, not v4's frozen markup - Needs "
@@ -372,7 +373,9 @@ def t_nav_badges_on_screen():
         review_badge = pg.eval_on_selector('.nav-i[data-v="review"] b', "e => e.textContent")
         draft_badge = pg.eval_on_selector('#draftBadge', "e => e.textContent")
         assert review_badge == "1", "still v4's frozen number: %r" % review_badge
-        assert draft_badge == "1", "still v4's frozen number: %r" % draft_badge
+        # a Production Incharge can open neither challans nor pallets, so its
+        # Drafts screen lists nothing - and its badge says so (24 Oct 2026)
+        assert draft_badge == "0", "not this account's own count: %r" % draft_badge
 
 
 # --------------------------------------------------------------------------

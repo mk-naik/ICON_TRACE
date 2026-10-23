@@ -267,8 +267,9 @@ SUBVIEWS = {
 #       not tie it to these flags.)
 #   hold - GET /api/hold only; holds clear by themselves when evidence
 #       arrives, or through Needs Review.
-#   drafts - still v4's own sample-data screen, never overridden, no server
-#       call at all.
+#   drafts - lists challan drafts and open pallets through the Challan and
+#       packing screens' own reads; its buttons write through THEIR routes
+#       and flags (Create Challan's submit/discard, New Pallet), not this one.
 # review is NOT here, although the brief listed it: Needs Review is where a
 # Quality, Production Incharge or Admin RESOLVES an item, through
 # POST /api/review/resolve - it is the Quality role's entire job. Marking it

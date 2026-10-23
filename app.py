@@ -592,6 +592,19 @@ def require_screen_write(screen_id):
     return deco
 
 
+def _drafts_badge(cur):
+    """The Drafts badge for THIS account: what its Drafts screen lists - the
+    challan drafts when it may read /api/challans, the open pallets when it
+    may read /api/boxes (the same view gates). A count the screen would not
+    show is a number nobody can find."""
+    if not g.icon_session:
+        return 0
+    perms = icon_auth.get_screen_perms(cur, g.icon_session["login_id"])
+    see = lambda *sids: any(perms.get(s, {}).get("view") for s in sids)
+    return db.draft_challan_count(cur, challans=see("challan", "disp"),
+                                  pallets=see("pack", "repack", "packdash"))
+
+
 def _session_can_view(*sids):
     """True when the signed-in account may view at least one of sids. Reads
     the table on every call, like the write gate - so a change made in the
@@ -1592,7 +1605,7 @@ def boot_private():
         except (TypeError, ValueError):
             cfg_ceiling = 36
         needs_review_total = db.review_open_counts(cur)["total"]
-        drafts_open = db.draft_challan_count(cur)
+        drafts_open = _drafts_badge(cur)
     import icon_materials as MM
     mat_cats = MM.MAT_CATS
     return {
@@ -9993,7 +10006,7 @@ def api_nav_badges():
         return jsonify({"ok": False, "why": "Sign in required."}), 401
     with store.conn() as (cx, cur):
         return jsonify({"needs_review": db.review_open_counts(cur)["total"],
-                        "drafts": db.draft_challan_count(cur)})
+                        "drafts": _drafts_badge(cur)})
 
 
 @app.route("/api/db/stats")

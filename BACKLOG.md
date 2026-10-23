@@ -8283,3 +8283,30 @@ commit.
   IS2I/26/0002-0004.
 - **Test:** `test_indent_properties.py` (6): the form has no preset name, the browser
   opens it blank, an untouched form stores none.
+
+### 24 Oct 2026 - Drafts was v4's sample; a challan draft could not be finished (overnight audit)
+- **Found:** Drafts showed v4's own drafts - DRF-2608-0012 "saved by Rajesh Kumar",
+  "422 serials reserved", a "demonstration" check against A047 - while the sidebar
+  badge beside it counted the real challan drafts. Following one: a challan saved as a
+  draft keeps its number and reserves its pallets, but Create Challan holds it only
+  while the screen is open; once you leave, nothing in the app offers it again (the
+  Challan list's detail has no action for a draft) - it can be neither created nor
+  discarded, and its pallets stay hidden from every selector.
+- **Change:** Drafts lists the challan drafts (/api/challans?status=draft) and the
+  pallets still open (/api/boxes?state=open), newest first, with real tiles; View /
+  **Create challan** (the draft's own submit - every check runs again, with a confirm)
+  / **Discard** (its own discard) on a draft; **Open** on a pallet resumes that pallet
+  on New Pallet (`iconPackOpen`, also for a pallet that is not the newest, which New
+  Pallet alone never took up). The demonstration card is hidden; the note says what
+  a draft really holds. An account sees the drafts of the screens it can open; the
+  buttons follow the owning screen's write flag. The badge counts the same, per
+  account (`_drafts_badge`); refreshed by the change feed on challans and boxes.
+  `/api/challans` now carries `created_at` / `created_by`.
+- **[open]** resuming a challan draft in Create Challan to change it before creating;
+  a draft discarded with no reason is recorded "draft discarded", as the Challan
+  screen's own Discard always did (DECISIONS 1 lists it beside box-abandon).
+- **Test:** `test_drafts_ui.py` (new, 4, Chromium): the list, tiles and badge; Create
+  and Discard recorded; Open on the older of two open pallets; a Packing Operator's
+  view. `test_boot_payload.py` (9): the badge now counts open pallets and is per
+  account. `test_packing.js` 29, `test_challan.py` 80, change feed, challan list /
+  cancel / edit, demo claims - all pass.

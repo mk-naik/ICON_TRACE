@@ -6544,28 +6544,64 @@ function wireFqcAnomalies() {
       .then(function (r) { return r.ok ? r.json() : []; })
       .then(function (rows) {
         var open = (rows || [])[0];
-        if (!open) return;
-        packBox = { box_id: open.box_id, seq: open.seq, grade: open.grade,
-                    model: open.model, qty: open.qty,
-                    customer: open.customer_name, pack_date: open.pack_date,
-                    capacity: open.capacity, label: open.label,
-                    bin: open.bin_no == null ? null : open.bin_no };
-        packPaintBox();
-        fetch('/api/box/' + open.box_id, { cache: 'no-store' })
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            if (typeof buildSlots === 'function') buildSlots();
-            (d.serials || []).forEach(function (s) {
-              if (typeof addSlot === 'function') addSlot(s.serial || s);
-            });
-            if (typeof toast === 'function') {
-              toast('Box ' + (open.label || open.seq) + ' was still open with ' +
-                    (d.serials || []).length + ' module(s).');
-            }
-          });
+        if (open) packResume(open);
       })
       .catch(function () { /* nothing open, or the server is down */ });
   }
+
+  /* One open pallet, as /api/boxes lists it, onto the screen with its
+     modules in their slots. */
+  function packResume(open) {
+    packBox = { box_id: open.box_id, seq: open.seq, grade: open.grade,
+                model: open.model, qty: open.qty,
+                customer: open.customer_name, pack_date: open.pack_date,
+                capacity: open.capacity, label: open.label,
+                bin: open.bin_no == null ? null : open.bin_no };
+    packPaintBox();
+    fetch('/api/box/' + open.box_id, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (typeof buildSlots === 'function') buildSlots();
+        (d.serials || []).forEach(function (s) {
+          if (typeof addSlot === 'function') addSlot(s.serial || s);
+        });
+        if (typeof toast === 'function') {
+          toast('Box ' + (open.label || open.seq) + ' was still open with ' +
+                (d.serials || []).length + ' module(s).');
+        }
+      });
+  }
+
+  /* Drafts' Open on a pallet still open: New Pallet takes up THAT pallet.
+     packRestore() takes up only the newest, so a second open pallet could
+     not be reached at all. Both stay open on the server whichever one the
+     screen holds; only a scan half-way through (Space not pressed yet)
+     keeps the screen where it is. */
+  window.iconPackOpen = function (boxId) {
+    if (typeof packHold !== 'undefined' && packHold) {
+      if (typeof toast === 'function')
+        toast('A scan is waiting on New Pallet - add it or cancel it first.');
+      return;
+    }
+    var view = document.getElementById('v-pack');
+    if (view) view.__restored = true;          // not the newest instead
+    fetch('/api/boxes?state=open', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (rows) {
+        var open = (rows || []).filter(function (b) { return b.box_id === boxId; })[0];
+        if (!open) {
+          if (typeof toast === 'function')
+            toast('That pallet is no longer open - it was saved or cleared.');
+          return;
+        }
+        if (typeof go === 'function')
+          go('pack', typeof navBtn === 'function' ? navBtn('pack') : undefined);
+        if (!packBox || packBox.box_id !== open.box_id) packResume(open);
+      })
+      .catch(function () {
+        if (typeof toast === 'function') toast('The server did not answer.');
+      });
+  };
 
   /* 2026-10-01 or 2026-10-01T12:00:14 -> 01-10-2026 (12:00) */
   function packWhen(v) {
@@ -7907,6 +7943,7 @@ function wireFqcAnomalies() {
     if (id === 'review') {
       try { reviewWireFilters(); window.iconReviewRefresh(); } catch (e) {}
     }
+    if (id === 'drafts') { try { window.iconDraftsLoad(); } catch (e) {} }
   };
 
   /* ---- Planning: the serial must agree with the indent line -----------
@@ -10794,6 +10831,7 @@ function wireFqcAnomalies() {
     'gp-new':         ['gatepasses', 'challans'],
     hold:             ['fqc', 'serials'],
     review:           ['review', 'fqc'],
+    drafts:           ['challans', 'boxes'],
     /* Not 'audit', deliberately. Nearly every save anywhere writes
        dispatch_audit, so subscribing the Admin screen to it would raise a
        chip over somebody editing a user every time an operator closed a
@@ -10823,7 +10861,8 @@ function wireFqcAnomalies() {
     prodentry:        function () { window.renderPE(); },
     loss:             function () { window.loFetchAndRender(); },
     hold:             function () { window.iconHoldRefresh(); },
-    review:           function () { window.iconReviewRefresh(); window.iconRefreshNavBadges(); }
+    review:           function () { window.iconReviewRefresh(); window.iconRefreshNavBadges(); },
+    drafts:           function () { window.iconDraftsLoad(); window.iconRefreshNavBadges(); }
   };
 
   /* The screens the feed acts on at all: every screen whose LANDING state is
@@ -10850,11 +10889,10 @@ function wireFqcAnomalies() {
        config screens, which have no clean list-reload path (they redraw on
        navigation).
 
-     drafts and search are here for completeness - both are list/landing by
-     nature - but neither carries a change topic today, so neither actually
-     fires: drafts still shows v4's sample rows (CHANGE_SCREEN_TOPICS has no
-     'drafts'), and Search & Trace opens empty and is deliberately left without
-     a topic so a trace result is never refetched out from under a reader. */
+     drafts lists challan drafts and open pallets (24 Oct 2026) and refreshes
+     on their topics. search is here for completeness, but Search & Trace
+     opens empty and is deliberately left without a topic so a trace result
+     is never refetched out from under a reader. */
   var CHANGE_SILENT = {
     mgmt: 1, proddash: 1, dash: 1, packdash: 1, disp: 1,
     indent: 1, plan: 1, prodentry: 1, loss: 1, fqc: 1, repack: 1,
@@ -16868,5 +16906,227 @@ window.gpSetKind = function(k) {
     window.adTab.__hashWrapped = true;
   }
 
+  /* ---- Drafts, from the database (overnight audit, 24 Oct 2026) --------
+   *
+   * v4's Drafts screen was its own sample: DRF-2608-0012 "saved by Rajesh
+   * Kumar", 422 serials reserved, a "demonstration" check against A047 - beside
+   * a sidebar badge that already counted the real ones. This schema keeps two
+   * kinds of unfinished work, and the screen lists exactly those:
+   *
+   *   a challan saved as a draft - its number is drawn and its pallets are
+   *     reserved (no other challan offers them) until it is created or
+   *     discarded. Create Challan forgets a draft the moment you leave it,
+   *     so until now nothing could finish or discard one afterwards;
+   *   a pallet still open on New Pallet - the modules scanned into it go
+   *     into no other pallet until it is saved or cleared.
+   *
+   * Each comes from its own screen's read (/api/challans, /api/boxes), so an
+   * account sees the drafts of the screens it can see, and every button goes
+   * through that screen's own route and write flag: Create and Discard are
+   * Create Challan's, Open is New Pallet's.
+   */
+  var DF = { challans: null, boxes: null, mine: false, seq: 0 };
+
+  function dfCanChallans() { return can('challan') || can('disp'); }
+  function dfCanPallets() { return can('pack') || can('repack') || can('packdash'); }
+
+  function dfAge(iso) {
+    var t = Date.parse(String(iso || '').replace(' ', 'T') + (/[zZ+]/.test(iso || '') ? '' : '+05:30'));
+    return isNaN(t) ? null : Math.max(0, Math.floor((Date.now() - t) / 86400000));
+  }
+
+  function dfRows() {
+    var rows = [];
+    (DF.challans || []).forEach(function (c) {
+      rows.push({ kind: 'challan', id: c.challan_id,
+        no: c.challan_no || ('#' + c.challan_id), type: 'Challan', section: 'Dispatch',
+        holding: (c.box_count || 0) + ' pallet(s)' +
+                 (c.invoice_no ? ' · invoice ' + c.invoice_no : '') +
+                 (c.buyer_name ? ' · ' + c.buyer_name : ''),
+        qty: c.qty || 0, by: c.created_by || '', at: c.created_at || '' });
+    });
+    (DF.boxes || []).forEach(function (b) {
+      rows.push({ kind: 'pallet', id: b.box_id,
+        no: b.label || ('#' + b.box_id), type: 'Pallet, still open', section: 'Packing',
+        holding: [b.model, b.grade, (b.qty || 0) + ' of ' + (b.capacity || '?'),
+                  b.customer_name].filter(Boolean).join(' · '),
+        qty: b.qty || 0, by: b.created_by || '', at: b.created_at || '' });
+    });
+    rows.sort(function (a, b) { return String(a.at) < String(b.at) ? 1 : -1; });   // newest first
+    return rows;
+  }
+
+  function dfActions(r) {
+    var b = function (label, fn, cls) {
+      return '<button class="btn ' + (cls || 'btn-ghost') + ' btn-sm" onclick="' + fn + '">' +
+             label + '</button>';
+    };
+    if (r.kind === 'challan') {
+      return b('View', 'dfViewChallan(' + r.id + ')') +
+        (canWrite('challan') ? ' ' + b('Create challan', 'dfCreateChallan(' + r.id + ')', 'btn-primary') +
+                               ' ' + b('Discard', 'dfDiscardChallan(' + r.id + ')', 'btn-danger') : '');
+    }
+    return can('pack') ? b('Open', 'dfOpenPallet(' + r.id + ')') : '';
+  }
+
+  function dfPaint() {
+    var view = document.getElementById('v-drafts');
+    if (!view) return;
+    /* v4's note said a person using reserved material "is stopped and sent
+       here"; nothing sends anyone here. What a draft does hold, said plainly. */
+    var note = view.querySelector('.note');
+    if (note && !note.__live) {
+      note.__live = true;
+      note.innerHTML = '<span>&#9873;</span><span>A <b>challan draft</b> has its number ' +
+        'and reserves its pallets - no other challan offers them until it is created ' +
+        'or discarded. A <b>pallet still open</b> on New Pallet holds the modules ' +
+        'scanned into it - no other pallet takes them until it is saved or cleared.</span>';
+    }
+    /* the "demonstration" card checked v4's own sample numbers */
+    Array.prototype.forEach.call(view.querySelectorAll('.card'), function (c) {
+      var h = c.querySelector('.card-h h3');
+      if (h && /reserved material/i.test(h.textContent)) c.style.display = 'none';
+    });
+    var foot = view.querySelector('.card .card-f span');
+    if (foot) foot.textContent = 'You see the drafts of the screens you can open: challan ' +
+      'drafts with Challan, open pallets with New Pallet or Packing Log.';
+
+    var scope = document.getElementById('dfScope');
+    if (scope) {
+      var parts = [dfCanChallans() ? 'Dispatch' : '', dfCanPallets() ? 'Packing' : '']
+        .filter(Boolean);
+      scope.textContent = parts.length === 2 ? 'All sections' :
+        parts.length ? parts[0] + ' only' : 'No section with drafts';
+    }
+
+    var tb = document.getElementById('draftRows');
+    var set = function (id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
+    /* not read yet (before sign-in, or the first answer still on its way):
+       v4 had already painted its sample counts into these tiles */
+    if (DF.challans === null || DF.boxes === null) {
+      ['dk1', 'dk2', 'dk3', 'dk4'].forEach(function (k) { set(k, '—'); });
+      set('dk1d', 'reading…');
+      if (tb) tb.innerHTML = '<tr data-empty><td colspan="8" style="padding:16px;color:var(--ink3)">' +
+        'Loading…</td></tr>';
+      return;
+    }
+    var all = dfRows();
+    var me = (typeof USER !== 'undefined' && USER) ? USER.name : '';
+    var mine = all.filter(function (r) { return r.by && r.by === me; });
+    var rows = DF.mine ? mine : all;
+    var nCh = all.filter(function (r) { return r.kind === 'challan'; }).length;
+    set('dk1', all.length);
+    set('dk1d', nCh + ' challan · ' + (all.length - nCh) + ' pallet');
+    set('dk2', all.reduce(function (s, r) { return s + (r.qty || 0); }, 0));
+    var ages = all.map(function (r) { return dfAge(r.at); }).filter(function (a) { return a !== null; });
+    set('dk3', ages.length ? Math.max.apply(null, ages) : '—');
+    set('dk4', mine.length);
+    if (!tb) return;
+    if (!rows.length) {
+      tb.innerHTML = '<tr data-empty><td colspan="8" style="padding:16px;color:var(--ink3)">' +
+        (DF.mine ? 'Nothing saved by you is waiting.' :
+         'No challan draft and no open pallet - nothing is waiting to be finished.') +
+        '</td></tr>';
+    } else {
+      tb.innerHTML = rows.map(function (r) {
+        return '<tr><td class="mono">' + fqcEsc(r.no) + '</td>' +
+          '<td>' + fqcEsc(r.type) + '</td><td>' + fqcEsc(r.section) + '</td>' +
+          '<td style="font-size:11.5px">' + fqcEsc(r.holding) + '</td>' +
+          '<td style="text-align:right" class="mono">' + r.qty + '</td>' +
+          '<td>' + fqcEsc(r.by || '—') + '</td>' +
+          '<td class="mono">' + fqcEsc(r.at ? fmtIST(String(r.at).replace(' ', 'T')) : '—') + '</td>' +
+          '<td style="text-align:right;white-space:nowrap">' + dfActions(r) + '</td></tr>';
+      }).join('');
+    }
+    if (window.iconTable) { try { window.iconTable.wireAll(); } catch (e) {} }
+  }
+
+  window.iconDraftsLoad = function () {
+    var seq = ++DF.seq;
+    var take = function (key, url, pick) {
+      return fetch(url, { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { if (seq === DF.seq) DF[key] = d ? pick(d) : []; })
+        .catch(function () { if (seq === DF.seq) DF[key] = []; });
+    };
+    var waits = [];
+    if (dfCanChallans()) {
+      waits.push(take('challans', '/api/challans?status=draft',
+                      function (d) { return d.challans || []; }));
+    } else DF.challans = [];
+    if (dfCanPallets()) {
+      waits.push(take('boxes', '/api/boxes?state=open',
+                      function (d) { return Array.isArray(d) ? d : []; }));
+    } else DF.boxes = [];
+    dfPaint();
+    return Promise.all(waits).then(function () { if (seq === DF.seq) dfPaint(); });
+  };
+
+  /* v4's own render and filter, answered from what was read */
+  window.renderDrafts = function () { dfPaint(); };
+  window.dfFilter = function (btn, which) {
+    DF.mine = which === 'mine';
+    if (btn && btn.parentNode) {
+      Array.prototype.forEach.call(btn.parentNode.querySelectorAll('button'), function (x) {
+        x.classList.toggle('on', x === btn);
+      });
+    }
+    dfPaint();
+  };
+
+  function dfChallan(id) {
+    return (DF.challans || []).filter(function (c) { return c.challan_id === id; })[0] || null;
+  }
+
+  window.dfViewChallan = function (id) {
+    if (typeof go === 'function') go('challan-list');
+    if (typeof window.clOpenDetail === 'function') window.clOpenDetail(id);
+  };
+
+  window.dfCreateChallan = function (id) {
+    var c = dfChallan(id);
+    if (!c) return;
+    var no = c.challan_no || ('challan #' + id);
+    if (!confirm('Create ' + no + '? Its ' + (c.qty || 0) + ' serial(s) on ' +
+                 (c.box_count || 0) + ' pallet(s) are dispatched' +
+                 (c.invoice_no ? ' against invoice ' + c.invoice_no : '') +
+                 '. Every check runs again first.')) return;
+    api('challan/' + id + '/submit', { method: 'POST', body: '{}' })
+      .then(function (d) {
+        if (!d || d.ok !== true) {
+          toast(no + ' was not created: ' + String((d && d.why) || 'refused').replace(/\.$/, '') + '.');
+          return;
+        }
+        toast(d.no + ' created — ' + d.qty + ' serial(s) now dispatched. Print it from the Challan list.');
+        window.iconDraftsLoad();
+        if (window.iconRefreshNavBadges) window.iconRefreshNavBadges();
+      })
+      .catch(function () { toast('The server did not answer - nothing was created.'); });
+  };
+
+  window.dfDiscardChallan = function (id) {
+    var c = dfChallan(id);
+    if (!c) return;
+    var no = c.challan_no || ('challan #' + id);
+    if (!confirm('Discard ' + no + '? Its pallets and serials go back to being ' +
+                 'available. The number is not reused.')) return;
+    api('challan/' + id + '/discard', { method: 'POST', body: '{}' })
+      .then(function (d) {
+        if (!d || d.ok !== true) {
+          toast(no + ' was not discarded: ' + String((d && d.why) || 'refused').replace(/\.$/, '') + '.');
+          return;
+        }
+        toast(no + ' discarded - its pallets are available again.');
+        window.iconDraftsLoad();
+        if (window.iconRefreshNavBadges) window.iconRefreshNavBadges();
+      })
+      .catch(function () { toast('The server did not answer - nothing was discarded.'); });
+  };
+
+  window.dfOpenPallet = function (id) {
+    if (typeof window.iconPackOpen === 'function') window.iconPackOpen(id);
+  };
+
+  try { dfPaint(); } catch (e) {}
 
 })();

@@ -23,7 +23,8 @@ or finish a `[decided]` item, update this file in the same commit.
 - Every cancel, override and resolution records who, when and a **mandatory
   reason**. Never substitute a default reason string. [built for all ten cancel
   routes - a blank reason is a 400, asked before the authenticator step; **[open]**
-  the box-abandon route still fills a stated-fact reason when none is sent]
+  the box-abandon route still fills a stated-fact reason when none is sent, and so
+  does discarding a challan DRAFT ("draft discarded")]
 - Software shows evidence; a person decides; the system records who, why, when.
   It does not score or suggest. [built]
 - No fake success. A button that does nothing is disabled ("Not built yet"),
@@ -144,6 +145,16 @@ no one signs twice. [enforcement unverified]
   `_cancel_issued_challan`, behind both `/cancel` and the issued branch of
   `/discard` (the challan screen's Cancel button, shown to Admin / Super Admin
   only). Discarding a DRAFT stays open to whoever has Challan write. [built]
+- **Drafts lists what is unfinished, from the database** (24 Oct, overnight audit;
+  it was v4's sample - "DRF-2608-0012 saved by Rajesh Kumar"): the challans saved
+  as drafts and the pallets still open on New Pallet - the two kinds of
+  unfinished work this schema keeps - read through /api/challans and /api/boxes,
+  so an account sees the drafts of the screens it can open. A challan draft is
+  **Created** (its own submit, every check again) or **Discarded** from there -
+  Create Challan forgets a draft once you leave it, so nothing could finish one
+  before; **Open** on a pallet resumes THAT pallet on New Pallet. The sidebar badge
+  counts what the account's Drafts screen lists. [built] **[open]** resuming a
+  challan draft in Create Challan itself, to change it before creating.
 
 ## 4. Loading Verification and Gate Pass
 
@@ -627,7 +638,6 @@ replacement-serial workflow · Production
 Entry segments (material per serial sub-range; this blocks the Traceability
 Report) · Production Report · FQC Matrix report · sidebar redesign. No OEE or
 efficiency figure until the production head signs off an ideal cycle time.
-The Drafts screen is still v4 sample data.
 
 ## 12. Indent properties and serial numbers (Round 37)
 
