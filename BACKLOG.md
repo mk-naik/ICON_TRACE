@@ -8378,3 +8378,16 @@ commit.
   (scheduled minutes 480, ideal rate 2000 "unconfirmed until Humeshwar agrees") stay.
 - **Test:** `test_form_presets_ui.py` (new, 2, Chromium). Loss 17, production 16,
   incharge 9, the import screen, factory-day defaults - all pass.
+
+### 24 Oct 2026 - Management Overview's footer described an aging alert that does not exist (overnight audit)
+- **Found (v4 text left on screen):** under Needs a decision: "a production incharge
+  cannot action a challan approval ... The aging alert counts open boxes only - a closed
+  box can sit in stock for months, and one real box waited 67 days between packing and
+  dispatch." There is no aging alert and no challan approval in ICON TRACE, and the 67
+  days are nobody's data on this database.
+- **Change (icon_live.js, renderMgmt):** the footer says what the card does - counts
+  waiting on somebody's decision, Open goes to where it is decided, only what you can open.
+- **Swept:** every screen's rendered text for prototype words (demo, sample, placeholder,
+  example, real build, pending, provisional, unconfirmed): what remains is honest (the
+  ideal rate "unconfirmed until Humeshwar", Hold's "not built yet").
+- **Test:** `test_demo_leftovers_ui.py` (new, 1, Chromium).

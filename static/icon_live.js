@@ -2294,6 +2294,19 @@
           'onclick="go(\'' + b[4] + '\')">Open</button></td></tr>';
       }).join('') : '<tr data-empty><td colspan="5"><div class="empty-state"><p>' +
         'Nothing is waiting on a decision.</p></div></td></tr>');
+      /* v4's footer here described an aging alert on open boxes, challan
+         approvals and "one real box waited 67 days" - none of them exist in
+         this system, and the 67 days were nobody's data (overnight audit,
+         24 Oct 2026). It says what the card does instead. */
+      var mgCard = document.getElementById('mgBlocked');
+      var mgFoot = mgCard && mgCard.closest('.card') &&
+                   mgCard.closest('.card').querySelector('.card-f span');
+      if (mgFoot && !mgFoot.__live) {
+        mgFoot.__live = true;
+        mgFoot.textContent = 'Each row is a count waiting on somebody’s decision - ' +
+          'Quality’s calls, downtime still open, tester reads that match no serial - ' +
+          'and Open goes to the screen where it is decided. Only what you can open is listed.';
+      }
 
       if (typeof drawDonut === 'function') {
          /* each module in exactly one slice - the earlier version drew
