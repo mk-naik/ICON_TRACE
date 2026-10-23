@@ -1211,6 +1211,50 @@
   }
   window.applyWriteLocks = applyWriteLocks;
 
+  /* A button whose whole job is to open another screen, offered to an
+     account that cannot open it, answered "Your role does not have access to
+     that screen." - FQC Dashboard's New entry for a Packing Operator,
+     Management Overview's Open dispatch for a Production Incharge, Hold's
+     Open in Needs Review for a dispatcher (overnight audit, 24 Oct 2026).
+     Disabled with the reason instead; undone if another account signs in. */
+  function lockUnviewableGo(root) {
+    if (!root || !root.querySelectorAll || !USER || !USER.perms) return;
+    var list = Array.prototype.slice.call(root.querySelectorAll('button[onclick^="go("]'));
+    if (root.matches && root.matches('button[onclick^="go("]')) list.push(root);
+    list.forEach(function (b) {
+      var m = (b.getAttribute('onclick') || '').match(/^go\(\s*'([a-z-]+)'/);
+      if (!m || b.closest('#sidenav')) return;
+      if (can(m[1])) {
+        if (b.hasAttribute('data-go-locked')) {
+          b.removeAttribute('data-go-locked');
+          b.disabled = false;
+          b.title = '';
+          b.classList.remove('ro-locked');
+        }
+        return;
+      }
+      b.setAttribute('data-go-locked', '1');
+      b.disabled = true;
+      b.title = 'Not one of your screens';
+      b.classList.add('ro-locked');
+    });
+  }
+  function watchUnviewableGo() {
+    var main = document.querySelector('.main');
+    lockUnviewableGo(main);
+    if (!main || main.__goWatch || typeof MutationObserver === 'undefined') return;
+    main.__goWatch = new MutationObserver(function (muts) {
+      /* once per changed container, not once per added row */
+      var seen = [];
+      muts.forEach(function (m) {
+        if (!m.addedNodes.length || seen.indexOf(m.target) !== -1) return;
+        seen.push(m.target);
+        lockUnviewableGo(m.target);
+      });
+    });
+    main.__goWatch.observe(main, { childList: true, subtree: true });
+  }
+
   /* The role's home when the account can view it, else the first screen
      in nav order it can. A home the account cannot open would greet every
      sign-in with "no access" and an empty page. */
@@ -7826,6 +7870,7 @@ function wireFqcAnomalies() {
     _loadViewableScreens();
     addScreens();
     sidebarToggle();
+    watchUnviewableGo();
     /* v4's title named a station_config table that does not exist */
     var tbSt = document.getElementById('tbStation');
     if (tbSt) tbSt.title = 'Your station, written on your account (Admin > Users). ' +

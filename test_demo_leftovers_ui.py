@@ -84,6 +84,29 @@ def t_first_visit_and_chip():
         assert pg.errors == [], pg.errors
 
 
+@test("a button that only opens another screen is disabled, with why, for an account "
+      "that cannot open that screen - also one drawn after the page loaded")
+def t_go_buttons_follow_access():
+    store.wipe(); AUTH.ensure_auth_schema()
+    NEW_ENTRY = "#v-dash button[onclick^=\"go('fqc'\"]"
+    with H.browser() as b:
+        pk = H.open_page(b, "dash", wait_ms=1200, role="Packing Operator", login_id="pk.go")
+        assert pk.is_disabled(NEW_ENTRY), "a Packing Operator is offered FQC Entry"
+        assert pk.get_attribute(NEW_ENTRY, "title") == "Not one of your screens"
+        # drawn later, the way a detail panel or a list row is
+        pk.evaluate("() => document.getElementById('v-dash').insertAdjacentHTML('beforeend', "
+                    "'<button id=\"lateGo\" onclick=\"go(\\'review\\')\">Open</button>')")
+        pk.wait_for_timeout(300)
+        assert pk.is_disabled("#lateGo"), "a row drawn later still offers a screen it cannot open"
+        assert pk.errors == [], pk.errors
+        sa = H.open_page(b, "dash", wait_ms=1200, role="Super Admin", login_id="sa.go")
+        assert sa.is_enabled(NEW_ENTRY), "Super Admin lost FQC Entry's button"
+        pi = H.open_page(b, "mgmt", wait_ms=1500, role="Production Incharge", login_id="pi.go")
+        disp = "#v-mgmt button[onclick^=\"go('disp'\"]"
+        assert pi.is_disabled(disp), "a Production Incharge is offered Stock & Dispatch"
+        assert pi.errors == [] and sa.errors == [], (pi.errors, sa.errors)
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

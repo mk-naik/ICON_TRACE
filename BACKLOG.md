@@ -8408,3 +8408,17 @@ commit.
   that was signed in.
 - **Test:** `test_demo_leftovers_ui.py` +2 (3, Chromium). Relogin 6, login 11, users 7 + 21,
   admin tabs 9, sessions 14, hash route 9, EL capture 15 - all pass.
+
+### 24 Oct 2026 - buttons that open a screen the account cannot open (overnight audit)
+- **Found (the same crawl as each of the seven roles):** a button whose whole job is to open
+  another screen answered "Your role does not have access to that screen." for an account
+  without it - FQC Dashboard's New entry for a Packing Operator or Quality, Management
+  Overview's Open dispatch for a Production Incharge, Hold's Open in Needs Review for a
+  Packing or Dispatch Operator.
+- **Change (icon_live.js, lockUnviewableGo):** after sign-in, and for whatever is drawn later
+  (one observer on the page, once per changed container), a `go('<screen>')` button for a
+  screen the account cannot open is disabled with "Not one of your screens"; undone if
+  another account signs in on the page.
+- **Test:** `test_demo_leftovers_ui.py` +1 (4): Packing Operator / Super Admin on New entry,
+  a button drawn later, a Production Incharge on Open dispatch. Permission editor 6, role
+  gates 11, dashboards 28, loading list 8, write gates 9, inline args - all pass.
