@@ -187,6 +187,25 @@ def t_unknown_hash_goes_home():
             ctx.close()
 
 
+@test("#gp - an old bookmark, or typed - lands on the Gate Pass list, never on "
+      "v4's own Gate Pass section and its sample (SAI BABUJI, CHN-455, GP-2608-0031)")
+def t_old_gp_hash_is_the_list():
+    fresh()
+    with H.browser() as b:
+        ctx, pg = signed_in_page(b, login_id="sa.gp", hashfrag="#gp")
+        try:
+            assert shown(pg) == "gp-list", shown(pg)
+            assert pg.evaluate("location.hash") == "#gp-list", pg.evaluate("location.hash")
+            pg.evaluate("go('gp')")                    # no nav button either
+            pg.wait_for_timeout(300)
+            assert shown(pg) == "gp-list", shown(pg)
+            body = pg.inner_text(".view.on")
+            assert "GP-2608-0031" not in body and "CHN-455" not in body, body[:300]
+            assert pg.errors == [], pg.errors
+        finally:
+            ctx.close()
+
+
 # --------------------------------------------------------------------------
 # 4. a hash for a screen the account cannot view lands on home, not a 403
 # --------------------------------------------------------------------------

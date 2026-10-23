@@ -8253,3 +8253,13 @@ commit.
   **[open]** whether Mukesh wants them cleared (a correction, audited).
 - **Test:** `test_packing.js` +3 (29); `test_pallet_header_ui.py` (new, 3, Chromium):
   fresh header, no bin recorded, a picked bin recorded and fixed across a reload.
+
+### 24 Oct 2026 - /#gp opened v4's sample gate pass (overnight audit)
+- **Found:** the address /#gp - typed, or a bookmark from before the Gate Pass list
+  existed - opened v4's own Gate Pass section: party SAI BABUJI, challan CHN-455, gate pass
+  GP-2608-0031, a loading box against pallets A044/A045, Print and Issue buttons. The nav
+  button's go('gp', this) was redirected to the list; go('gp') without it was not.
+- **Change (icon_live.js):** every go('gp') opens the Gate Pass list - nothing shows v4's
+  native section any more (gpBeginEdit and the list's New Gate Pass already use gp-new).
+- **Test:** `test_hash_route.py` +1 (9): #gp and a bare go('gp') land on gp-list, hash
+  rewritten to #gp-list, none of the sample on screen.

@@ -13786,8 +13786,10 @@ function wireFqcAnomalies() {
       // caller that wants the create/edit page (gpBeginEdit, the list's
       // own "New Gate Pass" button) targets go('gp-new') directly, its
       // own real view - v4's native v-gp is never navigated to by
-      // anything at all any more, by either path.
-      if (view === 'gp' && btn && btn.classList && btn.classList.contains('nav-i')) {
+      // anything at all any more, by either path. Not even without the
+      // button: a typed or bookmarked /#gp landed on v4's sample gate pass
+      // (SAI BABUJI, CHN-455, GP-2608-0031) - overnight audit, 24 Oct 2026.
+      if (view === 'gp') {
         view = 'gp-list';
         arguments[0] = view;
       }
