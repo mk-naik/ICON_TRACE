@@ -7744,6 +7744,13 @@ def api_allocation_create():
         refusal = _removed_material_refusal(cur, [n for n, _m in mats])
         if refusal:
             return jsonify({"ok": False, "why": refusal}), 400
+        # Planning's "Validate only" asks this whole question and stops here:
+        # every refusal above, nothing written. It used to answer from the
+        # browser's own two checks - "Validated." for a range this route then
+        # refused (overnight audit, 24 Oct 2026).
+        if d.get("validate_only"):
+            return jsonify({"ok": True, "validated": True, "qty": qty,
+                            "left": L["left"], "indent_no": L["indent_no"]})
 
         made_on, made_shift = _alloc_date_shift()
         aid = store.insert(cur, "allocation", {
@@ -8039,6 +8046,10 @@ def api_allocation_update(alloc_id):
                 (alloc_id,))])
         if refusal:
             return jsonify({"ok": False, "why": refusal}), 400
+        # "Validate only" on an edit: the same checks, nothing written
+        if d.get("validate_only"):
+            return jsonify({"ok": True, "validated": True, "qty": qty,
+                            "indent_no": L["indent_no"]})
         import icon_challan_import as CI
         # an edit is not a new issue - it keeps when it was first allocated
         made_on, made_shift = old["date_produced"], old["shift"]

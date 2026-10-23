@@ -8311,49 +8311,52 @@ function wireFqcAnomalies() {
        quantity exceeds what is left, and refresh the figures either way. */
     if (typeof loadMaster === 'function' && !loadMaster.__wired) {
       var origLoad = loadMaster;
-      var wrapped = function () {
-        var L = planIndentLine();
-        if (!L) { origLoad.apply(this, arguments); return; }
+      /* What Load into master sends for indent line L, or null once a check
+         here has said why not (the toast is the answer). Validate only sends
+         exactly this too. */
+      var planPayload = function (L) {
         var m = planMaterialsReady();
         if (!m.ok) {
           if (typeof toast === 'function')
             toast(m.missing.length + ' material(s) still unchosen. Record every '
                   + 'make before loading the range.');
-          return;
+          return null;
         }
         var custom = !!L.custom_serial, csr = planCustomState();
         if (custom && !csr) {
           if (typeof toast === 'function')
             toast('Upload the Excel file of serial numbers first.');
-          return;
+          return null;
         }
         var a = custom ? '' : (document.getElementById('rgFrom') || {}).value.trim().toUpperCase();
         var b = custom ? '' : (document.getElementById('rgTo') || {}).value.trim().toUpperCase();
         if (!custom && (!a || !b)) {
           if (typeof toast === 'function')
             toast('Fill the start and end serial before loading the range.');
-          return;
+          return null;
         }
         if (!custom && typeof rangeQty !== 'function') {
           if (typeof toast === 'function')
             toast('Cannot read the range on this build.');
-          return;
+          return null;
         }
         var serials = [];
         if (custom) {
           serials = csr.serials.slice();
         } else {
           var r = rangeQty(a, b);
-          if (!r.ok) { if (typeof toast === 'function') toast(r.why); return; }
+          if (!r.ok) { if (typeof toast === 'function') toast(r.why); return null; }
           for (var i = 0; i < r.n; i++) serials.push(bumpSerial(a, i));
         }
         if (!serials.length) {
           if (typeof toast === 'function') toast('That range is empty.');
-          return;
+          return null;
         }
         var editingId = window.__editingAlloc;
-        api(editingId ? ('allocation/' + editingId + '/update') : 'allocation', {
-          method: editingId ? 'PUT' : 'POST', body: JSON.stringify({
+        return {
+          path: editingId ? ('allocation/' + editingId + '/update') : 'allocation',
+          method: editingId ? 'PUT' : 'POST',
+          body: {
             alloc_id: editingId || null,
             indent_line_id: L.id, qty: serials.length, serials: serials,
             customer: L.cust, shift: (custom || !serials.length) ? 1 :
@@ -8361,7 +8364,53 @@ function wireFqcAnomalies() {
             date_produced: (document.getElementById('pDate') || {}).value || null,
             alloc_type: (document.getElementById('pAllocType') || {}).value || null,
             materials: planMaterialRows()
-          }) })
+          }
+        };
+      };
+      var planRail = function (ok, text) {
+        var st = document.getElementById('railStatus');
+        if (st) st.innerHTML = '<div class="note ' + (ok ? 'n-ok' : 'n-bad') + '" ' +
+          'style="font-size:11.5px"><span>' + (ok ? '✓' : '⚑') + '</span><span>' +
+          fqcEsc(text) + '</span></div>';
+      };
+      /* "Validate only" said "Validated. N serials ready" from two checks of
+         its own - the range's shape and a customer - while Load into master
+         could still be refused: a serial the master already has, more than
+         the line has left, a removed material. It now asks the server the
+         whole question (validate_only): every refusal Load into master would
+         meet, and nothing written (overnight audit, 24 Oct 2026). */
+      window.validateOnly = function () {
+        var L = planIndentLine();
+        if (!L) {
+          if (typeof toast === 'function') toast('Choose the indent and its item first.');
+          return;
+        }
+        var p = planPayload(L);
+        if (!p) return;
+        p.body.validate_only = true;
+        api(p.path, { method: p.method, body: JSON.stringify(p.body) })
+          .then(function (d) {
+            if (!d || d.ok !== true || !d.validated) {
+              var why = (d && d.why) || 'The server did not accept it.';
+              if (typeof toast === 'function') toast(why);
+              planRail(false, why);
+              return;
+            }
+            var msg = 'The server accepts this range: ' + d.qty + ' serial(s) against ' +
+                      d.indent_no + '. Nothing is written until Load into master.';
+            if (typeof toast === 'function') toast(msg);
+            planRail(true, msg);
+          })
+          .catch(function () {
+            if (typeof toast === 'function') toast('The server did not answer - nothing was checked.');
+          });
+      };
+      var wrapped = function () {
+        var L = planIndentLine();
+        if (!L) { origLoad.apply(this, arguments); return; }
+        var p = planPayload(L);
+        if (!p) return;
+        api(p.path, { method: p.method, body: JSON.stringify(p.body) })
           .then(function (d) {
             if (d.ok === false) {
               if (typeof toast === 'function') toast(d.why);

@@ -8326,3 +8326,18 @@ commit.
   or report reads it. **[open]** whether it should show (Search & Trace, the
   traceability report) and how a verifier should be recorded.
 - **Test:** `test_demo_claims.py` +1 (4, Chromium).
+
+### 24 Oct 2026 - Planning's "Validate only" said "Validated." for ranges the server refuses (overnight audit)
+- **Found:** v4's validateOnly() checked the range's shape and a customer in the
+  browser and toasted "Validated. N serials ready - nothing written yet." Load into
+  master is refused by the server for much more: a serial the master already has (any
+  customer), more than the line has left, a removed material, a custom list's problems.
+- **Change:** "Validate only" builds exactly what Load into master sends (the payload
+  is one function, `planPayload`, behind both) and posts it with `validate_only`. POST
+  /api/allocation and PUT .../update answer it after every check and before the first
+  write: accepted with the quantity, or refused with the same reason Load would get.
+  The answer is in the toast and the rail.
+- **Test:** `test_plan_validate_ui.py` (new, 3): server - accepted / refused, nothing
+  written, an edit too; Chromium - a good range, and a range whose serial the master
+  already holds. Planning's other suites pass (custom serials, batch copy, withdraw,
+  material remove, BOM match, indent export).
