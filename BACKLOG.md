@@ -8263,3 +8263,11 @@ commit.
   native section any more (gpBeginEdit and the list's New Gate Pass already use gp-new).
 - **Test:** `test_hash_route.py` +1 (9): #gp and a bare go('gp') land on gp-list, hash
   rewritten to #gp-list, none of the sample on screen.
+
+### 24 Oct 2026 - Item Master's Export table did nothing (overnight audit)
+- **Found:** clicking it sent nothing and downloaded nothing. It sat in the page header,
+  outside the table card, and icon_table.js answers `data-role="export"` only inside its
+  card - the fault the indent list had once (`test_indent_export.py`).
+- **Change (frag_items.html):** the button calls exportNote(), the Export every screen
+  uses - the rows on screen to /api/export/xlsx, recorded as `export.xlsx`.
+- **Test:** `test_item_master_export.py` (new, 1, Chromium): request, file, print log.
