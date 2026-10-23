@@ -843,6 +843,64 @@ function () {
 });
 
 
+/* ---- the bin is somebody's choice, never v4's preset ------------------ */
+
+test('no bin is chosen until somebody chooses one (v4 preset BIN-3)',
+function () {
+  reset();
+  var on = document.getElementById('binOn'), no = document.getElementById('binNo');
+  assert(on.checked === false, '"Use" is still ticked by v4\'s markup');
+  assert(no.value === '', 'bin ' + no.value + ' was chosen for the operator');
+  var bx = document.getElementById('boxNo').textContent;
+  assert(bx === '—', 'the header shows pallet ' + bx + ' before any pallet exists');
+
+  route(/\/box\/check/, checkReply());
+  route(/\/box\/open$/, { box_id: 11, seq: 1, label: 'ISPL260910/A001',
+    pack_date: '2026-09-10' });
+  route(/\/box\/11\/scan$/, { ok: true, qty: 1, capacity: 36 });
+  scanIn('S1'); packCommit();
+
+  var opened = lastCallTo(/\/box\/open$/);
+  assert(opened.body.bin === null, 'the box was opened in bin ' + opened.body.bin);
+});
+
+test('a bin picked before scanning is what the box is opened with, then fixed',
+function () {
+  reset();
+  var on = document.getElementById('binOn'), no = document.getElementById('binNo');
+  no.value = '5'; binTog();
+  assert(on.checked === true, 'picking a bin did not count as using one');
+
+  route(/\/box\/check/, checkReply());
+  route(/\/box\/open$/, { box_id: 12, seq: 1, label: 'ISPL260910/A001',
+    pack_date: '2026-09-10' });
+  route(/\/box\/12\/scan$/, { ok: true, qty: 1, capacity: 36 });
+  scanIn('S1'); packCommit();
+
+  var opened = lastCallTo(/\/box\/open$/);
+  assert(opened.body.bin === '5', 'the box was opened in bin ' + opened.body.bin);
+  assert(no.disabled && on.disabled,
+    'the bin stayed editable once the box existed - a change never reaches it');
+  var shown = document.getElementById('metaBin').innerHTML;
+  assert(shown.indexOf('BIN-5') !== -1, shown);
+});
+
+test('a pallet read back on load shows the bin it was opened with',
+function () {
+  prepare();
+  route(/\/boxes\?state=open/, [{ box_id: 78, seq: 3, grade: 'A',
+    model: 'ISEN625-G12R', qty: 1, customer_name: 'ICON STOCK',
+    pack_date: '2026-09-11', capacity: 36, label: 'ISPL260911/T003', bin_no: 2 }]);
+  route(/\/box\/78$/, { box_id: 78, serials: [{ serial: 'S10' }] });
+
+  wirePacking();
+
+  var no = document.getElementById('binNo');
+  assert(no.value === '2', 'the restored pallet shows bin ' + no.value);
+  assert(no.disabled, 'the restored bin could be changed on screen only');
+});
+
+
 /* ---- surviving a reload ------------------------------------------------ */
 
 test('a part-packed pallet is read back from the database on load, not lost',

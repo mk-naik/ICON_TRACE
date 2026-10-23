@@ -6262,15 +6262,14 @@ function wireFqcAnomalies() {
      something the contents do not. */
   function packEnsureBox(info) {
     if (packBox) return Promise.resolve(packBox);
-    var bin = document.getElementById('binOn');
     var dateEl = document.querySelector('#v-pack input[type=date]');
+    var bin = packBinChosen();
     return api('box/open', { method: 'POST', body: JSON.stringify({
       grade: info.grade, model: info.model,
       customer: info.customer_code || null,
       capacity: packCap(),
       pack_date: dateEl ? dateEl.value : null,
-      bin: (bin && bin.checked) ?
-           (document.getElementById('binNo') || {}).value : null,
+      bin: bin,
       shift: null
     }) }).then(function (d) {
       if (d && d.ok === false) {
@@ -6283,16 +6282,46 @@ function wireFqcAnomalies() {
       packBox = { box_id: d.box_id, seq: d.seq, label: d.label,
                   grade: info.grade, model: info.model,
                   customer: info.customer, pack_date: d.pack_date,
-                  qty: 0, capacity: d.capacity || packCap() };
+                  qty: 0, capacity: d.capacity || packCap(), bin: bin };
       packPaintBox();
       return packBox;
     });
   }
 
+  /* The bin the operator picked, or null. v4 shipped "Use" ticked with bin
+     3 already selected, so every pallet was recorded in BIN-3 whether
+     anybody chose it or not - all four pallets on the plant's database said
+     BIN-3 on 24 Oct 2026. Nothing is chosen now until somebody chooses it. */
+  function packBinChosen() {
+    var on = document.getElementById('binOn');
+    var no = document.getElementById('binNo');
+    return (on && on.checked && no && no.value) ? no.value : null;
+  }
+
+  function packPaintBin() {
+    var el = document.getElementById('metaBin');
+    if (!el) return;
+    var bin = packBox ? packBox.bin : packBinChosen();
+    el.style.display = bin ? '' : 'none';
+    el.innerHTML = 'Bin <b>' + (bin ? 'BIN-' + fqcEsc(String(bin)) : '—') + '</b>';
+  }
+
+  /* v4's binTog() for the "Use" box and the bin list: picking a bin is
+     using one, clearing it is not; neither changes a box already open -
+     box/open is the only call that records a bin. */
+  window.binTog = function () {
+    var on = document.getElementById('binOn');
+    var no = document.getElementById('binNo');
+    if (on && no && !packBox && no.value !== no.__last) on.checked = !!no.value;
+    if (no) no.__last = no.value;
+    packPaintBin();
+  };
+
   function packPaintBox() {
     var el = document.getElementById('boxNo');
     if (el && packBox && packBox.seq != null) {
       el.textContent = packBox.label || ('#' + packBox.seq);
+      el.title = '';
     }
     packLockFields();
   }
@@ -6445,6 +6474,40 @@ function wireFqcAnomalies() {
     if (mg) mg.textContent = open ? (packBox.grade || '—') : '—';
     var mm = document.getElementById('metaModel');
     if (mm) mm.textContent = open ? (packBox.model || '—') : '—';
+    /* v4 printed A043 here - a number nobody was given. The server numbers
+       a pallet (ISPL...) when its first module is scanned in. */
+    var bx = document.getElementById('boxNo');
+    if (bx && !open) {
+      bx.textContent = '—';
+      bx.title = 'The pallet number is given when the first module is scanned in';
+    }
+
+    /* The bin: no bin until one is picked (see packBinChosen), and once the
+       box exists, the bin it was opened with - fixed, like its date. */
+    var binOn = document.getElementById('binOn');
+    var binNo = document.getElementById('binNo');
+    if (binOn && binNo) {
+      if (!binNo.__noPreset) {
+        binNo.__noPreset = true;
+        var none = document.createElement('option');
+        none.value = '';
+        none.textContent = '—';
+        binNo.insertBefore(none, binNo.firstChild || null);
+        binNo.value = '';
+        binNo.__last = '';
+        binOn.checked = false;
+      }
+      if (open) {
+        binOn.checked = !!packBox.bin;
+        binNo.value = packBox.bin ? String(packBox.bin) : '';
+        binNo.__last = binNo.value;
+      }
+      binOn.disabled = open;
+      binNo.disabled = open;
+      binNo.title = open ? 'Fixed when this box was opened' :
+                           'Optional - the bin this pallet stands in';
+      packPaintBin();
+    }
 
     /* Packing date defaults to today but is the operator's to set until a
        box exists - a pallet finished just after midnight, or logged the
@@ -6485,7 +6548,8 @@ function wireFqcAnomalies() {
         packBox = { box_id: open.box_id, seq: open.seq, grade: open.grade,
                     model: open.model, qty: open.qty,
                     customer: open.customer_name, pack_date: open.pack_date,
-                    capacity: open.capacity, label: open.label };
+                    capacity: open.capacity, label: open.label,
+                    bin: open.bin_no == null ? null : open.bin_no };
         packPaintBox();
         fetch('/api/box/' + open.box_id, { cache: 'no-store' })
           .then(function (r) { return r.json(); })
@@ -6695,6 +6759,9 @@ function wireFqcAnomalies() {
           var closed = packBox;
           packBox = null;
           if (typeof buildSlots === 'function') buildSlots();
+          /* the saved pallet's number, customer and grade went on reading
+             above the empty grid until the next scan opened another */
+          packLockFields();
           if (window.iconRefresh) iconRefresh();
           if (print) printWindow('/box/' + closed.box_id + '/sheet');
         })

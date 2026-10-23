@@ -499,6 +499,10 @@ no one signs twice. [enforcement unverified]
   Unit-2's 30 mm frame). The indent's pallet instruction is **not** a cap.
   [built]
 - Unallocated stock is General Stock, never blank. [built]
+- **A pallet's bin is the operator's choice; nothing is preset** (24 Oct, overnight
+  audit): v4 ticked "Use" with bin 3 chosen, so every pallet was recorded in BIN-3. No
+  bin until one is picked; once the pallet is open its bin is fixed. [built] **[open]**
+  the four pallets recorded in bin 3 before this - cleared or left.
 - **A refused pack scan says WHY, by name** (Mukesh, 4 Oct). One gate (`_pack_block` / `_pack_refusal`) behind the Pallet scan, its preview and Repack's fresh-stock scan; the preview also shows the category in the FQC cell. The reasons: Not in master (the tester has read it but nobody planned it / it is not a serial / the tester never read it), Already packed or dispatched, Serial cancelled, Not FQC'd, FQC cancelled (who, when, why), Quality pending (with the defect), Provisional (tester reading missing) and Provisional - disagrees (a Needs Review item is open), Below nameplate, Pass not carried on. Each reads from the record that says so, never guessed from `state` alone. [built]
 - **Packing Log status is read from the challan**, not stored on the pallet: open,
   packed (closed, on no live challan), challaned (on a live draft or issued

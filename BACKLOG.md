@@ -8233,3 +8233,23 @@ commit.
 - **Test:** `test_el_analysis.py` +1 (22): both exports recorded; `test_el_analysis_ui.py`
   +2 (14): a click lands on its list, Back and Close; Copy picture - clipboard, file, the
   print log, the right-click fallback.
+
+### 24 Oct 2026 - New Pallet recorded every pallet in BIN-3 (overnight audit)
+- **Asked (Mukesh, 23 Oct night: "audit all things fix demo or disable buttons"):** every
+  screen and every visible button was clicked in Chromium on a copy of the 18 Oct real-data
+  snapshot (`crawl.py`, scratch), one level into what each click opens, and v4's sample
+  values were searched for on every screen. This is the first fix from it.
+- **Found:** a fresh New Pallet showed v4's sample pallet "A043" and "Bin BIN-3". The bin
+  was not cosmetic: v4's markup ticks "Use" with bin 3 selected and box/open records what
+  is ticked, so all four pallets on the plant's database (read-only, 24 Oct) say bin 3 -
+  shown as BIN-3 in Packing Log, Search & Trace and the challan's pallet list. The bin
+  could also be changed after the pallet was opened, where the change reached nothing;
+  after Save the closed pallet's number, customer and grade stayed above the empty grid.
+- **Change (icon_live.js, New Pallet):** no bin until one is picked ("Use" unticked, a
+  blank first choice; picking a bin ticks Use); box/open sends null otherwise; once the
+  pallet exists its bin is fixed on screen, read back on reload (`bin_no`); the header
+  shows "—" until the server numbers the pallet; Save empties the header.
+- **Not changed:** the four pallets already recorded in bin 3 - records are not rewritten.
+  **[open]** whether Mukesh wants them cleared (a correction, audited).
+- **Test:** `test_packing.js` +3 (29); `test_pallet_header_ui.py` (new, 3, Chromium):
+  fresh header, no bin recorded, a picked bin recorded and fixed across a reload.
