@@ -8422,3 +8422,13 @@ commit.
 - **Test:** `test_demo_leftovers_ui.py` +1 (4): Packing Operator / Super Admin on New entry,
   a button drawn later, a Production Incharge on Open dispatch. Permission editor 6, role
   gates 11, dashboards 28, loading list 8, write gates 9, inline args - all pass.
+
+### 24 Oct 2026 - the station counts asked /api/users before sign-in, and hid an Admin's read-only note
+- **Found (full suite after dbf096e):** `test_dashrath_case.py` - a restricted account's page
+  made a refused read of /api/users; `test_master_data_ui.py` - an Admin's Stations & sources
+  lost its "master data" read-only note.
+- **Cause:** adStationsPaint() ran at file load, when v4's USER still says Admin, so the
+  Users read went out on whatever cookie the page carried; and its `#ad-stations > .note`
+  picked the read-only note an Admin gets in front of v4's, and rewrote it.
+- **Change:** it waits for a signed-in account (USER.perms) and rewrites only v4's own note.
+- **Test:** both files pass again (6, 5); `test_demo_leftovers_ui.py` 4.

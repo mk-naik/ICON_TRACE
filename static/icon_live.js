@@ -17094,8 +17094,11 @@ window.gpSetKind = function(k) {
      names that this list lacks is shown too. */
   function adStationsPaint() {
     var tb = document.getElementById('stationRows');
-    if (!tb || !can('admin')) return;
-    var note = document.querySelector('#ad-stations > .note');
+    /* signed in first: before that v4's USER still says Admin, and the read
+       of /api/users went out for whoever's cookie the page carried */
+    if (!tb || !USER || !USER.perms || !can('admin')) return;
+    /* v4's own note - not the read-only note an Admin gets in front of it */
+    var note = document.querySelector('#ad-stations > .note:not(.ro-note)');
     if (note && !note.__live) {
       note.__live = true;
       note.innerHTML = '<span>&#9432;</span><span>A station is written on each account ' +
