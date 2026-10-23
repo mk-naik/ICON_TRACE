@@ -15051,7 +15051,28 @@ window.gpSetKind = function(k) {
     if (impBody) { impBody.innerHTML = ''; impBody.style.display = 'none'; }
     var fileIn = document.getElementById('peFileIn');
     if (fileIn) fileIn.value = '';
+    /* Line: v4 opened on A-Line, so an entry nobody set was recorded as
+       A-Line. Blank until picked - the entry then records no line, which the
+       dashboards say plainly (overnight audit, 24 Oct 2026). */
+    document.querySelectorAll('#peManual .fld').forEach(function (f) {
+      var lab = f.querySelector('label'), sel = f.querySelector('select');
+      if (!lab || !sel || lab.textContent.trim() !== 'Line') return;
+      blankFirstOption(sel, '— not recorded —');
+    });
   };
+
+  /* A select whose first choice would be recorded for whoever did not look:
+     a blank first option, chosen. */
+  function blankFirstOption(sel, label) {
+    if (!sel) return;
+    if (!sel.options.length || sel.options[0].value !== '') {
+      var o = document.createElement('option');
+      o.value = '';
+      o.textContent = label;
+      sel.insertBefore(o, sel.firstChild);
+    }
+    sel.value = '';
+  }
 
   /* "A material changed part-way through this range": what is ticked here
      travels with the entry (material_note) when Record production is
@@ -16189,6 +16210,13 @@ window.gpSetKind = function(k) {
     if (sh) sh.value = _istShift();
     var en = document.getElementById('evEnd');
     if (en) en.value = '';
+    /* Line, machine and reason are the operator's to name: the form opened
+       on Line A, its first machine and "power cut", and Open event recorded
+       exactly that for whoever did not look (overnight audit, 24 Oct 2026).
+       Blank now; Open event refuses until each is chosen. */
+    blankFirstOption(document.getElementById('evLine'), '— choose the line —');
+    blankFirstOption(document.getElementById('evReason'), '— choose the reason —');
+    if (typeof window.evMachines === 'function') window.evMachines();
     if (window.loRetroSync) window.loRetroSync();
   };
 
@@ -16346,9 +16374,10 @@ window.gpSetKind = function(k) {
     var line = lineEl.value;
     var machEl = document.getElementById('evMach');
     if (machEl && typeof machListFor === 'function') {
-      machEl.innerHTML = machListFor(line).map(function (m) {
-        return '<option>' + m + '</option>';
-      }).join('');
+      machEl.innerHTML = line
+        ? '<option value="">— choose the machine —</option>' +
+          machListFor(line).map(function (m) { return '<option>' + m + '</option>'; }).join('')
+        : '<option value="">— choose the line first —</option>';
     }
     var linkEl = document.getElementById('evLink');
     var fill = function (list, none) {

@@ -8363,3 +8363,18 @@ commit.
 - **Change (icon_live.js, wireFqcDash):** the x clears To and asks the dashboard again.
 - **Test:** `test_demo_claims.py` +1 (5): the request goes out with from = to; the
   test fails on the code before this change (no request).
+
+### 24 Oct 2026 - Production Entry's Line and the downtime form opened on values nobody chose (overnight audit)
+- **Found (form-by-form dump of every field's starting value, Chromium):** Production
+  Entry's Line opened on A-Line, so an entry nobody set was recorded as A-Line (8 of the
+  plant's 236 entries say A-Line, the rest are imports with none). The downtime form
+  opened on Line A, its first machine (Stringer-1 · ATW-1) and LOP-POWER - power cut, and
+  Open event recorded exactly that for whoever did not look.
+- **Change (icon_live.js):** a blank first choice, chosen each time the form opens:
+  Line "— not recorded —" on Production Entry (optional, as before; the server records
+  no line and the dashboards say so); "— choose the line / machine / reason —" on the
+  downtime form, where Open event already refused a blank one.
+- **Not changed:** the 8 entries recorded A-Line. Indicative fields that say so on screen
+  (scheduled minutes 480, ideal rate 2000 "unconfirmed until Humeshwar agrees") stay.
+- **Test:** `test_form_presets_ui.py` (new, 2, Chromium). Loss 17, production 16,
+  incharge 9, the import screen, factory-day defaults - all pass.
