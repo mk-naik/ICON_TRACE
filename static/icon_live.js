@@ -4289,6 +4289,19 @@ function wireFqcAnomalies() {
       }
     });
 
+    /* v4's x beside To cleared the field and relabelled the Period "single
+       day" - but a value set from code fires no change event, so the figures
+       stayed on the old range under a toast saying "showing a single day"
+       (overnight audit, 24 Oct 2026). */
+    window.fqcClearTo = function () {
+      var t = document.getElementById('fTo');
+      if (!t) return;
+      t.value = '';
+      if (typeof fqcRange === 'function') fqcRange();
+      renderLiveFqcDash();
+      if (typeof toast === 'function') toast('To date cleared — showing a single day.');
+    };
+
     window.fqcResetFilters = function () {
       [['fDashShift', 'All shifts'], ['fDashCust', 'All customers'],
        ['fDashModel', 'All'], ['fDashResult', 'All']].forEach(function (x) {

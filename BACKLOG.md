@@ -8353,3 +8353,13 @@ commit.
   `loading`).
 - **Test:** `test_el_capture_ui.py` +1 (15), `test_loading_ui.py` +1 (8): the request,
   its rows, the log row.
+
+### 24 Oct 2026 - FQC Dashboard's x beside To said "showing a single day" and was not (overnight audit)
+- **Found (crawl, then by hand):** v4's fqcClearTo() blanks To, relabels the Period
+  "single day" and toasts "To date cleared - showing a single day.", but a value set
+  from code fires no change event, so the live layer never asked again: the cards and
+  tables stayed on the old range. (Management Overview's x calls renderMgmt() itself
+  and was fine.)
+- **Change (icon_live.js, wireFqcDash):** the x clears To and asks the dashboard again.
+- **Test:** `test_demo_claims.py` +1 (5): the request goes out with from = to; the
+  test fails on the code before this change (no request).

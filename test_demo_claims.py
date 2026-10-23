@@ -189,6 +189,25 @@ def t_material_change_box():
         assert pg.errors == [], pg.errors
 
 
+@test("FQC Dashboard's x beside To: 'showing a single day' is true - the figures "
+      "are asked for again for that one day (overnight audit, 24 Oct 2026)")
+def t_fqc_clear_to():
+    store.wipe(); AUTH.ensure_auth_schema()
+    with H.browser() as b:
+        pg = page(b)
+        pg.evaluate("go('dash')"); pg.wait_for_timeout(900)
+        pg.fill("#fFrom", "2026-10-01"); pg.dispatch_event("#fFrom", "change")
+        pg.fill("#fTo", "2026-10-05"); pg.dispatch_event("#fTo", "change")
+        pg.wait_for_timeout(800)
+        with pg.expect_request(lambda r: "/api/fqc/dashboard?" in r.url, timeout=8000) as info:
+            pg.click("#v-dash button[onclick='fqcClearTo()']")
+        url = info.value.url
+        assert "from=2026-10-01" in url and "to=2026-10-01" in url, url
+        assert pg.input_value("#fTo") == "" and "single day" in pg.input_value("#fPeriod")
+        assert pg.toasts and "single day" in pg.toasts[-1], pg.toasts
+        assert pg.errors == [], pg.errors
+
+
 # --------------------------------------------------------------------------
 
 if __name__ == "__main__":
