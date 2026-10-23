@@ -8439,3 +8439,16 @@ commit.
   rightly refuses an expected return before today.
 - **Change:** the tests use a date a week ahead on the IST clock; the rule is unchanged.
 - **Test:** 6 and 4 pass.
+
+### 24 Oct 2026 - Planning's allocation type: preset Post-shared, and an edit overwrote it (overnight audit)
+- **Found (form presets):** Allocation type (marked required) opened on "Post-shared", so every
+  Planning allocation nobody changed was recorded post-shared (all 9 on the plant's database
+  are; the 224 imports are post-shared rightly). Opening an allocation to edit never set the
+  field, so saving the edit sent whatever it showed - a pre-shared batch became post-shared.
+- **Change (icon_live.js):** a blank first choice; New plan resets it; Edit shows the type the
+  allocation recorded; Validate only and Load into master say "Choose the allocation type"
+  and send nothing until it is chosen.
+- **Not changed:** the 9 recorded allocations.
+- **Test:** `test_plan_validate_ui.py` +1 (4): unchosen, asked for before any request, an
+  edit shows "pre"; `test_custom_serials_ui.py` (5) chooses it and checks it is stored.
+  Batch copy 8, withdraw 3, material remove 9, BOM match 5, custom serials 14, boot 9.

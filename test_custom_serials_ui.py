@@ -104,6 +104,7 @@ def t_upload_and_load():
         assert pg.inner_text("#pvModel").strip() == "ISEN625-G12R", pg.inner_text("#pvModel")
         assert pg.query_selector("#matPanel .matrow"), "the bill of materials did not appear"
         fill_bom(pg)
+        pg.select_option("#pAllocType", "pre")       # nothing is preset (24 Oct 2026)
         assert not pg.is_disabled("#loadBtn"), pg.inner_text("#railStatus")
         pg.click("#loadBtn")
         pg.wait_for_function("() => !document.getElementById('pCustomResult') || "
@@ -113,6 +114,8 @@ def t_upload_and_load():
     with store.conn() as (cx, cur):
         rows = store.rows(cur, "SELECT serial, sequence, format_version FROM serial ORDER BY sequence")
         mats = store.one(cur, "SELECT COUNT(*) AS n FROM allocation_material")["n"]
+        kind = store.one(cur, "SELECT alloc_type FROM allocation")["alloc_type"]
+    assert kind == "pre", kind
     assert [r["serial"] for r in rows] == ["B100001", "B100002", "B100003"], rows
     assert all(r["format_version"] == 0 for r in rows) and mats >= 1, (rows, mats)
 

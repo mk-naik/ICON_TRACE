@@ -8401,6 +8401,12 @@ function wireFqcAnomalies() {
          here has said why not (the toast is the answer). Validate only sends
          exactly this too. */
       var planPayload = function (L) {
+        var aType = document.getElementById('pAllocType');
+        if (aType && !aType.value) {
+          if (typeof toast === 'function')
+            toast('Choose the allocation type - pre-shared or post-shared.');
+          return null;
+        }
         var m = planMaterialsReady();
         if (!m.ok) {
           if (typeof toast === 'function')
@@ -8554,8 +8560,13 @@ function wireFqcAnomalies() {
     if (!host) return;
     var fld = document.createElement('div');
     fld.className = 'fld req';
+    /* nothing chosen until the planner chooses: "Post-shared" was the first
+       option and went on every allocation nobody changed (overnight audit,
+       24 Oct 2026); Validate and Load ask for it, an edit shows what was
+       recorded */
     fld.innerHTML = '<label>Allocation type</label>' +
       '<select id="pAllocType">' +
+      '<option value="">— choose —</option>' +
       '<option value="post">Post-shared — allocated from what is built</option>' +
       '<option value="pre">Pre-shared — serials issued before production</option>' +
       '</select>';
@@ -8585,6 +8596,11 @@ function wireFqcAnomalies() {
           var line = document.getElementById('pIndentLine');
           if (!copy) {
             window.__editingAlloc = id;
+            /* what this allocation recorded - an edit used to send whatever
+               the select showed (Post-shared), so editing anything turned a
+               pre-shared batch into a post-shared one */
+            var aType = document.getElementById('pAllocType');
+            if (aType) aType.value = a.alloc_type || '';
             if (ind) {
               ind.value = a.indent_no;
               if (typeof indentChange === 'function') indentChange();
@@ -8973,6 +8989,8 @@ function wireFqcAnomalies() {
           var to = document.getElementById('rgTo');
           if (from) from.value = '';
           if (to) to.value = '';
+          var aType = document.getElementById('pAllocType');
+          if (aType) aType.value = '';
           planCustomReset();
           planCopyNote('', '');
           MAT_SEL = {};

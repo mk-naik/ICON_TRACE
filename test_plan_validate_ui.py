@@ -65,6 +65,7 @@ def validate(pg):
     pg.fill("#rgTo", RANGE[-1]); pg.dispatch_event("#rgTo", "input")
     pg.wait_for_timeout(500)
     U.fill_bom(pg)
+    pg.select_option("#pAllocType", "post")
     pg.click("#v-plan button:has-text('Validate only')")
     pg.wait_for_function("() => /server/i.test(document.getElementById('railStatus').innerText) "
                          "|| /already/i.test(document.getElementById('railStatus').innerText)",
@@ -96,6 +97,34 @@ def t_browser_refused():
         said = validate(pg)
         assert RANGE[1] in said and "server accepts" not in said, said
         assert counts() == (1, 1), counts()
+        assert not pg.errors, pg.errors
+
+
+@test("in the browser: the allocation type starts unchosen and Validate only asks for "
+      "it; an allocation opened for editing shows the type it recorded - an edit "
+      "used to send Post-shared whatever it was (24 Oct 2026)")
+def t_alloc_type():
+    c, _custom, line = T.world()
+    assert T.allocate(c, line, RANGE[:2], alloc_type="pre").status_code == 200
+    with store.conn() as (cx, cur):
+        aid = store.one(cur, "SELECT alloc_id FROM allocation")["alloc_id"]
+    with H.browser() as b:
+        pg = U.open_plan(b)
+        assert pg.input_value("#pAllocType") == "", pg.input_value("#pAllocType")
+        U.pick(pg, "OCT-02/2026")
+        pg.fill("#rgFrom", RANGE[2]); pg.dispatch_event("#rgFrom", "input")
+        pg.fill("#rgTo", RANGE[2]); pg.dispatch_event("#rgTo", "input")
+        pg.wait_for_timeout(400)
+        U.fill_bom(pg)
+        sent = []
+        pg.on("request", lambda r: sent.append(r.url) if "/api/allocation" in r.url else None)
+        pg.click("#v-plan button:has-text('Validate only')")
+        pg.wait_for_timeout(600)
+        assert not sent, "it asked the server without an allocation type: %s" % sent
+        assert "server accepts" not in pg.inner_text("#railStatus")
+        pg.evaluate("iconEditAlloc(%d)" % aid)
+        pg.wait_for_function("() => document.getElementById('pAllocType').value === 'pre'",
+                             timeout=8000)
         assert not pg.errors, pg.errors
 
 
