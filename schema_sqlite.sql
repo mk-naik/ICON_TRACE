@@ -984,6 +984,70 @@ CREATE TABLE IF NOT EXISTS cell_efficiency (
   seq    INTEGER NOT NULL DEFAULT 0
 ) ;
 
+-- ==========================================================================
+-- Customer and model masters (24 Oct 2026)
+--
+-- They lived in icon_customers.py / icon_models.py as Python lists, so adding
+-- a customer meant editing source and redeploying. Filled from those lists
+-- once - a row only where its code is absent (store._seed_masters) - after
+-- which these tables are the master, kept in Admin > Customers and Models.
+--
+-- The code is the key every record stores and is never edited: a box stores
+-- the customer CODE, Planning stores the customer's NAME, every serial, indent
+-- line and pallet stores the MODEL code. A row is never deleted: Remove stamps
+-- it (removed_*), it is no longer offered or matched, and a record that named
+-- it still names it; Restore takes the stamp off. Every create, edit, removal
+-- and restore is an entity_revision row (before and after) and an audit row.
+--
+-- customer.gstins / aliases / former_names are JSON lists, locations a JSON
+-- {gstin: place}. former_names: the names it was shown under before an edit -
+-- the rows Planning wrote with them still find it.
+-- model.seq is the order models were added: item codes (F02 01 0001 ...) are
+-- numbered by it, removed models counted, so no code ever moves.
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS customer (
+  customer_code  TEXT    NOT NULL PRIMARY KEY,
+  name           TEXT    NOT NULL,
+  gstins         TEXT    NOT NULL DEFAULT '[]',
+  locations      TEXT    NOT NULL DEFAULT '{}',
+  state          TEXT    NULL,
+  aliases        TEXT    NOT NULL DEFAULT '[]',
+  former_names   TEXT    NOT NULL DEFAULT '[]',
+  erp_code       TEXT    NULL,
+  seq            INTEGER NOT NULL DEFAULT 0,
+  created_at     TEXT    NULL,
+  created_by     TEXT    NULL,
+  updated_at     TEXT    NULL,
+  updated_by     TEXT    NULL,
+  removed_at     TEXT    NULL,
+  removed_by     TEXT    NULL,
+  removed_reason TEXT    NULL
+) ;
+
+CREATE TABLE IF NOT EXISTS model (
+  model            TEXT    NOT NULL PRIMARY KEY,
+  wattage          INTEGER NOT NULL,
+  family           TEXT    NOT NULL,       -- G12R | G2X | BI: the serial's type character
+  cells            INTEGER NOT NULL,
+  cells_per_string INTEGER NULL,
+  strings          INTEGER NULL,
+  produced         INTEGER NOT NULL DEFAULT 0,   -- authorised and produced are two facts
+  hsn              TEXT    NOT NULL DEFAULT '85414012',
+  erp_code         TEXT    NULL,           -- the other system's code, mapped in
+  unit             INTEGER NOT NULL DEFAULT 2,
+  frame_mm         INTEGER NOT NULL DEFAULT 30,
+  pallet_ceiling   INTEGER NOT NULL DEFAULT 36,
+  size             TEXT    NULL,
+  seq              INTEGER NOT NULL DEFAULT 0,
+  created_at       TEXT    NULL,
+  created_by       TEXT    NULL,
+  updated_at       TEXT    NULL,
+  updated_by       TEXT    NULL,
+  removed_at       TEXT    NULL,
+  removed_by       TEXT    NULL,
+  removed_reason   TEXT    NULL
+) ;
+
 
 
 -- ==========================================================================

@@ -16,7 +16,10 @@ plain, the placeholders are normalised, and nothing depends on SQLite.
 """
 
 import os, re, json, time, sqlite3, datetime, threading
+import icon_clock
 import icon_defects
+import icon_customers
+import icon_models
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("ICON_DB_FILE", os.path.join(BASE, "icontrace.db"))
@@ -60,6 +63,7 @@ TOPIC_OF_TABLE = {
     "loss_event": "loss",
     "review_item": "review",
     "material": "master", "cell_efficiency": "master", "app_config": "master",
+    "customer": "master", "model": "master",
     "app_user": "users", "user_screen_perm": "users",
     "dispatch_audit": "audit",
 }
@@ -657,6 +661,61 @@ def _seed_defects(cx):
     cx.commit()
 
 
+_CUSTOMER_COLS = ("customer_code", "name", "gstins", "locations", "state", "aliases",
+                  "former_names", "erp_code", "seq", "created_at", "created_by")
+_MODEL_COLS = ("model", "wattage", "family", "cells", "cells_per_string", "strings",
+               "produced", "hsn", "erp_code", "unit", "frame_mm", "pallet_ceiling",
+               "size", "seq", "created_at", "created_by")
+
+
+def _seed_masters(cx):
+    """Fill `customer` and `model` from icon_customers / icon_models' seed lists
+    (24 Oct 2026): a row only where its code is absent - INSERT OR IGNORE, as
+    _seed_defects does. A row that exists is never touched, so an edit stands
+    and a removed customer or model stays removed (removal never deletes the
+    row). Then the two modules are handed what the tables hold."""
+    def cols(t):
+        return {r[1] for r in cx.execute("PRAGMA table_info(%s)" % t)}
+    now = icon_clock.stamp()
+    if "customer_code" in cols("customer"):
+        for r in icon_customers.seed_rows():
+            rec = dict(r, gstins=json.dumps(r["gstins"]), locations=json.dumps(r["locations"]),
+                       aliases=json.dumps(r["aliases"]), former_names="[]",
+                       created_at=now, created_by="seed")
+            cx.execute("INSERT OR IGNORE INTO customer (%s) VALUES (%s)"
+                       % (", ".join(_CUSTOMER_COLS), ", ".join("?" * len(_CUSTOMER_COLS))),
+                       [rec[c] for c in _CUSTOMER_COLS])
+    if "wattage" in cols("model"):
+        for r in icon_models.seed_rows():
+            rec = dict(r, produced=1 if r["produced"] else 0, created_at=now,
+                       created_by="seed")
+            cx.execute("INSERT OR IGNORE INTO model (%s) VALUES (%s)"
+                       % (", ".join(_MODEL_COLS), ", ".join("?" * len(_MODEL_COLS))),
+                       [rec[c] for c in _MODEL_COLS])
+    cx.commit()
+    load_masters(cx)
+
+
+def load_masters(cx=None):
+    """Hand icon_customers and icon_models the rows their tables hold now - at
+    start-up, and after every save to either master (the app's routes call it
+    once their transaction has committed)."""
+    own = cx is None
+    if own:
+        cx = sqlite3.connect(DB_PATH, timeout=20)
+
+    def rows(sql):
+        cur = cx.execute(sql)
+        names = [d[0] for d in cur.description]
+        return [dict(zip(names, r)) for r in cur.fetchall()]
+    try:
+        icon_customers.load(rows("SELECT * FROM customer ORDER BY seq, customer_code"))
+        icon_models.load(rows("SELECT * FROM model ORDER BY seq, model"))
+    finally:
+        if own:
+            cx.close()
+
+
 def ensure():
     """Create the file and the schema on first use."""
     global _ready
@@ -681,6 +740,7 @@ def ensure():
                 _stamps_from_created(cx)
                 _loss_on_factory_day(cx)
                 _seed_defects(cx)
+                _seed_masters(cx)
         finally:
             cx.close()
         _ready = True

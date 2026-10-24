@@ -2403,14 +2403,17 @@ def customer_match(col, value):
     found one of those spellings and silently dropped the rest.
 
     This compares without case, against both forms the master knows for the
-    customer the filter names - its name and its code. A name the master does
-    not know is still compared without case, against itself."""
+    customer the filter names - its name and its code, and every name it was
+    shown under before an edit (24 Oct 2026: the master is edited in Admin now,
+    and the rows Planning wrote under the old name keep it). A name the master
+    does not know is still compared without case, against itself."""
     v = (value or "").strip()
     forms = {v.upper()}
     c = _customers.get(v) or _customers.resolve(v)
     if c:
         forms.add((c.get("customer_code") or "").upper())
         forms.add((c.get("name") or "").upper())
+        forms.update(f.upper() for f in c.get("former_names") or [])
     forms.discard("")
     forms = sorted(forms)
     return ("UPPER(TRIM(%s)) IN (%s)" % (col, ", ".join(["%s"] * len(forms))),

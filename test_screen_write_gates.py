@@ -204,6 +204,15 @@ def t_critical_surface_keeps_role_gates():
     want = {
         "/api/material": "_R_MASTER", "/api/material/<int:n>": "_R_MASTER",
         "/api/cell-efficiencies": "_R_MASTER", "/api/db/reset": "_R_MASTER",
+        # the customer and model masters (24 Oct 2026): every write and the
+        # use-check a removal starts from
+        "/api/customer": "_R_MASTER", "/api/customer/<code>": "_R_MASTER",
+        ("/api/customer/<code>", "DELETE"): "_R_MASTER",
+        "/api/customer/<code>/use": "_R_MASTER",
+        "/api/customer/<code>/restore": "_R_MASTER",
+        "/api/model": "_R_MASTER", "/api/model/<code>": "_R_MASTER",
+        ("/api/model/<code>", "DELETE"): "_R_MASTER",
+        "/api/model/<code>/use": "_R_MASTER", "/api/model/<code>/restore": "_R_MASTER",
         # (the form's POST; GET /settings is only a redirect into the app and
         # carries no gate - the fragment it lands on does)
         "/api/settings": "_R_MASTER", ("/settings", "POST"): "_R_ADMIN",

@@ -1616,10 +1616,14 @@ def boot_private():
         "prod": _prod_rows(),
         "shifts": _shift_rows(),
         "range": _data_range(),
+        # filters and the names records display - a removed customer too, after
+        # the live ones and marked: its records still carry it. A picker for
+        # anything new offers live ones only (the indent form's own list).
         "customers": [{"code": c["customer_code"], "name": c["name"],
                        "gstin": c["gstin"], "state": c["state"],
-                       "stock": c["is_stock"]}
-                      for c in customers.all_customers()],
+                       "stock": c["is_stock"], "removed": bool(c["removed_at"])}
+                      for c in customers.all_customers() +
+                      customers.all_customers(removed=True)],
         "open_boxes": [{"box_id": b["box_id"], "seq": b["seq"],
                         "pack_date": b["pack_date"], "model": b["model"],
                         "grade": b["grade"], "qty": b["qty"],
@@ -1629,15 +1633,20 @@ def boot_private():
         # both come out of the serial as STRINGS. Sending wattage as an integer
         # and omitting the type character made every serial fall through to
         # "not produced at Unit-2". Same shape as v4's own MODELS, exactly.
+        # A removed model too, after the live ones and marked: v4's derive()
+        # reads every serial against this list (FQC Entry among others), and a
+        # removed model's modules are still tested, packed and dispatched.
         "models": [{"watt": str(m["wattage"]), "tc": TC.get(m["family"], ""),
                     "model": m["model"], "series": m["family"],
                     "cells": "%d half cell" % (m["cells"] or 0),
                     "ct": m["family"], "size": m.get("size", ""),
-                    "produced": bool(m["produced"]), "lh": ""}
-                   for m in M.all_models()],
+                    "produced": bool(m["produced"]), "lh": m.get("erp_code") or "",
+                    "removed": bool(m["removed_at"])}
+                   for m in M.all_models() + M.all_models(removed=True)],
         "items": [{"item_code": i["item_code"], "model": i["model"],
-                   "cell_type": i["cell_type"], "wattage": i["wattage"]}
-                  for i in M.all_items()],
+                   "cell_type": i["cell_type"], "wattage": i["wattage"],
+                   "removed": i["removed"]}
+                  for i in M.all_items() + [x for x in M.ITEMS if x["removed"]]],
         # the bill of materials, which used to live only in the browser
         "materials": mats, "mat_cats": mat_cats, "cell_eff": cell_eff,
         # taken off the master: offered nowhere, listed under Materials as removed
@@ -7421,6 +7430,593 @@ def api_cell_efficiencies():
     return jsonify({"ok": True, "values": vals})
 
 
+# --------------------------------------------------------------------------
+# Customer and model masters (24 Oct 2026). They were Python lists, so adding
+# a customer meant editing source and redeploying; they are the `customer` and
+# `model` tables now, on the materials' pattern: a Super Admin writes, an Admin
+# reads; the code is never edited; Remove stamps the row - what still names it
+# said first, reason mandatory - and Restore takes the stamp off; every create,
+# edit, removal and restore is an entity_revision row and an audit row.
+# Mukesh, 24 Oct: a packing list prints the master's CURRENT name (challans and
+# gate passes print the invoice's text, which they store); a model whose
+# serials exist may be removed, the warning leading with what is still to plan.
+# --------------------------------------------------------------------------
+
+def _master_rows(cur, kind):
+    """Every row of one master as its module reads it, removed ones too."""
+    if kind == "customer":
+        return [customers._row(r) for r in store.rows(
+            cur, "SELECT * FROM customer ORDER BY seq, customer_code")]
+    return [models._row(r) for r in store.rows(
+        cur, "SELECT * FROM model ORDER BY seq, model")]
+
+
+def _removed_note(row):
+    if not row.get("removed_at"):
+        return None
+    return {"at": row["removed_at"], "by": row["removed_by"],
+            "reason": row["removed_reason"]}
+
+
+def _customer_out(c):
+    return {"code": c["customer_code"], "name": c["name"],
+            "gstins": [[g, c["locations"].get(g)] for g in c["gstins"]],
+            "state": c["state"], "aliases": c["aliases"],
+            "former_names": c["former_names"], "erp_code": c["erp_code"],
+            "stock": c["is_stock"], "created_at": c["created_at"],
+            "created_by": c["created_by"], "updated_at": c["updated_at"],
+            "updated_by": c["updated_by"], "removed": _removed_note(c)}
+
+
+def _model_out(m):
+    out = {k: m[k] for k in ("model", "wattage", "family", "cells",
+                             "cells_per_string", "strings", "produced", "hsn",
+                             "erp_code", "frame_mm", "pallet_ceiling", "size",
+                             "created_at", "created_by", "updated_at", "updated_by")}
+    out["tc"] = models.TYPE_CHAR.get(m["family"], "")
+    out["removed"] = _removed_note(m)
+    return out
+
+
+def _customer_removed(c):
+    """Why a removed customer cannot go on anything new."""
+    return ("%s (%s) was removed from the customer master on %s by %s (%s) - "
+            "nothing new is matched to it. A Super Admin can restore it in Admin "
+            "> Customers." % (c["name"], c["customer_code"], _dmy(c["removed_at"]),
+                               c["removed_by"], c["removed_reason"]))
+
+
+def _model_removed(code):
+    """Why a model cannot go on anything new - None while it is in the master."""
+    m = models.get(code)
+    if not m or not m["removed_at"]:
+        return None
+    return ("%s was removed from the model master on %s by %s (%s) - nothing new "
+            "is planned on it. A Super Admin can restore it in Admin > Models."
+            % (m["model"], _dmy(m["removed_at"]), m["removed_by"],
+               m["removed_reason"]))
+
+
+def _customer_for(text, keep=None):
+    """(what an indent stores for its customer, refusal or None). A customer in
+    the master gives its code; a REMOVED one is refused - unless it is the one
+    the indent already names (`keep`, its stored value), which an edit keeps;
+    a name the master never knew is kept as typed, as it always was."""
+    cr = customers.resolve(text)
+    if cr:
+        return cr["customer_code"], None
+    gone = customers.get(text)
+    if gone and gone["removed_at"]:
+        was = customers.get(keep) if keep else None
+        if was and was["customer_code"] == gone["customer_code"]:
+            return keep, None
+        return None, _customer_removed(gone)
+    return text, None
+
+
+def _left_on_line(cur, line_id, qty):
+    n = store.one(cur, "SELECT COUNT(*) AS n FROM serial WHERE indent_line_id=%s",
+                  (line_id,))["n"]
+    return max(0, (qty or 0) - n)
+
+
+def _customer_use(cur, code):
+    """What still names customer `code`, said before it is removed: its live
+    indents and what they still have to plan (in flight), its modules - how
+    many not yet dispatched - and its pallets. Matched on every spelling the
+    records carry: Planning stores the name, a pallet the code."""
+    sql, args = db.customer_match("i.customer", code)
+    indents = store.rows(cur, "SELECT i.indent_id, i.indent_no FROM indent i "
+                              "WHERE i.status<>'cancelled' AND " + sql +
+                         " ORDER BY i.indent_id", args)
+    open_ = []
+    for i in indents:
+        left = sum(_left_on_line(cur, l["indent_line_id"], l["qty"]) for l in store.rows(
+            cur, "SELECT indent_line_id, qty FROM indent_line WHERE indent_id=%s "
+                 "AND status<>'cancelled'", (i["indent_id"],)))
+        if left:
+            open_.append({"indent_no": i["indent_no"], "left": left})
+    sql, args = db.customer_match("customer", code)
+    by_state = {r["state"]: r["n"] for r in store.rows(
+        cur, "SELECT state, COUNT(*) AS n FROM serial WHERE " + sql +
+             " GROUP BY state", args)}
+    pallets = store.one(cur, "SELECT COUNT(*) AS n FROM box WHERE state<>'retired' "
+                             "AND " + sql, args)["n"]
+    modules = sum(n for s, n in by_state.items() if s != "cancelled")
+    sent = by_state.get("dispatched", 0)
+    return {"indents": len(indents), "open": open_[:8], "open_count": len(open_),
+            "to_plan": sum(o["left"] for o in open_), "modules": modules,
+            "in_flight": modules - sent, "dispatched": sent, "pallets": pallets}
+
+
+def _model_use(cur, code):
+    """What still names model `code`, said before it is removed: first what is
+    IN FLIGHT - indent lines with modules still to plan on it, which removal
+    stops (Mukesh, 24 Oct: "was used" is normal, "is in flight" is what should
+    stop you) - then the serials ever generated for it, its batches and its
+    pallets, which keep naming it."""
+    open_ = []
+    for l in store.rows(cur, "SELECT l.indent_line_id, l.line_no, l.qty, i.indent_no "
+                             "FROM indent_line l JOIN indent i ON i.indent_id=l.indent_id "
+                             "WHERE l.model=%s AND l.status<>'cancelled' AND "
+                             "i.status<>'cancelled' ORDER BY i.indent_id, l.line_no",
+                        (code,)):
+        left = _left_on_line(cur, l["indent_line_id"], l["qty"])
+        if left:
+            open_.append({"indent_no": l["indent_no"], "line": l["line_no"],
+                          "left": left, "qty": l["qty"]})
+    by_state = {r["state"]: r["n"] for r in store.rows(
+        cur, "SELECT state, COUNT(*) AS n FROM serial WHERE model=%s GROUP BY state",
+        (code,))}
+    batches = store.one(cur, "SELECT COUNT(DISTINCT alloc_id) AS n FROM serial "
+                             "WHERE model=%s AND alloc_id IS NOT NULL", (code,))["n"]
+    pallets = store.one(cur, "SELECT COUNT(*) AS n FROM box WHERE model=%s "
+                             "AND state<>'retired'", (code,))["n"]
+    return {"to_plan": sum(o["left"] for o in open_), "open": open_[:8],
+            "open_count": len(open_), "serials": sum(by_state.values()),
+            "not_produced": by_state.get("planned", 0),
+            "dispatched": by_state.get("dispatched", 0),
+            "batches": batches, "pallets": pallets}
+
+
+def _customer_in(d):
+    """A posted customer as icon_customers.problems reads it. A GSTIN may come
+    as "GSTIN place" (one line of the form), [gstin, place] or {gstin, place}."""
+    gst = []
+    for x in d.get("gstins") or []:
+        if isinstance(x, dict):
+            g, place = x.get("gstin"), x.get("place")
+        elif isinstance(x, (list, tuple)):
+            g, place = (list(x) + [None, None])[:2]
+        else:
+            parts = str(x).strip().split(None, 1)
+            g, place = (parts + [None, None])[:2]
+        g = str(g or "").strip().upper()
+        if g:
+            gst.append([g, str(place or "").strip() or None])
+    aliases, seen = [], set()
+    for a in d.get("aliases") or []:
+        a = str(a or "").strip()
+        if a and a.upper() not in seen:
+            seen.add(a.upper())
+            aliases.append(a)
+    return {"name": str(d.get("name") or "").strip(), "gstins": gst,
+            "state": str(d.get("state") or "").strip() or None,
+            "aliases": aliases,
+            "erp_code": str(d.get("erp_code") or "").strip() or None}
+
+
+def _customer_cols(rec, former):
+    return {"name": rec["name"],
+            "gstins": json.dumps([g for g, _p in rec["gstins"]]),
+            "locations": json.dumps({g: p for g, p in rec["gstins"] if p}),
+            "state": rec["state"], "aliases": json.dumps(rec["aliases"]),
+            "former_names": json.dumps(former), "erp_code": rec["erp_code"]}
+
+
+_JSON_COLS = ("gstins", "locations", "aliases", "former_names")
+
+
+def _decoded(row):
+    """A customer or model row with its JSON columns read - for a history."""
+    if row is None:
+        return None
+    out = dict(row)
+    for k in _JSON_COLS:
+        if isinstance(out.get(k), str):
+            try:
+                out[k] = json.loads(out[k])
+            except ValueError:
+                pass
+    return out
+
+
+def _master_write(cur, kind, key, action, before, after, detail):
+    db.record_revision(cur, actor(), kind, key, action, before, after)
+    db.audit(cur, actor(), "%s.%s" % (kind, action), kind, key, detail)
+
+
+def _gone_409(kind, row, key):
+    return jsonify({"ok": False, "why":
+        "%s was removed from the %s master on %s by %s - it cannot be edited. "
+        "Restore it first." % (key, kind, _dmy(row["removed_at"]),
+                               row["removed_by"])}), 409
+
+
+@app.route("/api/admin/customers")
+@require_role(*_R_ADMIN)
+def api_admin_customers():
+    """The customer master for Admin > Customers: live and removed, every field."""
+    with store.conn() as (cx, cur):
+        rows = _master_rows(cur, "customer")
+    live = sorted((c for c in rows if not c["removed_at"]),
+                  key=lambda c: (not c["is_stock"], c["name"].upper()))
+    gone = sorted((c for c in rows if c["removed_at"]),
+                  key=lambda c: c["removed_at"], reverse=True)
+    return jsonify({"customers": [_customer_out(c) for c in live],
+                    "removed": [_customer_out(c) for c in gone],
+                    "next_code": customers.next_code([c["customer_code"] for c in rows])})
+
+
+@app.route("/api/customer", methods=["POST"])
+@require_role(*_R_MASTER)
+def api_customer_create():
+    """Add a customer. The server gives the code - one past the highest ever
+    given, removed customers' included - never the browser."""
+    rec = _customer_in(request.get_json(silent=True) or {})
+    with store.conn() as (cx, cur):
+        rows = _master_rows(cur, "customer")
+        why = customers.problems(rec, None, rows)
+        if why:
+            return jsonify({"ok": False, "why": " ".join(why), "problems": why}), 400
+        code = customers.next_code([c["customer_code"] for c in rows])
+        cols = _customer_cols(rec, [])
+        cols.update(customer_code=code, seq=max([c["seq"] for c in rows] or [0]) + 1,
+                    created_at=clock.stamp(), created_by=actor())
+        store.insert(cur, "customer", cols)
+        after = store.one(cur, "SELECT * FROM customer WHERE customer_code=%s", (code,))
+        _master_write(cur, "customer", code, "create", None, after, {"name": rec["name"]})
+    store.load_masters()
+    return jsonify({"ok": True, "code": code,
+                    "customer": _customer_out(customers.get(code))})
+
+
+@app.route("/api/customer/<code>", methods=["PUT"])
+@require_role(*_R_MASTER)
+def api_customer_save(code):
+    """Edit a customer's name, GSTINs, state, aliases or ERP code. The code is
+    never changed - every indent, pallet and module of theirs stores it; a
+    removed customer is not edited (restore it first). A name it was shown
+    under before stays one of its names, so the rows Planning wrote with it
+    still find it. An edit that changes nothing writes nothing."""
+    d = request.get_json(silent=True) or {}
+    code = code.strip().upper()
+    sent = str(d.get("code") or d.get("customer_code") or code).strip().upper()
+    if sent != code:
+        return jsonify({"ok": False, "why":
+            "A customer's code is never changed - %s is what every indent, pallet "
+            "and module of theirs stores. Add the customer again (it gets a new "
+            "code) and remove this one." % code}), 400
+    with store.conn() as (cx, cur):
+        rows = _master_rows(cur, "customer")
+        row = next((c for c in rows if c["customer_code"] == code), None)
+        if not row:
+            return jsonify({"ok": False, "why": "No customer %s." % code}), 404
+        if row["removed_at"]:
+            return _gone_409("customer", row, "%s (%s)" % (row["name"], code))
+        # what the caller did not send stays as it is - a PUT of a name alone
+        # must not wipe the GSTINs and aliases
+        mine = _customer_out(row)
+        rec = _customer_in({k: d.get(k, mine[k]) for k in
+                            ("name", "gstins", "state", "aliases", "erp_code")})
+        why = customers.problems(rec, row, rows)
+        if why:
+            return jsonify({"ok": False, "why": " ".join(why), "problems": why}), 400
+        former = list(row["former_names"])
+        known = {t.upper() for t in rec["aliases"] + former}
+        if row["name"].upper() != rec["name"].upper() and row["name"].upper() not in known:
+            former.append(row["name"])
+        cols = _customer_cols(rec, former)
+        before = store.one(cur, "SELECT * FROM customer WHERE customer_code=%s", (code,))
+        changed = sorted(k for k in cols if _decoded({k: before[k]})[k] !=
+                         _decoded({k: cols[k]})[k])
+        if not changed:
+            return jsonify({"ok": True, "changed": False, "code": code,
+                            "customer": _customer_out(row)})
+        cols.update(updated_at=clock.stamp(), updated_by=actor())
+        cur.execute("UPDATE customer SET %s WHERE customer_code=%%s"
+                    % ", ".join("%s=%%s" % k for k in cols), list(cols.values()) + [code])
+        after = store.one(cur, "SELECT * FROM customer WHERE customer_code=%s", (code,))
+        _master_write(cur, "customer", code, "edit", before, after,
+                      {"name": rec["name"], "changed": changed})
+    store.load_masters()
+    return jsonify({"ok": True, "changed": True, "code": code,
+                    "customer": _customer_out(customers.get(code))})
+
+
+@app.route("/api/customer/<code>/use")
+@require_role(*_R_MASTER)
+def api_customer_use(code):
+    """What removing customer `code` would leave naming it - said before."""
+    code = code.strip().upper()
+    with store.conn() as (cx, cur):
+        row = store.one(cur, "SELECT customer_code, removed_at FROM customer "
+                             "WHERE customer_code=%s", (code,))
+        if not row:
+            return jsonify({"ok": False, "why": "No customer %s." % code}), 404
+        return jsonify(dict(ok=True, code=code, removed=bool(row["removed_at"]),
+                            stock=code == customers.STOCK_CODE, **_customer_use(cur, code)))
+
+
+@app.route("/api/customer/<code>", methods=["DELETE"])
+@require_role(*_R_MASTER)
+def api_customer_remove(code):
+    """Take a customer off the master: no longer offered, or matched to an
+    invoice, a file or a typed name - but the row stays, its code is never
+    given again, and every record that named it still does. Super Admin,
+    reason mandatory, audited. Icon Stock never: it is not a customer."""
+    d = request.get_json(silent=True) or {}
+    code = code.strip().upper()
+    if code == customers.STOCK_CODE:
+        return jsonify({"ok": False, "why":
+            "Icon Stock is the 'unallocated' value, not a customer - every module "
+            "built to stock carries it. It cannot be removed."}), 400
+    reason = str(d.get("reason") or "").strip()
+    if not reason:
+        return jsonify({"ok": False, "why": "A reason is required to remove a customer."}), 400
+    with store.conn() as (cx, cur):
+        before = store.one(cur, "SELECT * FROM customer WHERE customer_code=%s", (code,))
+        if not before:
+            return jsonify({"ok": False, "why": "No customer %s." % code}), 404
+        if before["removed_at"]:
+            return jsonify({"ok": False, "why": "%s (%s) was already removed, on %s by %s."
+                            % (before["name"], code, _dmy(before["removed_at"]),
+                               before["removed_by"])}), 409
+        use = _customer_use(cur, code)
+        cur.execute("UPDATE customer SET removed_at=%s, removed_by=%s, removed_reason=%s "
+                    "WHERE customer_code=%s", (clock.stamp(), actor(), reason, code))
+        after = store.one(cur, "SELECT * FROM customer WHERE customer_code=%s", (code,))
+        _master_write(cur, "customer", code, "remove", before, after,
+                      {"name": before["name"], "reason": reason,
+                       "modules": use["modules"], "to_plan": use["to_plan"]})
+    store.load_masters()
+    return jsonify(dict(ok=True, code=code, **use))
+
+
+@app.route("/api/customer/<code>/restore", methods=["POST"])
+@require_role(*_R_MASTER)
+def api_customer_restore(code):
+    """Put a removed customer back: offered and matched again, as it was. Super
+    Admin, reason mandatory, audited - refused while another customer holds
+    one of its GSTINs."""
+    d = request.get_json(silent=True) or {}
+    code = code.strip().upper()
+    reason = str(d.get("reason") or "").strip()
+    if not reason:
+        return jsonify({"ok": False, "why": "A reason is required to restore a customer."}), 400
+    with store.conn() as (cx, cur):
+        rows = _master_rows(cur, "customer")
+        row = next((c for c in rows if c["customer_code"] == code), None)
+        if not row:
+            return jsonify({"ok": False, "why": "No customer %s." % code}), 404
+        if not row["removed_at"]:
+            return jsonify({"ok": False, "why": "%s (%s) is not removed."
+                            % (row["name"], code)}), 409
+        why = customers.restore_problems(row, rows)
+        if why:
+            return jsonify({"ok": False, "why": " ".join(why), "problems": why}), 400
+        before = store.one(cur, "SELECT * FROM customer WHERE customer_code=%s", (code,))
+        cur.execute("UPDATE customer SET removed_at=NULL, removed_by=NULL, "
+                    "removed_reason=NULL, updated_at=%s, updated_by=%s "
+                    "WHERE customer_code=%s", (clock.stamp(), actor(), code))
+        after = store.one(cur, "SELECT * FROM customer WHERE customer_code=%s", (code,))
+        _master_write(cur, "customer", code, "restore", before, after,
+                      {"name": row["name"], "reason": reason,
+                       "removed_reason": row["removed_reason"]})
+    store.load_masters()
+    return jsonify({"ok": True, "code": code,
+                    "customer": _customer_out(customers.get(code))})
+
+
+def _master_history(cur, kind, key):
+    """Every revision of one master row, newest first, each with the detail of
+    the audit row written beside it in the same save (_master_write) - a
+    restore's reason is only there: the row keeps no reason once its stamp is
+    off."""
+    revs = db.entity_revisions(cur, kind, key)
+    auds = store.rows(cur, "SELECT action, detail FROM dispatch_audit WHERE entity=%s "
+                           "AND entity_id=%s ORDER BY audit_id DESC", (kind, key))
+    i = 0
+    for r in revs:
+        want = "%s.%s" % (kind, r["action"])
+        while i < len(auds) and auds[i]["action"] != want:
+            i += 1
+        if i < len(auds):
+            try:
+                r["detail"] = json.loads(auds[i]["detail"] or "null")
+            except ValueError:
+                r["detail"] = None
+            i += 1
+        r["before"], r["after"] = _decoded(r["before"]), _decoded(r["after"])
+    return revs
+
+
+@app.route("/api/customer/<code>/history")
+@require_role(*_R_ADMIN)
+def api_customer_history(code):
+    with store.conn() as (cx, cur):
+        revs = _master_history(cur, "customer", code.strip().upper())
+    return jsonify({"ok": True, "code": code.strip().upper(), "revisions": revs})
+
+
+@app.route("/api/admin/models")
+@require_role(*_R_ADMIN)
+def api_admin_models():
+    """The model master for Admin > Models: live and removed, every field."""
+    with store.conn() as (cx, cur):
+        rows = _master_rows(cur, "model")
+    live = sorted((m for m in rows if not m["removed_at"]),
+                  key=lambda m: (m["family"], m["wattage"]))
+    gone = sorted((m for m in rows if m["removed_at"]),
+                  key=lambda m: m["removed_at"], reverse=True)
+    return jsonify({"models": [_model_out(m) for m in live],
+                    "removed": [_model_out(m) for m in gone],
+                    "families": models.TYPE_CHAR})
+
+
+def _model_cols(rec):
+    return {k: rec[k] for k in ("wattage", "family", "cells", "cells_per_string",
+                                "strings", "produced", "hsn", "erp_code", "unit",
+                                "frame_mm", "pallet_ceiling", "size")}
+
+
+@app.route("/api/model", methods=["POST"])
+@require_role(*_R_MASTER)
+def api_model_create():
+    """Add a model. Its code is the key every serial, indent line and pallet
+    stores: typed once, never edited. Its item codes take the next numbers in
+    its family."""
+    d = request.get_json(silent=True) or {}
+    with store.conn() as (cx, cur):
+        rows = _master_rows(cur, "model")
+        rec, why = models.clean(d, None, rows)
+        if why:
+            return jsonify({"ok": False, "why": " ".join(why), "problems": why}), 400
+        cols = _model_cols(rec)
+        cols.update(model=rec["model"], seq=max([m["seq"] for m in rows] or [0]) + 1,
+                    created_at=clock.stamp(), created_by=actor())
+        store.insert(cur, "model", cols)
+        after = store.one(cur, "SELECT * FROM model WHERE model=%s", (rec["model"],))
+        _master_write(cur, "model", rec["model"], "create", None, after,
+                      {"wattage": rec["wattage"], "family": rec["family"]})
+    store.load_masters()
+    return jsonify({"ok": True, "model": _model_out(models.get(rec["model"]))})
+
+
+@app.route("/api/model/<code>", methods=["PUT"])
+@require_role(*_R_MASTER)
+def api_model_save(code):
+    """Edit a model. Its code and family are fixed (the key, and the middle of
+    its item codes); a code shaped ISEN<watts>-<family> fixes its wattage too.
+    A removed model is not edited (restore it first). An edit that changes
+    nothing writes nothing."""
+    d = request.get_json(silent=True) or {}
+    code = code.strip().upper()
+    with store.conn() as (cx, cur):
+        rows = _master_rows(cur, "model")
+        row = next((m for m in rows if m["model"] == code), None)
+        if not row:
+            return jsonify({"ok": False, "why": "No model %s." % code}), 404
+        if row["removed_at"]:
+            return _gone_409("model", row, code)
+        # what the caller did not send stays as it is
+        rec, why = models.clean(dict(_model_out(row), **d), row, rows)
+        if why:
+            return jsonify({"ok": False, "why": " ".join(why), "problems": why}), 400
+        cols = _model_cols(rec)
+        before = store.one(cur, "SELECT * FROM model WHERE model=%s", (code,))
+        changed = sorted(k for k in cols if before[k] != cols[k])
+        if not changed:
+            return jsonify({"ok": True, "changed": False, "model": _model_out(row)})
+        cols.update(updated_at=clock.stamp(), updated_by=actor())
+        cur.execute("UPDATE model SET %s WHERE model=%%s"
+                    % ", ".join("%s=%%s" % k for k in cols), list(cols.values()) + [code])
+        after = store.one(cur, "SELECT * FROM model WHERE model=%s", (code,))
+        _master_write(cur, "model", code, "edit", before, after, {"changed": changed})
+    store.load_masters()
+    return jsonify({"ok": True, "changed": True, "model": _model_out(models.get(code))})
+
+
+@app.route("/api/model/<code>/use")
+@require_role(*_R_MASTER)
+def api_model_use(code):
+    """What removing model `code` would stop and leave naming it - said before."""
+    code = code.strip().upper()
+    with store.conn() as (cx, cur):
+        row = store.one(cur, "SELECT model, removed_at FROM model WHERE model=%s", (code,))
+        if not row:
+            return jsonify({"ok": False, "why": "No model %s." % code}), 404
+        return jsonify(dict(ok=True, model=code, removed=bool(row["removed_at"]),
+                            **_model_use(cur, code)))
+
+
+@app.route("/api/model/<code>", methods=["DELETE"])
+@require_role(*_R_MASTER)
+def api_model_remove(code):
+    """Take a model off the master (Mukesh, 24 Oct: allowed although serials
+    exist, after the warning): no longer offered for an indent, and nothing new
+    is planned on it - an open indent line of it cannot be allocated until it
+    is restored. The row stays; its serials, batches and pallets still name it
+    and are packed and dispatched as before. Super Admin, reason mandatory,
+    audited."""
+    d = request.get_json(silent=True) or {}
+    code = code.strip().upper()
+    reason = str(d.get("reason") or "").strip()
+    if not reason:
+        return jsonify({"ok": False, "why": "A reason is required to remove a model."}), 400
+    with store.conn() as (cx, cur):
+        before = store.one(cur, "SELECT * FROM model WHERE model=%s", (code,))
+        if not before:
+            return jsonify({"ok": False, "why": "No model %s." % code}), 404
+        if before["removed_at"]:
+            return jsonify({"ok": False, "why": "%s was already removed, on %s by %s."
+                            % (code, _dmy(before["removed_at"]), before["removed_by"])}), 409
+        use = _model_use(cur, code)
+        cur.execute("UPDATE model SET removed_at=%s, removed_by=%s, removed_reason=%s "
+                    "WHERE model=%s", (clock.stamp(), actor(), reason, code))
+        after = store.one(cur, "SELECT * FROM model WHERE model=%s", (code,))
+        _master_write(cur, "model", code, "remove", before, after,
+                      {"reason": reason, "to_plan": use["to_plan"],
+                       "serials": use["serials"]})
+    store.load_masters()
+    return jsonify(dict(ok=True, model=code, **use))
+
+
+@app.route("/api/model/<code>/restore", methods=["POST"])
+@require_role(*_R_MASTER)
+def api_model_restore(code):
+    """Put a removed model back - offered and planned on again. Super Admin,
+    reason mandatory, audited; refused while a live model has its wattage and
+    family (their serials would read alike)."""
+    d = request.get_json(silent=True) or {}
+    code = code.strip().upper()
+    reason = str(d.get("reason") or "").strip()
+    if not reason:
+        return jsonify({"ok": False, "why": "A reason is required to restore a model."}), 400
+    with store.conn() as (cx, cur):
+        rows = _master_rows(cur, "model")
+        row = next((m for m in rows if m["model"] == code), None)
+        if not row:
+            return jsonify({"ok": False, "why": "No model %s." % code}), 404
+        if not row["removed_at"]:
+            return jsonify({"ok": False, "why": "%s is not removed." % code}), 409
+        twin = next((m for m in rows if not m["removed_at"] and
+                     m["wattage"] == row["wattage"] and m["family"] == row["family"]), None)
+        if twin:
+            return jsonify({"ok": False, "why":
+                "%s is %d W %s now - the serials of both would read ICON%d%s..., and "
+                "nothing could tell which model a module is. Remove %s first."
+                % (twin["model"], row["wattage"], row["family"], row["wattage"],
+                   models.TYPE_CHAR.get(row["family"], ""), twin["model"])}), 400
+        before = store.one(cur, "SELECT * FROM model WHERE model=%s", (code,))
+        cur.execute("UPDATE model SET removed_at=NULL, removed_by=NULL, "
+                    "removed_reason=NULL, updated_at=%s, updated_by=%s WHERE model=%s",
+                    (clock.stamp(), actor(), code))
+        after = store.one(cur, "SELECT * FROM model WHERE model=%s", (code,))
+        _master_write(cur, "model", code, "restore", before, after,
+                      {"reason": reason, "removed_reason": row["removed_reason"]})
+    store.load_masters()
+    return jsonify({"ok": True, "model": _model_out(models.get(code))})
+
+
+@app.route("/api/model/<code>/history")
+@require_role(*_R_ADMIN)
+def api_model_history(code):
+    with store.conn() as (cx, cur):
+        revs = _master_history(cur, "model", code.strip().upper())
+    return jsonify({"ok": True, "model": code.strip().upper(), "revisions": revs})
+
+
 def _bars_overflow(cfg):
     """Why these bar settings cannot print, or None: the widest serial's barcode
     (quiet zones included - blank, but they may not reach the cell's border)
@@ -7584,6 +8180,9 @@ def api_indent_create():
         if not mm:
             errors.append("Item %d is not in the item master." % i)
             continue
+        if mm["removed"]:
+            errors.append("Item %d: %s" % (i, _model_removed(mm["model"])))
+            continue
         raw = it.get("qty")
         try:
             q = int(raw)
@@ -7621,15 +8220,17 @@ def api_indent_create():
     with store.conn() as (cx, cur):
         if d.get("indent_no") and db.indent_exists(cur, d["indent_no"]):
             errors.append("Indent %s already exists." % d["indent_no"])
+    cust, cust_err = _customer_for(d.get("customer"))
+    if cust_err:
+        errors.append(cust_err)
     if errors:
         return jsonify({"errors": errors}), 200
 
-    cr = customers.resolve(d.get("customer"))
     head = {k: d.get(k) for k in ("indent_no", "indent_date", "area",
                                   "lot_name", "build_type", "delivery_by",
                                   "delivery_text", "special_instructions",
                                   "prepared_by", "approved_by")}
-    head["customer"] = cr["customer_code"] if cr else d.get("customer")
+    head["customer"] = cust
     head["form_no"] = "IS-HO-MRK-FM-03"
     # defaults for anything the caller omitted, so a partial payload cannot
     # fail on a NOT NULL rather than on a message the operator can act on
@@ -7693,6 +8294,13 @@ def api_allocation_create():
             return jsonify({"ok": False, "why":
                 "Indent %s line %d is cancelled and cannot be allocated "
                 "against." % (L["indent_no"], L["line"])}), 400
+        # a new batch for a model or customer taken off the master: refused
+        # by name, with the way back (an existing batch's edit keeps it)
+        gone = customers.get(L["cust"])
+        why = _model_removed(L["model"]) or (
+            _customer_removed(gone) if gone and gone["removed_at"] else None)
+        if why:
+            return jsonify({"ok": False, "why": why}), 400
         if qty < 1:
             return jsonify({"ok": False, "why": "Quantity must be at least 1."}), 400
         if qty > L["left"]:
@@ -8899,9 +9507,12 @@ def _trace_batch(cur, q):
 def _trace_customer(cur, q):
     if len(q) < 3:
         return None
-    hits = [c for c in customers.all_customers()
+    # every customer the records can name - one removed from the master too,
+    # and by a name it had before an edit (24 Oct 2026)
+    hits = [c for c in customers.all_customers() + customers.all_customers(removed=True)
             if q == c["customer_code"] or q in c["name"].upper()
-            or any(q in (a or "").upper() for a in (c.get("aliases") or []))]
+            or any(q in (a or "").upper() for a in
+                   (c.get("aliases") or []) + (c.get("former_names") or []))]
     if not hits:
         return None
     if len(hits) > 1:
@@ -8920,28 +9531,31 @@ def _trace_customer(cur, q):
     # the name at all. Case-insensitive, and matching either form, catches
     # every one of these rather than silently dropping whichever this
     # customer's rows happen to use.
-    name = c["name"]
-    ids = (name, code)
+    # ... and since the master is edited in Admin (24 Oct 2026), under every
+    # name it was shown under before: db.customer_match reads them all.
+    m_sql, m_args = db.customer_match("customer", code)
     counts = {r["state"]: r["n"] for r in store.rows(cur,
-        "SELECT state, COUNT(*) AS n FROM serial WHERE UPPER(customer) IN "
-        "(UPPER(%s), UPPER(%s)) GROUP BY state", ids)}
+        "SELECT state, COUNT(*) AS n FROM serial WHERE " + m_sql +
+        " GROUP BY state", m_args)}
     batches = [dict(r, batch_no=batch_no(dict(r))) for r in store.rows(cur,
         "SELECT alloc_id, date_produced, model, qty FROM allocation "
-        "WHERE UPPER(customer) IN (UPPER(%s), UPPER(%s)) "
-        "ORDER BY alloc_id DESC LIMIT 200", ids)]
+        "WHERE " + m_sql + " ORDER BY alloc_id DESC LIMIT 200", m_args)]
     # The customer's challans: those carrying modules made for it, AND those
     # whose buyer is it. A General Stock pallet delivered on a challan takes
     # the buyer as its owner on the PALLET (db.assign_customer_on_challan) -
     # its modules keep "STOCK" - so a challan built from Icon Stock was found
     # through the modules alone never (audit 9 Oct). The buyer is resolved
     # the way the challan screen resolves it (GSTIN first, then the name).
+    s_sql, s_args = db.customer_match("s.customer", code)
     chids = {r["challan_id"] for r in store.rows(cur,
         "SELECT DISTINCT cs.challan_id FROM challan_serial cs "
         "JOIN serial s ON s.serial=cs.serial AND s.build_instance=cs.build_instance "
-        "WHERE UPPER(s.customer) IN (UPPER(%s), UPPER(%s))", ids)}
+        "WHERE " + s_sql, s_args)}
     for r in store.rows(cur, "SELECT challan_id, buyer_name, buyer_gstin "
                              "FROM challan"):
-        who = customers.resolve(r["buyer_name"], r["buyer_gstin"])
+        # a removed customer is never resolve()d - its own name finds it
+        who = (customers.resolve(r["buyer_name"], r["buyer_gstin"]) or
+               customers.get(r["buyer_name"]))
         if who and who["customer_code"] == code:
             chids.add(r["challan_id"])
     chs = store.rows(cur,
@@ -8950,7 +9564,7 @@ def _trace_customer(cur, q):
         % ",".join(str(int(x)) for x in chids)) if chids else []
     return {"ok": True, "kind": "customer",
             "customer": {"code": code, "name": c["name"], "gstin": c.get("gstin"),
-                         "state": c.get("state")},
+                         "state": c.get("state"), "removed": _removed_note(c)},
             "counts": counts, "batches": batches,
             "challans": [_challan_brief(x) for x in chs]}
 
@@ -9801,11 +10415,19 @@ def api_indent_update(indent_no):
                               "indent_line_id IN (SELECT indent_line_id FROM "
                               "indent_line WHERE indent_id=%s)",
                          (i["indent_id"],))["n"]
+        # what the indent already carries may stay on it although its model
+        # has since been removed - only a NEW item of a removed model is refused
+        had = {r["item_code"] for r in store.rows(
+            cur, "SELECT item_code FROM indent_line WHERE indent_id=%s "
+                 "AND status<>'cancelled'", (i["indent_id"],))}
     errors, lines = [], []
     for n, it in enumerate(d.get("items") or [], start=1):
         mm = models.get_item(it.get("item_code"))
         if not mm:
             errors.append("Item %d is not in the item master." % n)
+            continue
+        if mm["removed"] and mm["item_code"] not in had:
+            errors.append("Item %d: %s" % (n, _model_removed(mm["model"])))
             continue
         try:
             q = int(it.get("qty"))
@@ -9843,15 +10465,17 @@ def api_indent_update(indent_no):
         errors.append("This edit carries no items, which would empty the "
                       "indent. If the form is still loading, wait for the "
                       "items to appear before saving.")
+    cust, cust_err = _customer_for(d.get("customer"), keep=i["customer"])
+    if cust_err:
+        errors.append(cust_err)
     if errors:
         return jsonify({"errors": errors})
 
-    cr = customers.resolve(d.get("customer"))
     head = {k: (d.get(k) or None) for k in
             ("indent_date", "area", "lot_name", "build_type", "delivery_by",
              "delivery_text", "special_instructions", "prepared_by",
              "approved_by")}
-    head["customer"] = cr["customer_code"] if cr else d.get("customer")
+    head["customer"] = cust
     # Only write what the caller actually sent. A PUT that omits a field must
     # leave it alone, not null it - NOT NULL columns aside, silently blanking
     # a delivery date because the form did not include it is worse.

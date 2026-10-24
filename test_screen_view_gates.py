@@ -132,7 +132,10 @@ EXPECTED = {
 
 # Admin surface - role-gated reads, never per-user (were open to anyone)
 ADMIN_READS = ["/api/db/stats", "/api/materials", "/api/evidence/sources",
-               "/view/settings", "/view/items"]
+               "/view/settings", "/view/items",
+               # the customer and model masters (24 Oct 2026)
+               "/api/admin/customers", "/api/admin/models",
+               "/api/customer/C0001/history", "/api/model/ISEN625-G12R/history"]
 
 
 def past_gate(r):

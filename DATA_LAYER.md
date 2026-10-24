@@ -40,7 +40,11 @@ indent ── indent_line ── allocation ── serial ──┬── fqc_re
                                                 └── challan_serial ── challan
 ```
 
-Beside the spine: `fqc_defect` and `defect_master` (what a decision found),
+Beside the spine: `customer` and `model` (the masters - seeded once from
+icon_customers.py / icon_models.py, kept in Admin since 24 Oct 2026; a code is
+never edited, a removed row stays and is never deleted, the modules' lookups are
+rebuilt from the tables after every save: `store.load_masters`),
+`fqc_defect` and `defect_master` (what a decision found),
 `entity_revision` (who created or edited what, with before and after),
 `review_item` (Needs Review - one table, a `type` column), `ftr_reading`
 (the Sun Simulator reading saved for a module the master does not have yet),
@@ -344,7 +348,8 @@ the picks.
 way: Planning stores the customer's NAME in whatever case the master had that
 day ("ICON STOCK", "ICON Stock", "Icon Stock" all exist), and a box stores the
 CODE. Never filter them with `customer = ?`: use `db.customer_match(col,
-value)` (any case; the value, plus the master's name and code for it), and
+value)` (any case; the value, plus the master's name and code for it, and every
+name it was shown under before an edit - `customer.former_names`), and
 build a dropdown with `db.customer_options()` (one entry per customer), and
 merge any `GROUP BY customer` result with `db.fold_customer_rows()` - SQL
 groups by spelling, not by customer.

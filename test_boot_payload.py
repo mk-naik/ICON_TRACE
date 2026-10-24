@@ -80,12 +80,16 @@ ROW_KEYS = {
     # the Excel upload. Added deliberately.
     "indents": {"indent_no", "customer", "build_type", "delivery_by", "lines",
                 "custom_serial"},
-    "customers": {"code", "name", "gstin", "state", "stock"},
+    # 24 Oct 2026: "removed" on customers, models and items - the masters are
+    # edited in Admin now, and a removed one is still sent (after the live
+    # ones) so its records keep their names and v4's derive() still reads its
+    # serials. Added deliberately.
+    "customers": {"code", "name", "gstin", "state", "stock", "removed"},
     "open_boxes": {"box_id", "seq", "pack_date", "model", "grade", "qty",
                    "capacity", "customer"},
     "models": {"watt", "tc", "model", "series", "cells", "ct", "size",
-               "produced", "lh"},
-    "items": {"item_code", "model", "cell_type", "wattage"},
+               "produced", "lh", "removed"},
+    "items": {"item_code", "model", "cell_type", "wattage", "removed"},
 }
 PUBLIC_KEYS = {"build", "live", "db_file"}
 

@@ -8677,3 +8677,43 @@ commit.
   the screen, and the shortcut is judged by whether Challan opens (lockUnviewableGo). Stored rows
   need no change - a write flag on a screen with nothing to write gates nothing. test_screen_perms'
   defaults and test_dashrath_case's wording would change with it.
+
+### 24 Oct 2026 - customers and models are tables (Prompt 2, part 1: tables, seed, routes)
+- **What was wrong:** icon_customers.py held 75 customers and icon_models.py 10 models as Python
+  lists - adding either meant editing source and redeploying. Admin's Models tab was read-only
+  and there was no Customers tab.
+- **Mukesh's answers (24 Oct):** a packing list prints the CURRENT master name (challans, gate
+  passes and the FTR already store the invoice's text); a model whose serials exist may be
+  removed after a warning that leads with what is still to plan; Restore for both masters in the
+  same build; Customers is a tab of its own after Models.
+- **Change:** `customer` and `model` tables (schema_sqlite.sql), filled at start-up by
+  store._seed_masters - INSERT OR IGNORE, so a restart never brings back a removed row or undoes
+  an edit. icon_customers / icon_models build their lookups from the rows (`load`) at start-up
+  and after every save (`store.load_masters`), swapped together. `customers.get()` finds a stored
+  value - a code, or a name, alias or earlier name (Planning stores NAMES), removed customers
+  too; `resolve()` never matches a removed one. A rename keeps the old name (`former_names`), read
+  by `db.customer_match` and Search & Trace. Item codes are numbered in the order models were added
+  (`model.seq`), removed ones counted. Routes on the materials' pattern, Super Admin writes, Admin
+  reads: `/api/admin/customers|models`, POST `/api/customer|model`, PUT / DELETE
+  `/api/customer|model/<code>`, `/use`, `/restore`, `/history`; every write an entity_revision row
+  (before and after) and an audit row (`customer.create|edit|remove|restore`, `model.…`). New
+  records refuse a removed one with the reason: indent create (item, customer), indent update (a
+  NEW item or a CHANGED customer only - what the indent had stays), allocation create. The boot
+  payload sends removed rows too, marked and after the live ones: filters and names still need
+  them, and v4's derive() reads every serial against `models` (FQC Entry among others).
+- **Found on the way:** icon_customers' docstring put "exact code" before GSTIN; the code has
+  always tried a GSTIN first - kept, docstring corrected (1,354 texts and 77 GSTINs resolve exactly
+  as before; every item code, all_items, all_models and as_json identical). The packing list was
+  the only issued document reading the master, which is what made "current name" cheap. A
+  rename would have split every filter: db.customer_match knew only the current name and code.
+  No server-side GSTIN check existed (only v4's gstChecksum and test_customer_gstins) - one now
+  refuses a save. A family is part of the item codes, so it is fixed like the code; a code
+  shaped ISEN<watts>-<family> must agree with both; two live models of one wattage and family
+  would make their serials unreadable as either - refused.
+- **Not built:** a separate "Correct a typo" action - with nothing frozen, an edit of the name is
+  that correction everywhere the master is shown, recorded with before and after (DECISIONS 13,
+  [open] if Mukesh still wants one).
+- **Test:** `test_master_data.py` (14): seed once, refusals, rename and former names, packing list
+  vs challan after a rename, fixed keys, 409 on a removed row, removal in use + restore, GSTIN
+  conflict on restore, Icon Stock, model create / remove in use / restore twin, history, gates.
+  `test_boot_payload.py` (shape + `removed`), both gate maps list the new routes.

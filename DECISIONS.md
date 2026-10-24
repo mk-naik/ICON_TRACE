@@ -806,6 +806,72 @@ efficiency figure until the production head signs off an ideal cycle time.
   BOM becomes the allocation's final materials). Bad rows are named, never
   silently imported. [built]
 
+## 13. Customer and model masters
+
+- **They are tables, kept in Admin** (24 Oct 2026, Mukesh's prompt): they were
+  Python lists in icon_customers.py and icon_models.py, so adding a customer or a
+  model meant editing source and redeploying. `customer` and `model` were filled
+  from those lists once - a row only where its code is absent, so a redeploy never
+  brings back a removed row or undoes an edit; the lists are seed data only. Super
+  Admin writes, Admin reads. Admin > Models becomes editable and Admin > Customers
+  a tab of its own, after Models (Mukesh: a 16th tab - there were 15, not 14).
+  [built: tables, seed, routes] **[decided]** the two tabs (next commit).
+- **A code is never edited** - every indent, pallet, serial and line stores it;
+  to change one, add a new row and remove the old. A new customer's code is the
+  server's: one past the highest C-number ever given, a removed customer's
+  included. A model's code is typed once, and its **family is fixed too**: it is
+  the middle of its item codes (F02 01 ... is G12R), which indent lines store. A
+  code shaped ISEN<watts>-<family> must agree with its wattage and family; a family
+  needs a serial type character (G12R R, G2X G, BI B); **no two live models share a
+  wattage and a family** - their serials would read alike (ICON625R...). Item codes
+  are numbered in the order models were added, removed ones counted, so none ever
+  moves. [built]
+- **A customer save is refused for** a GSTIN that fails its check letter (v4's
+  gstChecksum, now on the server too - the master once held ICON's head office as
+  ...L1Z4), one another live customer holds, a name or alias that already names
+  another customer (live or removed), no name, or markup. Only what a save ADDS is
+  checked - a name a customer already had never blocks its edit - and a PUT keeps
+  what it does not send. [built]
+- **A packing list prints the master's current name; a challan keeps its own**
+  (Mukesh, 24 Oct, over keeping the issued text: freezing it would have to follow
+  every cancel, reallocation and reissue, for a row printed off by default).
+  Challans, gate passes and the FTR store the buyer and consignee as the invoice
+  printed them, so no master edit reaches them; the packing list's optional
+  Customer row reads the master when it prints. So there is no snapshot column and
+  no separate "Correct a typo" action: with nothing frozen, an edit of the name IS
+  that correction wherever the master is shown, recorded with before and after.
+  [built] **[open]** whether Mukesh still wants a separate typo action.
+- **A rename keeps the old name as one of the customer's names** (`former_names`):
+  Planning stores the NAME on allocations and serials, so the rows written before
+  a rename still find their customer - shown under the new name, in every filter
+  (db.customer_match) and in Search & Trace. [built]
+- **Remove stamps the row; Restore takes the stamp off.** Super Admin, reason
+  mandatory, audited; the use-check says first what still names it. A removed
+  customer or model is no longer offered, or matched to an invoice, a file or a
+  typed name; its row stays, a record that named it still names it, and it is not
+  edited (409, naming who removed it and when) until restored. A new indent or a
+  new batch naming it is refused with the reason and the way back; an indent that
+  already names it keeps it on an edit, and an existing batch's edit keeps it.
+  Restore is refused while another live customer holds one of its GSTINs, or a
+  live model has its wattage and family. Materials still have no restore
+  (section 12). [built]
+- **Icon Stock is never removed** - it is the "unallocated" value, not a customer.
+  [built]
+- **A model whose serials exist may be removed** (Mukesh, 24 Oct: every model that
+  ever ran has serials, so refusing would mean none could ever be retired). Its
+  use-check leads with what is IN FLIGHT - indent lines with modules still to plan
+  on it, which removal stops - then the serials, batches and pallets, which keep
+  naming it. Its modules are tested, packed and dispatched as before: the page still
+  reads their serials (v4's derive() is sent removed models too). [built]
+- **The history is entity_revision** (entity types `customer` and `model`): every
+  create, edit, removal and restore, the row before and after, who and when; the
+  history route reads it back. [built]
+- **Resolution is unchanged**: a GSTIN when one is given, then the exact code, name
+  or alias, then the same normalised; never fuzzier. (icon_customers' docstring said
+  "exact code, then GSTIN"; the code has always tried the GSTIN first, and was kept.)
+  Removed customers are never resolved; a stored value - code or name, removed or
+  not - still finds its customer (icon_customers.get). [built]
+
 ## 11. Open — needs Mukesh
 
 - Dates are locked to the server clock, but migrating history from Excel needs
