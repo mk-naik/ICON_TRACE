@@ -10309,12 +10309,17 @@ def view_invoice_pdf(invoice_id):
             abort(404)
         return send_file(pdf_path, mimetype='application/pdf', as_attachment=False)
 
+# Both answered a caller with no session (24 Oct 2026): /invoice rendered the
+# last 20 invoices - number, date, buyer, model, quantity - to anyone, and
+# /legacy sent them there. Gated like the sibling page routes.
 @app.route("/legacy")
+@require_screen_view("invoice")
 def home():
     return redirect(url_for("invoice_upload"))
 
 
 @app.route("/invoice", methods=["GET"])
+@require_screen_view("invoice")
 def invoice_upload():
     sweep_temp()
     with db.conn() as (cx, cur):

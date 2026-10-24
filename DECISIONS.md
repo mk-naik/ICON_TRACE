@@ -629,6 +629,10 @@ no one signs twice. [enforcement unverified]
   walks Flask's url_map. `/api/customers`, `/api/customers/resolve` and
   `/api/sync/status` are on `require_role(*_R_EVERY)`: every signed-in role,
   never an anonymous caller. [built]
+- **The pre-v4 `/invoice` page and its `/legacy` redirect are gated** (24 Oct 2026):
+  both answered a caller with no session, and `/invoice` listed the last 20
+  invoices - number, date, buyer, model, quantity. They are on Tax Invoice's view
+  flag, like their sibling page routes. [built]
 
 ## 10. Deliberately not built — do not build unless asked
 

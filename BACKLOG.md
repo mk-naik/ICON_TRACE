@@ -8548,3 +8548,16 @@ commit.
 - **Change (icon_live.js):** the card's Reset puts those five back on their first choice and
   asks again.
 - **Test:** `test_fqc_screen.py` +1 (18).
+
+### 24 Oct 2026 - /invoice listed invoices, buyer names included, to anyone (Prompt 1, Job A)
+- **Found (Mukesh's review of 9d88a6b, verified with the test client):** `GET /invoice` had
+  no auth decorator and rendered `db.recent_invoices` - the last 20 invoices with number,
+  date, buyer, declared model and quantity - to a caller with no session (200, buyer name in
+  the page); `/legacy` had none either and redirected there. Filed since 9 Oct as "retire the
+  pre-v4 pages", a chore - it is a customer-data leak.
+- **Cause:** pre-v4 page routes added before Round 28's gates; `test_anonymous_routes.py`
+  walked only `/api/*` rules, so a page route was never checked.
+- **Change (app.py):** both on `@require_screen_view("invoice")`, as their siblings are on
+  their screens' view flags - 401 with no session.
+- **Test:** `test_anonymous_routes.py` +1 (4): an invoice on file, both paths 401 and no buyer
+  or invoice number in the body.
