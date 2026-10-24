@@ -26,7 +26,7 @@ Run:  python serve.py
 """
 
 import os, io, re, json, time, hashlib, datetime, secrets, traceback, functools, glob, threading
-from flask import (Flask, render_template, request, redirect, url_for,
+from flask import (Flask, render_template, request, redirect,
                    session, flash, jsonify, send_file, abort, g, make_response,
                    send_from_directory)
 
@@ -35,7 +35,6 @@ import store
 import icon_auth
 import icon_invoice_parser as invparse
 import icon_challan_import as chimport
-import icon_box_number as bx
 import icon_serial as gen
 import icon_evidence as ev
 import icon_ingest
@@ -461,7 +460,6 @@ def _sync_guard(fn):
                                request.headers.get("X-Client-Time"))
         return resp
     return inner
-
 
 
 def actor():
@@ -4986,7 +4984,6 @@ def _prod_payload():
                     "packed": r["packed"] or 0, "disp": r["disp"] or 0,
                     "batches": r["batches"] or 0})
     return out
-
 
 
 # --------------------------------------------------------------------------
@@ -10102,6 +10099,9 @@ def _duplicate_why(dup):
 @app.route("/api/invoice/parse", methods=["POST"])
 @require_screen_write("invoice")
 def api_invoice_parse():
+    # temp files a closed browser left behind: swept here since the pre-v4
+    # /invoice page that swept them is retired (24 Oct 2026)
+    sweep_temp()
     f = request.files.get("pdf")
     if not f or not f.filename:
         return jsonify({"error": "no file"}), 400
@@ -10314,175 +10314,6 @@ def view_invoice_pdf(invoice_id):
             abort(404)
         return send_file(pdf_path, mimetype='application/pdf', as_attachment=False)
 
-# Both answered a caller with no session (24 Oct 2026): /invoice rendered the
-# last 20 invoices - number, date, buyer, model, quantity - to anyone, and
-# /legacy sent them there. Gated like the sibling page routes.
-@app.route("/legacy")
-@require_screen_view("invoice")
-def home():
-    return redirect(url_for("invoice_upload"))
-
-
-@app.route("/invoice", methods=["GET"])
-@require_screen_view("invoice")
-def invoice_upload():
-    sweep_temp()
-    with db.conn() as (cx, cur):
-        recent = db.recent_invoices(cur)
-    return render_template("invoice_upload.html", recent=recent)
-
-
-@app.route("/invoice/parse", methods=["POST"])
-@require_screen_write("invoice")
-def invoice_parse():
-    f = request.files.get("pdf")
-    if not f or not f.filename:
-        flash("Choose an invoice PDF first.", "warn")
-        return redirect(url_for("invoice_upload"))
-
-    raw = f.read()
-    sha = hashlib.sha256(raw).hexdigest()
-    tmp = os.path.join(STORE, "_tmp_%s.pdf" % sha[:16])
-    with open(tmp, "wb") as fh:
-        fh.write(raw)
-
-    try:
-        expect = request.form.get("expect_qty", "").strip()
-        result = invparse.parse(tmp, expect_qty=int(expect) if expect else None)
-    except Exception:
-        safe_remove(tmp)
-        app.logger.error(traceback.format_exc())
-        flash("That file could not be read as a PDF.", "fail")
-        return redirect(url_for("invoice_upload"))
-
-    if not result["fingerprint"]["ok"]:
-        safe_remove(tmp)
-        return render_template("invoice_refused.html", r=result,
-                               filename=f.filename)
-
-    # duplicate / supersede check on IRN
-    irn = result["fields"]["irn"]["value"]
-    warn_supersede = None
-    with db.conn() as (cx, cur):
-        if irn and db.find_invoice_by_irn(cur, irn):
-            safe_remove(tmp)
-            flash("This invoice (IRN %s…) is already loaded." % irn[:16], "warn")
-            return redirect(url_for("invoice_upload"))
-        inv_no = result["fields"]["invoice_no"]["value"]
-        if inv_no:
-            prior = db.find_invoices_by_number(cur, inv_no)
-            prior = [p for p in prior if p.get("irn") != irn]
-            if prior:
-                built = []
-                for p in prior:
-                    built += db.challans_against_irn(cur, p.get("irn"))
-                warn_supersede = {
-                    "invoice_no": inv_no,
-                    "prior_ids": [p["invoice_id"] for p in prior],
-                    "challans": built,
-                }
-
-    session["pending"] = {"tmp": tmp, "sha": sha, "orig": f.filename,
-                          "expect": expect}
-    return render_template("invoice_preview.html", r=result,
-                           filename=f.filename, expect=expect,
-                           supersede=warn_supersede,
-                           fieldmeta=invparse.__doc__ and None)
-
-
-# --------------------------------------------------------------------------
-# invoice: confirm
-# --------------------------------------------------------------------------
-
-@app.route("/invoice/confirm", methods=["POST"])
-@require_screen_write("invoice")
-def invoice_confirm():
-    pend = session.get("pending")
-    if not pend or not os.path.exists(pend["tmp"]):
-        flash("That upload expired. Start again.", "warn")
-        return redirect(url_for("invoice_upload"))
-
-    # re-parse rather than trust a round-trip through the browser
-    result = invparse.parse(pend["tmp"])
-    data, edited = {}, {}
-    for group in ("fields", "compare_only"):
-        for key, meta in result[group].items():
-            posted = request.form.get("f_" + key)
-            if posted is not None:
-                posted = posted.strip() or None
-                orig = meta["value"]
-                if str(posted) != str(orig) if orig is not None else bool(posted):
-                    edited[key] = {"from": orig, "to": posted}
-                data[key] = posted
-            else:
-                data[key] = meta["value"]
-
-    # compare-only fields keep their own names in the invoice table
-    data["declared_qty"] = data.pop("quantity", None)
-    data["declared_model"] = data.pop("model", None)
-    data["declared_hsn"] = data.pop("hsn", None)
-    if data.get("declared_qty"):
-        try:
-            data["declared_qty"] = int(float(str(data["declared_qty"]).replace(",", "")))
-        except ValueError:
-            data["declared_qty"] = None
-    data["consignee_same_as_buyer"] = 1 if request.form.get(
-        "f_consignee_same_as_buyer") in ("1", "True", "on", "true") else 0
-
-    # hard block: scanned total must equal the declared quantity
-    expect = request.form.get("expect_qty", "").strip()
-    if expect:
-        if data.get("declared_qty") is None:
-            flash("Invoice quantity is blank. Type it before continuing.", "fail")
-            return redirect(url_for("invoice_upload"))
-        if int(expect) != data["declared_qty"]:
-            flash("Invoice declares %d, boxes scanned total %s. No override — "
-                  "fix the packing or have HO reissue."
-                  % (data["declared_qty"], expect), "fail")
-            return redirect(url_for("invoice_upload"))
-
-    # e-Way Bill expiry
-    if data.get("ewb_valid_upto"):
-        try:
-            if datetime.date.fromisoformat(str(data["ewb_valid_upto"])) \
-                    < clock.today():
-                flash("e-Way Bill expired on %s. The vehicle must not move."
-                      % data["ewb_valid_upto"], "fail")
-                return redirect(url_for("invoice_upload"))
-        except ValueError:
-            pass
-
-    stamp = clock.now().strftime("%Y%m%d_%H%M%S")
-    safe = "".join(c for c in (data.get("invoice_no") or "invoice")
-                   if c.isalnum() or c in "-_")
-    final = os.path.join(STORE, "%s_%s_%s.pdf" % (stamp, safe, pend["sha"][:8]))
-    os.replace(pend["tmp"], final)
-
-    with db.conn() as (cx, cur):
-        inv_id = db.insert_invoice(
-            cur, data, os.path.relpath(final, BASE), pend["sha"],
-            result, bool(result["qr"].get("einvoice")), edited, actor())
-        for pid in json.loads(request.form.get("supersede_ids") or "[]"):
-            db.supersede_invoice(cur, pid, inv_id)
-        db.audit(cur, actor(), "invoice.load", "invoice", inv_id,
-                 {"file": pend["orig"], "sha256": pend["sha"],
-                  "edited": list(edited.keys()),
-                  "qr": bool(result["qr"].get("einvoice"))})
-
-    session.pop("pending", None)
-    flash("Invoice %s stored%s." % (data.get("invoice_no") or "",
-          " — %d field(s) corrected" % len(edited) if edited else ""), "pass")
-    return redirect(url_for("invoice_upload"))
-
-
-@app.route("/invoice/cancel", methods=["POST"])
-@require_screen_write("invoice")
-def invoice_cancel():
-    pend = session.pop("pending", None)
-    if pend and os.path.exists(pend["tmp"]):
-        safe_remove(pend["tmp"])
-    return redirect(url_for("invoice_upload"))
-
 
 # --------------------------------------------------------------------------
 # challan importer (admin)
@@ -10600,165 +10431,6 @@ def challan_import():
     # done, held rather than hidden - but says 403 rather than 200, so
     # "refused" is never mistaken for "ran and found nothing to do".
     return (page, 403) if refused else page
-
-
-# --------------------------------------------------------------------------
-# indent - typed, not parsed
-# --------------------------------------------------------------------------
-
-@app.route("/indent")
-@require_screen_view("indent")
-def indent_list():
-    with db.conn() as (cx, cur):
-        rows = db.recent_indents(cur)
-        prog = db.indent_progress(cur)
-    return render_template("indent_list.html", rows=rows, prog=prog)
-
-
-@app.route("/indent/new", methods=["GET", "POST"])
-@require_screen_write("indent")
-def indent_new():
-    with db.conn() as (cx, cur):
-        known = db.known_customers(cur)
-    if request.method == "GET":
-        return render_template("indent_new.html", errors=[], form={},
-                               items=[{}], catalog=models.all_items(),
-                               model_json=models.items_json(), customers=known)
-
-    form = {k: (request.form.get(k) or "").strip() for k in
-            ("indent_no", "indent_date", "customer", "area", "build_type",
-             "delivery_by", "delivery_text", "special_instructions",
-             "prepared_by", "approved_by", "lot_name")}
-    form["form_no"] = "IS-HO-MRK-FM-03"
-
-    lines, errors = [], []
-    for i in range(1, 31):
-        model = (request.form.get("model_%d" % i) or "").strip()
-        qty = (request.form.get("qty_%d" % i) or "").strip()
-        if not model and not qty:
-            continue
-        mm = models.get_item(model)
-        if not mm:
-            errors.append("Item %d: %s is not in the item master. Add it there "
-                          "first - the serial embeds the wattage, so an "
-                          "unknown item cannot be generated." % (i, model))
-            continue
-        try:
-            watt = int(request.form.get("wattage_%d" % i) or mm["wattage"])
-            q = int(qty)
-        except ValueError:
-            errors.append("Item %d: quantity must be a number." % i)
-            continue
-        ceiling = mm["pallet_ceiling"]
-        pallet = (request.form.get("pallet_%d" % i) or "").strip()
-        pallet = int(pallet) if pallet.isdigit() else None
-        if pallet is not None and pallet > ceiling:
-            errors.append(
-                "Item %d: %d per pallet is physically impossible - the %d mm "
-                "frame takes at most %d. Refused at entry rather than "
-                "discovered at packing."
-                % (i, pallet, mm["frame_mm"], ceiling))
-        if q < 1:
-            errors.append("Item %d: quantity must be at least 1." % i)
-        lines.append({
-            "item_description": mm["description"],
-            "item_code": mm["item_code"],
-            "model": mm["model"], "wattage": watt, "qty": q,
-            # cell type comes WITH the item, exactly as it does in the other system
-            "dcr": mm["cell_type"],
-            "arc": request.form.get("arc_%d" % i) or None,
-            "pallet_qty": pallet,
-            "line_note": (request.form.get("note_%d" % i) or "").strip() or None,
-        })
-
-    if not form["indent_no"]:
-        errors.append("Indent number is required.")
-    if not form["customer"]:
-        errors.append("Customer is required.")
-    if not form["indent_date"]:
-        errors.append("Indent date is required.")
-    if not lines:
-        errors.append("An indent needs at least one item.")
-    if form["delivery_text"] and not form["delivery_by"]:
-        errors.append('Delivery schedule reads %r. Enter a real date as well '
-                      '- "NEXT WEEK" cannot be sorted or chased.'
-                      % form["delivery_text"])
-
-    pdf_path = sha = None
-    f = request.files.get("pdf")
-    if f and f.filename:
-        raw = f.read()
-        sha = hashlib.sha256(raw).hexdigest()
-        d = os.path.join(BASE, "storage", "indents")
-        os.makedirs(d, exist_ok=True)
-        safe = "".join(c for c in form["indent_no"] if c.isalnum() or c in "-_")
-        pdf_path = os.path.join(d, "%s_%s.pdf" % (safe or "indent", sha[:8]))
-        with open(pdf_path, "wb") as fh:
-            fh.write(raw)
-        pdf_path = os.path.relpath(pdf_path, BASE)
-    else:
-        errors.append("Attach the indent PDF. It is the record of what "
-                      "Marketing actually instructed.")
-
-    with db.conn() as (cx, cur):
-        if form["indent_no"] and db.indent_exists(cur, form["indent_no"]):
-            errors.append("Indent %s already exists." % form["indent_no"])
-
-    if errors:
-        return render_template("indent_new.html", errors=errors, form=form,
-                               items=lines or [{}], catalog=models.all_items(),
-                               model_json=models.items_json(), customers=known)
-
-    with db.conn() as (cx, cur):
-        iid = db.insert_indent(cur, form, lines, pdf_path, sha, actor())
-        db.audit(cur, actor(), "indent.create", "indent", iid,
-                 {"indent_no": form["indent_no"], "lines": len(lines),
-                  "qty": sum(l["qty"] for l in lines)})
-    flash("Indent %s saved with %d item(s)." % (form["indent_no"], len(lines)),
-          "pass")
-    return redirect(url_for("indent_list"))
-
-
-# --------------------------------------------------------------------------
-# Planning
-# --------------------------------------------------------------------------
-
-@app.route("/planning", methods=["GET", "POST"])
-@require_screen_write("plan")
-def planning():
-    with db.conn() as (cx, cur):
-        prog = db.indent_progress(cur)
-        allocs = db.allocations(cur)
-
-    if request.method == "POST":
-        lid = int(request.form.get("indent_line_id") or 0)
-        line = next((p for p in prog if p["indent_line_id"] == lid), None)
-        if not line:
-            flash("Pick an indent line first.", "warn")
-            return redirect(url_for("planning"))
-        try:
-            d = datetime.date.fromisoformat(request.form["produced_on"])
-            shift = int(request.form["shift"])
-            qty = int(request.form["qty"])
-        except (KeyError, ValueError):
-            flash("Date, shift and quantity are required.", "fail")
-            return redirect(url_for("planning"))
-        if qty < 1 or qty > line["remaining_qty"]:
-            flash("Indent line %s has %d remaining; cannot allocate %d."
-                  % (line["indent_no"], line["remaining_qty"], qty), "fail")
-            return redirect(url_for("planning"))
-        with db.conn() as (cx, cur):
-            aid, serials = db.create_allocation(cur, line, d, shift, qty, actor())
-            _planned_serials(cur, serials, "planned")
-            db.audit(cur, actor(), "planning.allocate", "allocation", aid,
-                     {"indent": line["indent_no"], "qty": qty,
-                      "first": serials[0], "last": serials[-1]})
-        flash("Allocated %d serials: %s … %s" % (qty, serials[0], serials[-1]),
-              "pass")
-        return redirect(url_for("planning"))
-
-    return render_template("planning.html", prog=prog, allocs=allocs,
-                           today=clock.today().isoformat())
 
 
 # --------------------------------------------------------------------------
@@ -12470,186 +12142,6 @@ def api_fqc_dashboard_modules():
 
 
 # --------------------------------------------------------------------------
-# Packing
-# --------------------------------------------------------------------------
-
-_BOXES = {}          # sandbox working set: box_no -> bx.Box
-_COUNTER = bx.DailyCounter()
-
-
-@app.route("/packing", methods=["GET", "POST"])
-@require_screen_write("pack")
-def packing():
-    msg = None
-    act = request.form.get("action")
-    today = clock.today()
-
-    if act == "open":
-        grade = request.form.get("grade") or "A"
-        model = (request.form.get("model") or "").strip()
-        cust = (request.form.get("customer") or "").strip() or None
-        with db.conn() as (cx, cur):
-            cap = int(db.get_config(cur).get("pallet_ceiling", 36))
-        if not model:
-            flash("Model is required to open a box.", "fail")
-        else:
-            b = bx.Box(today, _COUNTER.draw(today), grade, model,
-                       customer=cust, capacity=cap)
-            _BOXES[b.number] = b
-            flash("Opened %s — grade %s, %s, capacity %d."
-                  % (b.number, grade, model, cap), "pass")
-
-    elif act == "scan":
-        no = request.form.get("box_no")
-        serial = (request.form.get("serial") or "").strip().upper()
-        b = _BOXES.get(no)
-        if not b:
-            flash("No open box %s." % no, "fail")
-        else:
-            with db.conn() as (cx, cur):
-                srec = db.find_serial(cur, serial)
-            if not srec:
-                flash("%s is not in the serial master." % serial, "fail")
-            elif srec.get("state") != "graded":
-                flash("%s has no FQC grade yet. Packing an ungraded module is "
-                      "how a reject reaches a customer." % serial, "fail")
-            else:
-                try:
-                    b.add(serial, srec.get("grade"), srec.get("model"),
-                          srec.get("customer"))
-                    with db.conn() as (cx, cur):
-                        db.set_serial(cur, serial, state="packed")
-                    flash("%s added to %s (%d/%d)."
-                          % (serial, b.number, len(b.serials), b.capacity), "pass")
-                except bx.BoxNumberError as e:
-                    flash(str(e), "fail")
-
-    elif act == "close":
-        b = _BOXES.get(request.form.get("box_no"))
-        if b:
-            try:
-                b.close()
-                b.print_label(actor())
-                flash("%s closed with %d module(s)%s."
-                      % (b.number, len(b.serials),
-                         " — partial" if b.is_partial else ""), "pass")
-            except bx.BoxNumberError as e:
-                flash(str(e), "fail")
-
-    with db.conn() as (cx, cur):
-        graded = db.serials_for(cur, state="graded")
-    return render_template("packing.html", boxes=list(_BOXES.values()),
-                           graded=graded)
-
-
-@app.route("/packing/label/<path:box_no>")
-@require_screen_view("pack")
-def packing_label(box_no):
-    b = _BOXES.get(box_no)
-    if not b:
-        abort(404)
-    return render_template("label.html", b=b, L=b.label())
-
-
-# --------------------------------------------------------------------------
-# Dispatch  ->  challan
-# --------------------------------------------------------------------------
-
-@app.route("/dispatch", methods=["GET", "POST"])
-@require_screen_write("disp")
-def dispatch():
-    closed = [b for b in _BOXES.values() if b.state == bx.Box.CLOSED]
-    with db.conn() as (cx, cur):
-        invoices = db.recent_invoices(cur)
-
-    if request.method == "POST":
-        picked = request.form.getlist("box")
-        inv_no = request.form.get("invoice_no") or None
-        sel = [b for b in closed if b.number in picked]
-        total = sum(len(b.serials) for b in sel)
-        inv = next((i for i in invoices if i.get("invoice_no") == inv_no), None)
-        declared = (inv or {}).get("declared_qty")
-
-        if not sel:
-            flash("Tick at least one box.", "warn")
-        elif declared is None:
-            flash("Load the invoice first — the challan quantity is reconciled "
-                  "against it, and there is no override.", "fail")
-        elif int(declared) != total:
-            flash("Invoice %s declares %d, boxes ticked total %d. Fix the "
-                  "packing or have HO reissue — no override."
-                  % (inv_no, declared, total), "fail")
-        else:
-            with db.conn() as (cx, cur):
-                fy = db.fin_year()
-                seq = db.draw_challan_seq(cur, fy)
-                d = clock.today()
-                no = db.render_challan_no(d, seq)
-                db.audit(cur, actor(), "challan.issue", "challan", no,
-                         {"invoice": inv_no, "boxes": len(sel), "qty": total})
-            for b in sel:
-                b.challan_no = no
-            flash("Challan %s issued — %d boxes, %d modules, against %s."
-                  % (no, len(sel), total, inv_no), "pass")
-            return redirect(url_for("dispatch"))
-
-    return render_template("dispatch.html", closed=closed, invoices=invoices)
-
-
-# --------------------------------------------------------------------------
-# Gate pass  -  ISGP + YYMMDD + / + seq, one series for every type
-# --------------------------------------------------------------------------
-
-@app.route("/gatepass", methods=["GET", "POST"])
-@require_screen_write("gp")
-def gatepass():
-    with db.conn() as (cx, cur):
-        rows = db.gatepasses(cur)
-    if request.method == "POST":
-        d = clock.today()
-        # Accept challan_id (real FK) from both form and JSON body so the
-        # JS layer can post either way without a second endpoint.
-        body = request.get_json(silent=True) or {}
-        ch_id_raw = (request.form.get("challan_id") or body.get("challan_id") or "").strip()
-        try:
-            ch_id = int(ch_id_raw) if ch_id_raw else None
-        except ValueError:
-            ch_id = None
-        with db.conn() as (cx, cur):
-            seq = db.draw_gp_seq(cur, d)
-            no = db.render_gp_no(d, seq)
-            ch_no = (request.form.get("challan_no") or body.get("challan_no") or "").strip()
-            # If a real challan_id was supplied and challan_no is blank,
-            # render the number from the record so legacy fields stay consistent.
-            if ch_id and not ch_no:
-                ch_row = store.one(cur,
-                    "SELECT * FROM challan WHERE challan_id=%s", (ch_id,))
-                if ch_row:
-                    try:
-                        cdate = datetime.date.fromisoformat(ch_row["challan_date"])
-                        ch_no = db.render_challan_no(cdate, ch_row["seq"],
-                                                     ch_row.get("suffix"))
-                    except (TypeError, ValueError):
-                        pass
-            rec = {"gp_no": no, "gp_date": d.isoformat(),
-                   "kind": request.form.get("kind") or body.get("kind") or "NRGP",
-                   "party": (request.form.get("party") or body.get("party") or "").strip(),
-                   "delivery_address": (request.form.get("address") or body.get("delivery_address") or "").strip(),
-                   "vehicle_no": (request.form.get("vehicle") or body.get("vehicle_no") or "").strip(),
-                   "description": (request.form.get("description") or body.get("description") or "").strip(),
-                   "qty": request.form.get("qty") or body.get("qty") or None,
-                   "expected_return": request.form.get("expected_return") or body.get("expected_return") or None,
-                   "challan_no": ch_no or None,
-                   "challan_id": ch_id}
-            gid = db.create_gatepass(cur, rec, actor())
-            db.audit(cur, actor(), "gatepass.issue", "gatepass", no, rec)
-        flash("Gate pass %s issued (%s)." % (no, rec["kind"]), "pass")
-        return redirect(url_for("gatepass"))
-    return render_template("gatepass.html", rows=rows,
-                           today=clock.today().isoformat())
-
-
-# --------------------------------------------------------------------------
 # Settings  -  where SS and EL actually live
 # --------------------------------------------------------------------------
 
@@ -12706,47 +12198,6 @@ def settings():
         flash(invalid, "fail")
         return render_template("settings.html", **_settings_context(cfg)), 400
     return render_template("settings.html", **_settings_context(cfg))
-
-
-@app.route("/dashboard")
-@require_screen_view("proddash")
-def proddash():
-    with db.conn() as (cx, cur):
-        f = db.production_funnel(cur)
-        shifts = db.shift_performance(cur)
-    return render_template("proddash.html", f=f, shifts=shifts)
-
-
-@app.route("/mgmt")
-@require_screen_view("mgmt")
-def mgmt():
-    with db.conn() as (cx, cur):
-        f = db.production_funnel(cur)
-        indents = db.recent_indents(cur)
-        prog = db.indent_progress(cur)
-        inv = db.recent_invoices(cur)
-        gps = db.gatepasses(cur)
-        stats = db.import_stats(cur)
-    return render_template("mgmt.html", f=f, indents=indents, prog=prog,
-                           invoices=inv, gatepasses=gps, stats=stats)
-
-
-@app.route("/search")
-@require_screen_view("search")
-def search():
-    q = (request.args.get("q") or "").strip().upper()
-    hit = None
-    with db.conn() as (cx, cur):
-        if q:
-            hit = db.trace_serial(cur, q)
-    return render_template("search.html", q=q, hit=hit)
-
-
-@app.route("/models")
-@require_role(*_R_ADMIN)
-def model_master():
-    return render_template("models.html", items=models.all_items(),
-                           models=models.all_models())
 
 
 @app.route("/export/<what>.csv")
@@ -12865,10 +12316,14 @@ def api_stock_dispatch():
 
 @app.errorhandler(413)
 def too_big(e):
-    flash("That file is larger than 25 MB.", "fail")
-    return redirect(url_for("invoice_upload")), 413
-
-
+    # It flashed and redirected to the pre-v4 /invoice page, retired 24 Oct
+    # 2026 - and a screen's own upload (a fetch) got that page back instead
+    # of a reason. A fetch gets the reason; anything else, plain text.
+    from flask import Response
+    why = "That file is larger than 25 MB."
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "why": why}), 413
+    return Response(why, status=413, mimetype="text/plain")
 
 
 _GP_UNITS = ("Nos", "Kg", "Set")

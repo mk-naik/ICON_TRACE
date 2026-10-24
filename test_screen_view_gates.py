@@ -80,16 +80,14 @@ VIEW_MAP = read_view_map()
 # The reviewed read map (Round 28 report), written down once so a silent
 # re-mapping fails here rather than in production.
 EXPECTED = {
-    "mgmt": {("mgmt",)},
     "api_prod_dashboard": {("proddash", "mgmt")},
     "api_prod": {("proddash", "mgmt")},
     "api_fqc_dashboard": {("dash", "mgmt")},
     "api_stock_dispatch": {("disp", "mgmt")},
     "api_trace_find": {("search",)}, "api_trace_serial": {("search",)},
-    "api_trace_invoice": {("search",)}, "search": {("search",)},
-    "proddash": {("proddash",)},
+    "api_trace_invoice": {("search",)},
     "api_indents": {("indent",)}, "api_indent_get": {("indent",)},
-    "indent_list": {("indent",)},
+
     "api_allocations": {("plan",)}, "api_allocation_get": {("plan",)},
     # Round 37: the copy-from-batch lookup (read-only, Planning's own)
     "api_allocation_copy_source": {("plan",)},
@@ -109,15 +107,12 @@ EXPECTED = {
     "api_fqc_lookup": {("fqc", "review")}, "api_el_image": {("fqc", "review")},
     "api_fqc_defects": {("fqc", "review")},
     "api_ftr": {("challan", "fqc")},
-    "packing_label": {("pack",)},
+
     "api_box_check": {("pack", "repack")}, "api_box": {("pack", "repack")},
     "api_boxes": {("pack", "repack", "packdash")},
     "pallet_sheet": {("pack", "repack", "packdash")},
     "api_packing_log": {("packdash",)},
     "view_invoice_pdf": {("invoice",)},
-    # the pre-v4 invoice page and its redirect, gated 24 Oct 2026 - they listed
-    # invoices with buyer names to anyone
-    "invoice_upload": {("invoice",)}, "home": {("invoice",)},
     "api_invoices_list": {("invoice", "challan")},
     "api_invoice_get": {("invoice", "challan")},
     "api_challan_available_boxes": {("challan",)}, "api_challan_get": {("challan",)},
@@ -137,7 +132,7 @@ EXPECTED = {
 
 # Admin surface - role-gated reads, never per-user (were open to anyone)
 ADMIN_READS = ["/api/db/stats", "/api/materials", "/api/evidence/sources",
-               "/models", "/view/settings", "/view/items"]
+               "/view/settings", "/view/items"]
 
 
 def past_gate(r):

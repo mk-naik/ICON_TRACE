@@ -28,14 +28,10 @@
   <nav class="side" id="sidenav">
     <div class="nav-sec">Overview</div>
     <a class="nav-i" href="/"><em>&#9905;</em>Back to the main app</a>
-    <div class="nav-sec">Records</div>
-    <a class="nav-i {{ 'on' if nav=='indent' }}" href="{{ url_for('indent_list') }}"><em>&#9636;</em>Indent</a>
-    <a class="nav-i {{ 'on' if nav=='invoice' }}" href="{{ url_for('invoice_upload') }}"><em>&#9637;</em>Tax Invoice</a>
     <div class="nav-sec">Loading</div>
     <a class="nav-i {{ 'on' if nav=='loading' }}" href="{{ url_for('loading') }}"><em>&#8862;</em>Loading Verification</a>
     <div class="nav-sec">Admin</div>
     <a class="nav-i {{ 'on' if nav=='import' }}" href="{{ url_for('challan_import') }}"><em>&#9707;</em>Historical Import</a>
-    <a class="nav-i {{ 'on' if nav=='models' }}" href="{{ url_for('model_master') }}"><em>&#9645;</em>Item Master</a>
     <a class="nav-i {{ 'on' if nav=='settings' }}" href="{{ url_for('settings') }}"><em>&#9881;</em>Evidence Sources</a>
   </nav>
 

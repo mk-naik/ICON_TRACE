@@ -91,24 +91,24 @@ EXPECTED = {
                   "api_challan_discard", "api_challan_edit_draft",
                   "api_challan_edit_save", "api_challan_submit",
                   "api_challan_checks"},
-    "gp":        {"api_gatepass", "api_gatepass_update", "gatepass"},
-    "invoice":   {"api_invoice_confirm", "api_invoice_parse",
-                  "invoice_cancel", "invoice_confirm", "invoice_parse"},
-    "disp":      {"dispatch"},
+    "gp":        {"api_gatepass", "api_gatepass_update"},
+    "invoice":   {"api_invoice_confirm", "api_invoice_parse"},
+    # "disp" had one write, the pre-v4 /dispatch page (retired 24 Oct 2026) -
+    # Stock & Dispatch writes nothing of its own; a challan is Challan's
     "review":    {"api_review_resolve", "api_review_discard_many"},
     "fqc":       {"api_fqc_grade"},
     "loadver":   {"api_loading_confirm", "api_loading_submit"},
     "pack":      {"api_box_abandon", "api_box_capacity", "api_box_close",
                   "api_box_remove", "api_box_repack", "api_box_scan",
-                  "api_box_open", "packing"},
+                  "api_box_open"},
     "repack":    {"api_repack"},
     # api_allocation_cancel moved to a role gate (Admin/Super Admin + TOTP) in
     # Round 34 - see t_critical_surface_keeps_role_gates below.
     # api_allocation_custom_parse: Round 37, the custom-serial Excel upload
     # (reads a file and writes nothing, but it is Planning's own tool)
     "plan":      {"api_allocation_create", "api_allocation_custom_parse",
-                  "api_allocation_update", "planning"},
-    "indent":    {"api_indent_create", "api_indent_update", "indent_new"},
+                  "api_allocation_update"},
+    "indent":    {"api_indent_create", "api_indent_update"},
     "loss":      {"api_loss_event_open", "api_loss_event_close"},
     # the two traceability-import routes: Round 36, the monthly Excel
     # api_incharges_add: Round 37, the incharge master (anyone who can record
@@ -166,8 +166,8 @@ def fresh():
 # The map itself
 # --------------------------------------------------------------------------
 
-@test("the map read out of app.py is exactly the reviewed map - 42 view "
-     "functions on 13 screens, every one a real, non-excluded screen")
+@test("the map read out of app.py is exactly the reviewed map - 34 write "
+     "functions on 12 screens, every one a real, non-excluded screen")
 def t_map_is_the_reviewed_map():
     got = {}
     for _p, _m, screen, fn in SCREEN_MAP:
@@ -175,7 +175,9 @@ def t_map_is_the_reviewed_map():
     assert got == EXPECTED, "map drifted:\n  got      %s\n  expected %s" % (
         sorted((k, sorted(v)) for k, v in got.items()),
         sorted((k, sorted(v)) for k, v in EXPECTED.items()))
-    assert sum(len(v) for v in got.values()) == 42
+    # 42 on 13 until the pre-v4 pages went (24 Oct 2026): their eight POSTs, and
+    # with /dispatch the only write Stock & Dispatch ("disp") had
+    assert sum(len(v) for v in got.values()) == 34
     for s in got:
         assert s in icon_auth.SCREEN_IDS and s not in icon_auth.EXCLUDED_SCREENS, s
     print("      %d route lines, %d functions" % (

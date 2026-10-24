@@ -156,24 +156,34 @@ def t_customers_gated_and_still_served():
         assert res.status_code == 200 and res.get_json().get("found"), (role, res.get_json())
 
 
-@test("the pre-v4 invoice page and /legacy refuse a caller with no session - /invoice "
-      "rendered the last 20 invoices, buyer names included, to anyone (24 Oct 2026)")
-def t_invoice_page_gated():
-    import db
+RETIRED = [("GET", "/legacy"), ("GET", "/invoice"), ("POST", "/invoice/parse"),
+           ("POST", "/invoice/confirm"), ("POST", "/invoice/cancel"), ("GET", "/indent"),
+           ("GET", "/indent/new"), ("POST", "/indent/new"), ("GET", "/planning"),
+           ("POST", "/planning"), ("GET", "/packing"), ("POST", "/packing"),
+           ("GET", "/packing/label/ISPL261024-K001"), ("GET", "/dispatch"),
+           ("POST", "/dispatch"), ("GET", "/gatepass"), ("POST", "/gatepass"),
+           ("GET", "/dashboard"), ("GET", "/mgmt"), ("GET", "/search"), ("GET", "/models")]
+
+
+@test("the pre-v4 pages are retired: each answers 404, signed in or not - /invoice "
+      "listed the last 20 invoices with buyer names to anyone, /packing marked "
+      "modules packed into a pallet that existed only in memory, /dispatch drew "
+      "challan numbers for no challan (24 Oct 2026)")
+def t_retired_pages_404():
     store.wipe()
     AUTH.ensure_auth_schema()
-    with store.conn() as (cx, cur):
-        db.insert_invoice(cur, {"buyer_name": "SECRET BUYER PVT LTD",
-            "buyer_gstin": "15AACCA2122Q1ZT", "declared_qty": 36,
-            "declared_model": "ISEN625-G12R", "ewb_no": "1", "ewb_valid_upto": "2030-01-01",
-            "invoice_no": "LEAK/26-27/1", "irn": "abc123", "consignee_same_as_buyer": 1},
-            "t.pdf", "deadbeef", {"fields": {}, "compare_only": {}, "qr": {}}, False, {}, "t")
     anon = APP.app.test_client()
-    for path in ("/invoice", "/legacy"):
-        r = anon.get(path)
-        body = r.get_data(as_text=True)
-        assert r.status_code == 401, (path, r.status_code, r.headers.get("Location"))
-        assert "SECRET BUYER" not in body and "LEAK/26-27/1" not in body, path
+    sa = APP.app.test_client()
+    AUTH.test_login(sa)
+    for method, path in RETIRED:
+        for who, c in (("anonymous", anon), ("Super Admin", sa)):
+            kw = {"data": {}} if method == "POST" else {}
+            r = c.open(path, method=method, **kw)
+            assert r.status_code == 404, (who, method, path, r.status_code)
+    # what stays: the settings landing redirect, the loading page, the import tool
+    assert sa.get("/settings").status_code == 302
+    assert sa.get("/loading").status_code == 200
+    assert sa.get("/admin/challan-import").status_code == 200
 
 
 @test("a screen fragment, real name or not, answers 401 with no session - an unknown "

@@ -8586,3 +8586,39 @@ commit.
   -> 302 (to /invoice)`, `GET /view/<name> -> 404`. Now: 168 route/method pairs, 36 outside
   /api, all 401.
 - **Test:** `test_anonymous_routes.py` 7.
+
+### 24 Oct 2026 - the pre-v4 pages retired (Prompt 1, Job C)
+- **What they were:** standalone server-rendered pages beside the live screens, each with
+  rules of its own - `/invoice` (+ `/invoice/parse`, `/confirm`, `/cancel`) listed invoices
+  with buyer names to anyone until 632672c; `/packing` kept pallets in a Python dict
+  (`_BOXES`) yet set each scanned module's state to `packed` in the database, so a module
+  could be "packed" into a pallet nothing records; `/dispatch` drew a real challan sequence
+  number and wrote a `challan.issue` audit row for a challan it never created; `/gatepass`
+  made gate passes outside the live screen's rules (DECISIONS 4: a module gate pass is never
+  made by hand). The others (`/indent`, `/indent/new`, `/planning`, `/dashboard`, `/mgmt`,
+  `/search`, `/models`, `/legacy`) duplicated live screens.
+- **Checked before deleting:** nothing in v4, the live layer, the offline layer or the
+  service worker calls any of them (the live invoice flow posts to /api/invoice/parse and
+  /confirm; the one `/gatepass/` link is the print route); no template renders theirs; no
+  document mentions them.
+- **Change:** the 16 route functions, the `_BOXES` / `_COUNTER` sandbox and the 14 templates
+  are gone (`/packing/label` too - beyond the list, but it served only `_BOXES`, which nothing
+  fills once `/packing` is gone). `base.html` stays: `/admin/challan-import`, `/loading` and
+  the settings POST still extend it - its links to the retired pages are removed. Found on the
+  way: the 413 handler (any upload over 25 MB) redirected to `/invoice` - a screen's fetch got
+  that page back; it now answers JSON for /api/ and plain text otherwise. `sweep_temp()` (old
+  `_tmp_` uploads) ran only from the retired page; it runs from /api/invoice/parse now.
+- **Left, and why:** `/loading` - the live Loading Verification is the challan list and session
+  the live layer injects (confirm, Submit, the gate pass), with "Verify one pallet's contents"
+  opening `/view/loading` (frag_loading.html); `/loading` is an older standalone copy of that
+  pallet check, linked only from the old shell. DECISIONS 10's "Swap in Loading Verification
+  (scrapped)" is the pallet SWAP inside it, not the screen. Changed nothing - Mukesh's call.
+  `/admin/challan-import` - an Admin tool, left as asked. Stock & Dispatch's write flag now
+  gates nothing (`/dispatch` was its one write) - noted, not changed.
+- **Test:** `test_anonymous_routes.py` (7): all 21 retired method/paths 404 signed in or not,
+  /settings 302, /loading and /admin/challan-import 200; the walker still finds every rule 401.
+  `test_screen_view_gates.py` / `test_screen_write_gates.py` (9, 9): the reviewed maps lose the
+  retired endpoints (writes 42 on 13 screens -> 34 on 12). `test_dashrath_case.py` (6) no longer
+  posts /dispatch or reads /mgmt. Full suite on the change: 119 of 121 - `test_fqc_scanner_ui`
+  passes alone (a parallel-run flake); `test_el_analysis_ui`'s control-limit check fails on
+  the unchanged HEAD too, by the time of day it runs (its own entry below).

@@ -162,14 +162,13 @@ def t_cannot_save_challan_or_invoice():
     assert n == 1, "a refused save still created a challan"
 
 
-@test("Stock & Dispatch and Gate Pass save: both pass their write gates")
+@test("Gate Pass saves past its write gate; Stock & Dispatch reads (its one write, "
+      "the pre-v4 /dispatch page, is retired - 24 Oct 2026)")
 def t_can_save_disp_and_gp():
     world()
     c = dashrath()
     r = c.post("/api/gatepass", json={})
     assert past_gate(r), (r.status_code, r.get_json(silent=True))
-    r = c.post("/dispatch", data={})
-    assert past_gate(r), r.status_code
     assert c.get("/api/gatepasses").status_code == 200
     assert c.get("/api/stock_dispatch").status_code == 200
 
@@ -195,7 +194,7 @@ def t_packing_production_fqc_unreachable():
 def t_overview_readable():
     world()
     c = dashrath()
-    for path in ("/mgmt", "/api/prod/dashboard", "/api/fqc/dashboard",
+    for path in ("/api/prod/dashboard", "/api/fqc/dashboard",
                  "/api/stock_dispatch", "/api/prod"):
         r = c.get(path)
         assert r.status_code == 200, (path, r.status_code)

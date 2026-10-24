@@ -635,10 +635,19 @@ no one signs twice. [enforcement unverified]
   any shape fails it by name. `/api/customers`, `/api/customers/resolve` and
   `/api/sync/status` are on `require_role(*_R_EVERY)`: every signed-in role, never
   an anonymous caller. [built]
-- **The pre-v4 `/invoice` page and its `/legacy` redirect are gated** (24 Oct 2026):
-  both answered a caller with no session, and `/invoice` listed the last 20
-  invoices - number, date, buyer, model, quantity. They are on Tax Invoice's view
-  flag, like their sibling page routes. [built] A `/view/<name>` screen fragment asks
+- **The pre-v4 pages are retired** (24 Oct 2026, Mukesh's prompt): `/legacy`,
+  `/invoice` with `/invoice/parse`, `/confirm` and `/cancel`, `/indent`,
+  `/indent/new`, `/planning`, `/packing` with `/packing/label`, `/dispatch`,
+  `/gatepass`, `/dashboard`, `/mgmt`, `/search` and `/models` answer 404, and their
+  templates are gone. Each kept its own rules beside the live screen: `/invoice`
+  listed the last 20 invoices with buyer names to anyone (gated first, then
+  retired), `/packing` marked modules packed into a pallet that existed only in
+  memory, `/dispatch` drew a challan number and audited a challan it never made,
+  `/gatepass` made gate passes outside the live screen's rules. Kept: `GET
+  /settings` (above), `/loading` (a standalone copy of the pallet-contents check -
+  the live one is `/view/loading`; **[open]** retire it too?), `/admin/challan-import`
+  (**[open]** keep?), every document, export and `/view/` route, and `base.html`
+  (the three pages that stay extend it). [built] A `/view/<name>` screen fragment asks
   for a session before it looks the name up: an anonymous caller gets 401 whatever
   the name, never a 404 that says which screens exist. [built]
 
