@@ -162,7 +162,9 @@ RETIRED = [("GET", "/legacy"), ("GET", "/invoice"), ("POST", "/invoice/parse"),
            ("POST", "/planning"), ("GET", "/packing"), ("POST", "/packing"),
            ("GET", "/packing/label/ISPL261024-K001"), ("GET", "/dispatch"),
            ("POST", "/dispatch"), ("GET", "/gatepass"), ("POST", "/gatepass"),
-           ("GET", "/dashboard"), ("GET", "/mgmt"), ("GET", "/search"), ("GET", "/models")]
+           ("GET", "/dashboard"), ("GET", "/mgmt"), ("GET", "/search"), ("GET", "/models"),
+           # an older copy of the pallet-contents check, which lives on as /view/loading
+           ("GET", "/loading")]
 
 
 @test("the pre-v4 pages are retired: each answers 404, signed in or not - /invoice "
@@ -180,9 +182,10 @@ def t_retired_pages_404():
             kw = {"data": {}} if method == "POST" else {}
             r = c.open(path, method=method, **kw)
             assert r.status_code == 404, (who, method, path, r.status_code)
-    # what stays: the settings landing redirect, the loading page, the import tool
+    # what stays: the settings landing redirect, the live pallet-contents check, the
+    # Admin's historical import tool
     assert sa.get("/settings").status_code == 302
-    assert sa.get("/loading").status_code == 200
+    assert sa.get("/view/loading").status_code == 200
     assert sa.get("/admin/challan-import").status_code == 200
 
 

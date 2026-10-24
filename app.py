@@ -2635,12 +2635,6 @@ def pallet_sheet(box_id):
                            rows=rows, qr=qr, bc_text=bc.text_style(cfg))
 
 
-@app.route("/loading")
-@require_screen_view("loadver")
-def loading():
-    return render_template("loading.html")
-
-
 def _pallet_no_from_scan(raw):
     """The pallet number in what was typed or scanned: the number itself, or
     the packing list's QR (ICONTRACE|BOX|<number>|...). DECISIONS 4: Team 3
@@ -2691,8 +2685,9 @@ def api_loading_box():
 # Loading Verification - Team 3 confirms every pallet is actually on the
 # vehicle before the challan's own print/excel documents may be produced.
 #
-# Deliberately separate from /loading above (serial-contents verification,
-# unchanged) - this is pallet-by-pallet, one challan at a time, and what it
+# Deliberately separate from the pallet-contents check (/view/loading,
+# frag_loading.html - its standalone /loading page was retired on 24 Oct
+# 2026) - this is pallet-by-pallet, one challan at a time, and what it
 # writes is what gates print/excel. A wrong or missing pallet has one
 # resolution: leave without submitting, edit the challan (the existing
 # (MA)/(MB) mechanism), and start a fresh session against the new

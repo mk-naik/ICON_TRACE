@@ -638,16 +638,20 @@ no one signs twice. [enforcement unverified]
 - **The pre-v4 pages are retired** (24 Oct 2026, Mukesh's prompt): `/legacy`,
   `/invoice` with `/invoice/parse`, `/confirm` and `/cancel`, `/indent`,
   `/indent/new`, `/planning`, `/packing` with `/packing/label`, `/dispatch`,
-  `/gatepass`, `/dashboard`, `/mgmt`, `/search` and `/models` answer 404, and their
-  templates are gone. Each kept its own rules beside the live screen: `/invoice`
-  listed the last 20 invoices with buyer names to anyone (gated first, then
-  retired), `/packing` marked modules packed into a pallet that existed only in
+  `/gatepass`, `/dashboard`, `/mgmt`, `/search`, `/models` and `/loading` answer 404,
+  and their templates are gone. Each kept its own rules beside the live screen:
+  `/invoice` listed the last 20 invoices with buyer names to anyone (gated first,
+  then retired), `/packing` marked modules packed into a pallet that existed only in
   memory, `/dispatch` drew a challan number and audited a challan it never made,
-  `/gatepass` made gate passes outside the live screen's rules. Kept: `GET
-  /settings` (above), `/loading` (a standalone copy of the pallet-contents check -
-  the live one is `/view/loading`; **[open]** retire it too?), `/admin/challan-import`
-  (**[open]** keep?), every document, export and `/view/` route, and `base.html`
-  (the three pages that stay extend it). [built] A `/view/<name>` screen fragment asks
+  `/gatepass` made gate passes outside the live screen's rules; `/loading` was an
+  older copy of the pallet-contents check, which lives on as `/view/loading` (retired
+  the same day at Mukesh's word: once nothing links to it, it is a second copy of a
+  live screen). Production's database carried none of their damage on 24 Oct:
+  no challan number drawn for no challan, no module packed into no pallet, no gate
+  pass made by the old page. Kept: `GET /settings` (above), `/admin/challan-import`
+  (Mukesh, 24 Oct: an Admin tool by design - a CHECK before any LOAD, each batch
+  all or nothing), every document, export and `/view/` route, and `base.html` (the
+  import page and the settings form extend it). [built] A `/view/<name>` screen fragment asks
   for a session before it looks the name up: an anonymous caller gets 401 whatever
   the name, never a 404 that says which screens exist. [built]
 

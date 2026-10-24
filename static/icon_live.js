@@ -13556,8 +13556,8 @@ function wireFqcAnomalies() {
    * check (frag_loading.html, via /view/loading) - fetched once at sign-in
    * and left completely unchanged. It's reached from the landing list's
    * "Verify one pallet's contents" button (go('loadver') with no nav-i
-   * element, so the redirect below doesn't fire) rather than at its own
-   * standalone /loading URL, so it stays inside the SPA shell; a close bar
+   * element, so the redirect below doesn't fire) - its standalone /loading
+   * page was retired on 24 Oct 2026 - so it stays inside the SPA shell; a close bar
    * is injected once its fragment loads (see ldInjectPalletCheckClose,
    * called from loadView) since the fragment itself has no way back.
    * That check answers "is this ONE pallet's contents what packing said";

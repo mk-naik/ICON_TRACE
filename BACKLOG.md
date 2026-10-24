@@ -8635,3 +8635,25 @@ commit.
   hour into its shift (`clock.DAY_STARTS_AT`, eight hours a shift) - 0 of 1,440 minutes. The
   screen and its limits are unchanged.
 - **Test:** `test_el_analysis_ui.py` 14 of 14 at 09:20, a time the old seeding failed.
+
+### 24 Oct 2026 - /loading retired too; /admin/challan-import kept; the old pages' damage checked
+- **What was left:** Job C (a61e1ef) kept `/loading` and `/admin/challan-import` for Mukesh. His
+  answer: retire `/loading`, keep the import tool.
+- **`/loading`:** `loading.html`, an older standalone copy of the pallet-contents check. The live
+  one is `/view/loading` (frag_loading.html), opened by Loading Verification's "Verify one
+  pallet's contents"; only `base.html`'s old nav linked to `/loading`. The route, its template
+  and that link are gone; `/api/loading/box` stays (the fragment reads it).
+- **`/admin/challan-import`:** kept as designed - Admin-gated, a CHECK before any LOAD, each batch
+  all or nothing (icon_challan_import, tracked). `backfill_challans.py`, the command-line backfill
+  beside it, is git-ignored on purpose (.gitignore, "One-off local scripts") and was never
+  committed. No database here holds anything it wrote: production, testing (the 18 Oct snapshot)
+  and the dev copy have no `origin='historical'` challan and no `challan.import` audit row.
+- **The damage the retired pages could leave, read on a copy of production** (sqlite backup API,
+  sign-in tables dropped from the copy, the copy deleted afterwards): no `challan.issue` audit row
+  (the old `/dispatch` was the only writer - a number drawn for no challan); no module `packed` in
+  no pallet - nor in no LIVE pallet (12 packed, all in closed pallets); no gate pass the old
+  `/gatepass` made (the one gate pass came from Loading Verification's submit - note that
+  `gatepass.issue` is written by the live routes too, so it is no marker); the challan counter has
+  drawn 1 number and challan 1 holds it. Nothing to repair.
+- **Test:** `test_anonymous_routes.py` (7): `/loading` joins the retired paths (404 signed in or
+  not); `/view/loading` answers 200. `test_screen_view_gates.py` loses the `loading` endpoint.

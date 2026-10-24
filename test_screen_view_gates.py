@@ -121,7 +121,7 @@ EXPECTED = {
     "api_print_resolve": {("challan", "gp", "pack", "repack", "packdash")},
     "api_challans_list": {("challan", "disp")},
     "api_loading_challans": {("loadver",)}, "api_loading_get": {("loadver",)},
-    "api_loading_box": {("loadver",)}, "loading": {("loadver",)},
+    "api_loading_box": {("loadver",)},
     "api_gatepasses": {("gp",)}, "api_gatepass_get": {("gp",)},
     "gatepass_print": {("gp",)},
     "api_hold": {("hold",)},
