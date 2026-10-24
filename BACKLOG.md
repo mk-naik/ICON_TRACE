@@ -8657,3 +8657,23 @@ commit.
   drawn 1 number and challan 1 holds it. Nothing to repair.
 - **Test:** `test_anonymous_routes.py` (7): `/loading` joins the retired paths (404 signed in or
   not); `/view/loading` answers 200. `test_screen_view_gates.py` loses the `loading` endpoint.
+
+### 24 Oct 2026 - Stock & Dispatch's Write tick gates no route (NEEDS MUKESH - the fix waits)
+- **What was said** (a review of Job C): nine screens have a Write flag that gates no route, and the
+  per-user editor still shows a Write toggle for the read-only dashboards.
+- **What is true** (icon_auth.SCREENS, test_screen_write_gates' reviewed map, and Admin > Users >
+  Edit permissions read in Chromium): 22 per-user screens. 12 have server routes behind their Write
+  flag (34 functions). 9 are `icon_auth.READ_ONLY_SCREENS` (Management Overview, Search & Trace,
+  Production Dashboard, FQC Dashboard, Packing Log, Hold & Deviation, Drafts, EL Stations, EL
+  Analysis): the editor shows "read only" for each, with no Write tick, and a new account gets
+  write off for them. **One tick says something untrue: Stock & Dispatch.** Its one write was the
+  pre-v4 `/dispatch` page (retired in a61e1ef); no route reads it now, yet a Dispatch Operator has it
+  on by default - and Dashrath's case (test_dashrath_case, the case that drove per-user permissions)
+  gives "write: Stock & Dispatch and Gate Pass". On the page it decides one thing only: without it
+  the live layer marks Stock & Dispatch view-only and disables its "Create challan" shortcut (the
+  label starts with "Create"), a `go('challan')` that Challan's own flags already decide.
+- **Proposed fix, waiting for Mukesh** (it changes what the permission editor offers): add `disp` to
+  `READ_ONLY_SCREENS`. The editor then says "read only"; the view-only lock no longer applies to
+  the screen, and the shortcut is judged by whether Challan opens (lockUnviewableGo). Stored rows
+  need no change - a write flag on a screen with nothing to write gates nothing. test_screen_perms'
+  defaults and test_dashrath_case's wording would change with it.
