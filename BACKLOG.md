@@ -8571,3 +8571,18 @@ commit.
 - **Change (app.py, view_fragment):** no session is 401 before the name lookup; a signed-in
   account still gets 404 for a name that is not a screen.
 - **Test:** `test_anonymous_routes.py` +1 (5); `test_screen_view_gates.py` 9.
+
+### 24 Oct 2026 - test_anonymous_routes.py walks every rule, not only /api (Prompt 1, Job B)
+- **Wrong:** the test walked Flask's url_map and then skipped every rule outside `/api/` - the
+  reason a page route leaking invoices with buyer names was invisible to a test written to catch
+  routes leaking customer data.
+- **Change (test only):** every rule, every method it allows, path parameters filled with 1 by
+  `concrete()`; 401 required - a 302 to sign-in or a 404 fails; no prefix skip of any kind.
+  The allow-list names each exception with its reason: `/`, `/login`, `/logout`, `/enrol`,
+  `/healthz`, `/favicon.ico`, `/static/<path:filename>`, `/api/session`, and `/settings` for
+  GET only (DECISIONS 9). Two checks beside it: every allow-list entry is a rule Flask serves
+  (by the method it allows), and the shell embeds boot_public()'s three keys and nothing else.
+- **Proof:** against app.py at 9d88a6b it fails by name - `GET /invoice -> 200`, `GET /legacy
+  -> 302 (to /invoice)`, `GET /view/<name> -> 404`. Now: 168 route/method pairs, 36 outside
+  /api, all 401.
+- **Test:** `test_anonymous_routes.py` 7.

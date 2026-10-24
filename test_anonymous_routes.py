@@ -1,17 +1,20 @@
 """
-ICON TRACE - no /api route answers an anonymous caller.
+ICON TRACE - no route answers an anonymous caller, unless it is on the list.
 
     python test_anonymous_routes.py
 
-DECISIONS.md section 9: every /api/* route must be gated except a short, named
-allow-list. This walks Flask's own url_map - so a route added tomorrow is
-checked tomorrow - and calls EVERY /api/* rule with no session, by every
-method it allows, path parameters filled with 1. Each must answer 401.
+DECISIONS.md section 9. This walks Flask's own url_map - so a route added
+tomorrow is checked tomorrow - and calls EVERY rule with no session, by every
+method it allows, path parameters filled with 1. Each must answer 401: not a
+302 to the sign-in page, not a 404 - the gated routes answer 401 today and are
+held to it.
 
 It was written after /api/customers and /api/customers/resolve were found
 answering anonymous callers with every customer's name, GSTIN, state and ERP
-code (and letting anyone test whether a GSTIN is a customer). A new ungated
-route now fails here, by name.
+code. It then walked only /api/* rules - and that skip is why the pre-v4
+/invoice page, which listed the last 20 invoices with buyer names to anyone,
+went unseen through two audits (24 Oct 2026). There is no prefix skip of any
+kind now: a new ungated rule of any shape fails here, by name.
 
 The allow-list is the only way out, and every entry carries its reason.
 """
@@ -29,10 +32,21 @@ import auth_test_helper as AUTH                              # noqa: E402
 APP.app.config["PROPAGATE_EXCEPTIONS"] = False
 _results = []
 
-# route -> why it may answer a caller who is not signed in
+# rule -> (the methods it may answer anonymously - None for every method it
+#          allows - and why it may answer a caller who is not signed in)
 ALLOW = {
-    "/api/session": "answers who the cookie belongs to - {signed_in: false} "
-                    "for nobody; the page asks it before anything else",
+    "/": (None, "the sign-in shell: the page itself, carrying boot_public() only "
+                "(build, live, db_file) - the data comes from /api/boot after sign-in"),
+    "/login": (None, "the sign-in POST - the one way to get a session"),
+    "/logout": (None, "signing out - there is nothing to refuse a caller with no session"),
+    "/enrol": (None, "first-run enrolment, by its one-time token (refused without one)"),
+    "/healthz": (None, "says the server is up and which build - no data"),
+    "/favicon.ico": (None, "the tab icon"),
+    "/static/<path:filename>": (None, "the page's own scripts, styles and bundled fonts"),
+    "/api/session": (None, "answers who the cookie belongs to - {signed_in: false} for "
+                           "nobody; the page asks it before anything else"),
+    "/settings": ({"GET"}, "DECISIONS 9: GET redirects to /#admin/stations and shows "
+                           "nothing itself; its POST keeps the Super Admin gate"),
 }
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
@@ -49,37 +63,69 @@ def concrete(path):
     return re.sub(r"<(?:\w+:)?\w+>", "1", path)
 
 
-def api_calls():
+def allowed(method, rule):
+    entry = ALLOW.get(rule)
+    return bool(entry) and (entry[0] is None or method in entry[0])
+
+
+def all_calls():
+    """Every (method, rule) Flask serves - no prefix of any kind skipped -
+    except what the allow-list names."""
     out = []
     for rule in APP.app.url_map.iter_rules():
-        if not rule.rule.startswith("/api/") or rule.rule in ALLOW:
-            continue
         for m in METHODS:
-            if m in rule.methods:
+            if m in rule.methods and not allowed(m, rule.rule):
                 out.append((m, rule.rule))
     return sorted(out, key=lambda x: (x[1], x[0]))
 
 
-@test("every /api route, called with no session, answers 401 - except the "
-      "named allow-list")
-def t_all_api_routes_need_a_session():
+@test("every route - pages, documents, fragments and /api alike - called with no "
+      "session, answers 401 by every method it allows, except the named allow-list")
+def t_all_routes_need_a_session():
     store.wipe()
     AUTH.ensure_auth_schema()
     anon = APP.app.test_client()
     open_routes = []
-    calls = api_calls()
+    calls = all_calls()
     for method, path in calls:
         kw = {"json": {}} if method != "GET" else {}
         r = anon.open(concrete(path), method=method, **kw)
         if r.status_code != 401:
-            open_routes.append("%s %s -> %d" % (method, path, r.status_code))
+            to = r.headers.get("Location")
+            open_routes.append("%s %s -> %d%s" % (method, path, r.status_code,
+                                                  " (to %s)" % to if to else ""))
     assert not open_routes, (
-        "%d /api route(s) answer a caller who is not signed in - gate them "
+        "%d route(s) answer a caller who is not signed in - gate them "
         "(require_role / require_screen_view / require_screen_write), or, if "
         "public on purpose, add them to ALLOW with the reason:\n  %s"
         % (len(open_routes), "\n  ".join(open_routes)))
-    print("      %d route/method pairs, all 401 (allow-list: %s)"
-          % (len(calls), ", ".join(sorted(ALLOW))))
+    pages = sum(1 for _m, p in calls if not p.startswith("/api/"))
+    print("      %d route/method pairs, all 401 (%d of them outside /api); allow-list: %s"
+          % (len(calls), pages, ", ".join(sorted(ALLOW))))
+
+
+@test("every allow-list entry names a rule Flask really serves - a stale entry is "
+      "a hole waiting for the next route of that name")
+def t_allow_list_is_real():
+    rules = {}                     # one path can be several rules (/settings GET and POST)
+    for r in APP.app.url_map.iter_rules():
+        rules.setdefault(r.rule, set()).update(r.methods)
+    for rule, (methods, why) in ALLOW.items():
+        assert rule in rules, "ALLOW names %s, which no route serves" % rule
+        assert why.strip(), rule
+        for m in (methods or ()):
+            assert m in rules[rule], "ALLOW lets %s %s through, which it does not serve" % (m, rule)
+
+
+@test("the sign-in shell carries boot_public() and nothing else - no indent, "
+      "customer or count reaches a caller with no session")
+def t_shell_gives_nothing_away():
+    import json as _json
+    anon = APP.app.test_client()
+    html = anon.get("/").get_data(as_text=True)
+    m = re.search(r"window\.ICON_BOOT = (\{.*?\});</script>", html, re.S)
+    assert m, "no ICON_BOOT in the page"
+    assert set(_json.loads(m.group(1))) == {"build", "live", "db_file"}, m.group(1)[:200]
 
 
 @test("the allow-list is only what it says: /api/session gives nothing but "

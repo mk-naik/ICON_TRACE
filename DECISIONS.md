@@ -623,12 +623,18 @@ no one signs twice. [enforcement unverified]
   buttons (an id that is not one of them does nothing); picking a tab writes its
   hash, so a refresh returns to it, and the first tab stays plain `#admin`. The
   form's POST keeps its Super-Admin gate. [built]
-- Every `/api/*` route must be gated except `/api/session` (it says who the
-  cookie belongs to, and nothing else when nobody is signed in). `/api/boot`
-  gates itself. A new ungated route fails `test_anonymous_routes.py`, which
-  walks Flask's url_map. `/api/customers`, `/api/customers/resolve` and
-  `/api/sync/status` are on `require_role(*_R_EVERY)`: every signed-in role,
-  never an anonymous caller. [built]
+- **Every route - pages, documents, fragments and `/api` alike - answers 401 to a
+  caller with no session**, except a named allow-list, each with its reason: the
+  sign-in shell `/` (it carries `boot_public()` only), `/login`, `/logout`,
+  `/enrol`, `/healthz`, `/favicon.ico`, `/static/...`, `/api/session` (it says who
+  the cookie belongs to, and nothing else when nobody is signed in) and `GET
+  /settings` (below). Not a 302 to the sign-in page, not a 404. `/api/boot` gates
+  itself. `test_anonymous_routes.py` walks EVERY rule of Flask's url_map by every
+  method - until 24 Oct 2026 it skipped everything outside `/api/`, which is how
+  the `/invoice` page leaked invoices through two audits - so a new ungated rule of
+  any shape fails it by name. `/api/customers`, `/api/customers/resolve` and
+  `/api/sync/status` are on `require_role(*_R_EVERY)`: every signed-in role, never
+  an anonymous caller. [built]
 - **The pre-v4 `/invoice` page and its `/legacy` redirect are gated** (24 Oct 2026):
   both answered a caller with no session, and `/invoice` listed the last 20
   invoices - number, date, buyer, model, quantity. They are on Tax Invoice's view
