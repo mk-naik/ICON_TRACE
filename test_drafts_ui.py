@@ -172,6 +172,21 @@ def t_packing_operator():
         assert not pg.errors, pg.errors
 
 
+@test("in the browser: an FQC Operator, who can see neither kind, is told none of "
+      "their screens keeps drafts - not that nothing is waiting, while drafts exist")
+def t_fqc_operator():
+    seed()
+    with H.browser() as b:
+        pg = open_drafts(b, role="FQC Operator", login_id="fqc.drafts")
+        assert rows(pg) == [], rows(pg)
+        empty = pg.inner_text("#draftRows")
+        assert "None of your screens keeps drafts" in empty, empty
+        assert "nothing is waiting" not in empty, empty
+        assert pg.inner_text("#dk1d").strip() == "none of your screens keeps drafts", \
+            pg.inner_text("#dk1d")
+        assert not pg.errors, pg.errors
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     only = [a for a in sys.argv[1:] if not a.startswith("-")]

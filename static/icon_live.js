@@ -17306,17 +17306,26 @@ window.gpSetKind = function(k) {
     var mine = all.filter(function (r) { return r.by && r.by === me; });
     var rows = DF.mine ? mine : all;
     var nCh = all.filter(function (r) { return r.kind === 'challan'; }).length;
+    var seeCh = dfCanChallans(), seePl = dfCanPallets();
     set('dk1', all.length);
-    set('dk1d', nCh + ' challan · ' + (all.length - nCh) + ' pallet');
+    set('dk1d', [seeCh ? nCh + ' challan' : '', seePl ? (all.length - nCh) + ' pallet' : '']
+      .filter(Boolean).join(' · ') || 'none of your screens keeps drafts');
     set('dk2', all.reduce(function (s, r) { return s + (r.qty || 0); }, 0));
     var ages = all.map(function (r) { return dfAge(r.at); }).filter(function (a) { return a !== null; });
     set('dk3', ages.length ? Math.max.apply(null, ages) : '—');
     set('dk4', mine.length);
     if (!tb) return;
     if (!rows.length) {
+      /* said only of what this account can see - "nothing is waiting" to an
+         FQC operator, who sees neither kind, was a claim about drafts it
+         cannot read */
       tb.innerHTML = '<tr data-empty><td colspan="8" style="padding:16px;color:var(--ink3)">' +
         (DF.mine ? 'Nothing saved by you is waiting.' :
-         'No challan draft and no open pallet - nothing is waiting to be finished.') +
+         seeCh && seePl ? 'No challan draft and no open pallet - nothing is waiting to be finished.' :
+         seeCh ? 'No challan draft is waiting.' :
+         seePl ? 'No pallet is open.' :
+         'None of your screens keeps drafts: challan drafts belong to Challan, open pallets ' +
+         'to New Pallet.') +
         '</td></tr>';
     } else {
       tb.innerHTML = rows.map(function (r) {

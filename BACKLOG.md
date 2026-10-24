@@ -8465,3 +8465,12 @@ commit.
 - **Test:** `test_demo_leftovers_ui.py` +1 (5): with the dashboard answers blocked, the lists
   hold only "All" - fails on the code before. `test_packlog.py` (6) expects "All models".
   Dashboards e2e 28, customer filters 17, dashboards IST 13, cascade 15, FQC dashboard 26.
+
+### 24 Oct 2026 - Drafts told an FQC Operator "nothing is waiting" while drafts existed (overnight audit)
+- **Found (role crawl):** an account that can see neither challan drafts nor open pallets
+  read "No challan draft and no open pallet - nothing is waiting to be finished." and
+  "0 challan · 0 pallet" - a claim about drafts it cannot read.
+- **Change (icon_live.js, Drafts):** the empty line and the tile's sub-label name only the
+  kinds the account can see; an account that sees neither is told none of its screens keeps
+  drafts, and where they belong.
+- **Test:** `test_drafts_ui.py` +1 (5).
