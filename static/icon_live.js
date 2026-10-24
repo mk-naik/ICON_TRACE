@@ -9341,7 +9341,8 @@ function wireFqcAnomalies() {
     (checks || []).forEach(function (c) {
       if (c.id !== 'seller' && c.id !== 'qr_docno' && c.id !== 'qr_irn') return;
       var ok = c.level === 'ok';
-      h += '<div class="note ' + (ok ? 'n-ok' : 'n-fail') + '" style="font-size:11px;margin:8px 0 0">' +
+      /* n-bad: v4 styles no n-fail, so a failed QR check read as plain text */
+      h += '<div class="note ' + (ok ? 'n-ok' : 'n-bad') + '" style="font-size:11px;margin:8px 0 0">' +
            '<span>' + (ok ? '&#10003;' : '&#10007;') + '</span><span>' + fqcEsc(c.msg) +
            '</span></div>';
     });
@@ -14433,7 +14434,7 @@ function wireFqcAnomalies() {
         'invoice. Create Challan refuses pallets that do not add up to it - no ' +
         'override.</span></div>';
     } else if (isNaN(q) && note && !(note.innerText || '').trim()) {
-      note.innerHTML = '<div class="note n-fail" style="font-size:11.5px"><span>&#10007;</span>' +
+      note.innerHTML = '<div class="note n-bad" style="font-size:11.5px"><span>&#10007;</span>' +
         '<span>No quantity was read from this invoice - type it from the PDF before ' +
         'attaching.</span></div>';
     }

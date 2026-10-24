@@ -8513,3 +8513,11 @@ commit.
 - **Change (icon_live.js, ldSubmit):** the toast names the gate pass it made.
 - **Test:** `test_loading_ui.py` +1 (9): confirm, submit, the toast names the stored gate
   pass; `test_loading.js` 25.
+
+### 24 Oct 2026 - two failure notes used a class v4 does not style (n-fail)
+- **Found (full suite, test_styles.py):** the invoice card's "No quantity was read" note
+  (cf30bc5) was written as `note n-fail`; v4 styles `n-bad`, so it rendered as plain text.
+  Looking for the same: the invoice QR checks (seller / document no. / IRN) wrote a failed
+  check as `n-fail` too - a QR mismatch read as plain text, not red.
+- **Change:** both are `n-bad`.
+- **Test:** `test_styles.py` 9.
