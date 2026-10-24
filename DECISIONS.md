@@ -632,7 +632,9 @@ no one signs twice. [enforcement unverified]
 - **The pre-v4 `/invoice` page and its `/legacy` redirect are gated** (24 Oct 2026):
   both answered a caller with no session, and `/invoice` listed the last 20
   invoices - number, date, buyer, model, quantity. They are on Tax Invoice's view
-  flag, like their sibling page routes. [built]
+  flag, like their sibling page routes. [built] A `/view/<name>` screen fragment asks
+  for a session before it looks the name up: an anonymous caller gets 401 whatever
+  the name, never a 404 that says which screens exist. [built]
 
 ## 10. Deliberately not built — do not build unless asked
 

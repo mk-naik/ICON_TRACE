@@ -7083,6 +7083,11 @@ def view_fragment(name):
                "settings": "frag_settings.html",
                "el-stations": "frag_el_stations.html",
                "el-analysis": "frag_el_analysis.html"}
+    # No session, no answer at all - not even whether a screen of that name
+    # exists: an anonymous /view/<anything> got 404 for an unknown name and
+    # 401 for a real one (24 Oct 2026).
+    if not g.icon_session:
+        return jsonify({"ok": False, "why": "Sign in required."}), 401
     if name not in allowed:
         abort(404)
     # One route, several screens - so gated here by name, not by decorator.

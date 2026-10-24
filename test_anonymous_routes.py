@@ -130,6 +130,22 @@ def t_invoice_page_gated():
         assert "SECRET BUYER" not in body and "LEAK/26-27/1" not in body, path
 
 
+@test("a screen fragment, real name or not, answers 401 with no session - an unknown "
+      "name used to answer 404, telling an anonymous caller which screens exist; a "
+      "signed-in account still gets 404 for a name that is not a screen")
+def t_view_fragment_gated_before_lookup():
+    store.wipe()
+    AUTH.ensure_auth_schema()
+    anon = APP.app.test_client()
+    for name in ("indent", "el-analysis", "items", "nosuch"):
+        r = anon.get("/view/" + name)
+        assert r.status_code == 401, (name, r.status_code)
+    c = APP.app.test_client()
+    AUTH.test_login(c)
+    assert c.get("/view/nosuch").status_code == 404
+    assert c.get("/view/indent").status_code == 200
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

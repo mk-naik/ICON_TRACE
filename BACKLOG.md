@@ -8564,3 +8564,10 @@ commit.
 - **Follow-up (same day):** `test_screen_view_gates.py` keeps a reviewed map of every gated
   read and reported it drifted - the two routes are added to it (9 pass). It should have been
   run before 632672c was pushed.
+
+### 24 Oct 2026 - /view/<name> told an anonymous caller which screens exist (Prompt 1)
+- **Found (probing every rule with no session, for Job B):** a real fragment name answered 401,
+  an unknown one 404 - the name was looked up before the session was asked for.
+- **Change (app.py, view_fragment):** no session is 401 before the name lookup; a signed-in
+  account still gets 404 for a name that is not a screen.
+- **Test:** `test_anonymous_routes.py` +1 (5); `test_screen_view_gates.py` 9.
