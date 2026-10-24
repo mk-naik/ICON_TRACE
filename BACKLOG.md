@@ -8481,3 +8481,16 @@ commit.
 - **Change (icon_live.js):** counted words agree with their number (box / boxes, challan /
   challans); the screen's own word "box" is kept.
 - **Test:** `test_demo_leftovers_ui.py` +1 (6).
+
+### 24 Oct 2026 - Tax Invoice's Reconciliation compared the invoice with itself (overnight audit)
+- **Found (a real upload in Chromium, on a database with no pallet at all):** the card read
+  "Scanned into boxes 36 · Difference 0 · reconciled - Invoice quantity matches the scanned
+  boxes exactly." The live layer sets INV_SCANNED (v4's demo 290) to the invoice's OWN
+  quantity, so the comparison always matched and no pallet was looked at. Pallets meet the
+  invoice at Create Challan, which refuses pallets that do not add up to it (no override).
+- **Change (icon_live.js, after invCheck):** the row reads Pallets - "matched at the
+  challan"; the Difference row is gone; the badge says "ready to attach" (or "on file" for a
+  stored invoice) instead of "reconciled"; the note says the quantity was read from the
+  invoice and where pallets are matched; a blank quantity says to type it. The server's own
+  check (refuses a blank quantity) is unchanged.
+- **Test:** `test_invoice_screen_ui.py` +1 (5). Invoice confirm 5, search 19, upload drop 6.

@@ -14374,8 +14374,49 @@ function wireFqcAnomalies() {
                 'stored invoice is not changed here: if it is wrong, an Admin cancels ' +
                 'it and HO&#8217;s corrected PDF is uploaded.</span></div>';
         }
+        invHonestReconcile();
     };
     window.__invCheckPatched = true;
+  }
+
+  /* "Reconciliation" compared the invoice's quantity with INV_SCANNED - since
+     v4's demo 290 went, the invoice's OWN quantity - so it always read
+     "Scanned into boxes 36 · Difference 0 · reconciled · Invoice quantity
+     matches the scanned boxes exactly" with no pallet looked at (overnight
+     audit, 24 Oct 2026). Pallets meet the invoice when the challan is made:
+     Create Challan refuses pallets that do not add up to it, no override. The
+     card says so, and what it does check here: a quantity, the e-Way Bill. */
+  function invHonestReconcile() {
+    var st = window.INV_STATE;
+    if (!st || !st.fields) return;
+    var row = function (id) {
+      var el = document.getElementById(id);
+      return el && el.closest ? el.closest('.rail-sum') : null;
+    };
+    var scan = row('invScan');
+    if (scan) {
+      scan.querySelector('span').textContent = 'Pallets';
+      document.getElementById('invScan').textContent = 'matched at the challan';
+    }
+    var diff = row('invDiff');
+    if (diff) diff.style.display = 'none';
+    var q = parseInt(String((st.fields.quantity || {}).value || '').replace(/,/g, ''), 10);
+    var btn = document.getElementById('invSubmit');
+    var badge = document.getElementById('invBadge');
+    var note = document.getElementById('invStatus');
+    if (st.viewOnly) {
+      if (badge) { badge.className = 'tag t-mute'; badge.textContent = 'on file'; }
+    } else if (btn && !btn.disabled) {
+      if (badge) { badge.className = 'tag t-pass'; badge.textContent = 'ready to attach'; }
+      if (note) note.innerHTML = '<div class="note n-ok" style="font-size:11.5px">' +
+        '<span>&#10003;</span><span>' + q.toLocaleString() + ' module(s), read from the ' +
+        'invoice. Create Challan refuses pallets that do not add up to it - no ' +
+        'override.</span></div>';
+    } else if (isNaN(q) && note && !(note.innerText || '').trim()) {
+      note.innerHTML = '<div class="note n-fail" style="font-size:11.5px"><span>&#10007;</span>' +
+        '<span>No quantity was read from this invoice - type it from the PDF before ' +
+        'attaching.</span></div>';
+    }
   }
   
   // Invoice payload stringification monkey-patch

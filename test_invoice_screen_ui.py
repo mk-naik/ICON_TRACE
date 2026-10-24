@@ -145,6 +145,22 @@ def _filed():
     return set(os.listdir(H.APP.STORE)) if os.path.isdir(H.APP.STORE) else set()
 
 
+@test("the Reconciliation card does not claim a match with scanned boxes - the invoice "
+      "was compared with its own quantity; pallets meet it at the challan (24 Oct 2026)")
+def t_no_fake_reconciliation():
+    store.wipe()                                 # not one pallet exists
+    with H.browser() as b:
+        pg = H.open_page(b, role="Dispatch Operator", login_id="disp.recon")
+        load(pg, make_pdf(H.TMP, "UINV/26-27/007", 36))
+        card = pg.inner_text("#invBadge").lower() + " | " + pg.inner_text("#invStatus")
+        assert "reconciled" not in card and "scanned boxes" not in card, card
+        assert pg.inner_text("#invScan").strip() == "matched at the challan"
+        assert not pg.is_visible("#invDiff"), "a Difference against no boxes is still shown"
+        assert "ready to attach" in pg.inner_text("#invBadge").lower()
+        assert pg.is_enabled("#invSubmit")
+        assert not pg.errors, pg.errors
+
+
 if __name__ == "__main__":
     _filed_before = _filed()           # the PDFs these tests file are removed after
     width = max(len(n) for n, _ in _results)
