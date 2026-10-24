@@ -527,10 +527,40 @@ def all_customers(include_stock=True, removed=False):
     return sorted(rows, key=lambda c: (not c["is_stock"], c["name"]))
 
 
+def removed_match(text=None, gstin=None):
+    """The REMOVED customer a buyer's GSTIN or name names, or None - what
+    resolve() deliberately does not match, said so that a person restores it
+    rather than adds the same company again under a second code."""
+    g = (gstin or "").strip().upper()
+    if g:
+        hit = next((c for c in ALL if c["removed_at"] and g in c["gstins"]), None)
+        if hit:
+            return hit
+    c = get(text) if text else None
+    return c if c and c["removed_at"] else None
+
+
+def removed_note(c):
+    """'Agni ... (C0001), removed from the master on 24-10-2026 by mk (why)'."""
+    at = str(c.get("removed_at") or "")
+    day = "%s-%s-%s" % (at[8:10], at[5:7], at[0:4]) if len(at) >= 10 else at
+    return ("%s (%s), removed from the customer master on %s by %s (%s)"
+            % (c["name"], c["customer_code"], day, c.get("removed_by"),
+               c.get("removed_reason")))
+
+
 def unknown(text, gstin=None):
     """Report a name we could not place, so it can be added as an alias
-    rather than silently becoming a tenth spelling."""
-    return {"seen": text, "gstin": gstin, "normalised": normalise(text)}
+    rather than silently becoming a tenth spelling - unless it is a customer
+    that was REMOVED: that is said, with the way back (Restore), because
+    adding it again would give one company two codes."""
+    out = {"seen": text, "gstin": gstin, "normalised": normalise(text)}
+    gone = removed_match(text, gstin)
+    if gone:
+        out["removed"] = {"code": gone["customer_code"], "name": gone["name"],
+                          "why": "This is " + removed_note(gone) + " - restore it in "
+                                 "Admin > Customers rather than adding it again."}
+    return out
 
 
 def as_json():
@@ -622,6 +652,15 @@ def problems(rec, current=None, rows=None):
         if holder:
             out.append("%s is already %s's GSTIN (%s) - one GSTIN names one customer."
                        % (g, holder["name"], holder["customer_code"]))
+        elif g not in (current["gstins"] if current else []):
+            # a REMOVED customer's GSTIN too, when this save adds it (24 Oct
+            # 2026): it is that company again - a second code for it would
+            # split its history and leave the first never restorable
+            gone = next((c for c in others if c["removed_at"] and g in c["gstins"]), None)
+            if gone:
+                out.append("%s is the GSTIN of %s - it is that customer: restore it in "
+                           "Admin > Customers rather than adding it under a second code."
+                           % (g, removed_note(gone)))
         if place is not None and (len(place) > 60 or not _PRINTABLE.match(place)):
             out.append("The place beside %s must be at most 60 characters, without < or >." % g)
     texts = ([("name", name)] if name else []) + \
@@ -647,10 +686,10 @@ def problems(rec, current=None, rows=None):
 
 
 def restore_problems(c, rows=None):
-    """Why removed customer c cannot be put back, as sentences. Only a GSTIN can
-    stand in the way: while c was removed, a save could not take a name or
-    alias of its (problems() checks removed customers too), but a GSTIN is
-    checked against live customers only - and another may hold it now."""
+    """Why removed customer c cannot be put back, as sentences: a GSTIN another
+    live customer holds. A save refuses a removed customer's names and (since
+    the same day the masters came in) its GSTINs, so this guards what was
+    written before that, or by hand."""
     rows = ALL if rows is None else rows
     out = []
     for g in c["gstins"]:

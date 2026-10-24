@@ -3187,6 +3187,7 @@ def _challan_precheck(cur, box_ids, invoice_id, exclude_challan_id=None):
 
     invoice = None
     buyer_code = None
+    buyer_gone = None
     if not invoice_id:
         blocking.append({"code": "E-NOINVOICE", "detail":
             "No invoice is selected, so there is nothing to reconcile the "
@@ -3236,6 +3237,12 @@ def _challan_precheck(cur, box_ids, invoice_id, exclude_challan_id=None):
             buyer = customers.resolve(invoice.get("buyer_name"),
                                       invoice.get("buyer_gstin"))
             buyer_code = buyer["customer_code"] if buyer else None
+            # a buyer that is in the master as REMOVED is said to be that -
+            # "unknown" sent people to add the company again, a second code
+            # (24 Oct 2026)
+            if not buyer:
+                buyer_gone = customers.removed_match(invoice.get("buyer_name"),
+                                                     invoice.get("buyer_gstin"))
 
     # One customer across every ticked box. A General Stock box (customer
     # NULL) is not a conflict - it is the case #4 covers, and becomes the
@@ -3260,11 +3267,17 @@ def _challan_precheck(cur, box_ids, invoice_id, exclude_challan_id=None):
         for b in owned:
             cr = customers.get(b["customer"])
             blocking.append({"code": "E-OWNER", "box_id": b["box_id"],
-                "detail": "%s is allocated to %s, and the invoice's buyer (%s) "
-                          "is not in the customer master - only General Stock "
-                          "can go against it."
-                          % (b["label"], cr["name"] if cr else b["customer"],
-                             invoice.get("buyer_name") or "no name")})
+                "detail": ("%s is allocated to %s, and the invoice's buyer is %s - "
+                           "only General Stock can go against it until it is "
+                           "restored in Admin > Customers."
+                           % (b["label"], cr["name"] if cr else b["customer"],
+                              customers.removed_note(buyer_gone)))
+                if buyer_gone else
+                          ("%s is allocated to %s, and the invoice's buyer (%s) "
+                           "is not in the customer master - only General Stock "
+                           "can go against it."
+                           % (b["label"], cr["name"] if cr else b["customer"],
+                              invoice.get("buyer_name") or "no name"))})
     else:
         distinct = sorted(set(b["customer"] for b in owned))
         if len(distinct) > 1:
@@ -3277,7 +3290,17 @@ def _challan_precheck(cur, box_ids, invoice_id, exclude_challan_id=None):
     return {"ok": not blocking, "blocking": blocking, "boxes": boxes,
             "qty": qty, "kw": round(kw, 2), "models": models_seen,
             "invoice": invoice, "buyer_code": buyer_code,
-            "general_stock": general_stock}
+            "general_stock": general_stock,
+            # not a refusal: why only General Stock is offered for this invoice
+            "buyer_removed": {"code": buyer_gone["customer_code"],
+                              "name": buyer_gone["name"],
+                              "why": "The invoice's buyer is " +
+                                     customers.removed_note(buyer_gone) +
+                                     ". Only General Stock is offered for it; a "
+                                     "Super Admin can restore it in Admin > "
+                                     "Customers - adding it again would give the "
+                                     "company a second code."}
+                             if buyer_gone else None}
 
 
 @app.route("/api/challan/checks", methods=["POST"])

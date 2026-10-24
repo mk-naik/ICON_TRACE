@@ -854,8 +854,19 @@ efficiency figure until the production head signs off an ideal cycle time.
   new batch naming it is refused with the reason and the way back; an indent that
   already names it keeps it on an edit, and an existing batch's edit keeps it.
   Restore is refused while another live customer holds one of its GSTINs, or a
-  live model has its wattage and family. Materials still have no restore
-  (section 12). [built]
+  live model has its wattage and family. [built] **[open]** Restore for materials
+  too: section 12's "There is no restore" records what was built then, not a rule
+  against one - so customers and models can be restored and materials cannot.
+- **A removed customer is restored, never added again** (24 Oct, from a review of
+  the build: removed customer, then its invoice months later with the name printed
+  a little differently, "unknown" on the challan screen, so someone adds it - two
+  codes for one company, the first never restorable). A save that ADDS a removed
+  customer's GSTIN - a new customer, or an edit - is refused, naming it and pointing
+  to Restore (its names already were). An invoice whose buyer matches a removed
+  customer says so on Create Challan, beside the pallets ("only General Stock is
+  offered ... restore it ... adding it again would give the company a second
+  code"), refuses that customer's own pallets with the same reason, and
+  /api/customers/resolve's "unknown" answer carries it. [built]
 - **Icon Stock is never removed** - it is the "unallocated" value, not a customer.
   [built]
 - **A model whose serials exist may be removed** (Mukesh, 24 Oct: every model that

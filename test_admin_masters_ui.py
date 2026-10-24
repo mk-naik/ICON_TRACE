@@ -226,6 +226,28 @@ def t_hash_and_derive():
         assert pg.errors == [], pg.errors
 
 
+@test("an invoice whose buyer was removed: Create Challan says so beside the pallets - why "
+      "only General Stock is offered, and that the customer is restored, not added again")
+def t_challan_buyer_note():
+    import test_challan as T                 # its helpers; the database stays the harness's
+    c = T.setup()
+    T.packed_box(c, [600, 601])                                  # General Stock
+    inv = T.make_invoice(qty=2, invoice_no="INV-GONE-1")         # Agni's name and GSTIN
+    r = c.delete("/api/customer/C0001", json={"reason": "gone quiet"})
+    assert r.status_code == 200, r.get_json()
+    with H.browser() as b:
+        pg = H.open_page(b, role="Super Admin", login_id="sa.gone", wait_ms=1200)
+        pg.evaluate("go('challan')")
+        pg.wait_for_timeout(1200)
+        pg.select_option("#chInvoiceSel", str(inv))
+        pg.wait_for_function("(() => { const n = document.getElementById('chBuyerNote'); "
+                             "return n && n.textContent.indexOf('removed from the customer "
+                             "master') >= 0; })()", timeout=10000)
+        txt = pg.text_content("#chBuyerNote")
+        assert "Agni Green Power Limited (Mz) (C0001)" in txt and "restore it" in txt, txt
+        assert pg.errors == [], pg.errors
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     only = [a for a in sys.argv[1:] if not a.startswith("-")]

@@ -12598,8 +12598,27 @@ function wireFqcAnomalies() {
     }
 
     chRenderFails(blocking);
+    chRenderBuyerNote();
     chRenderStatus(hard);
     chUpdateButtons(hard === 0);
+  }
+
+  /* The invoice's buyer is a customer REMOVED from the master (24 Oct 2026):
+     said beside the pallets, so "only General Stock offered" has its reason -
+     and nobody adds the same company again under a second code. Not a
+     refusal: General Stock still goes. */
+  function chRenderBuyerNote() {
+    var fails = chEl('chFails');
+    if (!fails || !fails.parentNode) return;
+    var note = document.getElementById('chBuyerNote');
+    if (!note) {
+      note = document.createElement('div');
+      note.id = 'chBuyerNote';
+      fails.parentNode.insertBefore(note, fails);
+    }
+    var gone = chChecks && chChecks.buyer_removed;
+    note.innerHTML = gone ? '<div class="note n-warn" style="margin:0 0 12px"><span>!</span>' +
+      '<span>' + fqcEsc(gone.why) + '</span></div>' : '';
   }
 
   function chRenderFails(blocking) {

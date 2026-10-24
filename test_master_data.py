@@ -275,14 +275,59 @@ def t_remove_customer_in_use():
     assert audits("customer.remove") and audits("customer.restore")
 
 
-@test("a restore is refused while another customer holds one of its GSTINs, naming it")
-def t_restore_gstin_taken():
+@test("a removed customer's GSTIN is never put on another customer - new, or an edit adding "
+      "it - and the 'unknown' answer for it says it was removed: it is restored, never added "
+      "under a second code; a restore is still refused if another customer holds its GSTIN")
+def t_removed_gstin_not_added_again():
     c = T.setup()
+    ok(c.delete("/api/customer/C0004", json={"reason": "gone quiet"}))
+    # months later its invoice arrives with the name printed a little differently
+    refused(c.post("/api/customer", json={"name": "Agrawal Channel Mills Pvt Ltd (new)",
+                                          "gstins": ["22AAFCA7929N1ZC"]}), 400,
+            "22AAFCA7929N1ZC is the GSTIN of Agrawal Channel Mills Private Limited (C0004), "
+            "removed from the customer master on", "restore it in Admin > Customers")
+    refused(c.put("/api/customer/C0005", json={"gstins": ["22AACCP9830A1ZV",
+                                                          "22AAFCA7929N1ZC"]}), 400,
+            "is the GSTIN of Agrawal Channel Mills Private Limited (C0004)")
+    for q in ({"gstin": "22AAFCA7929N1ZC", "name": "Agrawal Channel Mill"},
+              {"name": "AGRAWAL CHANNEL MILLS"}):
+        d = ok(c.get("/api/customers/resolve", query_string=q))
+        assert d["found"] is False and d["unknown"]["removed"]["code"] == "C0004", d
+        assert "restore it in Admin > Customers" in d["unknown"]["removed"]["why"], d
+    assert "removed" not in ok(c.get("/api/customers/resolve",
+                                     query_string={"name": "Nobody Solar"}))["unknown"]
+    ok(c.post("/api/customer/C0004/restore", json={"reason": "it was not gone"}))
+    assert customers.resolve(None, "22AAFCA7929N1ZC")["customer_code"] == "C0004"
+    # data written before the rule (or by hand) can still collide: Restore says so
     ok(c.delete("/api/customer/C0004", json={"reason": "test"}))
-    d = ok(c.post("/api/customer", json={"name": "Agrawal Channel (new entity)",
-                                         "gstins": ["22AAFCA7929N1ZC"]}))
+    with store.conn() as (cx, cur):
+        cur.execute("UPDATE customer SET gstins=%s WHERE customer_code='C0005'",
+                    (json.dumps(["22AACCP9830A1ZV", "22AAFCA7929N1ZC"]),))
+    store.load_masters()
     refused(c.post("/api/customer/C0004/restore", json={"reason": "test"}), 400,
-            "22AAFCA7929N1ZC is Agrawal Channel (new entity)'s GSTIN now", d["code"])
+            "22AAFCA7929N1ZC is Srvs Solars Limited's GSTIN now (C0005)")
+
+
+@test("an invoice whose buyer was REMOVED from the master: the challan check says so - "
+      "why only General Stock is offered, and the way back - and refuses the buyer's own "
+      "pallet with the same reason")
+def t_challan_buyer_removed():
+    c = T.setup()
+    box = T.packed_box(c, [0, 1], customer="C0001")
+    inv = T.make_invoice(qty=2)                       # Agni's name and GSTIN
+    ok(c.delete("/api/customer/C0001", json={"reason": "gone quiet"}))
+    d = ok(c.post("/api/challan/checks", json={"boxes": [], "invoice_id": inv}))
+    note = d["buyer_removed"]
+    assert note and note["code"] == "C0001", d
+    assert "removed from the customer master" in note["why"] and "restore it" in note["why"], note
+    d = ok(c.post("/api/challan/checks", json={"boxes": [box], "invoice_id": inv}))
+    owner = [b["detail"] for b in d["blocking"] if b["code"] == "E-OWNER"]
+    assert owner and "Agni Green Power Limited (Mz) (C0001), removed from the customer master" \
+        in owner[0] and "until it is restored" in owner[0], d["blocking"]
+    ok(c.post("/api/customer/C0001/restore", json={"reason": "it was not gone"}))
+    d = ok(c.post("/api/challan/checks", json={"boxes": [box], "invoice_id": inv}))
+    assert d["buyer_removed"] is None and not [b for b in d["blocking"]
+                                              if b["code"] == "E-OWNER"], d["blocking"]
 
 
 @test("Icon Stock is never removed - it is the 'unallocated' value, not a customer")

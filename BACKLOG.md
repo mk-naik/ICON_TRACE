@@ -8743,3 +8743,23 @@ commit.
   rename with earlier name, Icon Stock, remove, restore refusal and history; an Admin read-only;
   `#admin/customers` lands on the tab and a removed model's serial still reads (derive).
   `test_master_data_ui.py` (5) updated as above.
+
+### 24 Oct 2026 - one company, two customer codes: a removed customer's GSTIN taken by a new one
+- **What was wrong** (found by a review of f248ae2, and reproduced): remove a customer, then save a
+  "new" one with a slightly different name and the SAME GSTIN - accepted. The removed one could
+  then never be restored (its GSTIN taken) and its history did not show under the new code. How it
+  would happen: a quiet customer is removed; months later its invoice arrives with the name printed
+  differently (the AGNI case the master was built for); Create Challan only offers General Stock and
+  says nothing about why; someone adds the company again.
+- **Cause:** problems() checked a new NAME or alias against removed customers but a new GSTIN only
+  against live ones, and nothing said a buyer resolve() would not match was a removed customer.
+- **Change:** a save that ADDS a removed customer's GSTIN (a new customer, or an edit) is refused,
+  naming the customer and pointing to Restore. icon_customers.removed_match / removed_note:
+  `/api/customers/resolve`'s "unknown" answer carries `removed` (code, name, why); the challan check
+  returns `buyer_removed`, shown on Create Challan under the pallets (not a refusal - General Stock
+  still goes), and the buyer's own pallet is refused with that reason. restore_problems() stays, for
+  data written before the rule or by hand.
+- **Test:** `test_master_data.py` (15): the removed GSTIN refused on a new customer and on an edit,
+  resolve's answer by GSTIN and by name, Restore, the restore guard on a hand-made collision; the
+  challan check's note and its E-OWNER reason. `test_admin_masters_ui.py` (5): the note on Create
+  Challan in Chromium.
