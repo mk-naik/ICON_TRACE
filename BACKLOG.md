@@ -8494,3 +8494,14 @@ commit.
   invoice and where pallets are matched; a blank quantity says to type it. The server's own
   check (refuses a blank quantity) is unchanged.
 - **Test:** `test_invoice_screen_ui.py` +1 (5). Invoice confirm 5, search 19, upload drop 6.
+
+### 24 Oct 2026 - Create Challan's Outputs card: "Save as draft or Create first", and a station nobody records (overnight audit)
+- **Found (Create Challan driven end to end in Chromium):** under a draft just saved, the card
+  still read "Nothing to print yet - Save as draft or Create first", though a draft prints
+  nothing: v1 and v2 print once the challan is created and every pallet is loaded. Its footer
+  said every print is logged "with who printed it and from which station"; the Document &
+  print log records who and when - there is no station column.
+- **Change (icon_live.js):** the empty card says when a challan prints (created, every pallet
+  loaded), with its own line for a draft; the footer says what the log keeps.
+- **Test:** `test_demo_leftovers_ui.py` +1 (7); `test_challan.js` 36; challan edit / cancel /
+  list / print UI pass.

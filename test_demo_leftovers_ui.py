@@ -148,6 +148,28 @@ def t_stock_words():
         assert pg.errors == [], pg.errors
 
 
+@test("Create Challan's Outputs card says when a challan prints - not 'Save as draft or "
+      "Create first' under a draft that prints nothing - and its footer no station")
+def t_challan_outputs_card():
+    import test_challan as T
+    c = T.setup()
+    box = T.packed_box(c, [520, 521])
+    inv = T.make_invoice(qty=2, invoice_no="INV-OUT-1")
+    with H.browser() as b:
+        pg = H.open_page(b, role="Super Admin", login_id="sa.out", wait_ms=1200)
+        pg.evaluate("go('challan')"); pg.wait_for_timeout(1200)
+        card = pg.evaluate("() => document.getElementById('chDocRows').closest('.card').innerText")
+        assert "from which station" not in card, card
+        assert "loaded" in pg.inner_text("#chDocRows"), pg.inner_text("#chDocRows")
+        assert "Save as draft or Create first" not in card, card
+        pg.select_option("#chInvoiceSel", str(inv)); pg.wait_for_timeout(1200)
+        pg.evaluate("(id) => chToggleBox(id, true)", box); pg.wait_for_timeout(1200)
+        pg.click("#chDraftBtn"); pg.wait_for_timeout(1800)
+        rows = pg.inner_text("#chDocRows")
+        assert "A draft has its number but is not printed" in rows, rows
+        assert pg.errors == [], pg.errors
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

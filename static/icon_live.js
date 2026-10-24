@@ -12886,9 +12886,27 @@ function wireFqcAnomalies() {
   function chRenderDocsPlaceholder() {
     var host = chEl('chDocRows');
     if (!host) return;
+    chOutputsFoot();
+    /* It said "Save as draft or Create first" - also under a draft just
+       saved, which prints nothing: v1 and v2 print once the challan is
+       created and every pallet on it is loaded (overnight audit, 24 Oct). */
     host.innerHTML = '<tr><td colspan="2" style="padding:12px;' +
-      'color:var(--ink3);font-size:11.5px">Nothing to print yet — Save ' +
-      'as draft or Create first.</td></tr>';
+      'color:var(--ink3);font-size:11.5px">' +
+      (chChallan && chChallan.status === 'draft'
+        ? 'A draft has its number but is not printed. Create it - its documents ' +
+          'print once every pallet on it is loaded (Loading Verification).'
+        : 'Nothing to print yet - a challan prints once it is created and every ' +
+          'pallet on it is loaded (Loading Verification).') + '</td></tr>';
+  }
+
+  /* v4's footer promised "who printed it and from which station"; the
+     Document & print log records who and when, no station */
+  function chOutputsFoot() {
+    var host = chEl('chDocRows');
+    if (!host || typeof host.closest !== 'function') return;
+    var foot = host.closest('.card') && host.closest('.card').querySelector('.card-f span');
+    if (foot) foot.textContent = 'Every print and export is written to the Document & ' +
+      'print log (Admin) - who, and when.';
   }
 
   /* A challan is addressed by (fy, seq) AND its edit suffix. A bare
