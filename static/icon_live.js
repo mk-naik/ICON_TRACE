@@ -7788,6 +7788,18 @@ function wireFqcAnomalies() {
   /* the box is in the page already, so it is empty before sign-in too */
   searchScreenSetup();
 
+  /* v4's markup ships its sample customers, models and wattages in these
+     filter lists (SAI BABUJI PROJECTS, ISEN590-G2X, 625W ...). Each is
+     refilled from the data once its screen has asked the server - and until
+     then it offered v4's, for seconds on a big database (overnight audit,
+     24 Oct 2026). Only the "All" choice stays until the real ones arrive. */
+  ['mgCust', 'mgModel', 'mgWatt', 'dpCust', 'dpModel', 'pdCust', 'pdModel',
+   'pkCust', 'pkModel', 'fDashCust', 'fDashModel'].forEach(function (id) {
+    var sel = document.getElementById(id);
+    if (!sel) return;
+    while (sel.options.length > 1) sel.remove(1);
+  });
+
   /* v4 ships sample rows in several tables. Where the database has nothing
      yet, say so plainly rather than leaving last month's demo numbers on
      screen - a stale figure that looks real is worse than an empty state. */

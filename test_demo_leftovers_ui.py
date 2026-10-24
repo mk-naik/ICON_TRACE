@@ -107,6 +107,31 @@ def t_go_buttons_follow_access():
         assert pi.errors == [] and sa.errors == [], (pi.errors, sa.errors)
 
 
+@test("before a screen's data arrives, its filter lists hold only 'All' - not v4's "
+      "sample wattages (625W ... 590W) and models")
+def t_filter_lists_before_data():
+    store.wipe(); AUTH.ensure_auth_schema()
+    with H.browser() as b:
+        pg = b.new_page()
+        pg.errors = []
+        pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+        # the answers that refill these lists never come
+        for pat in ("**/api/prod/dashboard*", "**/api/fqc/dashboard*", "**/api/stock_dispatch*"):
+            pg.route(pat, lambda route: route.abort())
+        sid = AUTH.make_session_id(role="Super Admin", login_id="sa.lists")
+        pg.context.add_cookies([{"name": "icon_sid", "value": sid,
+                                 "domain": "127.0.0.1", "path": "/"}])
+        pg.goto(H.base_url() + "/")
+        pg.wait_for_selector("#app.on", timeout=15000)
+        pg.wait_for_timeout(1500)
+        opts = lambda i: pg.evaluate("(i) => Array.from(document.getElementById(i).options)"
+                                     ".map(o => o.text)", i)
+        assert opts("mgWatt") == ["All"], opts("mgWatt")
+        assert opts("dpModel") == ["All"], opts("dpModel")
+        for sel in ("mgCust", "dpCust", "fDashCust"):
+            assert not set(opts(sel)) & {"SAI BABUJI PROJECTS", "SG MEDA", "MSEDCL"}, opts(sel)
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

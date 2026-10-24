@@ -151,7 +151,9 @@ def t_reset():
         vals = pg.eval_on_selector_all("#v-packdash .filters select, #v-packdash .filters input",
                                        "els => els.map(e => e.value)")
         assert vals[0] == clock.shift_day().isoformat(), vals
-        assert vals[1:] == ["All shifts", "All customers", "All", "All", "All"], vals
+        # the model list is the model master's from the start since v4's sample
+        # options stopped holding its place (24 Oct 2026) - so "All models"
+        assert vals[1:] == ["All shifts", "All customers", "All models", "All", "All"], vals
         assert len(calls) == 1 and "from=" + clock.shift_day().isoformat() in calls[0], calls
         n = pg.eval_on_selector_all("#pkBoxRows tr", "t => t.length")
         assert n == 2, n

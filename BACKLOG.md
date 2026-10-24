@@ -8452,3 +8452,16 @@ commit.
 - **Test:** `test_plan_validate_ui.py` +1 (4): unchosen, asked for before any request, an
   edit shows "pre"; `test_custom_serials_ui.py` (5) chooses it and checks it is stored.
   Batch copy 8, withdraw 3, material remove 9, BOM match 5, custom serials 14, boot 9.
+
+### 24 Oct 2026 - filter lists offered v4's sample customers, models and wattages until data came (overnight audit)
+- **Found (role crawl, Production Incharge, real-data copy):** Management Overview's Model and
+  Wattage lists read ISEN625-G12R ... ISEN590-G2X and 625W ... 590W - v4's markup - for the
+  seconds before its first answer; Stock & Dispatch's Model the same; the customer lists
+  carried SAI BABUJI PROJECTS / SG MEDA / MSEDCL.
+- **Change (icon_live.js, at load):** those lists keep only their "All" choice until their
+  screen's data refills them. The Packing Log's model list is now filled from the model
+  master at once (its first choice reads "All models"), as its code always meant to when
+  the list is empty.
+- **Test:** `test_demo_leftovers_ui.py` +1 (5): with the dashboard answers blocked, the lists
+  hold only "All" - fails on the code before. `test_packlog.py` (6) expects "All models".
+  Dashboards e2e 28, customer filters 17, dashboards IST 13, cascade 15, FQC dashboard 26.
