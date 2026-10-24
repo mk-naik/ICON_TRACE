@@ -8561,3 +8561,6 @@ commit.
   their screens' view flags - 401 with no session.
 - **Test:** `test_anonymous_routes.py` +1 (4): an invoice on file, both paths 401 and no buyer
   or invoice number in the body.
+- **Follow-up (same day):** `test_screen_view_gates.py` keeps a reviewed map of every gated
+  read and reported it drifted - the two routes are added to it (9 pass). It should have been
+  run before 632672c was pushed.

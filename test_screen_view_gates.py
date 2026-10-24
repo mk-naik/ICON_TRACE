@@ -115,6 +115,9 @@ EXPECTED = {
     "pallet_sheet": {("pack", "repack", "packdash")},
     "api_packing_log": {("packdash",)},
     "view_invoice_pdf": {("invoice",)},
+    # the pre-v4 invoice page and its redirect, gated 24 Oct 2026 - they listed
+    # invoices with buyer names to anyone
+    "invoice_upload": {("invoice",)}, "home": {("invoice",)},
     "api_invoices_list": {("invoice", "challan")},
     "api_invoice_get": {("invoice", "challan")},
     "api_challan_available_boxes": {("challan",)}, "api_challan_get": {("challan",)},
