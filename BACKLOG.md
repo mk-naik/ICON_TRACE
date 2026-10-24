@@ -8521,3 +8521,12 @@ commit.
   check as `n-fail` too - a QR mismatch read as plain text, not red.
 - **Change:** both are `n-bad`.
 - **Test:** `test_styles.py` 9.
+
+### 24 Oct 2026 - two browser tests that failed by the clock or under load
+- **Found (full suite, 6 files at a time):** `test_el_analysis_ui.py`'s dashboard card test
+  seeds EL images 200-300 minutes before now and read the card on its default window, Today
+  (the factory day from 06:00) - which before ~11:00 does not reach back to them, so it failed
+  every morning. `test_drafts_ui.py`'s Open-on-the-older-pallet waited 10 s for three requests
+  and missed under load (it passes alone).
+- **Change (tests only):** the card is read on its 8 hours window; the wait is 25 s.
+- **Test:** 14 and 5 pass.

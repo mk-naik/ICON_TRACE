@@ -464,6 +464,13 @@ def t_dashboard_card():
         cols = pg.eval_on_selector_all("#pdElTop .grid.g3 > div > div:first-child b",
                                        "bs => bs.map(b => b.textContent)")
         assert cols == ["Pre-EL", "Post EL", "Final EL"], cols
+        # the world's images are 5 hours old at most; the card opens on Today (the
+        # factory day from 06:00), which before ~11:00 does not reach back to them -
+        # the test failed every morning (24 Oct 2026). 8 hours always does.
+        pg.click("#pdElTop button >> text='8 hours'")
+        pg.wait_for_function("document.querySelector('#pdElTop .btn-primary').textContent === '8 hours'",
+                             timeout=10000)
+        pg.wait_for_timeout(500)
         text = pg.text_content("#pdElTop")
         assert "passed by the machine" in text, text          # Post EL: continuous only
         assert "first images" in text, text

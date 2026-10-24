@@ -151,7 +151,7 @@ def t_open_pallet():
         pg = open_drafts(b)
         pg.click("#draftRows tr:has-text('%s') button:has-text('Open')" % older["label"])
         pg.wait_for_function("(l) => document.getElementById('boxNo').textContent.trim() === l",
-                             arg=older["label"], timeout=10000)
+                             arg=older["label"], timeout=25000)   # three requests; slow under load
         assert pg.evaluate("document.querySelector('.view.on').id") == "v-pack"
         pg.wait_for_timeout(500)
         assert pg.inner_text("#pfill").strip() == "1", pg.inner_text("#pfill")
