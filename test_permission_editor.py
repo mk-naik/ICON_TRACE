@@ -228,7 +228,8 @@ def t_editor_on_the_page():
         assert "Permissions saved for Dashrath Pal" in pg.inner_text("#toast")
         assert pg.errors == [], pg.errors
 
-    want = full({"disp", "invoice", "challan", "loadver", "gp", "mgmt"}, {"disp", "gp"})
+    # Stock & Dispatch is read-only since 24 Oct 2026 - no Write tick to keep
+    want = full({"disp", "invoice", "challan", "loadver", "gp", "mgmt"}, {"gp"})
     assert perms("dp1") == want, perms("dp1")
     # the edited account's NEXT request - same session, no sign-out
     assert target.get("/api/session").get_json()["perms"] == want

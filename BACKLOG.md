@@ -8763,3 +8763,15 @@ commit.
   resolve's answer by GSTIN and by name, Restore, the restore guard on a hand-made collision; the
   challan check's note and its E-OWNER reason. `test_admin_masters_ui.py` (5): the note on Create
   Challan in Chromium.
+
+### 24 Oct 2026 - Stock & Dispatch is a read-only screen (the fix 5a58c05's entry waited for)
+- **What was wrong:** its Write tick gated no route since Job C retired `/dispatch` - one false tick,
+  not nine (the review that raised it agreed: the editor already shows the other nine screens as
+  read only).
+- **Change:** `disp` added to `icon_auth.READ_ONLY_SCREENS` (Mukesh's go, 24 Oct). The editor says
+  "read only" for it; a new account gets write off; the page no longer marks the screen view-only
+  for an account without its write flag, so "Create challan" is judged by whether the Challan screen
+  opens. Stored rows are left alone - a write flag on a screen with nothing to save gates nothing.
+- **Test:** `test_permission_editor.py` (6): saving Dashrath's case in the editor keeps writes on
+  Gate Pass only. `test_dashrath_case.py` (6) wording and its write set (Gate Pass);
+  `test_screen_perms.py` (20) reads the list; checked in Chromium: 22 screens, 10 read only.

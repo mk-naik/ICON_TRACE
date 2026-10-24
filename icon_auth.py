@@ -277,8 +277,14 @@ SUBVIEWS = {
 # away, which this round's own rule forbids: nobody's access changes.
 #   elst - EL Stations (16 Oct 2026) lists what the EL poller recorded; GET only.
 #   elan - EL Analysis (17 Oct 2026) reads the same index into figures; GET only.
+#   disp - Stock & Dispatch (24 Oct 2026). Its one write was the pre-v4
+#       /dispatch page, retired that morning; its "Create challan" opens the
+#       Challan screen, whose own flags decide. Its Write tick gated nothing
+#       and said it did - in the very case per-user permissions were built
+#       for (Dashrath: "write: Stock & Dispatch and Gate Pass").
 READ_ONLY_SCREENS = frozenset(("mgmt", "search", "proddash", "dash",
-                               "packdash", "hold", "drafts", "elst", "elan"))
+                               "packdash", "hold", "drafts", "elst", "elan",
+                               "disp"))
 
 # Screens added after accounts already existed. Every NEW account gets a row
 # per screen when it is created; an existing one has none for a screen added

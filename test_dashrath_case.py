@@ -10,12 +10,16 @@ permissions, which Mukesh sets in the editor afterwards:
     view  - the five Dispatch screens (Stock & Dispatch, Tax Invoice,
             Challan, Loading Verification, Gate Pass) and Management
             Overview. Nothing else.
-    write - Stock & Dispatch and Gate Pass only.
+    write - Gate Pass. (Stock & Dispatch was here too. Since 24 Oct 2026 it
+            is a read-only screen: its one write, the pre-v4 /dispatch page,
+            was retired, and the editor no longer offers a Write tick that
+            gated nothing.)
 
-So: Challan and Invoice open and show real data, and refuse a save;
-Stock & Dispatch and Gate Pass save; New Pallet and Repack (the whole
-Packing section), Production and FQC are unreachable; the overview
-landing page shows. Asserted on the server, then on the running page.
+So: Challan and Invoice open and show real data, and refuse a save; Gate
+Pass saves; Stock & Dispatch shows, its Create challan left to the Challan
+screen's own flags; New Pallet and Repack (the whole Packing section),
+Production and FQC are unreachable; the overview landing page shows.
+Asserted on the server, then on the running page.
 """
 
 import csv, datetime, os, sys, tempfile, traceback
@@ -42,7 +46,7 @@ def test(name):
 
 DISPATCH = ("disp", "invoice", "challan", "loadver", "gp")
 VIEW = set(DISPATCH) | {"mgmt"}
-WRITE = {"disp", "gp"}
+WRITE = {"gp"}            # Stock & Dispatch is read-only since 24 Oct 2026
 LOGIN = "dashrath"
 _GATE_403 = "Not permitted for your role."
 RO_REASON = "Your account can view this screen but not save changes."

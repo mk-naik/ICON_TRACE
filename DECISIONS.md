@@ -601,6 +601,13 @@ no one signs twice. [enforcement unverified]
   are role-gated, never per-user; master-data changes are Super Admin only.
 - Per-screen flags cannot express a per-action rule, so action limits use an
   inline role check (`_require_role`). "Cancel a challan" is one of them.
+- **A screen nothing is saved from shows "read only", with no Write tick**, in the
+  per-user editor - the ten of `icon_auth.READ_ONLY_SCREENS`. Stock & Dispatch joined
+  them on 24 Oct 2026: its one write, the pre-v4 `/dispatch` page, was retired that
+  morning, and its Write tick had gated nothing since while saying it did - in the
+  very case per-user permissions were built for (Dashrath: "write: Stock & Dispatch
+  and Gate Pass"). Its "Create challan" opens the Challan screen, whose own flags
+  decide. A write flag already stored on a read-only screen gates nothing. [built]
 - **A screen added after the accounts exist is given once, by role** (`icon_auth.
   LATER_SCREENS`): each account with no row for it gets its role's default at start-up,
   recorded as an auth event; a row that exists - an Admin's own choice - is never
