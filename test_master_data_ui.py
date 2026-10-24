@@ -117,8 +117,9 @@ def t_edit_persists():
         assert pg.evaluate("(MATERIALS.filter(m => m.n === 30)[0] || {}).makes") == was + ["New Test Vendor"]
         pg2 = admin_page(b, "Super Admin", "sa1")                                # another session
         assert pg2.evaluate("(MATERIALS.filter(m => m.n === 30)[0] || {}).makes") == was + ["New Test Vendor"]
-        # the lists that are NOT saved say so instead of pretending
-        pg2.evaluate("editRecord('model', 'ISEN625-G12R')")
+        # the lists that are NOT saved say so instead of pretending (models
+        # are saved since 24 Oct 2026 - test_admin_masters_ui.py)
+        pg2.evaluate("editRecord('station', 'x')")
         pg2.wait_for_timeout(300)
         assert not pg2.evaluate("document.getElementById('mdl').classList.contains('on')")
         assert pg2.toasts[-1] == PAGE_ONLY, pg2.toasts
@@ -162,15 +163,16 @@ def t_admin_reads_master():
         print("      toasts: %s" % pg.toasts)
 
 
-@test("models and stations are edited in the page and saved nowhere - no "
-     "role is offered that, each control says why; Reason codes has no edit "
-     "at all and its + Add code says why")
+@test("stations are edited in the page and saved nowhere - no role is offered "
+     "that, each control says why; Reason codes has no edit at all and its + "
+     "Add code says why (models left this list on 24 Oct 2026: they are saved "
+     "now - test_admin_masters_ui.py)")
 def t_page_only_lists_offered_to_nobody():
     world()
     with H.browser() as b:
         for role, lid in (("Super Admin", "sa1"), ("Admin", "admin1")):
             pg = admin_page(b, role, lid)
-            for pane, kind in (("models", "model"), ("stations", "station")):
+            for pane, kind in (("stations", "station"),):
                 tab(pg, pane)
                 ctl = pg.locator('#ad-%s [onclick*="Record(\'%s\'"]' % (pane, kind))
                 assert ctl.count() > 0, (role, pane)
@@ -186,7 +188,7 @@ def t_page_only_lists_offered_to_nobody():
             assert (add.get_attribute("title") or "").startswith("Not built yet"), \
                 add.get_attribute("title")
             assert pg.locator('#ad-reasons [onclick*="Record(\'reason\'"]').count() == 0
-            pg.evaluate("editRecord('model', 'x')"); pg.wait_for_timeout(200)
+            pg.evaluate("editRecord('station', 'x')"); pg.wait_for_timeout(200)
             assert pg.toasts[-1] == PAGE_ONLY, pg.toasts
             assert pg.errors == [], pg.errors
             pg.close()

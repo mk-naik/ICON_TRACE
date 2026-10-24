@@ -952,10 +952,12 @@
    * the server on save.
    *
    * Decided here, once, per kind of record:
-   *   material             saved to the server - a Super Admin edits it;
-   *                        anyone else sees it read-only, and is told why
-   *   model, station,      v4 edits these in the page and saves nothing,
-   *   reason, user         so the change is gone on reload - a demo control
+   *   material, model,     saved to the server - a Super Admin edits it;
+   *   customer             anyone else sees it read-only, and is told why
+   *                        (model and customer since 24 Oct 2026, through
+   *                        their own forms - the masters block, not v4's)
+   *   station, reason,     v4 edits these in the page and saves nothing,
+   *   user                 so the change is gone on reload - a demo control
    *                        on a live screen, offered to nobody
    *
    * icon_trace.html is v4's and may not be edited, so once this has allowed
@@ -965,8 +967,8 @@
   var MASTER_REASON = 'Only a Super Admin can change master data. You can view it.';
   var PAGE_ONLY_REASON = 'This list is not saved to the server yet, so it cannot be ' +
                          'edited here.';
-  var MASTER_KINDS = { material: 'saved', model: 'page', station: 'page',
-                       reason: 'page', user: 'page' };
+  var MASTER_KINDS = { material: 'saved', model: 'saved', customer: 'saved',
+                       station: 'page', reason: 'page', user: 'page' };
 
   var _roleDuringV4 = null;   /* the REAL role while a v4 call runs as 'Admin' */
 
@@ -1121,7 +1123,7 @@
         _masterLock(el, MASTER_REASON);
       });
     }
-    ['ad-materials', 'ad-stations'].forEach(function (id) {
+    ['ad-materials', 'ad-stations', 'ad-models', 'ad-customers'].forEach(function (id) {
       var pane = document.getElementById(id);
       if (!pane || pane.querySelector(':scope > .ro-note')) return;
       var n = document.createElement('div');
@@ -17305,6 +17307,548 @@ window.gpSetKind = function(k) {
     window.adTab.__loaders = true;
     window.adTab.__hashWrapped = true;
   }
+
+  /* ==== Customer and model masters (24 Oct 2026) =========================
+   *
+   * They were lists in icon_customers.py / icon_models.py: a new customer or
+   * model meant a code change and a redeploy. They are tables now, kept here -
+   * Admin > Models (v4's tab, which only showed the list) and Admin >
+   * Customers, a tab of its own after Models (Mukesh, 24 Oct). The server
+   * decides everything (a Super Admin writes, an Admin reads - DECISIONS 13);
+   * a refusal is shown in the form it came from, every sentence of it.
+   *
+   * A code is never edited. Remove says first what still names the row - what
+   * is IN FLIGHT first - and asks why; Restore puts a removed row back;
+   * History lists every create, edit, removal and restore with the row before
+   * and after. */
+  var MD = { models: null, removed: [], families: {} };
+  var CU = { rows: null, removed: [], next: '', q: '' };
+
+  function msVal(id) { var e = document.getElementById(id); return e ? e.value : ''; }
+  function msLines(id) {
+    return msVal(id).split(/\r?\n/).map(function (s) { return s.trim(); })
+      .filter(function (s) { return s; });
+  }
+  function msFld(label, inner, hint) {
+    return '<div class="fld"><label>' + label + '</label>' + inner +
+      (hint ? '<div class="hint">' + hint + '</div>' : '') + '</div>';
+  }
+  function msInp(id, v, attrs) {
+    return '<input id="' + id + '" value="' + fqcEsc(v == null ? '' : String(v)) + '"' +
+      (attrs || '') + '>';
+  }
+  function msOpen(title, sub, body, foot) {
+    var host = document.getElementById('mdlGeneric'), mdl = document.getElementById('mdl');
+    if (!host || !mdl) return null;
+    var t = document.getElementById('mdlTitle'), s = document.getElementById('mdlSub');
+    if (t) t.textContent = title;
+    if (s) s.textContent = sub || '';
+    if (typeof modalMode === 'function') modalMode(true);
+    host.innerHTML = '<div class="card" style="margin:0"><div class="card-b">' +
+      '<div data-problems></div>' + body + '</div><div class="card-f">' + foot +
+      '<button class="btn btn-ghost" onclick="closeModal()">' + (foot ? 'Cancel' : 'Close') +
+      '</button></div></div>';
+    mdl.classList.add('on');
+    return host;
+  }
+  /* every sentence of a refusal, inside the form that was refused */
+  function msRefused(host, d) {
+    var list = (d && d.problems && d.problems.length) ? d.problems :
+      [(d && d.why) || 'Not saved.'];
+    var box = host && host.querySelector('[data-problems]');
+    if (!box) { if (typeof toast === 'function') toast(list.join(' ')); return; }
+    box.innerHTML = '<div class="note n-bad" style="margin:0 0 10px"><span>!</span><span>' +
+      list.map(function (p) { return fqcEsc(p); }).join('<br>') + '</span></div>';
+  }
+  function msSend(host, btn, path, method, body, done) {
+    /* the last refusal goes as the form is sent again - only the answer to
+       this save is shown */
+    var box = host && host.querySelector('[data-problems]');
+    if (box) box.innerHTML = '';
+    btn.disabled = true;
+    api(path, { method: method, body: JSON.stringify(body || {}) }).then(function (d) {
+      btn.disabled = false;
+      if (!d || d.ok === false) { msRefused(host, d); return; }
+      if (typeof closeModal === 'function') closeModal();
+      done(d);
+    }).catch(function (e) {
+      btn.disabled = false;
+      msRefused(host, { why: 'Not saved - ' + e.message });
+    });
+  }
+  function msLock() {
+    return _isSuperAdmin() ? '' : ' disabled title="' + fqcEsc(MASTER_REASON) + '"';
+  }
+  function msWhen(r) {
+    return fqcEsc(String(r.at || '').replace('T', ' ').slice(0, 16)) + ' · ' + fqcEsc(r.by || '');
+  }
+  function msReasonFld(id, what) {
+    return msFld('Why is it being ' + what + '? (required)',
+      '<textarea id="' + id + '" rows="3"></textarea>');
+  }
+  /* a removed list under a table, with Restore */
+  function msRemovedCard(hostId, beforeEl, title, rows, label, act) {
+    var host = document.getElementById(hostId);
+    if (!host && beforeEl) {
+      host = document.createElement('div');
+      host.id = hostId;
+      beforeEl.parentNode.insertBefore(host, beforeEl);
+    }
+    if (!host) return;
+    host.innerHTML = !rows.length ? '' :
+      '<div class="card-b" style="border-top:1px solid var(--line)">' +
+      '<div style="font-size:11px;font-weight:700;color:var(--ink3);text-transform:uppercase;' +
+      'letter-spacing:.6px;margin-bottom:6px">' + title + ' (' + rows.length + ')</div>' +
+      '<table><tbody>' + rows.map(function (r) {
+        return '<tr data-key="' + fqcEsc(r.key) + '"><td style="font-weight:600">' + label(r) +
+          '</td><td style="font-size:11.5px;color:var(--ink3)">' + msWhen(r.removed) +
+          '<div>' + fqcEsc(r.removed.reason || '') + '</div></td><td style="white-space:nowrap">' +
+          '<button class="btn btn-ghost btn-sm" data-act="' + act + '-restore"' + msLock() +
+          '>Restore…</button> <button class="btn btn-ghost btn-sm" data-act="' + act +
+          '-history">History</button></td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  /* ---- History: every revision, the fields it changed ------------------ */
+  var MS_SKIP = { created_at: 1, created_by: 1, updated_at: 1, updated_by: 1, seq: 1,
+                  removed_at: 1, removed_by: 1, removed_reason: 1 };
+  /* a column under the name its form gives it */
+  var MS_LABEL = { former_names: 'earlier names', erp_code: 'ERP code', gstins: 'GSTINs',
+                   locations: 'GSTIN places', hsn: 'HSN', frame_mm: 'frame (mm)',
+                   cells_per_string: 'cells per string', pallet_ceiling: 'pallet ceiling' };
+  function msNum(n) { return Number(n || 0).toLocaleString('en-IN'); }
+  function msShow(v) {
+    if (v == null || v === '') return '—';
+    if (typeof v === 'object') return Array.isArray(v) ? v.join(', ') || '—' : JSON.stringify(v);
+    return String(v);
+  }
+  function msHistory(kind, key) {
+    api(kind + '/' + encodeURIComponent(key) + '/history').then(function (d) {
+      var revs = (d && d.revisions) || [];
+      var rows = revs.map(function (r) {
+        var b = r.before || {}, a = r.after || {}, what = '';
+        if (r.action === 'create') what = 'Added';
+        else if (r.action === 'remove') what = 'Removed - ' + fqcEsc(a.removed_reason || '');
+        else if (r.action === 'restore') what = 'Restored' +
+          ((r.detail && r.detail.reason) ? ' - ' + fqcEsc(r.detail.reason) : '');
+        else {
+          what = Object.keys(a).filter(function (k) {
+            return !MS_SKIP[k] && JSON.stringify(a[k]) !== JSON.stringify(b[k]);
+          }).map(function (k) {
+            return '<b>' + fqcEsc(MS_LABEL[k] || k.replace(/_/g, ' ')) + '</b>: ' + fqcEsc(msShow(b[k])) +
+              ' &rarr; ' + fqcEsc(msShow(a[k]));
+          }).join('<br>') || 'Saved, nothing changed';
+        }
+        return '<tr><td class="mono" style="font-size:11px;white-space:nowrap">' +
+          fqcEsc(String(r.at || '').replace('T', ' ').slice(0, 16)) + '</td><td>' +
+          fqcEsc(r.actor || '') + '</td><td>' + what + '</td></tr>';
+      });
+      msOpen('History of ' + key, 'Every change, the row before and after - newest first',
+        '<table data-history><thead><tr><th>When</th><th>Who</th><th>What changed</th></tr></thead>' +
+        '<tbody>' + (rows.join('') || '<tr><td colspan="3" class="hint">Nothing changed since ' +
+        'the master was seeded from the old list.</td></tr>') + '</tbody></table>', '');
+    }).catch(function (e) { if (typeof toast === 'function') toast('No history - ' + e.message); });
+  }
+
+  /* ---- Admin > Models -------------------------------------------------- */
+  function mdLoad() {
+    return api('admin/models').then(function (d) {
+      if (!d || !d.models) return;
+      MD.models = d.models;
+      MD.removed = d.removed || [];
+      MD.families = d.families || {};
+      /* v4's MODELS, which derive() reads every serial against - the removed
+         ones too, after the live ones, as the boot payload sends them */
+      if (typeof MODELS !== 'undefined') {
+        MODELS.length = 0;
+        MD.models.concat(MD.removed).forEach(function (m) {
+          MODELS.push({ watt: String(m.wattage), tc: m.tc, model: m.model, series: m.family,
+            cells: m.cells + ' half cell', ct: m.family, size: m.size || '',
+            produced: !!m.produced, lh: m.erp_code || '', removed: !!m.removed });
+        });
+      }
+      mdPaint();
+    });
+  }
+  function mdPaint() {
+    var tb = document.getElementById('modelRows');
+    if (!tb || !MD.models) return;
+    var head = tb.parentNode.querySelector('thead tr');
+    if (head) head.innerHTML = '<th>Model</th><th>Watt</th><th>Type char</th><th>Family</th>' +
+      '<th>Cells</th><th>Frame · pallet</th><th>Status</th><th>External ERP code</th><th></th>';
+    var lock = msLock();
+    tb.innerHTML = MD.models.map(function (m) {
+      /* an authorised-only model is dimmed as v4 had it - its data, not its buttons */
+      var dim = m.produced ? '' : ' style="opacity:.62"';
+      return '<tr data-key="' + fqcEsc(m.model) + '">' +
+        '<td class="mono"' + dim + '><b>' + fqcEsc(m.model) + '</b></td>' +
+        '<td class="mono"' + dim + '>' + m.wattage + 'W</td><td class="mono"' + dim + '>' +
+        fqcEsc(m.tc) + '</td><td' + dim + '>' + fqcEsc(m.family) + '</td><td' + dim + '>' + m.cells +
+        (m.cells_per_string && m.strings ? ' <span class="hint">(' + m.cells_per_string + ' × ' +
+          m.strings + ')</span>' : '') + '</td>' +
+        '<td class="mono" style="font-size:11px' + (m.produced ? '' : ';opacity:.62') + '">' +
+        m.frame_mm + ' mm · ' + m.pallet_ceiling + '</td>' +
+        '<td' + dim + '>' + (m.produced ? '<span class="tag t-pass">produced</span>' :
+          '<span class="tag t-mute">authorised only</span>') + '</td>' +
+        '<td class="mono" style="font-size:11px' + (m.produced ? '' : ';opacity:.62') + '">' +
+        (m.erp_code ? fqcEsc(m.erp_code) : '<span class="tag t-rev">to map</span>') + '</td>' +
+        '<td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" data-act="md-edit"' +
+        lock + '>Edit</button> <button class="btn btn-ghost btn-sm" data-act="md-remove"' + lock +
+        '>Remove…</button> <button class="btn btn-ghost btn-sm" data-act="md-history">History' +
+        '</button></td></tr>';
+    }).join('') || '<tr data-empty><td colspan="9" class="hint">No model in the master.</td></tr>';
+    var cnt = document.getElementById('mdCount');
+    if (cnt) cnt.textContent = MD.models.length + ' in the master · ' +
+      MD.models.filter(function (m) { return m.produced; }).length + ' produced' +
+      (MD.removed.length ? ' · ' + MD.removed.length + ' removed' : '');
+    var card = tb.closest('.card');
+    msRemovedCard('mdRemoved', card && card.querySelector(':scope > .card-f'),
+      'Removed from the master', MD.removed.map(function (m) {
+        return { key: m.model, removed: m.removed, m: m };
+      }), function (r) {
+        return '<span class="mono">' + fqcEsc(r.m.model) + '</span> <span class="hint">' +
+          r.m.wattage + ' W ' + fqcEsc(r.m.family) + '</span>';
+      }, 'md');
+  }
+  function mdForm(code) {
+    var m = code ? (MD.models || []).filter(function (x) { return x.model === code; })[0] : null;
+    if (code && !m) { if (typeof toast === 'function') toast(code + ' is not in the list - reload the page (F5).'); return; }
+    var v = m || { model: '', wattage: '', family: 'G12R', cells: 132, cells_per_string: 22,
+                   strings: 6, produced: false, hsn: '85414012', erp_code: '', frame_mm: 30,
+                   pallet_ceiling: 36, size: '' };
+    var fams = Object.keys(MD.families).length ? MD.families : { G12R: 'R', G2X: 'G', BI: 'B' };
+    var host = msOpen(m ? 'Edit model ' + m.model : 'Add a model',
+      'Save writes it to the database - it stays after a refresh and applies to everyone.',
+      msFld('Model code', msInp('mdCode', v.model, m ? ' disabled' :
+          ' placeholder="ISEN640-G12R" style="text-transform:uppercase"'),
+        m ? 'Never changed - it is the key every serial, indent line and pallet stores. To ' +
+            'change it, add the new model and remove this one.' :
+            'Typed once, never changed. ISEN&lt;watts&gt;-&lt;family&gt; must agree with the ' +
+            'wattage and family below.') +
+      msFld('Wattage (W)', msInp('mdWatt', v.wattage, ' type="number" min="100" max="999"'),
+        'The serial carries it: ICON640R… cannot be generated until 640 W is here.') +
+      msFld('Family', '<select id="mdFam"' + (m ? ' disabled' : '') + '>' +
+        Object.keys(fams).map(function (f) {
+          return '<option value="' + fqcEsc(f) + '"' + (f === v.family ? ' selected' : '') + '>' +
+            fqcEsc(f) + ' - type character ' + fqcEsc(fams[f]) + '</option>';
+        }).join('') + '</select>', m ? 'Fixed - it is the middle of the item codes indent ' +
+          'lines store.' : 'Decides the serial\'s type character and the item codes.') +
+      '<div style="display:flex;gap:10px">' +
+        msFld('Cells', msInp('mdCells', v.cells, ' type="number"')) +
+        msFld('Cells per string', msInp('mdCps', v.cells_per_string, ' type="number"')) +
+        msFld('Strings', msInp('mdStr', v.strings, ' type="number"')) + '</div>' +
+      '<div style="display:flex;gap:10px">' +
+        msFld('Frame (mm)', msInp('mdFrame', v.frame_mm, ' type="number"')) +
+        msFld('Pallet ceiling', msInp('mdCeil', v.pallet_ceiling, ' type="number"'),
+          'What a pallet of it may hold.') +
+        msFld('HSN', msInp('mdHsn', v.hsn)) + '</div>' +
+      msFld('Module size H &amp; F', msInp('mdSize', v.size)) +
+      msFld('External ERP code', msInp('mdErp', v.erp_code),
+        'The other system holds DCR and NDCR as separate items - mapped in, never invented here.') +
+      '<label style="display:flex;gap:6px;align-items:center;font-size:12.5px">' +
+        '<input type="checkbox" id="mdProd"' + (v.produced ? ' checked' : '') + '> Produced yet ' +
+        '<span class="hint">- authorised on the back label is a different fact</span></label>',
+      '<button class="btn btn-primary" data-save>' + (m ? 'Save' : 'Add model') + '</button>');
+    if (!host) return;
+    host.querySelector('[data-save]').onclick = function () {
+      var body = { model: msVal('mdCode').trim().toUpperCase(), wattage: msVal('mdWatt'),
+        family: msVal('mdFam'), cells: msVal('mdCells'), cells_per_string: msVal('mdCps'),
+        strings: msVal('mdStr'), frame_mm: msVal('mdFrame'), pallet_ceiling: msVal('mdCeil'),
+        hsn: msVal('mdHsn'), size: msVal('mdSize'), erp_code: msVal('mdErp'),
+        produced: !!(document.getElementById('mdProd') || {}).checked };
+      msSend(host, this, m ? 'model/' + encodeURIComponent(m.model) : 'model',
+        m ? 'PUT' : 'POST', body, function (d) {
+          if (typeof toast === 'function') toast(d.changed === false ? 'Nothing was changed.' :
+            (m ? m.model + ' saved.' : d.model.model + ' added to the master.'));
+          mdLoad();
+        });
+    };
+  }
+  function mdRemove(code) {
+    api('model/' + encodeURIComponent(code) + '/use').then(function (u) {
+      if (!u || u.ok === false) { if (typeof toast === 'function') toast((u && u.why) || 'Not found.'); return; }
+      var lines = (u.open || []).map(function (o) {
+        return fqcEsc(o.indent_no) + ' item ' + o.line + ' (' + msNum(o.left) + ' of ' +
+          msNum(o.qty) + ')';
+      }).join(', ') + (u.open_count > (u.open || []).length ? ', …' : '');
+      var flight = u.to_plan ?
+        '<div class="note n-bad" style="margin:0 0 10px" data-flight><span>!</span><span><b>In ' +
+        'flight: ' + msNum(u.to_plan) + ' module' + (u.to_plan === 1 ? '' : 's') + ' still to plan</b> on ' +
+        u.open_count + ' indent item' + (u.open_count === 1 ? '' : 's') + ': ' + lines +
+        '. Removing ' + fqcEsc(code) + ' stops them - Planning refuses a new batch of it until ' +
+        'it is restored.</span></div>' :
+        '<div class="note n-info" style="margin:0 0 10px" data-flight><span>ℹ</span><span>Nothing ' +
+        'is in flight: no open indent item still has modules to plan on it.</span></div>';
+      var used = u.serials ?
+        '<div class="note n-warn" style="margin:0 0 10px"><span>!</span><span><b>' + msNum(u.serials) +
+        ' serial' + (u.serials === 1 ? ' was' : 's were') + ' generated for it</b> (' +
+        msNum(u.not_produced) + ' not produced yet, ' + msNum(u.dispatched) + ' dispatched) in ' + u.batches +
+        ' batch' + (u.batches === 1 ? '' : 'es') + (u.pallets ? ', on ' + u.pallets + ' pallet' +
+        (u.pallets === 1 ? '' : 's') : '') + '. They keep naming it, and its modules are tested, ' +
+        'packed and dispatched as before.</span></div>' :
+        '<div class="note n-info" style="margin:0 0 10px"><span>ℹ</span><span>No serial was ' +
+        'generated for it.</span></div>';
+      var host = msOpen('Remove model ' + code, 'It leaves the Indent screen\'s list; its row ' +
+        'stays and Restore puts it back.', flight + used + msReasonFld('mdWhy', 'removed'),
+        '<button class="btn btn-danger" data-go>Remove</button>');
+      if (!host) return;
+      host.querySelector('[data-go]').onclick = function () {
+        msSend(host, this, 'model/' + encodeURIComponent(code), 'DELETE',
+          { reason: msVal('mdWhy').trim() }, function () {
+            if (typeof toast === 'function') toast(code + ' removed from the master.');
+            mdLoad();
+          });
+      };
+    }).catch(function (e) { if (typeof toast === 'function') toast('Could not check ' + code + ' - ' + e.message); });
+  }
+  function mdRestore(code) {
+    var host = msOpen('Restore model ' + code, 'Offered on the Indent screen and planned on ' +
+      'again, as before it was removed.', msReasonFld('mdWhy', 'restored'),
+      '<button class="btn btn-primary" data-go>Restore</button>');
+    if (!host) return;
+    host.querySelector('[data-go]').onclick = function () {
+      msSend(host, this, 'model/' + encodeURIComponent(code) + '/restore', 'POST',
+        { reason: msVal('mdWhy').trim() }, function () {
+          if (typeof toast === 'function') toast(code + ' is back in the master.');
+          mdLoad();
+        });
+    };
+  }
+
+  /* ---- Admin > Customers: a tab of its own, after Models ----------------- */
+  function cuInjectTab() {
+    var tabs = document.getElementById('adTabs'), models = document.getElementById('ad-models');
+    if (!tabs || !models || document.getElementById('ad-customers')) return;
+    var after = Array.prototype.filter.call(tabs.querySelectorAll('button'), function (b) {
+      return /adTab\(this,\s*'models'\)/.test(b.getAttribute('onclick') || '');
+    })[0];
+    var btn = document.createElement('button');
+    btn.setAttribute('onclick', "adTab(this,'customers')");
+    btn.textContent = 'Customers';
+    tabs.insertBefore(btn, after ? after.nextSibling : null);
+    var pane = document.createElement('div');
+    pane.className = 'adpane';
+    pane.id = 'ad-customers';
+    pane.innerHTML =
+      '<div class="note n-info"><span>&#9432;</span><span>The customer master - kept here since ' +
+      '24 Oct 2026 (it was a file). A pallet stores the customer\'s <b>code</b> and Planning its ' +
+      '<b>name</b>, so a code is never changed, and a renamed customer keeps its old name as an ' +
+      'earlier name: the records written with it still find it. An invoice is matched by GSTIN ' +
+      'first, then by code, name or alias - never by a near spelling. A packing list prints the ' +
+      'name as it is here today; a challan keeps the invoice\'s text. <b>Icon Stock</b> is the ' +
+      '"unallocated" value, not a customer, and is never removed.</span></div>' +
+      '<div class="card"><div class="card-h"><h3>Customer master</h3><div class="ch-r">' +
+      '<input id="cuQ" placeholder="Search code, name, GSTIN, alias" style="width:230px;' +
+      'padding:5px 8px;border:1px solid var(--line);border-radius:var(--r);font-size:12px">' +
+      '<span class="tag t-mute" id="cuCount">—</span>' +
+      '<button class="btn btn-ghost btn-sm" onclick="addRecord(\'customer\')">+ Add customer</button>' +
+      '</div></div><div class="card-b flush"><table><thead><tr><th>Code</th><th>Name</th>' +
+      '<th>GSTIN · place</th><th>State</th><th>Aliases</th><th>ERP code</th><th></th></tr></thead>' +
+      '<tbody id="cuRows"></tbody></table></div><div class="card-f"><span style="font-size:11.5px;' +
+      'color:var(--ink3)">Removing a customer stops new indents, batches and invoice matches for ' +
+      'it; its records keep naming it, and Restore puts it back.</span></div></div>';
+    models.parentNode.insertBefore(pane, models.nextSibling);
+    pane.querySelector('#cuQ').oninput = function () { CU.q = this.value; cuPaint(); };
+    pane.addEventListener('click', msClick);
+    /* not locked here: this runs before sign-in, while v4's USER still says
+       'Admin' - the sign-in's applyWriteLocks() locks + Add for the real role */
+  }
+  function cuLoad() {
+    return api('admin/customers').then(function (d) {
+      if (!d || !d.customers) return;
+      CU.rows = d.customers;
+      CU.removed = d.removed || [];
+      CU.next = d.next_code || '';
+      cuPaint();
+    });
+  }
+  function cuHit(c, q) {
+    if (!q) return true;
+    q = q.toUpperCase();
+    return [c.code, c.name, c.state || '', c.erp_code || ''].concat(c.aliases || [],
+      c.former_names || [], (c.gstins || []).map(function (g) { return g[0]; }))
+      .some(function (t) { return String(t).toUpperCase().indexOf(q) >= 0; });
+  }
+  function cuPaint() {
+    var tb = document.getElementById('cuRows');
+    if (!tb || !CU.rows) return;
+    var lock = msLock(), shown = CU.rows.filter(function (c) { return cuHit(c, CU.q); });
+    tb.innerHTML = shown.map(function (c) {
+      var rm = c.stock ? ' disabled title="Icon Stock is the \'unallocated\' value, not a ' +
+        'customer - it is never removed."' : lock;
+      return '<tr data-key="' + fqcEsc(c.code) + '"><td class="mono" style="font-weight:700">' +
+        fqcEsc(c.code) + '</td><td style="font-weight:600">' + fqcEsc(c.name) +
+        ((c.former_names || []).length ? '<div class="hint" style="font-weight:400">was ' +
+          fqcEsc(c.former_names.join(', ')) + '</div>' : '') + '</td><td class="mono" ' +
+        'style="font-size:11px">' + ((c.gstins || []).map(function (g) {
+          return fqcEsc(g[0]) + (g[1] ? ' <span class="hint">' + fqcEsc(g[1]) + '</span>' : '');
+        }).join('<br>') || '—') + '</td><td>' + fqcEsc(c.state || '—') + '</td>' +
+        '<td style="font-size:11.5px;max-width:260px">' + fqcEsc((c.aliases || []).join(', ') ||
+          '—') + '</td><td class="mono" style="font-size:11px">' + fqcEsc(c.erp_code || '—') +
+        '</td><td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" ' +
+        'data-act="cu-edit"' + lock + '>Edit</button> <button class="btn btn-ghost btn-sm" ' +
+        'data-act="cu-remove"' + rm + '>Remove…</button> <button class="btn btn-ghost btn-sm" ' +
+        'data-act="cu-history">History</button></td></tr>';
+    }).join('') || '<tr data-empty><td colspan="7" class="hint">No customer matches “' +
+      fqcEsc(CU.q) + '”.</td></tr>';
+    var cnt = document.getElementById('cuCount');
+    if (cnt) cnt.textContent = (CU.q ? shown.length + ' of ' : '') + CU.rows.length +
+      ' customers' + (CU.removed.length ? ' · ' + CU.removed.length + ' removed' : '');
+    var card = tb.closest('.card');
+    msRemovedCard('cuRemoved', card && card.querySelector(':scope > .card-f'),
+      'Removed from the master', CU.removed.map(function (c) {
+        return { key: c.code, removed: c.removed, c: c };
+      }), function (r) {
+        return '<span class="mono">' + fqcEsc(r.c.code) + '</span> ' + fqcEsc(r.c.name);
+      }, 'cu');
+  }
+  function cuForm(code) {
+    var c = code ? (CU.rows || []).filter(function (x) { return x.code === code; })[0] : null;
+    if (code && !c) { if (typeof toast === 'function') toast(code + ' is not in the list - reload the page (F5).'); return; }
+    var v = c || { code: '', name: '', gstins: [], state: '', aliases: [], erp_code: '', former_names: [] };
+    var host = msOpen(c ? 'Edit customer ' + c.code : 'Add a customer',
+      'Save writes it to the database - it stays after a refresh and applies to everyone.',
+      msFld('Code', msInp('cuCode', c ? c.code : (CU.next ? CU.next + ' - given when it is saved' :
+          'given when it is saved'), ' disabled'),
+        'The key every pallet and indent stores - given by the server, never changed.') +
+      msFld('Name', msInp('cuName', v.name), c ? 'A new name keeps the old one as an earlier ' +
+        'name, so the records written with it still find this customer.' : '') +
+      ((v.former_names || []).length ? msFld('Earlier names', '<div class="hint">' +
+        fqcEsc(v.former_names.join(', ')) + '</div>') : '') +
+      msFld('GSTINs', '<textarea id="cuGst" rows="3" class="mono">' + fqcEsc((v.gstins || []).map(
+          function (g) { return g[0] + (g[1] ? ' ' + g[1] : ''); }).join('\n')) + '</textarea>',
+        'One per line; the first is the main one. A place may follow the GSTIN: ' +
+        '"22AADCI5761L3ZE Unit-2". Its check letter is checked.') +
+      msFld('State', msInp('cuState', v.state)) +
+      msFld('Aliases', '<textarea id="cuAli" rows="3">' + fqcEsc((v.aliases || []).join('\n')) +
+        '</textarea>', 'One per line - the other ways invoices, files and people write this ' +
+        'customer. An alias that already names another customer is refused.') +
+      msFld('External ERP code', msInp('cuErp', v.erp_code)),
+      '<button class="btn btn-primary" data-save>' + (c ? 'Save' : 'Add customer') + '</button>');
+    if (!host) return;
+    host.querySelector('[data-save]').onclick = function () {
+      var body = { name: msVal('cuName').trim(), gstins: msLines('cuGst'),
+        state: msVal('cuState').trim(), aliases: msLines('cuAli'), erp_code: msVal('cuErp').trim() };
+      msSend(host, this, c ? 'customer/' + encodeURIComponent(c.code) : 'customer',
+        c ? 'PUT' : 'POST', body, function (d) {
+          if (typeof toast === 'function') toast(d.changed === false ? 'Nothing was changed.' :
+            (c ? c.code + ' saved.' : d.code + ' added - ' + d.customer.name + '.'));
+          cuLoad();
+        });
+    };
+  }
+  function cuRemove(code) {
+    api('customer/' + encodeURIComponent(code) + '/use').then(function (u) {
+      if (!u || u.ok === false) { if (typeof toast === 'function') toast((u && u.why) || 'Not found.'); return; }
+      var c = (CU.rows || []).filter(function (x) { return x.code === code; })[0] || { name: code };
+      var open = (u.open || []).map(function (o) {
+        return fqcEsc(o.indent_no) + ' (' + msNum(o.left) + ')';
+      }).join(', ') + (u.open_count > (u.open || []).length ? ', …' : '');
+      var flight = (u.to_plan || u.in_flight || u.pallets) ?
+        '<div class="note n-bad" style="margin:0 0 10px" data-flight><span>!</span><span><b>In ' +
+        'flight:</b> ' + [u.to_plan ? msNum(u.to_plan) + ' module' + (u.to_plan === 1 ? '' : 's') +
+          ' still to plan on ' + u.open_count + ' indent' + (u.open_count === 1 ? '' : 's') +
+          ' (' + open + ')' : '', u.in_flight ? msNum(u.in_flight) + ' module' + (u.in_flight === 1 ?
+          '' : 's') + ' not yet dispatched' : '', u.pallets ? u.pallets + ' pallet' +
+          (u.pallets === 1 ? '' : 's') : ''].filter(function (s) { return s; }).join('; ') +
+        '. Removing it stops new indents and batches for it, and an invoice to it no longer ' +
+        'finds it - until it is restored.</span></div>' :
+        '<div class="note n-info" style="margin:0 0 10px" data-flight><span>ℹ</span><span>Nothing ' +
+        'is in flight for it.</span></div>';
+      var used = '<div class="note n-info" style="margin:0 0 10px"><span>ℹ</span><span>' +
+        u.indents + ' live indent' + (u.indents === 1 ? '' : 's') + ', ' + msNum(u.modules) + ' module' +
+        (u.modules === 1 ? '' : 's') + ' (' + msNum(u.dispatched) + ' dispatched). Every record keeps ' +
+        'naming it.</span></div>';
+      var host = msOpen('Remove customer ' + code, c.name, flight + used +
+        msReasonFld('cuWhy', 'removed'), '<button class="btn btn-danger" data-go>Remove</button>');
+      if (!host) return;
+      host.querySelector('[data-go]').onclick = function () {
+        msSend(host, this, 'customer/' + encodeURIComponent(code), 'DELETE',
+          { reason: msVal('cuWhy').trim() }, function () {
+            if (typeof toast === 'function') toast(code + ' removed from the master.');
+            cuLoad();
+          });
+      };
+    }).catch(function (e) { if (typeof toast === 'function') toast('Could not check ' + code + ' - ' + e.message); });
+  }
+  function cuRestore(code) {
+    var host = msOpen('Restore customer ' + code, 'Offered and matched again, as before it ' +
+      'was removed.', msReasonFld('cuWhy', 'restored'),
+      '<button class="btn btn-primary" data-go>Restore</button>');
+    if (!host) return;
+    host.querySelector('[data-go]').onclick = function () {
+      msSend(host, this, 'customer/' + encodeURIComponent(code) + '/restore', 'POST',
+        { reason: msVal('cuWhy').trim() }, function () {
+          if (typeof toast === 'function') toast(code + ' is back in the master.');
+          cuLoad();
+        });
+    };
+  }
+
+  /* one listener per tab, reading what the button says it does */
+  function msClick(ev) {
+    var b = ev.target.closest && ev.target.closest('[data-act]');
+    if (!b || b.disabled) return;
+    var tr = b.closest('[data-key]'), key = tr && tr.getAttribute('data-key');
+    if (!key) return;
+    var act = b.getAttribute('data-act');
+    var go = { 'md-edit': mdForm, 'md-remove': mdRemove, 'md-restore': mdRestore,
+               'md-history': function (k) { msHistory('model', k); },
+               'cu-edit': cuForm, 'cu-remove': cuRemove, 'cu-restore': cuRestore,
+               'cu-history': function (k) { msHistory('customer', k); } }[act];
+    if (!go) return;
+    if (!/history/.test(act) && masterRefusal(/^md/.test(act) ? 'model' : 'customer')) {
+      if (typeof toast === 'function') toast(MASTER_REASON);
+      return;
+    }
+    go(key);
+  }
+
+  /* v4's "+ Add model" and Edit call addRecord / editRecord('model', ...) -
+     they open these forms instead of v4's, which saved to the page only. */
+  ['addRecord', 'editRecord'].forEach(function (name) {
+    var prev = window[name];
+    if (typeof prev !== 'function' || prev.__masters) return;
+    var w = function (kind, key) {
+      if (kind !== 'model' && kind !== 'customer') return prev.apply(this, arguments);
+      var why = masterRefusal(kind);
+      if (why) { if (typeof toast === 'function') toast(why); return; }
+      (kind === 'model' ? mdForm : cuForm)(name === 'editRecord' ? key : null);
+    };
+    w.__masters = true;
+    w.__master = prev.__master;
+    window[name] = w;
+  });
+
+  /* v4's renderDash() writes the model rows from its own array as well - put
+     the master's back after it */
+  if (typeof window.renderDash === 'function' && !window.renderDash.__masters) {
+    var _renderDashV4 = window.renderDash;
+    window.renderDash = function () {
+      var r = _renderDashV4.apply(this, arguments);
+      try { mdPaint(); } catch (e) {}
+      return r;
+    };
+    window.renderDash.__masters = true;
+  }
+
+  (function () {
+    var pane = document.getElementById('ad-models');
+    if (pane && !pane.__masters) {
+      pane.__masters = true;
+      pane.addEventListener('click', msClick);
+      adNote('ad-models', '<span>&#9432;</span><span>The model master - kept here since 24 Oct ' +
+        '2026 (it was a file), led by the <b>back label</b>, which decides what may be built and ' +
+        'labelled. The serial embeds the wattage, so <span class="mono">ICON640R…</span> cannot ' +
+        'be generated until 640 W is here - the master leads production. A model\'s code is the ' +
+        'key every serial, indent line and pallet stores and is never changed; its family is ' +
+        'fixed too. Removing one stops new indents and planning on it - its modules are packed ' +
+        'and dispatched as before - and Restore puts it back.</span>');
+    }
+    cuInjectTab();
+  })();
+  AD_LOADERS.models = mdLoad;
+  AD_LOADERS.customers = cuLoad;
 
   /* ---- Drafts, from the database (overnight audit, 24 Oct 2026) --------
    *

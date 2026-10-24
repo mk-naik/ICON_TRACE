@@ -8717,3 +8717,29 @@ commit.
   vs challan after a rename, fixed keys, 409 on a removed row, removal in use + restore, GSTIN
   conflict on restore, Icon Stock, model create / remove in use / restore twin, history, gates.
   `test_boot_payload.py` (shape + `removed`), both gate maps list the new routes.
+
+### 24 Oct 2026 - Admin > Models editable, Admin > Customers (Prompt 2, part 2: the tabs)
+- **What was wrong:** Admin > Models showed v4's list and its Edit / + Add model were page-only
+  ("This list is not saved to the server yet"); there was no Customers tab at all.
+- **Change (icon_live.js, the masters block):** Models renders the master from
+  `/api/admin/models` - Edit (code and family shown but locked), Remove… (its use-check first: IN
+  FLIGHT in red - modules still to plan, by indent item - then the serials, batches and pallets
+  that keep naming it; reason required), History, a "Removed from the master" list with Restore….
+  Customers is injected after Models (button + pane, so `#admin/customers` works like any tab):
+  search, + Add customer (the code shown as the one the server will give), Edit (earlier names
+  listed), Remove… (in flight first), Restore…, History; Icon Stock's Remove is disabled with the
+  reason. Every refusal is shown inside its form, every sentence, and cleared when the form is
+  sent again. An Admin gets both read-only: + Add, Edit, Remove and Restore disabled with
+  MASTER_REASON, History open, the read-only note (MASTER_KINDS: model and customer 'saved').
+  A save reloads the list and v4's MODELS - removed models after the live ones - so derive()
+  keeps reading every serial in that tab.
+- **Found on the way:** calling applyMasterLocks() while the page loads locked + Add for everyone:
+  until sign-in v4's USER says role 'Admin', and nothing unlocks afterwards - the lock is left to
+  the sign-in's applyWriteLocks(). A new test file overwrote the Round 28 test_master_data_ui.py
+  (same name): restored from git, the new one is test_admin_masters_ui.py, and the Round 28 test
+  now keeps only stations as page-only (models are saved).
+- **Test:** `test_admin_masters_ui.py` (4, Chromium): Models add / refusal / edit / remove with in
+  flight / restore / history; Customers order after Models, search, GSTIN and alias refusals,
+  rename with earlier name, Icon Stock, remove, restore refusal and history; an Admin read-only;
+  `#admin/customers` lands on the tab and a removed model's serial still reads (derive).
+  `test_master_data_ui.py` (5) updated as above.

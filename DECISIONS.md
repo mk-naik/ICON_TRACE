@@ -813,9 +813,10 @@ efficiency figure until the production head signs off an ideal cycle time.
   model meant editing source and redeploying. `customer` and `model` were filled
   from those lists once - a row only where its code is absent, so a redeploy never
   brings back a removed row or undoes an edit; the lists are seed data only. Super
-  Admin writes, Admin reads. Admin > Models becomes editable and Admin > Customers
-  a tab of its own, after Models (Mukesh: a 16th tab - there were 15, not 14).
-  [built: tables, seed, routes] **[decided]** the two tabs (next commit).
+  Admin writes, Admin reads. Admin > Models is editable and Admin > Customers is a
+  tab of its own, after Models (Mukesh: a 16th tab - there were 15, not 14): add,
+  edit, remove, restore and History on both; a refusal is shown in its form, every
+  sentence of it; an Admin is offered no write, each control saying why. [built]
 - **A code is never edited** - every indent, pallet, serial and line stores it;
   to change one, add a new row and remove the old. A new customer's code is the
   server's: one past the highest C-number ever given, a removed customer's
