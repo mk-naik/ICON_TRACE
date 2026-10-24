@@ -8622,3 +8622,16 @@ commit.
   posts /dispatch or reads /mgmt. Full suite on the change: 119 of 121 - `test_fqc_scanner_ui`
   passes alone (a parallel-run flake); `test_el_analysis_ui`'s control-limit check fails on
   the unchanged HEAD too, by the time of day it runs (its own entry below).
+
+### 24 Oct 2026 - the EL Analysis control-limit test failed most of the day
+- **What was wrong:** `test_el_analysis_ui.py` t_limits ("a bar beyond 3 sigma marked") failed at
+  09:15 - on the unchanged HEAD as well, so not the retired pages.
+- **Cause:** the test, not the screen. It seeded nine blocks of 30 images, 10 minutes apart (five
+  hours), every 8 hours from "now minus 76 hours". The 7-day window draws one bar per factory day
+  and shift (A 06, B 14, C 22), so whenever a block crossed a shift change its 30 images became two
+  bars, the half-NG shift among them - and the one bar beyond 3 sigma was not there. Checked for
+  every minute of a day: the old seeding put a block across a shift change in 870 of 1,440.
+- **Change:** the blocks are the nine whole shifts before the one running now, each from half an
+  hour into its shift (`clock.DAY_STARTS_AT`, eight hours a shift) - 0 of 1,440 minutes. The
+  screen and its limits are unchanged.
+- **Test:** `test_el_analysis_ui.py` 14 of 14 at 09:20, a time the old seeding failed.

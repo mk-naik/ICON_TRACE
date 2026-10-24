@@ -403,11 +403,17 @@ def t_colours():
       "lines, a bar beyond 3 sigma marked and said so")
 def t_limits():
     base()
+    # the nine whole shifts before the one running now, each from half an hour into it -
+    # seeded from "now" itself, a shift's five hours of images crossed a shift change
+    # unless the test ran in about three hours of every eight, and one shift became two
+    # bars (it failed at 09:15, 24 Oct 2026)
     now = clock.now()
-    start = now - datetime.timedelta(hours=8 * 9 + 4)
+    into = (now.hour - clock.DAY_STARTS_AT) % 8      # A 06, B 14, C 22: eight hours each
+    this_shift = now.replace(minute=0, second=0, microsecond=0) - datetime.timedelta(hours=into)
     with store.conn() as (cx, cur):
         for shift in range(9):                       # nine shifts, 30 first images each
-            t0 = start + datetime.timedelta(hours=8 * shift)
+            t0 = (this_shift - datetime.timedelta(hours=8 * (9 - shift))
+                  + datetime.timedelta(minutes=30))
             bad = 15 if shift == 6 else 3            # one shift at half NG
             for k in range(30):
                 at = (t0 + datetime.timedelta(minutes=10 * k)).replace(microsecond=0).isoformat()
