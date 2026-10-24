@@ -8775,3 +8775,18 @@ commit.
 - **Test:** `test_permission_editor.py` (6): saving Dashrath's case in the editor keeps writes on
   Gate Pass only. `test_dashrath_case.py` (6) wording and its write set (Gate Pass);
   `test_screen_perms.py` (20) reads the list; checked in Chromium: 22 screens, 10 read only.
+
+### 24 Oct 2026 - DEBT (not today): Planning stores the customer's NAME, a pallet its CODE
+- **What:** `allocation.customer` and `serial.customer` hold the customer's name as the master
+  spelled it that day - Planning writes `L["cust"]`, the master's name (app.py, allocation create
+  and edit); the real data has 4,530 serials as "ICON Stock" and 1,360 as "ICON STOCK"
+  (db.customer_match's own note) - while `box.customer` holds the code. icon_customers' first rule
+  is that the code is what the rest of the system stores; Planning breaks it.
+- **Why it matters:** every reader has to go through `db.customer_match` (17 call sites, app.py and
+  db.py) or `customers.get` to see one customer; one query that compares the column directly splits
+  a customer with no error. Since the master became editable a rename also needs `former_names` to
+  keep the older rows findable (DECISIONS 13).
+- **Proposed, not started:** Planning and the traceability import store the code; a once-only
+  migration rewrites the stored names to codes through the master (names it cannot place left as
+  written, and listed); then customer_match can shrink to the code. It rewrites a column on every
+  serial and allocation, so it waits for Mukesh's go (raised by a review of f248ae2).
