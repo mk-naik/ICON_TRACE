@@ -13970,8 +13970,10 @@ function wireFqcAnomalies() {
       .then(function (d) {
         if (!d.ok) { if (typeof toast === 'function') toast(d.why); return; }
         if (typeof toast === 'function') {
-          toast('Loading verified — ' + d.loaded + ' pallet(s) confirmed. ' +
-                'Print and Excel are now available on this challan.');
+          /* the gate pass this submit made is named - it was made silently */
+          toast('Loading verified — ' + d.loaded + ' pallet(s) confirmed' +
+                (d.gp_no ? '; gate pass ' + d.gp_no + ' made' : '') +
+                '. Print and Excel are now available on this challan.');
         }
         ldCloseSession();
       })

@@ -8505,3 +8505,11 @@ commit.
   loaded), with its own line for a draft; the footer says what the log keeps.
 - **Test:** `test_demo_leftovers_ui.py` +1 (7); `test_challan.js` 36; challan edit / cancel /
   list / print UI pass.
+
+### 24 Oct 2026 - Loading Verification's Submit made a gate pass and did not say so (overnight audit)
+- **Found (the loading session driven in Chromium):** Save & Submit creates the module gate
+  pass (DECISIONS 4), and the server returns its number, but the toast said only "Loading
+  verified - N pallet(s) confirmed. Print and Excel are now available".
+- **Change (icon_live.js, ldSubmit):** the toast names the gate pass it made.
+- **Test:** `test_loading_ui.py` +1 (9): confirm, submit, the toast names the stored gate
+  pass; `test_loading.js` 25.

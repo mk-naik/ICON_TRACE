@@ -128,6 +128,33 @@ def t_list_count_badge():
         assert not pg.errors, pg.errors
 
 
+@test("Save & Submit names the gate pass it made - it was made silently (24 Oct 2026)")
+def t_submit_names_gate_pass():
+    c = T.setup()
+    chid = issued(c, [16, 17], "INV-UI-SUBMIT")
+    no = c.get("/api/loading/%d" % chid).get_json()["boxes"][0]["box_no"]
+    with H.browser() as b:
+        pg = H.open_page(b, role="Dispatch Operator", login_id="disp.submit")
+        toasts = []
+        pg.expose_function("__t", lambda t: toasts.append(t))
+        pg.evaluate("() => { var t = window.toast; window.toast = function (m) { "
+                    "window.__t(String(m)); return t.apply(this, arguments); }; }")
+        pg.evaluate("(id) => ldOpenSession(id)", chid)
+        pg.wait_for_selector("#ldSessionScan", timeout=8000)
+        pg.fill("#ldSessionScan", no)
+        pg.press("#ldSessionScan", "Enter")
+        pg.wait_for_timeout(300)
+        pg.evaluate("ldConfirm()")
+        pg.wait_for_timeout(800)
+        pg.evaluate("ldSubmit()")
+        pg.wait_for_timeout(1500)
+        with store.conn() as (cx, cur):
+            gp = store.one(cur, "SELECT gp_no FROM gatepass WHERE challan_id=%s", (chid,))
+        assert gp, "no gate pass was made: %s" % toasts
+        assert toasts and ("gate pass " + gp["gp_no"]) in toasts[-1], toasts
+        assert not pg.errors, pg.errors
+
+
 @test("the list's Export is the recorded Excel export of the rows on screen - it "
       "built a CSV in the browser that nothing recorded (overnight audit, 24 Oct)")
 def t_list_export_recorded():
