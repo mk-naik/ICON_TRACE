@@ -132,6 +132,22 @@ def t_filter_lists_before_data():
             assert not set(opts(sel)) & {"SAI BABUJI PROJECTS", "SG MEDA", "MSEDCL"}, opts(sel)
 
 
+@test("Stock & Dispatch counts in words that agree - '1 box ready', not '1 boxes ready'")
+def t_stock_words():
+    import test_challan as T                 # real pallets: FQC'd modules, a closed box
+    c = T.setup()
+    T.packed_box(c, [500, 501])
+    with H.browser() as b:
+        pg = H.open_page(b, "disp", wait_ms=2000)
+        pg.wait_for_function("() => /ready/.test(document.querySelector('#v-disp .kpi .d').innerText)",
+                             timeout=8000)
+        assert pg.inner_text("#v-disp .kpi .d").strip() == "1 box ready", \
+            pg.inner_text("#v-disp .kpi .d")
+        labels = pg.eval_on_selector_all("#v-disp .kpi .d", "ds => ds.map(d => d.innerText)")
+        assert not [l for l in labels if "(es)" in l or "(s)" in l or "1 boxes" in l], labels
+        assert pg.errors == [], pg.errors
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)

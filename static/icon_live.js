@@ -14434,21 +14434,25 @@ function wireFqcAnomalies() {
       .then(function(r) { return r.json(); })
       .then(function(d) {
          var kpis = vDisp.querySelectorAll('.kpi');
+         /* "1 boxes ready", "1 boxes · 1 challan(s)" - counted words agree */
+         var nw = function (k, one, many) { k = k || 0; return k + ' ' + (k === 1 ? one : many); };
          if (kpis.length >= 5) {
             kpis[0].querySelector('.v').textContent = (d.fg_ready.modules || 0).toLocaleString();
-            kpis[0].querySelector('.d').textContent = (d.fg_ready.box_count || 0) + ' boxes ready';
+            kpis[0].querySelector('.d').textContent = nw(d.fg_ready.box_count, 'box', 'boxes') + ' ready';
             
             kpis[1].querySelector('.v').textContent = (d.fg_ready.kw || 0).toFixed(1);
             kpis[1].querySelector('.d').textContent = 'ready to ship';
             
             kpis[2].querySelector('.v').textContent = (d.disp_today.modules || 0).toLocaleString();
-            kpis[2].querySelector('.d').textContent = (d.disp_today.box_count || 0) + ' boxes · ' + (d.disp_today.ch_count || 0) + ' challans';
-            
+            kpis[2].querySelector('.d').textContent = nw(d.disp_today.box_count, 'box', 'boxes') +
+              ' · ' + nw(d.disp_today.ch_count, 'challan', 'challans');
+
             kpis[3].querySelector('.v').textContent = (d.rev_stock.modules || 0).toLocaleString();
-            kpis[3].querySelector('.d').textContent = (d.rev_stock.box_count || 0) + ' box(es)';
-            
+            kpis[3].querySelector('.d').textContent = nw(d.rev_stock.box_count, 'box', 'boxes');
+
             kpis[4].querySelector('.v').textContent = (d.open_ch.modules || 0).toLocaleString();
-            kpis[4].querySelector('.d').textContent = (d.open_ch.box_count || 0) + ' boxes · ' + (d.open_ch.ch_count || 0) + ' challan(s)';
+            kpis[4].querySelector('.d').textContent = nw(d.open_ch.box_count, 'box', 'boxes') +
+              ' · ' + nw(d.open_ch.ch_count, 'challan', 'challans');
          }
          
          var tbody1 = vDisp.querySelector('.grid.g2 .card:nth-child(1) tbody');

@@ -8474,3 +8474,10 @@ commit.
   kinds the account can see; an account that sees neither is told none of its screens keeps
   drafts, and where they belong.
 - **Test:** `test_drafts_ui.py` +1 (5).
+
+### 24 Oct 2026 - Stock & Dispatch said "1 boxes ready" (overnight audit)
+- **Found (real-data crawl):** the KPI sub-labels read "1 boxes ready", "1 boxes · 1
+  challan(s)", "0 box(es)".
+- **Change (icon_live.js):** counted words agree with their number (box / boxes, challan /
+  challans); the screen's own word "box" is kept.
+- **Test:** `test_demo_leftovers_ui.py` +1 (6).
