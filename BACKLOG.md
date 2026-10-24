@@ -8530,3 +8530,21 @@ commit.
   and missed under load (it passes alone).
 - **Change (tests only):** the card is read on its 8 hours window; the wait is 25 s.
 - **Test:** 14 and 5 pass.
+
+### 24 Oct 2026 - the profile menu listed v4's role labels: "Everything", "Master data", "Raise holds" (overnight audit)
+- **Found (each role signed in, Chromium):** the menu's "Can access" chips were v4's ROLES[..]
+  .perms - Admin "Everything / Release holds / Cancel documents / Master data" (master data is
+  a Super Admin's), operators "Raise holds", the Production Incharge "Release holds" (no such
+  action: a hold clears itself, or goes to Needs Review). Since Round 28 access is per account.
+- **Change (icon_live.js, after applyRole):** "Can open" names this account's own screens, as
+  its sidebar has them.
+- **Test:** `test_demo_leftovers_ui.py` +1 (8). Login 11, relogin 6, role gates 11, hash 9,
+  sessions 14, permission editor 6, Dashrath case 6.
+
+### 24 Oct 2026 - FQC Entry's Recent gradings Reset left its own five lists set (overnight audit)
+- **Found (Reset pressed after changing every filter, real-data copy):** the card's Reset (its
+  table tools) cleared only the search box; Shift / Customer / Wattage / Result / Defect, just
+  under it, stayed - and so did the list they narrowed.
+- **Change (icon_live.js):** the card's Reset puts those five back on their first choice and
+  asks again.
+- **Test:** `test_fqc_screen.py` +1 (18).

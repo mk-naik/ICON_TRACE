@@ -1239,6 +1239,37 @@
       b.classList.add('ro-locked');
     });
   }
+  /* The profile card's "Can access" chips were v4's labels for the ROLE -
+     "Everything" and "Master data" for an Admin (master data is a Super
+     Admin's), "Raise holds" / "Release holds" (no such action: a hold clears
+     itself or goes to Needs Review) - and since Round 28 access is the
+     account's own, not its role's. They name this account's screens now
+     (overnight audit, 24 Oct 2026). */
+  function umScreens() {
+    var host = document.getElementById('umPerms');
+    if (!host || !USER || !USER.perms) return;
+    var names = [];
+    document.querySelectorAll('#sidenav .nav-i[data-v]').forEach(function (b) {
+      if (b.classList.contains('hide') || !can(b.getAttribute('data-v'))) return;
+      var c = b.cloneNode(true);
+      c.querySelectorAll('em, b').forEach(function (x) { x.remove(); });
+      var t = (c.textContent || '').trim();
+      if (t && names.indexOf(t) < 0) names.push(t);
+    });
+    host.innerHTML = '<label>Can open</label>' + names.map(function (t) {
+      return '<span class="pchip">' + fqcEsc(t) + '</span>';
+    }).join('');
+  }
+  if (typeof window.applyRole === 'function' && !window.applyRole.__screens) {
+    var _v4ApplyRole = window.applyRole;
+    window.applyRole = function () {
+      var r = _v4ApplyRole.apply(this, arguments);
+      try { umScreens(); } catch (e) {}
+      return r;
+    };
+    window.applyRole.__screens = true;
+  }
+
   function watchUnviewableGo() {
     var main = document.querySelector('.main');
     lockUnviewableGo(main);
@@ -3108,6 +3139,18 @@
           // Insert after card-h
           var cardH = card.querySelector('.card-h');
           if (cardH) cardH.insertAdjacentElement('afterend', cb.firstChild);
+          /* the card's Reset (its table tools) cleared only the search box -
+             these five lists just under it stayed, and so did the list they
+             narrowed (overnight audit, 24 Oct 2026) */
+          card.addEventListener('click', function (e) {
+            if (!e.target.matches || !e.target.matches('[data-role=reset]')) return;
+            var changed = false;
+            ['rShift', 'rCust', 'rWatt', 'rResult', 'rDefect'].forEach(function (id) {
+              var s = document.getElementById(id);
+              if (s && s.selectedIndex > 0) { s.selectedIndex = 0; changed = true; }
+            });
+            if (changed && window.fqcRecentApply) window.fqcRecentApply();
+          });
         }
 
         /* Dynamic: the server's facets over EVERY live decision under the

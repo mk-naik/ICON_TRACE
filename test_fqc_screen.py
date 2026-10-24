@@ -499,6 +499,24 @@ def pass_record(serial, build_instance=1):
     return w
 
 
+@test("Recent gradings' Reset clears its own Shift / Customer / Wattage / Result / Defect "
+      "lists too - it cleared only the search box (overnight audit, 24 Oct 2026)")
+def t_recent_reset_clears_its_lists():
+    base(records=[pass_record(GOOD)])
+    with H.browser() as b:
+        pg = H.open_page(b, "fqc")
+        pg.wait_for_selector("#rResult", timeout=10000)
+        pg.select_option("#rResult", "reject")
+        pg.wait_for_function("() => !document.getElementById('fqcRows').innerText.includes(%r)" % GOOD,
+                             timeout=10000)
+        card = "document.getElementById('fqcRows').closest('.card')"
+        pg.evaluate("() => %s.querySelector('[data-role=reset]').click()" % card)
+        pg.wait_for_function("() => document.getElementById('fqcRows').innerText.includes(%r)" % GOOD,
+                             timeout=10000)
+        assert pg.input_value("#rResult") == "", pg.input_value("#rResult")
+        assert not pg.errors, pg.errors
+
+
 @test("a graded row's Customer column is its real customer, and sits right "
       "after Model")
 def t_customer_column():

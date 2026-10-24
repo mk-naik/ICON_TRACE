@@ -170,6 +170,23 @@ def t_challan_outputs_card():
         assert pg.errors == [], pg.errors
 
 
+@test("the profile menu names the account's own screens - not v4's role labels "
+      "('Everything', 'Master data', 'Raise holds')")
+def t_profile_menu():
+    store.wipe(); AUTH.ensure_auth_schema()
+    chips = "Array.from(document.querySelectorAll('#umPerms .pchip')).map(c => c.textContent)"
+    with H.browser() as b:
+        pk = H.open_page(b, None, role="Packing Operator", login_id="pk.menu")
+        got = pk.evaluate(chips)
+        assert "Raise holds" not in got and "New Pallet" in got and "Packing Log" in got, got
+        assert "Planning" not in got, got
+        ad = H.open_page(b, None, role="Admin", login_id="ad.menu")
+        got = ad.evaluate(chips)
+        assert not set(got) & {"Everything", "Master data", "Release holds"}, got
+        assert "Admin" in got, got
+        assert pk.errors == [] and ad.errors == [], (pk.errors, ad.errors)
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
     width = max(len(n) for n, _ in _results)
