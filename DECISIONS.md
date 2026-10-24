@@ -664,6 +664,12 @@ efficiency figure until the production head signs off an ideal cycle time.
   refusal names who holds it. All checks run before the first write (a
   refused request used to leave an empty allocation behind). [built]
 - Search & Trace finds a custom serial by exact match. [built]
+- **Planning's allocation type is chosen, never preset** (24 Oct, overnight audit):
+  Pre-shared or Post-shared starts unchosen; Validate only and Load into master ask for
+  it before anything is sent; an allocation opened to edit shows the type it recorded
+  and keeps it (an edit used to send Post-shared whatever it was). Validate only asks
+  the server the whole question (`validate_only`) and writes nothing. [built]
+  **[open]** the 9 Planning allocations recorded post-shared under the old preset.
 - **Planning copies a batch's bill of materials** two ways: "Copy from last
   batch" (the newest earlier batch that is ALIKE and has a bill of materials -
   not blindly the newest) and "Copy from batch number" (BAT-...). Two items are
